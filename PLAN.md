@@ -524,13 +524,19 @@ Progress note (2026-11-09): steps 1–4 demonstrated; step 5 partially (single-i
 
 **Exit status:** typed call ✓, persistent SQL row ✓, discovered TUnit tests ✓, native window start ✓ (visual confirmation pending), actionable scheduled notification ✗ pending interactive spike. Remaining step is sandbox-blocked, not API-blocked; later packages proceed and the spike is re-run when a desktop session is available.
 
-### [ ] 1 — Storage foundation and first durable task
+### [x] 1 — Storage foundation and first durable task
 
 **Depends on:** 0. **Files:** Domain Tasks/Time, Infrastructure Sqlite/Migrations, Application Tasks, Desktop composition/RPC, first frontend task form.
 
+Progress note (2026-11-09): implemented and verified headlessly (Roslynk skipped per user direction; file tools used). The only open item is visual click-through of the task form inside a real window, folded into the interactive acceptance spike already tracked under package 0.
+
 Implement migration runner, transaction worker, operation receipts, IDs/clock, profile/Personal/Inbox seed, error mapping and single-task create/get. Include the minimal validated SQLite backup primitive needed before every subsequent migration; package 12 adds scheduled retention, restore UI and transfer. Use a real UI input → typed RPC → transaction → row → restart vertical slice. Include tombstone/version/history scaffolding where future mutations need it; add later schema migrations as features arrive.
 
+— Done: migration runner (content-hash tracking, newer-version and tamper refusal), `SqliteApplicationStore` serialized write transaction with rollback, `OperationReceipts` (same-id same-payload replay / different-payload conflict), deterministic IDs/clock, `StorageBootstrap` (data-root lock, pre-upgrade backup, migrate, idempotent profile/Personal/Inbox seed), `SqliteErrorMapper` (stable kinds, InnerException preserved for logs only), `VACUUM INTO` backup with integrity check + catalog entry in one step; `TaskRpcService` create/get wired in `Program.cs`; first frontend task form in `frontend/src/main.tsx` calling generated `tasks.create` binding. `frontend/dist` is no longer tracked (build output, gitignored).
+
 **Tests:** fresh seed idempotence, upgrade checksum/version refusal, Unicode, duplicate OperationId same/different payload, transaction rollback and concurrent version conflict. **Exit:** capture a task while disconnected, restart and retrieve it; no mock/in-memory persistence.
+
+— Done: 47 TUnit tests green headlessly (Domain 6, Application 11, Infrastructure 21, Desktop 9), including Unicode round-trip, seed idempotence across restarts, checksum tamper + newer-schema refusal, replay/conflict, rollback of a failed write, optimistic-concurrency stale-version null, busy/full/constraint error mapping, backup create/validate/catalog. The restart slice (`TaskRpcRestartTests`) creates through the real RPC on SQLite, disposes the storage session, reopens the same data root and reads the task back — no mocks. Frontend: `npm test` 1/1, `tsc --noEmit` + `vite build` green against the generated bindings; Slopwatch clean. Interactive window click-through of the form remains part of the real-desktop acceptance run.
 
 ### [ ] 2 — Task lifecycle, containers, subtasks and templates
 

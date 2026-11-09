@@ -29,3 +29,10 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   `-p:RestorePackagesWithLockFile=false`; a `-r win-x64` restore would otherwise write a
   RID group into every `packages.lock.json` and break later `--locked-mode` restores
   (NU1004). Lock files stay stable for the plain/locked restore workflow.
+- **Storage failures keep their cause as InnerException.** `SqliteErrorMapper` maps
+  SQLite errors to stable `AppErrorKind`s whose messages never contain SQL, paths or
+  stack traces; the original exception is attached as `InnerException` so logs and test
+  output can still diagnose. Renderer-facing strings are unchanged.
+- **Task Position starts at 0 and grows by gaps of 1024.** The SQLite store computes
+  `COALESCE(MAX(Position), -1024) + 1024` (first task in a container gets 0); the
+  in-memory test fake mirrors this so Application and Infrastructure tests agree.
