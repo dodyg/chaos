@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "createdAt": "2026-11-09T19:18:32.4317941+00:00",
+  "updatedAt": "2026-11-09T19:18:32.4343247+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-11-09 19:18:32 UTC",
+  "entries": [
+    {
+      "hash": "774fb6ec86b03609",
+      "ruleId": "SW003",
+      "filePath": "src/Chaos.Desktop.Windows/Activation/SingleInstanceGuard.cs",
+      "lineNumber": 60,
+      "codeSnippet": "catch (ApplicationException)\n            {\n                // Release throws when the owning thread differs; disposal from a foreign\n                // thread must not mask the original failure being handled by the caller.\n            }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-11-09T19:18:32.434305+00:00"
+    }
+  ]
+}

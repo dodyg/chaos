@@ -51,6 +51,13 @@ CodeCoverage/
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
+# Chaos local tooling (sandbox redirects; never committed)
+.cli/
+.nuget/
+.npm/
+node_modules/
+scratchpad-*.md
+
 # NUnit
 *.VisualState.xml
 TestResult.xml

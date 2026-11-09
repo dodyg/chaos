@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows TFM for installed integration tests; ordinary application tests stay net11.0 headless (plan §4). -->
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Chaos.Desktop.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chaos.Desktop\Chaos.Desktop.csproj" />
+    <ProjectReference Include="..\..\src\Chaos.Infrastructure\Chaos.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

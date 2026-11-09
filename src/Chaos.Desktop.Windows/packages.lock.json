@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net11.0-windows10.0.19041": {
+      "chaos.application": {
+        "type": "Project",
+        "dependencies": {
+          "Chaos.Domain": "[1.0.0, )"
+        }
+      },
+      "chaos.domain": {
+        "type": "Project"
+      }
+    }
+  }
+}

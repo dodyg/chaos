@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Chaos.Infrastructure.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chaos.Infrastructure\Chaos.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Chaos.Application\Chaos.Application.csproj" />
+  </ItemGroup>
+
+</Project>

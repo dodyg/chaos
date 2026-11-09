@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows host: first supported desktop deliverable (plan §1/§4). NativeAOT off for Phase 1 (plan §3). -->
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <PublishAot>false</PublishAot>
+    <IsAotCompatible>false</IsAotCompatible>
+    <RootNamespace>Chaos.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NeoAstra" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chaos.Application\Chaos.Application.csproj" />
+    <ProjectReference Include="..\Chaos.Desktop.Windows\Chaos.Desktop.Windows.csproj" />
+    <ProjectReference Include="..\Chaos.Domain\Chaos.Domain.csproj" />
+    <ProjectReference Include="..\Chaos.Infrastructure\Chaos.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

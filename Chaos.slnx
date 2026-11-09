@@ -1,0 +1,11 @@
+<Solution>
+  <Project Path="src/Chaos.Domain/Chaos.Domain.csproj" />
+  <Project Path="src/Chaos.Application/Chaos.Application.csproj" />
+  <Project Path="src/Chaos.Infrastructure/Chaos.Infrastructure.csproj" />
+  <Project Path="src/Chaos.Desktop.Windows/Chaos.Desktop.Windows.csproj" />
+  <Project Path="src/Chaos.Desktop/Chaos.Desktop.csproj" />
+  <Project Path="tests/Chaos.Domain.Tests/Chaos.Domain.Tests.csproj" />
+  <Project Path="tests/Chaos.Application.Tests/Chaos.Application.Tests.csproj" />
+  <Project Path="tests/Chaos.Infrastructure.Tests/Chaos.Infrastructure.Tests.csproj" />
+  <Project Path="tests/Chaos.Desktop.Tests/Chaos.Desktop.Tests.csproj" />
+</Solution>

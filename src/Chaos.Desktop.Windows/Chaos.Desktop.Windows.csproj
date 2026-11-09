@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows-only notification/activation adapter (plan §4). WinRT types must not leak into application contracts. -->
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <RootNamespace>Chaos.Desktop.Windows</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chaos.Application\Chaos.Application.csproj" />
+  </ItemGroup>
+
+</Project>

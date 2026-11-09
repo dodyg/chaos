@@ -1,0 +1,16 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Desktop framework: NeoAstra 1.12.0 (plan §1). Keep template/tool versions aligned. -->
+    <PackageVersion Include="NeoAstra" Version="1.12.0" />
+    <!-- Persistence: SQLite via Microsoft.Data.Sqlite 10.0.14 (plan §1). No EF Core. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <!-- Tests: TUnit 1.81.16, latest stable verified at kickoff 2026-11-09 (plan §1). -->
+    <PackageVersion Include="TUnit" Version="1.81.16" />
+  </ItemGroup>
+
+</Project>
