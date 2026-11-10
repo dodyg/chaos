@@ -3,7 +3,6 @@ import { diaryRpc, historyRpc, type DiaryEntryResponse, type HistoryAsOfResponse
 import { History, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Count, DeletedItems, Field, StatusBadge, label } from "@/components/common";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { MarkdownPreview, type MarkdownLinks } from "./markdown";
@@ -141,7 +140,6 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
   const diaryCount = items.filter(item => item.diary).length;
   const snapshot = viewer?.snapshot;
   return <section className="grid gap-3" aria-labelledby="journal-heading">
-    <Separator/>
     <h3 id="journal-heading" className="flex items-center font-semibold">Diary &amp; history{diaryCount > 0 && <Count>{diaryCount}</Count>}</h3>
 
     <form className="grid gap-2" onSubmit={add}>

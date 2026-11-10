@@ -10,6 +10,9 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
+  requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
+  cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
 });
 const { render, screen, waitFor, cleanup, act, within, fireEvent } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;

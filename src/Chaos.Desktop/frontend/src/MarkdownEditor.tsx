@@ -20,6 +20,8 @@ type Props = {
   searchLinks?: (query: string) => Promise<LinkCandidate[]>;
   links?: MarkdownLinks;
   onBlur?: () => void;
+  /** Extra classes for the source area and preview box, e.g. a taller minimum height. */
+  areaClassName?: string;
 };
 
 const tools: { action: FormatAction; label: string; icon: React.ReactNode; shortcut?: string }[] = [
@@ -44,7 +46,7 @@ const tools: { action: FormatAction; label: string; icon: React.ReactNode; short
  * links, and a sanitized preview. Edits go through the browser's own insertText command when
  * available so Ctrl+Z inside the text keeps working.
  */
-export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur }: Props) {
+export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName }: Props) {
   const area = React.useRef<HTMLTextAreaElement | null>(null);
   const pendingSelection = React.useRef<[number, number] | null>(null);
   const [mode, setMode] = React.useState<"source" | "preview">("source");
@@ -142,7 +144,7 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
       </div>
       <div className="relative">
         <Textarea ref={area} id={id} rows={rows} value={value} disabled={disabled} placeholder={placeholder} spellCheck
-          className="font-mono text-sm leading-relaxed" dir="auto"
+          className={cn("font-mono text-sm leading-relaxed", areaClassName)} dir="auto"
           role={searchLinks ? "combobox" : undefined} aria-expanded={searchLinks ? showList : undefined} aria-controls={showList ? listId : undefined}
           aria-autocomplete={searchLinks ? "list" : undefined} aria-activedescendant={showList ? `${listId}-${active}` : undefined}
           onChange={event => { onChange(event.target.value); trackLinkQuery(event.target.value, event.target.selectionStart); }}
@@ -155,6 +157,6 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
         </ul>}
       </div>
       <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task.</p>
-    </> : <div className="min-h-24 rounded-md border bg-background px-3 py-2 text-sm"><MarkdownPreview source={value} links={links}/></div>}
+    </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
   </div>;
 }
