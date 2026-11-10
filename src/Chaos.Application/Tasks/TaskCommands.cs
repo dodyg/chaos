@@ -1,7 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Domain.Tasks;
@@ -11,105 +7,437 @@ namespace Chaos.Application.Tasks;
 
 public sealed record CaptureTaskCommand(string OperationId, string ContainerId, string Title, string? Notes);
 
-/// <summary>Stored receipt results and history snapshots carry a version so later app versions can recognize what they read.</summary>
-public sealed record VersionedPayload<T>(int V, T Payload)
-{
-    public const int CurrentVersion = 1;
-}
-
 public sealed record CaptureTaskResult(TaskRecord Task, string OperationId, bool Replayed);
 
+public sealed record UpdateTaskDetailsCommand(
+    string OperationId,
+    string TaskId,
+    long ExpectedVersion,
+    string Title,
+    string? Notes,
+    DateOnly? PlannedDate,
+    TimeOnly? PlannedTime,
+    string? PlannedZoneId,
+    DateOnly? DueDate,
+    TimeOnly? DueTime,
+    string? DueZoneId,
+    TaskPriority Priority,
+    int? EstimateMinutes,
+    CapacityCategory CapacityCategory);
+
+public sealed record SetTaskStatusCommand(
+    string OperationId,
+    string TaskId,
+    long ExpectedVersion,
+    TaskItemStatus Status,
+    OpenSubtaskChoice? OpenSubtaskChoice);
+
 /// <summary>
-/// Single-task create/get (PLAN §15 WP1). Each capture carries a client OperationId: the
-/// same operation replayed with the same normalized payload returns the original result;
-/// the same OperationId with different content is an operation conflict. Task row, history
-/// snapshot and receipt commit in one transaction; the empty ContainerId targets the Inbox.
+/// The explicit choice PLAN §6 requires when completing a parent that still has open
+/// subtasks: complete them together, or keep them open. Never a silent child change.
+/// </summary>
+public enum OpenSubtaskChoice
+{
+    CompleteAll = 0,
+    KeepOpen = 1,
+}
+
+public sealed record MoveTaskCommand(string OperationId, string TaskId, long ExpectedVersion, string TargetContainerId, string? TargetSectionId);
+
+public sealed record ReorderTaskCommand(string OperationId, string TaskId, long ExpectedVersion, int InsertionIndex);
+
+public sealed record DeleteTaskCommand(string OperationId, string TaskId, long ExpectedVersion);
+
+/// <summary>A task mutation result: the task as it is after the command, a replay flag and an optional overrideable warning.</summary>
+public sealed record TaskMutationResult(TaskRecord Task, bool Replayed, string? Warning);
+
+public sealed record TaskDetail(TaskRecord? Task, IReadOnlyList<SubtaskRecord> Subtasks);
+
+/// <summary>
+/// Task lifecycle commands (PLAN §15 WP2) over one store: capture (WP1), the full editor,
+/// status/completion with terminal timestamps, container/section moves, manual reorder,
+/// reversible deletion/restore, and history with before/after aggregate snapshots. Every
+/// mutating command carries a client OperationId: the same operation replayed with the same
+/// normalized payload returns the original result; different content is an operation conflict.
 /// </summary>
 public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
-    private static readonly JsonSerializerOptions StoredJson = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     public async Task<CaptureTaskResult> CaptureAsync(CaptureTaskCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         var normalized = Normalize(command);
-        var payloadHash = CanonicalHash(normalized);
 
-        return await store.ExecuteAsync(async (session, token) =>
+        return await InWriteAsync(async (session, profile, now, token) =>
         {
-            var profile = await RequirePrimaryProfile(session, token);
-
-            var receipt = await session.Receipts.FindAsync(profile.Id, command.OperationId, token);
-            if (receipt is not null)
-            {
-                if (!string.Equals(receipt.PayloadHash, payloadHash, StringComparison.Ordinal))
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, normalized.OperationId, "task.capture", normalized, now, async inner =>
                 {
-                    throw AppException.OperationConflict(
-                        "This operation was already used with different content. Retry the same change; for new content use a new operation.");
-                }
+                    var container = await ResolveContainerAsync(session, normalized.ContainerId, inner);
+                    var position = await session.Tasks.GetNextPositionAsync(container.Id, inner);
 
-                var stored = JsonSerializer.Deserialize<VersionedPayload<TaskRecord>>(receipt.ResultJson, StoredJson)
-                    ?? throw new AppException(
-                        AppErrorKind.StorageUnavailable,
-                        "The stored result of this operation could not be read. Look for the task in your lists.");
-                return new CaptureTaskResult(stored.Payload, command.OperationId, Replayed: true);
-            }
+                    var task = new TaskRecord
+                    {
+                        Id = ids.NewId().ToString(),
+                        SpaceId = container.SpaceId,
+                        ContainerId = container.Id,
+                        Title = normalized.Title,
+                        Notes = normalized.Notes ?? string.Empty,
+                        Status = TaskItemStatus.NotStarted,
+                        Priority = TaskPriority.Normal,
+                        Position = position,
+                        Version = 1,
+                        CreatedAtUtc = now,
+                        UpdatedAtUtc = now,
+                    };
+                    await session.Tasks.AddAsync(task, inner);
 
-            var container = await ResolveContainerAsync(session, normalized.ContainerId, token);
-            var now = clock.GetUtcNow();
-            var position = await session.Tasks.GetNextPositionAsync(container.Id, token);
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, normalized.OperationId,
+                        before: null,
+                        after: new TaskAggregateSnapshot(task, []),
+                        eventKind: "task.created",
+                        changedFields: ["Title", "Notes", "ContainerId"],
+                        now, inner);
 
-            var task = new TaskRecord
-            {
-                Id = ids.NewId().ToString(),
-                SpaceId = container.SpaceId,
-                ContainerId = container.Id,
-                Title = normalized.Title,
-                Notes = normalized.Notes ?? string.Empty,
-                Status = TaskItemStatus.NotStarted,
-                Priority = TaskPriority.Normal,
-                Position = position,
-                Version = 1,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now,
-            };
-            await session.Tasks.AddAsync(task, token);
+                    return new CaptureTaskResult(task, normalized.OperationId, Replayed: false);
+                }, token);
 
-            var snapshot = JsonSerializer.Serialize(
-                new VersionedPayload<TaskRecord>(VersionedPayload<TaskRecord>.CurrentVersion, task), StoredJson);
-            await session.History.AddAsync(new TaskHistoryRecord
-            {
-                Id = ids.NewId().ToString(),
-                TaskId = task.Id,
-                OperationId = command.OperationId,
-                EffectiveAtUtc = now,
-                Actor = "local",
-                EventKind = "task.created",
-                ChangedFields = ["Title", "Notes", "ContainerId"],
-                SnapshotAfter = snapshot,
-                AggregateVersion = task.Version,
-                RecordedAtUtc = now,
-            }, token);
-
-            await session.Receipts.AddAsync(new OperationReceiptRecord
-            {
-                ProfileId = profile.Id,
-                OperationId = command.OperationId,
-                CommandKind = "task.capture",
-                PayloadHash = payloadHash,
-                ResultJson = snapshot,
-                CommittedAtUtc = now,
-            }, token);
-
-            return new CaptureTaskResult(task, command.OperationId, Replayed: false);
+            return replayed ? envelope with { Replayed = true } : envelope;
         }, ct);
     }
 
     public async Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct = default) =>
         await store.QueryAsync((session, token) => session.Tasks.GetAsync(taskId, token), ct);
+
+    /// <summary>The task and its active subtasks, or a null task when the ID is unknown.</summary>
+    public async Task<TaskDetail> GetDetailAsync(string taskId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var task = await session.Tasks.GetAsync(taskId, token);
+            return task is null
+                ? new TaskDetail(null, [])
+                : new TaskDetail(task, await session.Subtasks.ListByTaskAsync(taskId, token));
+        }, ct);
+
+    /// <summary>Active top-level tasks of one container, ordered by (Position, Id).</summary>
+    public async Task<IReadOnlyList<TaskRecord>> ListAsync(string containerId, CancellationToken ct = default) =>
+        await store.QueryAsync((session, token) => session.Tasks.ListByContainerAsync(containerId, token), ct);
+
+    public async Task<IReadOnlyList<TaskRecord>> ListInboxAsync(CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var inbox = await ResolveContainerAsync(session, string.Empty, token);
+            return await session.Tasks.ListByContainerAsync(inbox.Id, token);
+        }, ct);
+
+    public async Task<TaskMutationResult> UpdateDetailsAsync(UpdateTaskDetailsCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var normalized = Normalize(command);
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, normalized.OperationId, "task.update-details", normalized, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, normalized.TaskId, inner);
+                    RequireCurrentVersion(task, normalized.ExpectedVersion);
+                    var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
+                    var before = new TaskAggregateSnapshot(task, subtasks);
+
+                    var updated = task with
+                    {
+                        Title = normalized.Title,
+                        Notes = normalized.Notes ?? string.Empty,
+                        PlannedDate = normalized.PlannedDate,
+                        PlannedTime = normalized.PlannedTime,
+                        PlannedZoneId = normalized.PlannedZoneId,
+                        DueDate = normalized.DueDate,
+                        DueTime = normalized.DueTime,
+                        DueZoneId = normalized.DueZoneId,
+                        Priority = normalized.Priority,
+                        EstimateMinutes = normalized.EstimateMinutes,
+                        CapacityCategory = normalized.CapacityCategory,
+                        Version = task.Version + 1,
+                        UpdatedAtUtc = now,
+                    };
+                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
+
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, normalized.OperationId, before,
+                        new TaskAggregateSnapshot(applied, subtasks),
+                        "task.updated",
+                        TaskMutationSupport.ChangedTaskFields(task, applied),
+                        now, inner);
+
+                    return new TaskMutationResult(applied, Replayed: false, PlannedAfterDueWarning(normalized));
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    public async Task<TaskMutationResult> SetStatusAsync(SetTaskStatusCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var normalized = command with { Status = TaskFieldValidation.Status(command.Status, "status") };
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, normalized.OperationId, "task.set-status", normalized, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, normalized.TaskId, inner);
+                    RequireCurrentVersion(task, normalized.ExpectedVersion);
+                    if (task.Status == normalized.Status)
+                    {
+                        return new TaskMutationResult(task, Replayed: false, Warning: null); // nothing to change
+                    }
+
+                    var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
+                    var before = new TaskAggregateSnapshot(task, subtasks);
+
+                    // Reopening restores the previous nonterminal status when history knows it (PLAN §6).
+                    var targetStatus = TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(normalized.Status)
+                        ? await TaskMutationSupport.PreviousNonterminalStatusAsync(session, task.Id, subtaskId: null, inner)
+                        : normalized.Status;
+
+                    if (targetStatus == TaskItemStatus.Done && !TaskItemStatusRules.IsTerminal(task.Status))
+                    {
+                        await ApplyOpenSubtaskChoiceAsync(session, subtasks, normalized.OpenSubtaskChoice, now, inner);
+                        subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
+                    }
+
+                    var updated = task with
+                    {
+                        Status = targetStatus,
+                        CompletedAtUtc = targetStatus == TaskItemStatus.Done ? now : null,
+                        CancelledAtUtc = targetStatus == TaskItemStatus.Cancelled ? now : null,
+                        Version = task.Version + 1,
+                        UpdatedAtUtc = now,
+                    };
+                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
+
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, normalized.OperationId, before,
+                        new TaskAggregateSnapshot(applied, subtasks),
+                        EventKindForStatusChange(task.Status, applied.Status),
+                        ["Status"],
+                        now, inner);
+
+                    return new TaskMutationResult(applied, Replayed: false, Warning: null);
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    public async Task<TaskMutationResult> MoveAsync(MoveTaskCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, command.OperationId, "task.move", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+
+                    var target = await session.Containers.GetAsync(command.TargetContainerId, inner)
+                        ?? throw AppException.NotFound("That list or project no longer exists. Refresh and try again.");
+                    if (target.SpaceId != task.SpaceId)
+                    {
+                        throw AppException.Validation("containerId", "That list or project belongs to a different space. Choose one from this space.");
+                    }
+
+                    SectionRecord? section = null;
+                    if (command.TargetSectionId is { } sectionId)
+                    {
+                        section = await session.Sections.GetAsync(sectionId, inner)
+                            ?? throw AppException.NotFound("That section no longer exists. Refresh and try again.");
+                        if (section.ContainerId != target.Id)
+                        {
+                            throw AppException.Validation("sectionId", "That section belongs to a different list or project. Pick a section inside the target.");
+                        }
+                    }
+
+                    var sameSection = section?.Id == task.SectionId;
+                    if (target.Id == task.ContainerId && sameSection)
+                    {
+                        return new TaskMutationResult(task, Replayed: false, Warning: null); // already there
+                    }
+
+                    var updated = task with
+                    {
+                        ContainerId = target.Id,
+                        SectionId = section?.Id,
+                        Version = task.Version + 1,
+                        UpdatedAtUtc = now,
+                    };
+                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
+
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, command.OperationId,
+                        new TaskAggregateSnapshot(task, await session.Subtasks.ListByTaskAsync(task.Id, inner)),
+                        new TaskAggregateSnapshot(applied, await session.Subtasks.ListByTaskAsync(task.Id, inner)),
+                        "task.moved",
+                        TaskMutationSupport.ChangedTaskFields(task, applied),
+                        now, inner);
+
+                    return new TaskMutationResult(applied, Replayed: false, Warning: null);
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    public async Task<TaskMutationResult> ReorderAsync(ReorderTaskCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, command.OperationId, "task.reorder", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var siblings = await session.Tasks.ListByContainerAsync(task.ContainerId, inner);
+
+                    var assignments = RankOrdering.Place(
+                        [.. siblings.Select(row => (row.Id, row.Position, row.Version))],
+                        task.Id,
+                        command.InsertionIndex);
+                    if (assignments.Count == 0)
+                    {
+                        return new TaskMutationResult(task, Replayed: false, Warning: null); // already in place
+                    }
+
+                    TaskRecord moved = task;
+                    foreach (var assignment in assignments)
+                    {
+                        var row = siblings.Single(candidate => candidate.Id == assignment.Id);
+                        var updated = row with
+                        {
+                            Position = assignment.NewPosition,
+                            Version = row.Version + 1,
+                            UpdatedAtUtc = now,
+                        };
+                        var applied = await ApplyTaskUpdateAsync(session, updated, row.Version, token);
+                        if (applied.Id == task.Id)
+                        {
+                            moved = applied;
+                        }
+
+                        await TaskMutationSupport.WriteTaskHistoryAsync(
+                            session, ids, command.OperationId,
+                            new TaskAggregateSnapshot(row, await session.Subtasks.ListByTaskAsync(row.Id, inner)),
+                            new TaskAggregateSnapshot(applied, await session.Subtasks.ListByTaskAsync(row.Id, inner)),
+                            "task.reordered",
+                            ["Position"],
+                            now, inner);
+                    }
+
+                    return new TaskMutationResult(moved, Replayed: false, Warning: null);
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    /// <summary>Reversible deletion (PLAN §1 decision 10): the parent and its subtasks are tombstoned together.</summary>
+    public async Task<TaskMutationResult> DeleteAsync(DeleteTaskCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, command.OperationId, "task.delete", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
+                    var before = new TaskAggregateSnapshot(task, subtasks);
+
+                    var tombstonedSubtasks = new List<SubtaskRecord>(subtasks.Count);
+                    foreach (var subtask in subtasks)
+                    {
+                        var updated = subtask with { DeletedAtUtc = now, Version = subtask.Version + 1, UpdatedAtUtc = now };
+                        tombstonedSubtasks.Add(await ApplySubtaskUpdateAsync(session, updated, subtask.Version, token));
+                    }
+
+                    var deleted = task with { DeletedAtUtc = now, Version = task.Version + 1, UpdatedAtUtc = now };
+                    var applied = await ApplyTaskUpdateAsync(session, deleted, task.Version, token);
+
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, command.OperationId, before,
+                        new TaskAggregateSnapshot(applied, tombstonedSubtasks),
+                        "task.deleted",
+                        ["DeletedAtUtc"],
+                        now, inner);
+
+                    return new TaskMutationResult(applied, Replayed: false, Warning: null);
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Restores a tombstoned task together with the subtasks its deletion tombstoned
+    /// (matched by the shared deletion instant); subtasks deleted separately stay deleted.
+    /// </summary>
+    public async Task<TaskMutationResult> RestoreAsync(DeleteTaskCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (envelope, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
+                session, profile.Id, command.OperationId, "task.restore", command, now, async inner =>
+                {
+                    var task = await session.Tasks.GetIncludingDeletedAsync(command.TaskId, inner)
+                        ?? throw AppException.NotFound("No task with that ID exists on this computer.");
+                    if (task.DeletedAtUtc is null)
+                    {
+                        return new TaskMutationResult(task, Replayed: false, Warning: null); // already active
+                    }
+
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var deletedAt = task.DeletedAtUtc.Value;
+                    var allSubtasks = await session.Subtasks.ListByTaskIncludingDeletedAsync(task.Id, inner);
+                    var before = new TaskAggregateSnapshot(task, allSubtasks.Where(subtask => subtask.DeletedAtUtc is null).ToList());
+
+                    var restoredSubtasks = new List<SubtaskRecord>();
+                    foreach (var subtask in allSubtasks)
+                    {
+                        if (subtask.DeletedAtUtc != deletedAt)
+                        {
+                            continue;
+                        }
+
+                        var updated = subtask with { DeletedAtUtc = null, Version = subtask.Version + 1, UpdatedAtUtc = now };
+                        restoredSubtasks.Add(await ApplySubtaskUpdateAsync(session, updated, subtask.Version, token));
+                    }
+
+                    var restored = task with { DeletedAtUtc = null, Version = task.Version + 1, UpdatedAtUtc = now };
+                    var applied = await ApplyTaskUpdateAsync(session, restored, task.Version, token);
+
+                    await TaskMutationSupport.WriteTaskHistoryAsync(
+                        session, ids, command.OperationId, before,
+                        new TaskAggregateSnapshot(applied, restoredSubtasks),
+                        "task.restored",
+                        ["DeletedAtUtc"],
+                        now, inner);
+
+                    return new TaskMutationResult(applied, Replayed: false, Warning: null);
+                }, token);
+
+            return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
 
     /// <summary>Trims and limit-checks the title; the payload hash covers the normalized text, so whitespace-only retries replay.</summary>
     internal static CaptureTaskCommand Normalize(CaptureTaskCommand command)
@@ -126,6 +454,110 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
 
         return command with { Title = title };
     }
+
+    /// <summary>Field-level validation of the full editor payload (PLAN §6 limits and anchor rules).</summary>
+    internal static UpdateTaskDetailsCommand Normalize(UpdateTaskDetailsCommand command)
+    {
+        var planned = TaskFieldValidation.Anchor(
+            command.PlannedDate, command.PlannedTime, command.PlannedZoneId,
+            "plannedDate", "plannedTime", "plannedZoneId");
+        var due = TaskFieldValidation.Anchor(
+            command.DueDate, command.DueTime, command.DueZoneId,
+            "dueDate", "dueTime", "dueZoneId");
+
+        return command with
+        {
+            Title = TaskFieldValidation.Title(command.Title, "title"),
+            Notes = TaskFieldValidation.Notes(command.Notes, "notes"),
+            PlannedDate = planned.Date,
+            PlannedTime = planned.Time,
+            PlannedZoneId = planned.ZoneId,
+            DueDate = due.Date,
+            DueTime = due.Time,
+            DueZoneId = due.ZoneId,
+            Priority = TaskFieldValidation.Priority(command.Priority, "priority"),
+            EstimateMinutes = TaskFieldValidation.Estimate(command.EstimateMinutes, "estimateMinutes"),
+            CapacityCategory = TaskFieldValidation.Category(command.CapacityCategory, "capacityCategory"),
+        };
+    }
+
+    /// <summary>A planned date after a due date warns but stays as entered (PLAN §5: never silently swap).</summary>
+    internal static string? PlannedAfterDueWarning(UpdateTaskDetailsCommand normalized) =>
+        normalized.PlannedDate is { } planned && normalized.DueDate is { } due && planned > due
+            ? "The planned date is after the due date. Both values are kept as entered."
+            : null;
+
+    private async Task<T> InWriteAsync<T>(
+        Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
+        CancellationToken ct) =>
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+
+    private static async Task<TaskRecord> RequireTaskAsync(IDataSession session, string taskId, CancellationToken token) =>
+        await session.Tasks.GetAsync(taskId, token)
+        ?? throw AppException.NotFound("That task no longer exists. Refresh and try again.");
+
+    private static void RequireCurrentVersion(TaskRecord task, long expectedVersion)
+    {
+        if (task.Version != expectedVersion)
+        {
+            throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
+        }
+    }
+
+    private static async Task<TaskRecord> ApplyTaskUpdateAsync(IDataSession session, TaskRecord updated, long expectedVersion, CancellationToken token) =>
+        await session.Tasks.UpdateAsync(updated, expectedVersion, token)
+        ?? throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
+
+    private static async Task<SubtaskRecord> ApplySubtaskUpdateAsync(IDataSession session, SubtaskRecord updated, long expectedVersion, CancellationToken token) =>
+        await session.Subtasks.UpdateAsync(updated, expectedVersion, token)
+        ?? throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
+
+    private static async Task ApplyOpenSubtaskChoiceAsync(
+        IDataSession session,
+        IReadOnlyList<SubtaskRecord> subtasks,
+        OpenSubtaskChoice? choice,
+        DateTimeOffset now,
+        CancellationToken token)
+    {
+        var open = subtasks.Where(subtask => !subtask.IsTerminal).ToList();
+        if (open.Count == 0)
+        {
+            return;
+        }
+
+        if (choice is null)
+        {
+            throw AppException.Validation(
+                "openSubtaskChoice",
+                "This task still has open subtasks. Choose \"completeAll\" to complete them together, or \"keepOpen\" to complete only this task.");
+        }
+
+        if (choice == OpenSubtaskChoice.KeepOpen)
+        {
+            return;
+        }
+
+        foreach (var subtask in open)
+        {
+            var updated = subtask with
+            {
+                Status = TaskItemStatus.Done,
+                CompletedAtUtc = now,
+                CancelledAtUtc = null,
+                Version = subtask.Version + 1,
+                UpdatedAtUtc = now,
+            };
+            await ApplySubtaskUpdateAsync(session, updated, subtask.Version, token);
+        }
+    }
+
+    private static string EventKindForStatusChange(TaskItemStatus before, TaskItemStatus after) => after switch
+    {
+        TaskItemStatus.Done => "task.completed",
+        TaskItemStatus.Cancelled => "task.cancelled",
+        _ when TaskItemStatusRules.IsTerminal(before) => "task.reopened",
+        _ => "task.status-changed",
+    };
 
     private static async Task<ProfileRecord> RequirePrimaryProfile(IDataSession session, CancellationToken token) =>
         await session.Profiles.GetPrimaryAsync(token)
@@ -153,9 +585,5 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
     }
 
     /// <summary>SHA-256 lowercase hex over canonical camelCase JSON of the normalized command.</summary>
-    internal static string CanonicalHash(CaptureTaskCommand normalizedCommand)
-    {
-        var canonical = JsonSerializer.Serialize(normalizedCommand, StoredJson);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
-    }
+    internal static string CanonicalHash(CaptureTaskCommand normalizedCommand) => StoredJsonFormats.Hash(normalizedCommand);
 }

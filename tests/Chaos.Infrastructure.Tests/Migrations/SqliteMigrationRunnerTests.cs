@@ -30,17 +30,17 @@ public sealed class SqliteMigrationRunnerTests
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(version).IsEqualTo(1L);
+        await Assert.That(version).IsEqualTo(2L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(2L);
         using var checksum = connection.CreateCommand();
         checksum.CommandText = "SELECT Checksum FROM SchemaMigrations WHERE Version = 1;";
         var storedChecksum = await checksum.ExecuteScalarAsync() as string;
         await Assert.That(storedChecksum).IsNotNull();
         await Assert.That(storedChecksum!.Length).IsEqualTo(64);
         // Core tables exist (spot check across the 001 schema map).
-        foreach (var table in new[] { "Profiles", "Spaces", "Containers", "Tasks", "TaskHistory", "OperationReceipts", "BackupCatalog" })
+        foreach (var table in new[] { "Profiles", "Spaces", "Containers", "Tasks", "TaskHistory", "OperationReceipts", "BackupCatalog", "TaskTemplates" })
         {
             using var probe = connection.CreateCommand();
             probe.CommandText = $"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}';";
@@ -56,10 +56,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var second = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(second).IsEqualTo(1L);
+        await Assert.That(second).IsEqualTo(2L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(2L);
     }
 
     [Test]

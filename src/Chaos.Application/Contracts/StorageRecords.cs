@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.Contracts;
@@ -68,7 +69,10 @@ public sealed record TaskRecord : AggregateRecord
     public required long Position { get; init; }
     public string? RecurrenceOccurrenceKey { get; init; }
 
+    // Computed flags are derived from Status; excluding them keeps stored snapshots canonical.
+    [JsonIgnore]
     public bool IsTerminal => TaskItemStatusRules.IsTerminal(Status);
+    [JsonIgnore]
     public bool IsCompleted => TaskItemStatusRules.IsCompleted(Status);
 }
 

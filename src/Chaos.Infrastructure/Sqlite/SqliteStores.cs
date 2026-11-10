@@ -11,7 +11,10 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IProfileStore Profiles { get; } = new SqliteProfileStore(connection);
     public ISpaceStore Spaces { get; } = new SqliteSpaceStore(connection);
     public IContainerStore Containers { get; } = new SqliteContainerStore(connection);
+    public ISectionStore Sections { get; } = new SqliteSectionStore(connection);
     public ITaskStore Tasks { get; } = new SqliteTaskStore(connection);
+    public ISubtaskStore Subtasks { get; } = new SqliteSubtaskStore(connection);
+    public ITemplateStore Templates { get; } = new SqliteTemplateStore(connection);
     public ITaskHistoryStore History { get; } = new SqliteTaskHistoryStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
@@ -166,6 +169,75 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         return await reader.ReadAsync(ct) ? ReadContainer(reader) : null;
     }
 
+    public async Task<IReadOnlyList<ContainerRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Containers WHERE SpaceId = $space AND DeletedAtUtc IS NULL ORDER BY Position, Id;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var containers = new List<ContainerRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            containers.Add(ReadContainer(reader));
+        }
+
+        return containers;
+    }
+
+    public async Task<long> GetNextPositionAsync(string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(Position), -1024) + 1024 FROM Containers WHERE SpaceId = $space AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        var value = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(value);
+    }
+
+    public async Task<long> CountActiveTasksAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM Tasks WHERE ContainerId = $container AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$container", containerId);
+        var value = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(value);
+    }
+
+    public async Task<ContainerRecord?> UpdateAsync(ContainerRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        // Optimistic concurrency (PLAN §5): the version check alone decides; a tombstoned
+        // row stays addressable so restore-style flows can rewrite it.
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Containers SET
+                Name = $name, NormalizedName = $normalizedName, Position = $position,
+                DeadlineDate = $deadline, ArchivedAtUtc = $archived,
+                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
+            WHERE Id = $id AND Version = $expectedVersion;
+            """;
+        command.Parameters.AddWithValue("$name", updated.Name);
+        command.Parameters.AddWithValue("$normalizedName", NormalizeName(updated.Name));
+        command.Parameters.AddWithValue("$position", updated.Position);
+        command.Parameters.AddWithValue("$deadline", SqliteProfileStore.OptionalDate(updated.DeadlineDate));
+        command.Parameters.AddWithValue("$archived", SqliteProfileStore.OptionalInstant(updated.ArchivedAtUtc));
+        command.Parameters.AddWithValue("$newVersion", updated.Version);
+        command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        command.Parameters.AddWithValue("$id", updated.Id);
+        command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
+
+        var rows = await command.ExecuteNonQueryAsync(ct);
+        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+    }
+
+    private async Task<ContainerRecord?> GetIncludingDeletedAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Containers WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", containerId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadContainer(reader) : null;
+    }
+
     public async Task AddAsync(ContainerRecord container, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -221,6 +293,30 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         return await reader.ReadAsync(ct) ? ReadTask(reader) : null;
     }
 
+    public async Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Tasks WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", taskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTask(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Tasks WHERE ContainerId = $container AND DeletedAtUtc IS NULL ORDER BY Position, Id;";
+        command.Parameters.AddWithValue("$container", containerId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var tasks = new List<TaskRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            tasks.Add(ReadTask(reader));
+        }
+
+        return tasks;
+    }
+
     public async Task AddAsync(TaskRecord task, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -267,16 +363,18 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE Tasks SET
-                SectionId = $section, Title = $title, Notes = $notes, Status = $status, Priority = $priority,
+                ContainerId = $container, SectionId = $section, Position = $position, Title = $title, Notes = $notes, Status = $status, Priority = $priority,
                 EstimateMinutes = $estimate, CapacityCategory = $category,
                 PlannedDate = $plannedDate, PlannedTime = $plannedTime, PlannedZoneId = $plannedZone,
                 DueDate = $dueDate, DueTime = $dueTime, DueZoneId = $dueZone,
                 CompletedAtUtc = $completed, CancelledAtUtc = $cancelled,
                 RecurrenceOccurrenceKey = $occurrenceKey,
                 Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
-            WHERE Id = $id AND Version = $expectedVersion AND DeletedAtUtc IS NULL;
+            WHERE Id = $id AND Version = $expectedVersion;
             """;
+        command.Parameters.AddWithValue("$container", updated.ContainerId);
         command.Parameters.AddWithValue("$section", SqliteProfileStore.OptionalValue(updated.SectionId));
+        command.Parameters.AddWithValue("$position", updated.Position);
         command.Parameters.AddWithValue("$title", updated.Title);
         command.Parameters.AddWithValue("$notes", updated.Notes);
         command.Parameters.AddWithValue("$status", (long)updated.Status);
@@ -299,7 +397,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
 
         var rows = await command.ExecuteNonQueryAsync(ct);
-        return rows == 1 ? await GetAsync(updated.Id, ct) : null;
+        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
     }
 
     public async Task<long> GetNextPositionAsync(string containerId, CancellationToken ct)
@@ -340,6 +438,327 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
     };
 }
 
+public sealed class SqliteSectionStore(SqliteConnection connection) : ISectionStore
+{
+    public async Task<SectionRecord?> GetAsync(string sectionId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Sections WHERE Id = $id AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$id", sectionId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadSection(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<SectionRecord>> ListByContainerAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Sections WHERE ContainerId = $container AND DeletedAtUtc IS NULL ORDER BY Position, Id;";
+        command.Parameters.AddWithValue("$container", containerId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var sections = new List<SectionRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            sections.Add(ReadSection(reader));
+        }
+
+        return sections;
+    }
+
+    public async Task AddAsync(SectionRecord section, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO Sections (Id, ContainerId, Title, Position, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $container, $title, $position, $version, $created, $updated, $deleted);
+            """;
+        command.Parameters.AddWithValue("$id", section.Id);
+        command.Parameters.AddWithValue("$container", section.ContainerId);
+        command.Parameters.AddWithValue("$title", section.Title);
+        command.Parameters.AddWithValue("$position", section.Position);
+        command.Parameters.AddWithValue("$version", section.Version);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(section.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(section.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(section.DeletedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<SectionRecord?> UpdateAsync(SectionRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Sections SET
+                Title = $title, Position = $position,
+                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
+            WHERE Id = $id AND Version = $expectedVersion;
+            """;
+        command.Parameters.AddWithValue("$title", updated.Title);
+        command.Parameters.AddWithValue("$position", updated.Position);
+        command.Parameters.AddWithValue("$newVersion", updated.Version);
+        command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        command.Parameters.AddWithValue("$id", updated.Id);
+        command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
+
+        var rows = await command.ExecuteNonQueryAsync(ct);
+        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+    }
+
+    public async Task<long> GetNextPositionAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(Position), -1024) + 1024 FROM Sections WHERE ContainerId = $container AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$container", containerId);
+        var value = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(value);
+    }
+
+    private async Task<SectionRecord?> GetIncludingDeletedAsync(string sectionId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Sections WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", sectionId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadSection(reader) : null;
+    }
+
+    internal static SectionRecord ReadSection(SqliteDataReader r) => new()
+    {
+        Id = r.S("Id"),
+        ContainerId = r.S("ContainerId"),
+        Title = r.S("Title"),
+        Position = r.L("Position"),
+        Version = r.L("Version"),
+        CreatedAtUtc = r.I("CreatedAtUtc"),
+        UpdatedAtUtc = r.I("UpdatedAtUtc"),
+        DeletedAtUtc = r.In("DeletedAtUtc"),
+    };
+}
+
+public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskStore
+{
+    public async Task<SubtaskRecord?> GetAsync(string subtaskId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Subtasks WHERE Id = $id AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$id", subtaskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadSubtask(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<SubtaskRecord>> ListByTaskAsync(string taskId, CancellationToken ct)
+    {
+        return await ListAsync(taskId, includeDeleted: false, ct);
+    }
+
+    public async Task<IReadOnlyList<SubtaskRecord>> ListByTaskIncludingDeletedAsync(string taskId, CancellationToken ct)
+    {
+        return await ListAsync(taskId, includeDeleted: true, ct);
+    }
+
+    private async Task<IReadOnlyList<SubtaskRecord>> ListAsync(string taskId, bool includeDeleted, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = includeDeleted
+            ? "SELECT * FROM Subtasks WHERE TaskId = $task ORDER BY Position, Id;"
+            : "SELECT * FROM Subtasks WHERE TaskId = $task AND DeletedAtUtc IS NULL ORDER BY Position, Id;";
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var subtasks = new List<SubtaskRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            subtasks.Add(ReadSubtask(reader));
+        }
+
+        return subtasks;
+    }
+
+    public async Task AddAsync(SubtaskRecord subtask, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO Subtasks (Id, TaskId, Title, Notes, Status, CompletedAtUtc, CancelledAtUtc,
+                Position, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $task, $title, $notes, $status, $completed, $cancelled,
+                $position, $version, $created, $updated, $deleted);
+            """;
+        command.Parameters.AddWithValue("$id", subtask.Id);
+        command.Parameters.AddWithValue("$task", subtask.TaskId);
+        command.Parameters.AddWithValue("$title", subtask.Title);
+        command.Parameters.AddWithValue("$notes", subtask.Notes);
+        command.Parameters.AddWithValue("$status", (long)subtask.Status);
+        command.Parameters.AddWithValue("$completed", SqliteProfileStore.OptionalInstant(subtask.CompletedAtUtc));
+        command.Parameters.AddWithValue("$cancelled", SqliteProfileStore.OptionalInstant(subtask.CancelledAtUtc));
+        command.Parameters.AddWithValue("$position", subtask.Position);
+        command.Parameters.AddWithValue("$version", subtask.Version);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(subtask.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(subtask.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(subtask.DeletedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<SubtaskRecord?> UpdateAsync(SubtaskRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        // Optimistic concurrency (PLAN §5): no tombstone filter, so restore can rewrite
+        // a deleted row; the version check alone decides.
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Subtasks SET
+                Title = $title, Notes = $notes, Status = $status,
+                CompletedAtUtc = $completed, CancelledAtUtc = $cancelled, Position = $position,
+                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
+            WHERE Id = $id AND Version = $expectedVersion;
+            """;
+        command.Parameters.AddWithValue("$title", updated.Title);
+        command.Parameters.AddWithValue("$notes", updated.Notes);
+        command.Parameters.AddWithValue("$status", (long)updated.Status);
+        command.Parameters.AddWithValue("$completed", SqliteProfileStore.OptionalInstant(updated.CompletedAtUtc));
+        command.Parameters.AddWithValue("$cancelled", SqliteProfileStore.OptionalInstant(updated.CancelledAtUtc));
+        command.Parameters.AddWithValue("$position", updated.Position);
+        command.Parameters.AddWithValue("$newVersion", updated.Version);
+        command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        command.Parameters.AddWithValue("$id", updated.Id);
+        command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
+
+        var rows = await command.ExecuteNonQueryAsync(ct);
+        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+    }
+
+    public async Task<long> GetNextPositionAsync(string taskId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(Position), -1024) + 1024 FROM Subtasks WHERE TaskId = $task AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$task", taskId);
+        var value = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(value);
+    }
+
+    private async Task<SubtaskRecord?> GetIncludingDeletedAsync(string subtaskId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Subtasks WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", subtaskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadSubtask(reader) : null;
+    }
+
+    internal static SubtaskRecord ReadSubtask(SqliteDataReader r) => new()
+    {
+        Id = r.S("Id"),
+        TaskId = r.S("TaskId"),
+        Title = r.S("Title"),
+        Notes = r.S("Notes"),
+        Status = (TaskItemStatus)(int)r.L("Status"),
+        CompletedAtUtc = r.In("CompletedAtUtc"),
+        CancelledAtUtc = r.In("CancelledAtUtc"),
+        Position = r.L("Position"),
+        Version = r.L("Version"),
+        CreatedAtUtc = r.I("CreatedAtUtc"),
+        UpdatedAtUtc = r.I("UpdatedAtUtc"),
+        DeletedAtUtc = r.In("DeletedAtUtc"),
+    };
+}
+
+public sealed class SqliteTemplateStore(SqliteConnection connection) : ITemplateStore
+{
+    public async Task<TemplateRecord?> GetAsync(string templateId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE Id = $id AND DeletedAtUtc IS NULL;";
+        command.Parameters.AddWithValue("$id", templateId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTemplate(reader) : null;
+    }
+
+    public async Task<TemplateRecord?> FindByNameAsync(string spaceId, string normalizedName, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE SpaceId = $space AND NormalizedName = $name AND DeletedAtUtc IS NULL LIMIT 1;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        command.Parameters.AddWithValue("$name", normalizedName);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTemplate(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<TemplateRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE SpaceId = $space AND DeletedAtUtc IS NULL ORDER BY NormalizedName, Id;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var templates = new List<TemplateRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            templates.Add(ReadTemplate(reader));
+        }
+
+        return templates;
+    }
+
+    public async Task AddAsync(TemplateRecord template, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO TaskTemplates (Id, SpaceId, Name, NormalizedName, Payload, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $space, $name, $normalizedName, $payload, $version, $created, $updated, $deleted);
+            """;
+        command.Parameters.AddWithValue("$id", template.Id);
+        command.Parameters.AddWithValue("$space", template.SpaceId);
+        command.Parameters.AddWithValue("$name", template.Name);
+        command.Parameters.AddWithValue("$normalizedName", template.NormalizedName);
+        command.Parameters.AddWithValue("$payload", template.PayloadJson);
+        command.Parameters.AddWithValue("$version", template.Version);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(template.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(template.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(template.DeletedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<TemplateRecord?> UpdateAsync(TemplateRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE TaskTemplates SET
+                Name = $name, NormalizedName = $normalizedName, Payload = $payload,
+                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
+            WHERE Id = $id AND Version = $expectedVersion;
+            """;
+        command.Parameters.AddWithValue("$name", updated.Name);
+        command.Parameters.AddWithValue("$normalizedName", updated.NormalizedName);
+        command.Parameters.AddWithValue("$payload", updated.PayloadJson);
+        command.Parameters.AddWithValue("$newVersion", updated.Version);
+        command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        command.Parameters.AddWithValue("$id", updated.Id);
+        command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
+
+        var rows = await command.ExecuteNonQueryAsync(ct);
+        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+    }
+
+    private async Task<TemplateRecord?> GetIncludingDeletedAsync(string templateId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", templateId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTemplate(reader) : null;
+    }
+
+    internal static TemplateRecord ReadTemplate(SqliteDataReader r) => new()
+    {
+        Id = r.S("Id"),
+        SpaceId = r.S("SpaceId"),
+        Name = r.S("Name"),
+        NormalizedName = r.S("NormalizedName"),
+        PayloadJson = r.S("Payload"),
+        Version = r.L("Version"),
+        CreatedAtUtc = r.I("CreatedAtUtc"),
+        UpdatedAtUtc = r.I("UpdatedAtUtc"),
+        DeletedAtUtc = r.In("DeletedAtUtc"),
+    };
+}
+
 public sealed class SqliteTaskHistoryStore(SqliteConnection connection) : ITaskHistoryStore
 {
     public async Task AddAsync(TaskHistoryRecord entry, CancellationToken ct)
@@ -363,6 +782,37 @@ public sealed class SqliteTaskHistoryStore(SqliteConnection connection) : ITaskH
         command.Parameters.AddWithValue("$recorded", StorageFormats.Instant(entry.RecordedAtUtc));
         await command.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task<IReadOnlyList<TaskHistoryRecord>> ListByTaskAsync(string taskId, CancellationToken ct)
+    {
+        // Rowid preserves insertion order when multiple events share a clock instant.
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskHistory WHERE TaskId = $task ORDER BY rowid;";
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var entries = new List<TaskHistoryRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            entries.Add(ReadHistoryEntry(reader));
+        }
+
+        return entries;
+    }
+
+    internal static TaskHistoryRecord ReadHistoryEntry(SqliteDataReader r) => new()
+    {
+        Id = r.S("Id"),
+        TaskId = r.S("TaskId"),
+        OperationId = r.S("OperationId"),
+        EffectiveAtUtc = r.I("EffectiveAtUtc"),
+        Actor = r.S("Actor"),
+        EventKind = r.S("EventKind"),
+        ChangedFields = r.S("ChangedFields").Split(',', StringSplitOptions.RemoveEmptyEntries),
+        SnapshotBefore = r.Sn("SnapshotBefore"),
+        SnapshotAfter = r.Sn("SnapshotAfter"),
+        AggregateVersion = r.L("AggregateVersion"),
+        RecordedAtUtc = r.I("RecordedAtUtc"),
+    };
 }
 
 public sealed class SqliteOperationReceiptStore(SqliteConnection connection) : IOperationReceiptStore

@@ -122,6 +122,23 @@ public sealed class TaskCommandsTests
     }
 
     [Test]
+    public async Task CaptureAsync_PackageOneReceipt_ReplaysAfterUpgrade()
+    {
+        var store = new InMemoryStore();
+        Seed(store);
+        var commands = NewCommands(store);
+        var command = new CaptureTaskCommand("op-legacy", string.Empty, "Buy milk", null);
+        var first = await commands.CaptureAsync(command);
+        store.Receipts[0] = store.Receipts[0] with { ResultJson = StoredJsonFormats.Snapshot(first.Task) };
+
+        var replay = await commands.CaptureAsync(command);
+
+        await Assert.That(replay.Replayed).IsTrue();
+        await Assert.That(replay.Task.Id).IsEqualTo(first.Task.Id);
+        await Assert.That(store.Tasks.Count).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task CaptureAsync_SameOperationIdDifferentPayload_ThrowsOperationConflict()
     {
         var store = new InMemoryStore();

@@ -11,7 +11,10 @@ public interface IDataSession
     IProfileStore Profiles { get; }
     ISpaceStore Spaces { get; }
     IContainerStore Containers { get; }
+    ISectionStore Sections { get; }
     ITaskStore Tasks { get; }
+    ISubtaskStore Subtasks { get; }
+    ITemplateStore Templates { get; }
     ITaskHistoryStore History { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
@@ -35,12 +38,31 @@ public interface IContainerStore
 {
     Task<ContainerRecord?> GetAsync(string containerId, CancellationToken ct);
     Task<ContainerRecord?> GetInboxAsync(string spaceId, CancellationToken ct);
+    Task<IReadOnlyList<ContainerRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
     Task AddAsync(ContainerRecord container, CancellationToken ct);
+    Task<ContainerRecord?> UpdateAsync(ContainerRecord updated, long expectedVersion, CancellationToken ct);
+    Task<long> GetNextPositionAsync(string spaceId, CancellationToken ct);
+    /// <summary>Active (nontombstoned) top-level task count inside one container.</summary>
+    Task<long> CountActiveTasksAsync(string containerId, CancellationToken ct);
+}
+
+public interface ISectionStore
+{
+    Task<SectionRecord?> GetAsync(string sectionId, CancellationToken ct);
+    /// <summary>Active sections of one container, ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<SectionRecord>> ListByContainerAsync(string containerId, CancellationToken ct);
+    Task AddAsync(SectionRecord section, CancellationToken ct);
+    Task<SectionRecord?> UpdateAsync(SectionRecord updated, long expectedVersion, CancellationToken ct);
+    Task<long> GetNextPositionAsync(string containerId, CancellationToken ct);
 }
 
 public interface ITaskStore
 {
     Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct);
+    /// <summary>The row even when tombstoned; restore and history need the deleted record.</summary>
+    Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct);
+    /// <summary>Active top-level tasks of one container, ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct);
     Task AddAsync(TaskRecord task, CancellationToken ct);
     /// <summary>
     /// Optimistic-concurrency update: rewrites the row only when its stored version equals
@@ -52,9 +74,34 @@ public interface ITaskStore
     Task<long> GetNextPositionAsync(string containerId, CancellationToken ct);
 }
 
+public interface ISubtaskStore
+{
+    Task<SubtaskRecord?> GetAsync(string subtaskId, CancellationToken ct);
+    /// <summary>Active subtasks of one task, ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<SubtaskRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
+    /// <summary>All subtasks of one task including tombstoned ones (history snapshots, restore).</summary>
+    Task<IReadOnlyList<SubtaskRecord>> ListByTaskIncludingDeletedAsync(string taskId, CancellationToken ct);
+    Task AddAsync(SubtaskRecord subtask, CancellationToken ct);
+    Task<SubtaskRecord?> UpdateAsync(SubtaskRecord updated, long expectedVersion, CancellationToken ct);
+    Task<long> GetNextPositionAsync(string taskId, CancellationToken ct);
+}
+
+public interface ITemplateStore
+{
+    Task<TemplateRecord?> GetAsync(string templateId, CancellationToken ct);
+    /// <summary>Active template with this normalized name in the space, if any.</summary>
+    Task<TemplateRecord?> FindByNameAsync(string spaceId, string normalizedName, CancellationToken ct);
+    /// <summary>Active templates of one space, ordered by (NormalizedName, Id).</summary>
+    Task<IReadOnlyList<TemplateRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
+    Task AddAsync(TemplateRecord template, CancellationToken ct);
+    Task<TemplateRecord?> UpdateAsync(TemplateRecord updated, long expectedVersion, CancellationToken ct);
+}
+
 public interface ITaskHistoryStore
 {
     Task AddAsync(TaskHistoryRecord entry, CancellationToken ct);
+    /// <summary>All history of one task, oldest first (PLAN §5: append-only).</summary>
+    Task<IReadOnlyList<TaskHistoryRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
 }
 
 public interface IOperationReceiptStore

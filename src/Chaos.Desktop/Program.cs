@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
+using Chaos.Application.Containers;
 using Chaos.Desktop.Services;
 using Chaos.Infrastructure.Bootstrap;
 using NeoAstra;
@@ -29,6 +30,8 @@ internal static class Program
             {
                 rpc.AddGreetingService(new GreetingService());
                 rpc.AddTaskRpcService(new TaskRpcService(tasks));
+                rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
             });
         });
     }
@@ -74,5 +77,31 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(TaskResponse))]
 [JsonSerializable(typeof(TaskErrorResponse))]
 [JsonSerializable(typeof(TaskErrorFieldResponse))]
+[JsonSerializable(typeof(ListTasksRequest))]
+[JsonSerializable(typeof(ListTasksResponse))]
+[JsonSerializable(typeof(EditTaskRequest))]
+[JsonSerializable(typeof(ChangeTaskStatusRequest))]
+[JsonSerializable(typeof(ReorderTaskRequest))]
+[JsonSerializable(typeof(DeleteTaskRequest))]
+[JsonSerializable(typeof(SubtaskListRequest))]
+[JsonSerializable(typeof(SubtaskListResponse))]
+[JsonSerializable(typeof(SubtaskAddRequest))]
+[JsonSerializable(typeof(SubtaskEditRequest))]
+[JsonSerializable(typeof(SubtaskStatusRequest))]
+[JsonSerializable(typeof(SubtaskOrderRequest))]
+[JsonSerializable(typeof(SubtaskOperationResponse))]
+[JsonSerializable(typeof(SubtaskResponse))]
+[JsonSerializable(typeof(ContainerListRequest))]
+[JsonSerializable(typeof(ContainerListResponse))]
+[JsonSerializable(typeof(ContainerResponse))]
+[JsonSerializable(typeof(ContainerCreateRequest))]
+[JsonSerializable(typeof(ContainerChangeRequest))]
+[JsonSerializable(typeof(ContainerOperationResponse))]
+[JsonSerializable(typeof(ContainerTasksRequest))]
+[JsonSerializable(typeof(MoveTaskRequest))]
+[JsonSerializable(typeof(SectionResponse))]
+[JsonSerializable(typeof(SectionListResponse))]
+[JsonSerializable(typeof(SectionCreateRequest))]
+[JsonSerializable(typeof(SectionOperationResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;
