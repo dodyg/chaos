@@ -7,37 +7,53 @@ projects are portable `net11.0`; only `Chaos.Desktop` and `Chaos.Desktop.Windows
 `net11.0-windows10.0.19041.0`. macOS/Linux desktop targets and mobile are **not** claimed
 as supported in this phase.
 
-## NeoAstra boundary (PLAN §11)
+## What the Windows shell does (work package 13)
 
-NeoAstra is the UI framework. Its current Windows notification presenter cannot satisfy
-scheduled actionable reminders, so reminders go through a dedicated Windows notification
-adapter behind the `INotificationAdapter` application port (implemented in
-`Chaos.Desktop.Windows/Notifications` in work package 10). NeoAstra's own balloons are not
-treated as scheduling infrastructure.
+| Feature | How | Where |
+| --- | --- | --- |
+| One instance per data root | Per-user mutex decides before storage opens; a second launch sends its arguments over a current-user named pipe and exits | `SingleInstanceGuard`, `LaunchRouter` |
+| Activation | `--capture`, `--pad` and `chaos:` URIs (`capture`, `pad`, `task/<id>`, `reminder/<job>/<generation>/<action>`) become intents; the page takes them when shown | `LaunchIntents`, `ShellActivations`, `shell.take` |
+| Notification-area icon | Open Chaos, Quick add, New pad note, Quit; a left click brings the window forward | `DesktopShell` (NeoAstra tray + menu services) |
+| Close to tray | Closing the window hides it while "Keep Chaos in the notification area" is on and the tray icon exists; Quit ends the process | `DesktopShell`, Settings |
+| Global shortcuts | Ctrl+Alt+N (quick add) and Ctrl+Alt+P (new pad note) by default, editable or off; conflicts and failures are shown in Settings | NeoAstra `RegisterHotKey` service; migration 013 |
+| Windows notifications | With package identity: reminders are scheduled with Windows (`AddToSchedule`), arrive after Chaos exits, and carry Open, Done, Snooze 10 min and Snooze 1 hour as `chaos:` protocol buttons. Without identity: the in-app presenter | `WindowsToastAdapter`, `InAppNotificationAdapter` |
+| Settings | Name, time zone, numeric date order, shortcuts, close to tray, Quit, version | `Settings.tsx`, `shell` RPC |
+| Accessibility basics | Skip link, `dir="auto"` on every text field, plaintext bidi for task titles, reduced motion, system light/dark | `App.tsx`, `style.css`, `components/ui` |
+| Package | MSIX with the `chaos` protocol, full trust, no file-system write virtualization, generated logos | `packaging/AppxManifest.xml`, `eng/package-msix.ps1` |
 
-## Interactive acceptance items (require a real Windows desktop session)
+## Data location
 
-The development sandbox used for automated verification is headless and cannot install or
-interact with packaged applications. The following are therefore implemented in code and
-unit-tested headlessly, but require recorded interactive acceptance on a real desktop
-before PLAN.md release-gate items may be checked:
+`%LOCALAPPDATA%\Chaos` holds `data\chaos.db`, `backups\` and `desktop\` (NeoAstra's private
+window and service state). The WebView profile is NeoAstra's own and is not part of backups.
+The installed package does not virtualize writes, so the same folder is used whether Chaos runs
+from the package or from a publish folder, package updates keep it, and uninstalling the package
+does not delete it. "Delete all local data" in Data & backups is the way to remove it.
 
-- Visual confirmation of the NeoAstra window rendering the React UI, and a typed RPC
-  round-trip performed through the running window.
-- Global shortcut registration (Ctrl+Alt+N capture / Ctrl+Alt+P pad) and conflict reporting.
-- Tray presence, foreground activation and focus recovery of the single running instance.
-- Installed-MSIX scheduled actionable notification spike: schedule while online/offline,
-  deliver after exit, Open/Done/Snooze activation routing to one instance, cancellation
-  after date change, permission-denied behavior.
-- High-DPI/RTL/screen-reader checks on real hardware.
+## Known platform limits
 
-`SingleInstanceGuard` (per-instance lock, secondary-launch detection) is unit-tested
-headlessly in `Chaos.Desktop.Tests`; wiring secondary launches to route capture/activation
-to the primary is completed with the host integration in work package 13.
+- **Windows decides whether a notification shows.** Do Not Disturb and Focus can hold or hide
+  notifications, and a turned-off Chaos notification setting in Windows makes the adapter report
+  "Denied"; reminders then appear inside Chaos while it is open. Settings shows which applies.
+- **Nothing is delivered while the computer is off.** Missed reminders are coalesced and shown
+  once at the next start (package 10 behaviour).
+- **A notification button that starts Chaos opens its window.** When Chaos is not running, Windows
+  starts it to handle Done or Snooze; the action happens and the window opens normally.
+- **Windows can refuse to bring the window forward** (foreground lock rules). The window is shown
+  and restored; the taskbar button may flash instead of taking focus.
+- **Summary-ready prompts stay in the app.** They are stored on the summary row, not as Windows
+  notifications (decisions, package 11).
+- **Unpackaged runs** (`dotnet run`, a publish folder) have no package identity: no Windows
+  notifications after exit and no `chaos:` protocol. Everything else works.
 
-## MSIX identity/signing requirements (established in work package 10/13)
+## Interactive acceptance still required
 
-- Package identity (Name/Publisher) is required for OS-scheduled toast notifications.
-- Signing: a test certificate for development; production certificate decided at release.
-- Data must live under `%LOCALAPPDATA%/Chaos` (never under the install directory) so
-  package upgrades preserve the database.
+The automated checks run headlessly. These need a person at a Windows desktop and are listed,
+with steps, in `docs/acceptance.md`:
+
+- The window renders the React UI and a typed RPC round trip works through it.
+- Installing the signed MSIX, offline first start, capture, restart.
+- Tray icon, close to tray, Quit; global shortcuts and a conflict report.
+- Scheduled notification after exit; Open, Done and Snooze from the notification reach one
+  instance; date change cancels the old notification; notifications turned off in Windows.
+- High DPI (100/150/200%), RTL text, keyboard-only use and Narrator.
+- Package upgrade keeps data.

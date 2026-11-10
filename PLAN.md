@@ -957,6 +957,39 @@ Package remains unchecked until the exit is shown in a native window: back up, r
 
 **Exit:** all section 17 criteria pass on a fresh installed Windows environment, with explicit evidence and any honest platform limitations documented. A successful `dotnet publish` alone is insufficient.
 
+Progress note (2026-11-10): the code, package and headless checks are done. The installed-desktop acceptance has not been run. Details are in `docs/acceptance.md`, `docs/desktop-support.md` and `docs/decisions.md`.
+
+- **Toolchain.** The pinned rc.3 SDK was no longer installed, so `global.json` now pins 11.0.100 (GA), as the user chose. Every project restores `win-x64`, so the publish runs in locked mode; the GA SDK refuses the old `RestorePackagesWithLockFile=false` workaround (NU1005).
+- **Settings.** Migration 013 adds the capture and pad shortcuts (Ctrl+Alt+N, Ctrl+Alt+P; empty = off) and "keep running in the notification area" to `Profiles`. The schema ceiling is now 13. `ProfileSettingsCommands` validates and saves name, IANA time zone (Windows IDs are converted), numeric date order and the desktop settings. A zone change reschedules every notification in the same transaction.
+- **Shell.**
+  - `SingleInstanceGuard` decides before storage opens. A second launch sends its arguments to the running instance over a current-user named pipe (`LaunchRouter`) and exits.
+  - `LaunchIntents` reads `--capture`, `--pad` and `chaos:` URIs strictly (GUID IDs only).
+  - `DesktopShell` adds the notification-area icon (Open, Quick add, New pad note, Quit), close to tray when the icon exists, global shortcuts with conflict status, and bringing the window forward.
+  - `ShellActivations` queues work for the page. A notification button runs the ordinary reminder action with an OperationId derived from the button, so a repeated click is a replay.
+- **Windows notifications.** `WindowsToastAdapter` schedules reminders with Windows when Chaos runs with package identity. It takes them back when they change, and every button is a `chaos:` protocol activation. Without identity, the in-app presenter stays.
+- **Desktop RPC.** New `shell` service: `take`, `status`, `settings`, `updateSettings`, `zones`, `quit`. The template greeting service and its spike test are removed.
+- **Frontend.**
+  - A fresh launch opens My Day.
+  - A new Settings page: name, time zone, date order, shortcuts with their Windows status, close to tray, version, Quit, and links to the other settings pages.
+  - The page takes shell activations on focus, on becoming visible and once a second.
+  - There is a skip link. Every text field is `dir="auto"`, task titles use plaintext bidi, and `prefers-reduced-motion` turns animations off.
+- **Packaging.** `packaging/AppxManifest.xml` declares the `chaos` protocol and full trust, and turns off file-system write virtualization so data stays in `%LOCALAPPDATA%\Chaos`. `eng/package-msix.ps1` publishes, lays out, packs and optionally signs. `eng/make-assets.ps1` generates the icon and logos.
+
+Results: Release build has 0 warnings and `eng/verify.ps1` passes. 486 TUnit tests pass, 48 more than before:
+- Domain 159
+- Application 49 (20 new settings and shortcut tests)
+- Infrastructure 217
+- Desktop 61 (30 new launch, routing, activation, settings RPC and toast-content tests; the 2 greeting spike tests were removed)
+
+Frontend: 70 tests pass (4 new). Slopwatch is clean. The unsigned MSIX builds (48 MB). The published exe starts offline on a fresh data folder, and a second `--capture` launch is routed to it and exits 0 in 308 ms.
+
+Not done:
+- **Installed-desktop acceptance.** It is the 16-step checklist in `docs/acceptance.md`: install, offline start, tray, shortcuts, notifications after exit and their buttons, DPI, RTL, keyboard and Narrator, upgrade, and no network traffic. The package 0 notification spike is the same run.
+- **Performance baseline.** The §16 dataset has not been generated or measured. Only process start to window handle was timed: 1.1–2.2 s.
+- **Signing.** No release certificate exists. The checklist shows how to make and trust a test certificate; the scripts never change the certificate store.
+
+Package remains unchecked until that checklist passes on an installed Windows environment.
+
 ## 16. Verification strategy
 
 ### TUnit conventions and isolation

@@ -267,6 +267,8 @@ public interface IProfileStore
     Task<ProfileRecord?> UpdateReminderSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
     /// <summary>Optimistic update of the morning, evening and weekly summary schedule (PLAN §12).</summary>
     Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
+    /// <summary>Optimistic update of the display name, time zone, date format and desktop shell settings (PLAN §13).</summary>
+    Task<ProfileRecord?> UpdateGeneralSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
 }
 
 public interface ISpaceStore

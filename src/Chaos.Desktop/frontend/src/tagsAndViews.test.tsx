@@ -53,7 +53,7 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
   const requests: TaskQueryRequest[] = [];
   const found = task("t1", "Weed the beds");
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App templates={<></>} api={api({
+  render(<App initialView="tasks" templates={<></>} api={api({
     queryRpc: { run: async (request: TaskQueryRequest) => { requests.push(request); return { ok: true, rows: [resultRow(found, ["garden"])], totalCount: 1, nextCursor: null, error: null }; } },
     tagRpc: { targetTags: async () => ({ ok: true, tagIds: ["garden"], error: null }) },
   })}/>, { container: dom.window.document.body });
@@ -79,7 +79,7 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
 test("search runs the typed words and pages with the server cursor", async () => {
   const requests: TaskQueryRequest[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App templates={<></>} api={api({
+  render(<App initialView="tasks" templates={<></>} api={api({
     queryRpc: { run: async (request: TaskQueryRequest) => {
       requests.push(request);
       return request.cursor === null
@@ -103,7 +103,7 @@ test("search runs the typed words and pages with the server cursor", async () =>
 test("a temporary status filter is sent with the view and can be cleared", async () => {
   const requests: TaskQueryRequest[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App templates={<></>} api={api({ queryRpc: { run: async (request: TaskQueryRequest) => { requests.push(request); return { ok: true, rows: [], totalCount: 0, nextCursor: null, error: null }; } } })}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" templates={<></>} api={api({ queryRpc: { run: async (request: TaskQueryRequest) => { requests.push(request); return { ok: true, rows: [], totalCount: 0, nextCursor: null, error: null }; } } })}/>, { container: dom.window.document.body });
 
   await user.click(await screen.findByRole("button", { name: /Assigned to me/ }));
   const filters = await screen.findByRole("form", { name: "Filters" });
@@ -118,7 +118,7 @@ test("a temporary status filter is sent with the view and can be cleared", async
 test("dropping a task on a tag tags it without moving it", async () => {
   const linked: Parameters<typeof tagRpc.link>[0][] = [];
   let moved = false;
-  render(<App templates={<></>} api={{ ...api({
+  render(<App initialView="tasks" templates={<></>} api={{ ...api({
     inbox: [task("t1", "Buy seeds")],
     tagRpc: { link: async (request: Parameters<typeof tagRpc.link>[0]) => { linked.push(request); return { ok: true, tagIds: ["garden"], error: null }; } },
   }), containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }), moveTask: async () => { moved = true; return { ok: true, operationId: "", task: null, error: null, warning: null }; } } }}/>, { container: dom.window.document.body });

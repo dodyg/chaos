@@ -29,6 +29,8 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   `-p:RestorePackagesWithLockFile=false`; a `-r win-x64` restore would otherwise write a
   RID group into every `packages.lock.json` and break later `--locked-mode` restores
   (NU1004). Lock files stay stable for the plain/locked restore workflow.
+  *Superseded in package 13:* the GA SDK refuses that switch while lock files exist (NU1005), so
+  the RID is now restored up front instead (see 2026-11-10, package 13).
 - **Storage failures keep their cause as InnerException.** `SqliteErrorMapper` maps
   SQLite errors to stable `AppErrorKind`s whose messages never contain SQL, paths or
   stack traces; the original exception is attached as `InnerException` so logs and test
@@ -260,3 +262,64 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   the purge deletes each dependent table in one transaction. It replaces the captured titles
   of purged tasks in journal facts and drops undo entries that mention them. It then runs
   `VACUUM` with the store exclusive.
+
+## 2026-11-10 (package 13)
+
+- **SDK 11.0.100 (GA) replaces the rc.3 pin.** The pinned 11.0.100-rc.3.26522.148 SDK was no
+  longer installed; the user chose to pin the GA SDK instead of reinstalling the release
+  candidate. `global.json` still pins one exact version with roll-forward disabled.
+- **Every project restores the win-x64 RID.** `Directory.Build.props` sets
+  `RuntimeIdentifiers=win-x64`, so the committed lock files cover the self-contained publish
+  and `eng/publish-windows.ps1` runs in locked mode. Portable projects still build portable
+  output; the RID only adds a restore group.
+- **Launch routing uses Chaos's own named pipe, not `NeoSingleInstance`.** NeoAstra's
+  single-instance service needs a `NeoApplication` before the window exists, which the simple
+  `NeoApp.Run` host does not offer, and Chaos must decide before storage opens anyway (the data
+  root is locked). `SingleInstanceGuard` (a per-user, per-data-root mutex) decides first; a
+  secondary process sends its arguments over a `CurrentUserOnly` named pipe
+  (`LaunchRouter`: length-prefixed, at most 8 arguments of 512 characters, one-byte
+  acknowledgement) and exits without touching storage. The primary re-parses the arguments
+  with `LaunchIntents`; nothing but arguments travels.
+- **Notification buttons are `chaos:` protocol activations.** The Windows adapter uses
+  `Windows.UI.Notifications` (`AddToSchedule`/`RemoveFromSchedule`) from the Windows SDK
+  projection that the TFM already includes, so no Windows App SDK or COM activator is needed.
+  Each button launches `chaos:reminder/<job>/<generation>/<action>`; the running instance gets
+  it through the pipe, or a fresh start handles it. The reminder command checks the generation,
+  and the OperationId is derived from the button, so a repeated click is a replay. Done and
+  Snooze act without bringing the window forward; a Done on a task with open subtasks opens the
+  task instead, because that choice is the person's. The adapter is used only with package
+  identity; an unpackaged run keeps the in-app presenter.
+- **The page takes activations; the host does not push them.** Shortcuts, the tray, other
+  launches and notification buttons queue activations in the host (newest 32 kept). The page
+  takes them on focus, on becoming visible and once a second with `shell.take`, which is cheap
+  and needs no event contract. A page without the shell service stops polling.
+- **Desktop settings live on the profile.** Migration 013 adds `CaptureShortcut`,
+  `PadShortcut` (NULL = off) and `KeepRunningInTray` to `Profiles`, with defaults Ctrl+Alt+N,
+  Ctrl+Alt+P and on. They travel with backups and the JSON archive like every other setting.
+  Shortcuts are normalized (Ctrl, Alt, Shift, then a letter, digit or F1–F24; Ctrl or Alt
+  required) and registered through NeoAstra's `RegisterHotKey` service; a conflict is reported
+  in Settings and the in-app shortcuts keep working.
+- **Settings collect general and desktop settings only.** Name, time zone, numeric date order,
+  shortcuts and close-to-tray are on the new Settings page. Reminder times, summary times,
+  week start and backups stay on the pages they affect, linked from Settings. A time zone change
+  recomputes every desired notification in the same transaction and then resynchronizes the
+  engine; task dates are not rewritten.
+- **Close keeps Chaos in the tray only when a tray icon exists.** The close request is cancelled
+  and the window hidden only for the person's own close, only while the tray icon was created,
+  and never during Quit or Windows shutdown. Quit (tray menu or Settings) ends the process.
+- **NeoAstra desktop services get minimal, unused opener scopes.**
+  `NeoDesktopServices.CreateSystem` refuses empty URL scopes, file roots and file intents. Chaos
+  passes `AnyWebAddress`, its own private `desktop` folder and plain text; the opener is never
+  called and no desktop renderer handlers are registered, so the page gains nothing.
+- **Icons are not in `Assets`.** NeoAstra publishes the web bundle to `assets\`, which is the
+  same folder as `Assets\` on Windows. The tray icon is `Icons\chaos.ico` and the MSIX logos are
+  `Images\*.png`, generated by `eng/make-assets.ps1`.
+- **The package does not virtualize file writes.** `desktop6:FileSystemWriteVirtualization` is
+  disabled (with the `unvirtualizedResources` capability), so the installed app keeps its data in
+  `%LOCALAPPDATA%\Chaos` exactly like an unpackaged run: updates keep it and uninstalling does not
+  delete it. Removing data stays the explicit Settings action.
+- **My Day is the start page.** A fresh launch opens My Day (PLAN §13); component tests that
+  exercise lists start on the Inbox explicitly.
+- **Text fields default to `dir="auto"`.** The shared `Input` and `Textarea` components set it,
+  and task-row titles use `unicode-bidi: plaintext`, so Arabic and Latin titles each take their
+  own direction. Animations and transitions are cut to nothing under `prefers-reduced-motion`.

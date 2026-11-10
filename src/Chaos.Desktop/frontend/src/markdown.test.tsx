@@ -180,7 +180,7 @@ test("app undo: the newest change is offered, Ctrl+Z outside text fields undoes 
     historyRpc,
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
   const row = await screen.findByRole("button", { name: "Pack" });
   await user.click(screen.getByRole("button", { name: "Delete Pack" }));
   const toast = await screen.findByRole("status", { name: "Undo" });
@@ -263,7 +263,7 @@ test("the task editor opens on a roomy Notes tab, keeps fields on Details and sa
     historyRpc,
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
   await user.click(await screen.findByRole("button", { name: "Write report" }));
   assert.equal(screen.getByRole("tab", { name: "Notes" }).getAttribute("aria-selected"), "true");
   const notes = dom.window.document.getElementById("task-notes") as HTMLTextAreaElement;

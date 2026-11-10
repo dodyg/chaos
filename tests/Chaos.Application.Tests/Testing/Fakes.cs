@@ -234,6 +234,9 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
     public Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
         UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
 
+    public Task<ProfileRecord?> UpdateGeneralSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
+        UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
+
     public Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
     {
         var index = rows.FindIndex(row => row.Id == profile.Id && row.Version == expectedVersion);
