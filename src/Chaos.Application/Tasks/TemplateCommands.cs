@@ -115,6 +115,24 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
         }, ct);
     }
 
+    public async Task<TemplateMutationResult> RestoreAsync(DeleteTemplateCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "template.restore", command, now, async inner =>
+            {
+                var template = await session.Templates.GetIncludingDeletedAsync(command.TemplateId, inner) ?? throw AppException.NotFound("That template no longer exists.");
+                RequireCurrentVersion(template, command.ExpectedVersion);
+                if (template.DeletedAtUtc is null) return new TemplateMutationResult(template, false);
+                await RequireFreeNameAsync(session, template.SpaceId, template.Name, template.Id, inner);
+                var restored = template with { DeletedAtUtc = null, Version = template.Version + 1, UpdatedAtUtc = now };
+                return new TemplateMutationResult(await ApplyUpdateAsync(session, restored, template.Version, inner), false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
+
     public async Task<IReadOnlyList<TemplateRecord>> ListAsync(string? spaceId, CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) =>
         {

@@ -22,23 +22,26 @@ public sealed class SingleInstanceGuardTests : IDisposable
     [Test]
     public async Task Acquire_SecondInstance_IsNotPrimary()
     {
-        using var primary = new SingleInstanceGuard(_name);
-
-        // Mutex ownership is thread-affine (reentrant for the owning thread). A real
-        // second instance runs in another process, so the probe must run on a different
-        // thread to observe the held lock.
-        SingleInstanceGuard? secondary = null;
-        await Task.Run(() =>
+        // Both the owner and probe use dedicated threads; mutex ownership is thread-affine.
+        var result = new TaskCompletionSource<(bool Primary, bool Secondary)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var owner = new Thread(() =>
         {
-            secondary = new SingleInstanceGuard(_name);
-            return secondary.IsPrimaryInstance;
+            try
+            {
+                using var primary = new SingleInstanceGuard(_name);
+                var isSecondaryPrimary = false;
+                var probe = new Thread(() => { using var secondary = new SingleInstanceGuard(_name); isSecondaryPrimary = secondary.IsPrimaryInstance; });
+                probe.Start();
+                probe.Join();
+                result.SetResult((primary.IsPrimaryInstance, isSecondaryPrimary));
+            }
+            catch (Exception error) { result.SetException(error); }
         });
-
-        using (secondary)
-        {
-            await Assert.That(primary.IsPrimaryInstance).IsTrue();
-            await Assert.That(secondary!.IsPrimaryInstance).IsFalse();
-        }
+        owner.Start();
+        var observed = await result.Task;
+        owner.Join();
+        await Assert.That(observed.Primary).IsTrue();
+        await Assert.That(observed.Secondary).IsFalse();
     }
 
     [Test]

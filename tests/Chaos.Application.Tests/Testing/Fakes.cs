@@ -182,6 +182,7 @@ public sealed class FakeSubtaskStore(List<SubtaskRecord> rows) : ISubtaskStore
 
 public sealed class FakeTemplateStore(List<TemplateRecord> rows) : ITemplateStore
 {
+    public Task<TemplateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
     public Task<TemplateRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
     public Task<TemplateRecord?> FindByNameAsync(string id, string name, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.SpaceId == id && x.NormalizedName == name && x.DeletedAtUtc is null));
     public Task<IReadOnlyList<TemplateRecord>> ListBySpaceAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TemplateRecord>>(rows.Where(x => x.SpaceId == id && x.DeletedAtUtc is null).OrderBy(x => x.NormalizedName).ThenBy(x => x.Id).ToList());

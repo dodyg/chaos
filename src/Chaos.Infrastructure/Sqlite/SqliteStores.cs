@@ -661,6 +661,14 @@ public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskSt
 
 public sealed class SqliteTemplateStore(SqliteConnection connection) : ITemplateStore
 {
+    public async Task<TemplateRecord?> GetIncludingDeletedAsync(string templateId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", templateId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadTemplate(reader) : null;
+    }
     public async Task<TemplateRecord?> GetAsync(string templateId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -734,15 +742,6 @@ public sealed class SqliteTemplateStore(SqliteConnection connection) : ITemplate
 
         var rows = await command.ExecuteNonQueryAsync(ct);
         return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
-    }
-
-    private async Task<TemplateRecord?> GetIncludingDeletedAsync(string templateId, CancellationToken ct)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT * FROM TaskTemplates WHERE Id = $id;";
-        command.Parameters.AddWithValue("$id", templateId);
-        using var reader = await command.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? ReadTemplate(reader) : null;
     }
 
     internal static TemplateRecord ReadTemplate(SqliteDataReader r) => new()

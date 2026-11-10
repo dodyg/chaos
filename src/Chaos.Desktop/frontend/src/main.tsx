@@ -2,6 +2,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import { taskRpc, subtaskRpc, containerRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse } from "#neoastra";
+import { Templates } from "./Templates";
+import { ContainerManagement } from "./ContainerManagement";
 
 const statuses = ["NotStarted", "InProgress", "WaitingOnSomeone", "NeedsReview", "Done", "Cancelled"];
 const label = (value: string) => value.replace(/([a-z])([A-Z])/g, "$1 $2");
@@ -23,6 +25,7 @@ function App() {
   const [containerKind, setContainerKind] = React.useState("List");
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
+  const [subtaskRevision, setSubtaskRevision] = React.useState(0);
 
   async function refresh() {
     const response = containerId ? await containerRpc.tasks({ containerId }) : await taskRpc.listInbox({});
@@ -64,6 +67,7 @@ function App() {
       after?.(result.subtask);
       const rows = await refreshSubtasks(taskId);
       setSubtasks(rows);
+      setSubtaskRevision(current => current + 1);
     } catch (e) { setError(e instanceof Error ? e.message : "The subtask could not be saved."); }
     finally { setBusy(false); }
   }
@@ -105,6 +109,7 @@ function App() {
     {containerId && containers.find(c => c.id === containerId) && <button type="button" disabled={busy} onClick={() => { const selected = containers.find(c => c.id === containerId)!; void (async () => { setBusy(true); setError(null); try { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; const result = selected.archived ? await containerRpc.unarchive(request) : await containerRpc.archive(request); if (!result.ok) throw new Error(result.error?.message ?? "Could not update archive state."); await refreshContainers(); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}>{containers.find(c => c.id === containerId)?.archived ? "Unarchive" : "Archive"}</button>}
     <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); setError(null); try { const result = await containerRpc.create({ operationId: operationId(), name: containerName, kind: containerKind }); if (!result.ok || !result.container) throw new Error(result.error?.message ?? "Could not create list."); await refreshContainers(); setContainerId(result.container.id); setContainerName(""); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}><div className="row"><label>New list or project<input value={containerName} onChange={e => setContainerName(e.target.value)}/></label><label>Type<select value={containerKind} onChange={e => setContainerKind(e.target.value)}><option>List</option><option>Project</option></select></label><button disabled={busy || !containerName.trim()}>Create</button></div></form>
     {containerId && <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); try { const result = await containerRpc.createSection({ operationId: operationId(), containerId, title: sectionTitle }); if (!result.ok) throw new Error(result.error?.message ?? "Could not create section."); const list = await containerRpc.sections({ containerId }); if (!list.ok) throw new Error(list.error?.message ?? "Could not load sections."); setSections([...list.sections]); setSectionTitle(""); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}><div className="row"><label>New section<input value={sectionTitle} onChange={e => setSectionTitle(e.target.value)}/></label><button disabled={busy || !sectionTitle.trim()}>Add section</button></div></form>}
+    {containerId && containers.find(c => c.id === containerId) && <ContainerManagement container={containers.find(c => c.id === containerId)!} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/>}
     <h2>{containers.find(c => c.id === containerId)?.name ?? "Inbox"}</h2>
     {tasks.length === 0 ? <p>No tasks in this list.</p> : <ol className="tasks">{tasks.map((task, index) => <li key={task.id}>
       <div><button className="task-title" onClick={() => setEditing(task)}>{task.title}</button> <span>{label(task.status)}</span></div>
@@ -141,6 +146,7 @@ function App() {
         <div className="row"><button disabled={busy}>Save subtask</button><button type="button" onClick={() => setSubtaskEdit(null)}>Cancel</button></div>
       </form>}
     </section>}
+    <Templates containerId={containerId} onCreated={refresh}/>
   </main>;
 }
 

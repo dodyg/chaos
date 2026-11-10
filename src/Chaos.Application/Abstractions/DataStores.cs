@@ -89,6 +89,7 @@ public interface ISubtaskStore
 public interface ITemplateStore
 {
     Task<TemplateRecord?> GetAsync(string templateId, CancellationToken ct);
+    Task<TemplateRecord?> GetIncludingDeletedAsync(string templateId, CancellationToken ct);
     /// <summary>Active template with this normalized name in the space, if any.</summary>
     Task<TemplateRecord?> FindByNameAsync(string spaceId, string normalizedName, CancellationToken ct);
     /// <summary>Active templates of one space, ordered by (NormalizedName, Id).</summary>

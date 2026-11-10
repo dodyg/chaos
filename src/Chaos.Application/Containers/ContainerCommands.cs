@@ -11,6 +11,7 @@ public sealed record CreateContainerCommand(string OperationId, string Name, Con
 public sealed record RenameContainerCommand(string OperationId, string ContainerId, long ExpectedVersion, string Name);
 
 public sealed record ReorderContainerCommand(string OperationId, string ContainerId, long ExpectedVersion, int InsertionIndex);
+public sealed record SetProjectDeadlineCommand(string OperationId, string ContainerId, long ExpectedVersion, DateOnly? DeadlineDate);
 
 public sealed record ArchiveContainerCommand(string OperationId, string ContainerId, long ExpectedVersion);
 
@@ -110,6 +111,7 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                 {
                     var container = await RequireContainerAsync(session, command.ContainerId, inner);
                     RequireCurrentVersion(container, command.ExpectedVersion);
+                    RequireNotInbox(container, "renamed");
                     var name = TaskFieldValidation.Title(command.Name, "name");
                     await RequireFreeNameAsync(session, container.SpaceId, name, selfId: container.Id, inner);
 
@@ -134,6 +136,7 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                 {
                     var container = await RequireContainerAsync(session, command.ContainerId, inner);
                     RequireCurrentVersion(container, command.ExpectedVersion);
+                    RequireNotInbox(container, "reordered");
                     var siblings = await session.Containers.ListBySpaceAsync(container.SpaceId, inner);
 
                     var assignments = RankOrdering.Place(
@@ -168,6 +171,24 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
     {
         ct.ThrowIfCancellationRequested();
         return await ApplyArchiveAsync(command, archiving: true, ct);
+    }
+
+    public async Task<ContainerMutationResult> SetDeadlineAsync(SetProjectDeadlineCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "project.deadline", command, now, async inner =>
+            {
+                var container = await RequireContainerAsync(session, command.ContainerId, inner);
+                RequireCurrentVersion(container, command.ExpectedVersion);
+                if (container.Kind != ContainerKind.Project) throw AppException.Validation("containerId", "Only projects have deadlines.");
+                if (container.DeadlineDate == command.DeadlineDate) return new ContainerMutationResult(container, false);
+                var updated = container with { DeadlineDate = command.DeadlineDate, Version = container.Version + 1, UpdatedAtUtc = now };
+                return new ContainerMutationResult(await ApplyUpdateAsync(session, updated, container.Version, inner), false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
     }
 
     public async Task<ContainerMutationResult> UnarchiveAsync(ArchiveContainerCommand command, CancellationToken ct = default)

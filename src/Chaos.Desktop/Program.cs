@@ -32,6 +32,7 @@ internal static class Program
                 rpc.AddTaskRpcService(new TaskRpcService(tasks));
                 rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
+                rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -103,5 +104,18 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(SectionListResponse))]
 [JsonSerializable(typeof(SectionCreateRequest))]
 [JsonSerializable(typeof(SectionOperationResponse))]
+[JsonSerializable(typeof(ContainerOrderRequest))]
+[JsonSerializable(typeof(SectionChangeRequest))]
+[JsonSerializable(typeof(DeadlineRequest))]
+[JsonSerializable(typeof(ProgressResponse))]
+[JsonSerializable(typeof(TemplateListRequest))]
+[JsonSerializable(typeof(TemplateListResponse))]
+[JsonSerializable(typeof(TemplateResponse))]
+[JsonSerializable(typeof(TemplatePayloadResponse))]
+[JsonSerializable(typeof(TemplatePartResponse))]
+[JsonSerializable(typeof(TemplateSaveRequest))]
+[JsonSerializable(typeof(TemplateDeleteRequest))]
+[JsonSerializable(typeof(TemplateInstantiateRequest))]
+[JsonSerializable(typeof(TemplateOperationResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

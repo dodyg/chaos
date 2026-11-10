@@ -14,6 +14,34 @@ namespace Chaos.Desktop.Tests.Rpc;
 public sealed class TaskRpcRestartTests
 {
     [Test]
+    public async Task TemplateRpc_SaveAndInstantiate_CreatesFreshOpenTaskWithRelativeDates()
+    {
+        using var storage = await StartAsync(TestPaths.NewDataRoot());
+        var ids = new SequentialIdGenerator();
+        var clock = new FixedTimeProvider(Now);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var templates = new TemplateRpcService(new TemplateCommands(storage.Store, ids, clock));
+        var payload = new TemplatePayloadResponse("Task", "Notes", "High", 45, "Work", 1, null, null, 3, null, null, [new("Step", "Details")]);
+        var saved = await templates.SaveAsync(new("template-save", null, null, "Reusable", payload), CancellationToken.None);
+        await Assert.That(saved.Ok).IsTrue();
+        var created = await templates.InstantiateAsync(new("template-create", saved.Template!.Id, null), CancellationToken.None);
+        var replay = await templates.InstantiateAsync(new("template-create", saved.Template.Id, null), CancellationToken.None);
+        await Assert.That(created.Ok).IsTrue();
+        await Assert.That(replay.Task!.Id).IsEqualTo(created.Task!.Id);
+        await Assert.That(created.Task.Status).IsEqualTo("NotStarted");
+        await Assert.That(created.Task.PlannedDate).IsEqualTo("2026-11-10");
+        await Assert.That(created.Task.DueDate).IsEqualTo("2026-11-12");
+        var detail = await tasks.GetDetailAsync(created.Task.Id);
+        await Assert.That(detail.Subtasks.Single().Title).IsEqualTo("Step");
+        await Assert.That(detail.Subtasks.Single().Status).IsEqualTo(Chaos.Domain.Tasks.TaskItemStatus.NotStarted);
+        var deleted = await templates.DeleteAsync(new("template-delete", saved.Template.Id, saved.Template.Version), CancellationToken.None);
+        await Assert.That((await templates.ListAsync(new(), CancellationToken.None)).Templates.Count).IsEqualTo(0);
+        var restored = await templates.RestoreAsync(new("template-restore", saved.Template.Id, deleted.Template!.Version), CancellationToken.None);
+        await Assert.That(restored.Ok).IsTrue();
+        await Assert.That((await templates.ListAsync(new(), CancellationToken.None)).Templates.Single().Name).IsEqualTo("Reusable");
+    }
+
+    [Test]
     public async Task ProjectAndSubtasks_ThroughRpc_PersistAndReopen()
     {
         using var storage = await StartAsync(TestPaths.NewDataRoot());

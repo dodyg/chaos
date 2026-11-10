@@ -10,6 +10,49 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class LifecycleTests
 {
     [Test]
+    public async Task ProjectProgress_CancelledTasksExcluded_AndDeleteMovesContentsToInbox()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var containers = new ContainerCommands(storage.Store, ids, clock);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var project = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+        var done = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Done", null))).Task;
+        var cancelled = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Cancelled", null))).Task;
+        await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), done.Id, done.Version, TaskItemStatus.Done, null));
+        await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), cancelled.Id, cancelled.Version, TaskItemStatus.Cancelled, null));
+        var progress = await containers.GetProjectProgressAsync(project.Id);
+        await Assert.That(progress.DoneCount).IsEqualTo(1L);
+        await Assert.That(progress.TotalCount).IsEqualTo(1L);
+        await containers.DeleteAsync(new DeleteContainerCommand(Guid.NewGuid().ToString(), project.Id, project.Version, ContainerContentsChoice.MoveToInbox));
+        var inbox = await tasks.ListInboxAsync();
+        await Assert.That(inbox.Count).IsEqualTo(2);
+        await Assert.That(inbox.Select(x => x.Id).Contains(done.Id)).IsTrue();
+        await Assert.That(inbox.Select(x => x.Id).Contains(cancelled.Id)).IsTrue();
+    }
+
+    [Test]
+    public async Task ProjectDeadline_AndInboxProtection_AreEnforcedInStorage()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var commands = new ContainerCommands(storage.Store, ids, clock);
+        var project = (await commands.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+        var date = new DateOnly(2026, 12, 1);
+        var updated = (await commands.SetDeadlineAsync(new(Guid.NewGuid().ToString(), project.Id, project.Version, date))).Container;
+        await Assert.That((await commands.ListPersonalAsync()).Single(x => x.Id == project.Id).DeadlineDate).IsEqualTo(date);
+        await Assert.That(updated.Version).IsEqualTo(project.Version + 1);
+        var inbox = (await commands.ListPersonalAsync()).Single(x => x.IsInbox);
+        Chaos.Application.Abstractions.AppException? error = null;
+        try { await commands.RenameAsync(new RenameContainerCommand(Guid.NewGuid().ToString(), inbox.Id, inbox.Version, "Other")); }
+        catch (Chaos.Application.Abstractions.AppException caught) { error = caught; }
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!.Kind).IsEqualTo(Chaos.Application.Abstractions.AppErrorKind.Validation);
+    }
+
+    [Test]
     public async Task ArchiveAndUnarchive_Project_PersistsBothTransitions()
     {
         var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
