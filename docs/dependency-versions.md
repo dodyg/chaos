@@ -31,7 +31,8 @@ version changes; PLAN.md §1 pins are the authority.
 ## Frontend (template-provided graph, locked in `frontend/package-lock.json`)
 
 Versions resolve from the committed lockfile; exact resolved versions are recorded by
-`npm ls` at CI time. Pinned toolchain: TypeScript ^5.9.3 (template), Vite + React from
+`npm ls` at CI time. Pinned toolchain: type checking by tsrs 0.23.0-ts7.1.0-beta (Rust port of the
+TypeScript 7.1 checker; replaces the template's `typescript` ^5.9.3), Vite + React from
 the locked graph. The generated `@neoastra/client` transport (0.1.0, staged by the C#
 build under `obj/neoastra/client`) is installed as a packed copy via
 `frontend/.npmrc` (`install-links=true`) because Windows symlink creation requires
