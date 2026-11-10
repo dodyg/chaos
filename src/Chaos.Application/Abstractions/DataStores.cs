@@ -18,8 +18,49 @@ public interface IDataSession
     ITagStore Tags { get; }
     ITaskQueryStore Queries { get; }
     ITaskHistoryStore History { get; }
+    IDiaryStore Diary { get; }
+    IUndoStore Undo { get; }
+    IChecklistConversionStore ChecklistConversions { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
+}
+
+/// <summary>
+/// Diary entries (PLAN §9). Add and Update also append the saved state as a revision and
+/// keep the entry's search document current, in the caller's transaction.
+/// </summary>
+public interface IDiaryStore
+{
+    Task<DiaryEntryRecord?> GetAsync(string entryId, CancellationToken ct);
+    Task<DiaryEntryRecord?> GetIncludingDeletedAsync(string entryId, CancellationToken ct);
+    /// <summary>Entries of one task ordered by (EntryAtUtc, Id); tombstoned entries only when asked.</summary>
+    Task<IReadOnlyList<DiaryEntryRecord>> ListByTaskAsync(string taskId, bool includeDeleted, CancellationToken ct);
+    Task AddAsync(DiaryEntryRecord entry, CancellationToken ct);
+    Task<DiaryEntryRecord?> UpdateAsync(DiaryEntryRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>All saved states of one entry, oldest first.</summary>
+    Task<IReadOnlyList<DiaryRevisionRecord>> ListRevisionsAsync(string entryId, CancellationToken ct);
+}
+
+/// <summary>Reversible operations per profile (PLAN §9: latest 100 kept).</summary>
+public interface IUndoStore
+{
+    Task AddAsync(UndoEntryRecord entry, CancellationToken ct);
+    Task<UndoEntryRecord?> FindByOperationAsync(string profileId, string operationId, CancellationToken ct);
+    /// <summary>Entries not undone yet, newest first.</summary>
+    Task<IReadOnlyList<UndoEntryRecord>> ListOpenAsync(string profileId, int limit, CancellationToken ct);
+    /// <returns>False when the entry was already marked undone.</returns>
+    Task<bool> MarkUndoneAsync(string entryId, DateTimeOffset undoneAtUtc, CancellationToken ct);
+    /// <summary>Deletes all but the newest <paramref name="keep"/> entries of the profile.</summary>
+    Task PruneAsync(string profileId, int keep, CancellationToken ct);
+    /// <summary>Rewrites the change set of an open entry (an undo re-points older entries to the versions it wrote).</summary>
+    Task ReplacePayloadAsync(string entryId, string inversePayload, string expectedVersions, CancellationToken ct);
+}
+
+public interface IChecklistConversionStore
+{
+    Task<ChecklistConversionRecord?> FindAsync(string taskId, string itemKey, CancellationToken ct);
+    /// <summary>Inserts the marker, replacing an older one for the same item (its subtask was deleted).</summary>
+    Task UpsertAsync(ChecklistConversionRecord marker, CancellationToken ct);
 }
 
 public interface IProfileStore

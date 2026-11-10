@@ -33,7 +33,7 @@ public sealed class TaskCommandsTests
         await Assert.That((await commands.GetAsync(task.Id))!.ContainerId).IsEqualTo(task.ContainerId);
     }
 
-    private static (string ProfileId, string SpaceId, string InboxId) Seed(InMemoryStore store)
+    internal static (string ProfileId, string SpaceId, string InboxId) Seed(InMemoryStore store)
     {
         var profile = new ProfileRecord
         {

@@ -68,5 +68,5 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
 
     private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
     private static TaskItemStatus Status(string value) => Enum.TryParse<TaskItemStatus>(value, out var status) && Enum.IsDefined(status) ? status : throw AppException.Validation("status", "Choose a valid status.");
-    private static SubtaskResponse Map(SubtaskRecord row) => new(row.Id, row.TaskId, row.Title, row.Notes, row.Status.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    internal static SubtaskResponse Map(SubtaskRecord row) => new(row.Id, row.TaskId, row.Title, row.Notes, row.Status.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }

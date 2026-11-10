@@ -42,7 +42,9 @@ For package 2 interaction tests, the lockfile adds `@testing-library/react` 16.3
 `@testing-library/user-event` 14.6.9, `jsdom` 31.0.0 and `@types/jsdom` 30.0.0
 as development dependencies. On 2026-11-10, `npm audit` reported three high-severity
 development-graph advisories involving the existing Vite, nanoid and source-map-js
-versions; `npm audit --omit=dev` reported none. Review and update the locked development
+versions; `npm audit --omit=dev` reported none at that point. Since the shadcn foundation made
+`@tailwindcss/vite` a runtime dependency, the same Vite, nanoid and source-map-js advisories
+also appear under `--omit=dev` (build tooling only; none ships in the bundle). Review and update the locked development
 graph separately, including Vite compatibility, before release.
 
 The shadcn/ui foundation (decision 2026-11-10) adds exact-pinned runtime dependencies
@@ -50,6 +52,14 @@ The shadcn/ui foundation (decision 2026-11-10) adds exact-pinned runtime depende
 `class-variance-authority` 0.7.1, `clsx` 2.1.1, `tailwind-merge` 3.7.0,
 `lucide-react` 1.70.0 and `tw-animate-css` 1.4.0, plus `@types/node` 26.6.6 as a
 development dependency. Component source is vendored; the `shadcn` CLI is not a dependency.
+
+Package 4 (Markdown, diary, history, undo) adds exact-pinned runtime dependencies
+`unified` 11.0.5, `remark-parse` 11.0.0, `remark-gfm` 4.0.1 (GFM parsing to mdast; rendering
+is our own mdast-to-React walk, no HTML), `lowlight` 3.3.0 (locally bundled highlight.js
+grammars, `common` set), `turndown` 7.2.4 and `turndown-plugin-gfm` 1.0.2 (rich-HTML paste to
+Markdown), plus `@types/mdast` 4.0.4, `@types/hast` 3.0.4 and `@types/turndown` 5.0.5 as
+development dependencies. `turndown` 7.2.5 was under a week old when checked and was not taken.
+The larger bundle triggers Vite's chunk-size notice; it is informational.
 
 ## Templates
 

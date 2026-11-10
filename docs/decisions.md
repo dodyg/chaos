@@ -77,3 +77,36 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
 - **Counts cross the RPC as 32-bit integers.** NeoAstra RPC refuses `long` unless it is
   serialized as a string. Counts and totals are clamped to `int` at the RPC edge;
   application and store code keeps `long`.
+
+## 2026-11-10 (package 4)
+
+- **History and undo are recorded at the transaction boundary, not per command.**
+  `TaskMutationSupport.InWriteTransactionAsync` wraps every write in a
+  `RecordingDataSession`. It captures row before-images, tag-link changes and the
+  before-aggregate of every task an operation reaches. When the body returns, it writes the
+  history entries and the undo entry in the same transaction. New stores or commands get
+  history and undo by writing through the session; nothing has to remember to write an
+  inverse. A command's `WriteTaskHistoryAsync` call now only declares the event kind and
+  fields.
+- **Undo restores before-images as new versions.** Version numbers only grow. Undo checks
+  every affected row against the version the operation left first, then writes. A diary
+  undo appends a revision rather than rewinding the trail. Because restored rows get new
+  version numbers, a successful undo re-points older open entries that expected a restored
+  row's before-version. That keeps repeated Ctrl+Z exact while any genuinely later edit is
+  still a conflict. Link changes carry no versions: undo applies the opposite set operation
+  and treats "nothing changed" as a conflict.
+- **Snapshots now include tag links.** `TaskAggregateSnapshot` gained `TagIds` and
+  `SubtaskTagIds`. Snapshots written before package 4 read back with those as null. A tag
+  rename or recolor touches linked tasks, but because snapshots hold tag IDs it produces no
+  task history entry. Tag deletion and merges do.
+- **Internal links are Markdown links with a `chaos:task/<id>` target.** They resolve by ID
+  at render time, so renames keep working and a deleted target renders as a recoverable
+  broken link. They stay readable in any Markdown export. The `ContentLinks` table is not
+  used yet.
+- **External links open through the host.** Rendered Markdown contains no anchors; a link
+  is a button that calls `markdown.openExternal`. That call accepts only absolute
+  http/https/mailto URLs up to 2,048 characters and opens them in the system browser.
+- **Checklist markers are keyed by item text and occurrence.** The editor sends
+  `<item text>#<n>` (the nth item with that text in the document) and the host stores a
+  SHA-256 of task ID plus key. Editing an item's text makes it a new item. A marker whose
+  subtask was deleted (or undone) is replaced on the next conversion.

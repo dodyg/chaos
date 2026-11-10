@@ -1,29 +1,43 @@
 import React from "react";
-import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse } from "#neoastra";
+import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
+import { TaskJournal } from "./TaskJournal";
+import { extractChecklist, type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
 import { ContainerManagement } from "./ContainerManagement";
 import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tags";
-import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, Plus, Search, Settings2, Trash2, UserRound, X } from "lucide-react";
+import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, Plus, Search, Settings2, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
 import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc };
+
+/** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
+function isTextEditing(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return !!element && (element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
+}
 
 export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api; templates?: React.ReactNode }) {
   const { taskRpc, containerRpc } = api;
   const tagApi = api.tagRpc ?? tagRpc;
   const queryApi = api.queryRpc ?? queryRpc;
+  const undoApi = api.undoRpc ?? undoRpc;
+  const markdownApi = api.markdownRpc ?? markdownRpc;
+  const journalApi = { diaryRpc: api.diaryRpc ?? diaryRpc, historyRpc: api.historyRpc ?? historyRpc };
+  const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
@@ -92,10 +106,74 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       setTagCounts(new Map(counts.tags.map(entry => [entry.tagId, entry.count])));
     }
   }
-  /** After any committed change: reload the open query view and the sidebar counts. */
+  /** After any committed change: reload the open query view, the sidebar counts and the undo offer. */
   function changed() {
     setRevision(current => current + 1);
     void refreshMeta().catch((e: unknown) => setError(String(e)));
+    void undoApi.list({ limit: 1 }).then(result => { if (result.ok) setLastUndo(result.entries[0] ?? null); }).catch(() => setLastUndo(null));
+  }
+  /** Operation-level undo of the newest change; on a conflict nothing changes and the reason is shown. */
+  async function undoLatest() {
+    if (busy) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const latest = (await undoApi.list({ limit: 1 })).entries[0];
+      if (!latest) { setNotice("There is nothing to undo."); return; }
+      const result = await undoApi.undo({ operationId: operationId(), targetOperationId: latest.operationId });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not undo that change.");
+      setNotice(`Undid ${result.label}.`);
+      await Promise.all([refresh(), refreshContainers()]);
+      if (editing) {
+        const current = await taskRpc.get({ taskId: editing.id });
+        setEditing(current.ok && current.task ? current.task : null);
+        if (current.ok && current.task) setSubtasks(await refreshSubtasks(current.task.id));
+      }
+      setSubtaskRevision(value => value + 1);
+      changed();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not undo that change."); }
+    finally { setBusy(false); }
+  }
+  const undoRef = React.useRef(undoLatest);
+  undoRef.current = undoLatest;
+  React.useEffect(() => {
+    function key(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z" && !isTextEditing(event.target)) {
+        event.preventDefault();
+        void undoRef.current();
+      }
+    }
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+  async function openLinkedTask(taskId: string) {
+    const result = await taskRpc.get({ taskId });
+    if (result.ok && result.task) setEditing(result.task);
+    else setError(result.error?.message ?? "That task is not available.");
+  }
+  const links: MarkdownLinks = React.useMemo(() => ({
+    resolve: async (taskIds: string[]) => { const result = await markdownApi.resolveLinks({ taskIds }); return result.ok ? [...result.targets] : []; },
+    onOpenTask: (taskId: string) => void openLinkedTask(taskId),
+    onOpenExternal: (url: string) => void markdownApi.openExternal({ url }).then(result => { if (!result.ok) setError(result.error?.message ?? "Could not open that link."); }),
+  }), [markdownApi]);
+  const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
+    if (!text.trim()) return [];
+    const result = await queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null });
+    return result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
+  }, [queryApi]);
+  async function convertChecklist(items: { itemKey: string; title: string; done: boolean }[]) {
+    if (busy || !editing) return;
+    const taskId = editing.id;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await markdownApi.convertChecklist({ operationId: operationId(), taskId, items });
+      if (!result.ok) throw new Error(result.error?.fields.map(f => f.message).join("; ") || result.error?.message || "Could not convert the checklist.");
+      setNotice(`Created ${result.created.length} subtask${result.created.length === 1 ? "" : "s"}${result.alreadyConverted > 0 ? `; ${result.alreadyConverted} already converted` : ""}.`);
+      setSubtasks(await refreshSubtasks(taskId));
+      setChecklistChoice(null);
+      setSubtaskRevision(value => value + 1);
+      changed();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not convert the checklist."); }
+    finally { setBusy(false); }
   }
   React.useEffect(() => { void refreshContainers().catch((e: unknown) => setError(String(e))); }, []);
   React.useEffect(() => { void refreshMeta().catch((e: unknown) => setError(String(e))); }, []);
@@ -350,6 +428,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
     <div className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16">
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
+      {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
 
       {view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
@@ -392,7 +471,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       <div className="grid flex-1 content-start gap-7 overflow-x-hidden overflow-y-auto p-5">
         <form className="grid gap-4" onSubmit={save}>
           <Field label="Title"><Input required className="h-10 text-base font-semibold md:text-base" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
-          <Field label="Notes"><Textarea rows={4} value={editing.notes} onChange={e => change({ notes: e.target.value })} placeholder="Add details…"/></Field>
+          <MarkdownEditor id="task-notes" label="Notes" rows={4} value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}/>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Status"><NativeSelect value={editing.status} disabled={busy} onChange={e => { const status = e.target.value; const hasOpen = subtasks.some(s => !isFinished(s.status)); const choice = status === "Done" && hasOpen ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null; void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, status, subtaskChoice: choice }), saved => { setEditing(current => current ? { ...current, status: saved.status, version: saved.version } : null); void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
             <Field label="Priority"><NativeSelect value={editing.priority} onChange={e => change({ priority: e.target.value })}>{priorities.map(s => <NativeSelectOption key={s}>{s}</NativeSelectOption>)}</NativeSelect></Field>
@@ -412,6 +491,21 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
           </div>
           <div className="flex gap-2 pt-1"><Button disabled={busy}>Save</Button><Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button></div>
         </form>
+
+        {(() => {
+          const checklist = extractChecklist(editing.notes);
+          if (checklist.length === 0) return null;
+          const chosen = checklistChoice ?? new Set(checklist.map(item => item.itemKey));
+          return <details className="grid gap-2 rounded-lg border p-3 text-sm" onToggle={e => { if (!(e.currentTarget as HTMLDetailsElement).open) setChecklistChoice(null); }}>
+            <summary className="flex cursor-pointer items-center gap-2 font-medium"><ListChecks className="size-4 text-muted-foreground"/>Convert checklist to subtasks ({checklist.length})</summary>
+            <p className="pt-2 text-xs text-muted-foreground">Uses the saved notes. Checked items become done subtasks; the notes stay as they are. Items already converted are skipped.</p>
+            <ul className="grid gap-1 pt-1" aria-label="Checklist items">{checklist.map(item => <li key={item.itemKey}><label className="flex items-center gap-2">
+              <input type="checkbox" className="accent-primary" checked={chosen.has(item.itemKey)} onChange={e => { const next = new Set(chosen); if (e.target.checked) next.add(item.itemKey); else next.delete(item.itemKey); setChecklistChoice(next); }}/>
+              <span className={cn(item.done && "text-muted-foreground line-through")}>{item.title}</span>
+            </label></li>)}</ul>
+            <div className="pt-1"><Button type="button" size="sm" variant="outline" disabled={busy || chosen.size === 0} onClick={() => void convertChecklist(checklist.filter(item => chosen.has(item.itemKey)))}>Convert {chosen.size} to subtasks</Button></div>
+          </details>;
+        })()}
 
         <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
 
@@ -433,14 +527,24 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
           {subtaskEdit && <Card className="gap-4 py-4"><CardContent className="px-4"><form className="grid gap-4" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.edit({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, title: subtaskEdit.title, notes: subtaskEdit.notes }), () => setSubtaskEdit(null)); }}>
             <h4 className="font-semibold">Edit subtask</h4>
             <Field label="Title"><Input required value={subtaskEdit.title} onChange={e => setSubtaskEdit({ ...subtaskEdit, title: e.target.value })}/></Field>
-            <Field label="Notes"><Textarea value={subtaskEdit.notes} onChange={e => setSubtaskEdit({ ...subtaskEdit, notes: e.target.value })}/></Field>
+            <MarkdownEditor id="subtask-notes" label="Subtask notes" rows={3} value={subtaskEdit.notes} onChange={notes => setSubtaskEdit({ ...subtaskEdit, notes })} links={links} searchLinks={searchLinks}/>
             <Field label="Status"><NativeSelect value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null)); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
             <div className="flex gap-2"><Button disabled={busy}>Save subtask</Button><Button type="button" variant="outline" onClick={() => setSubtaskEdit(null)}>Cancel</Button></div>
           </form></CardContent></Card>}
           {subtaskEdit && <TagPicker targetKind="Subtask" targetId={subtaskEdit.id} label={`Tags on “${subtaskEdit.title}”`} tags={tags} api={tagApi} revision={revision} onChanged={changed}/>}
           <DeletedItems noun="subtasks" items={deletedSubtasks} name={subtask => subtask.title} busy={busy} onRestore={subtask => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}/>
         </section>
+
+        <TaskJournal task={editing} api={journalApi} revision={revision + subtaskRevision} busy={busy} links={links} searchLinks={searchLinks}
+          onError={setError}
+          onChanged={saved => { if (saved) { setEditing(saved); void refresh().catch((e: unknown) => setError(String(e))); } changed(); }}/>
       </div>
     </aside>}
+
+    {lastUndo && <div role="status" aria-label="Undo" className="fixed bottom-4 left-1/2 z-30 flex max-w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border bg-popover py-1.5 pr-1.5 pl-4 text-sm shadow-lg">
+      <span className="truncate">{lastUndo.label}</span>
+      <Button type="button" size="sm" variant="outline" disabled={busy} title="Undo (Ctrl+Z outside text fields)" onClick={() => void undoLatest()}><Undo2/>Undo</Button>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss undo" onClick={() => setLastUndo(null)}><X/></Button>
+    </div>}
   </div>;
 }
