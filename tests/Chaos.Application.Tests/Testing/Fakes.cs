@@ -70,6 +70,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);
         public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
+        public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
     }
 }
 

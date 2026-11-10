@@ -69,6 +69,17 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                         {
                             throw Conflict(entry.Label, name);
                         }
+
+                        // A diary or tag change does not necessarily increment the task row.
+                        // Never remove an occurrence created by this operation if later work
+                        // has been recorded against it, even when its row version is unchanged.
+                        if (change.Kind == ChangeKind.Task && change.Before is null &&
+                            changes.Entities.Any(item => item.Kind == ChangeKind.RecurrenceOccurrence))
+                        {
+                            var history = await session.History.ListByTaskAsync(change.Id, inner);
+                            if (history.Any(item => item.OperationId != entry.OperationId))
+                                throw Conflict(entry.Label, name);
+                        }
                     }
 
                     foreach (var link in changes.Links.Reverse())
@@ -114,6 +125,8 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.Tag => await session.Tags.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.DisplayName) : (null, null),
         ChangeKind.Diary => await session.Diary.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, "diary entry") : (null, null),
         ChangeKind.Pad => await session.Pad.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, PadExcerpt.Of(row.RawMarkdown)) : (null, null),
+        ChangeKind.RecurrenceSeries => await session.Recurrence.GetSeriesAsync(change.Id, ct) is { } row ? (row.Version, "recurrence series") : (null, null),
+        ChangeKind.RecurrenceOccurrence => await session.Recurrence.GetOccurrenceAsync(change.Id, ct) is { } row ? (row.Version, "recurrence occurrence") : (null, null),
         _ => (null, null),
     };
 
@@ -141,6 +154,16 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
     {
         switch (change.Kind)
         {
+            case ChangeKind.RecurrenceSeries:
+                return await RevertAsync(change, label, _ => "recurrence series",
+                    id => session.Recurrence.GetSeriesAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Recurrence.UpdateSeriesAsync(row, expected, ct));
+            case ChangeKind.RecurrenceOccurrence:
+                return await RevertAsync(change, label, _ => "recurrence occurrence",
+                    id => session.Recurrence.GetOccurrenceAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Recurrence.UpdateOccurrenceAsync(row, expected, ct));
             case ChangeKind.Task:
                 return await RevertAsync(change, label, row => row.Title,
                     id => session.Tasks.GetIncludingDeletedAsync(id, ct),

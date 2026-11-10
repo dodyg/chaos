@@ -22,8 +22,24 @@ public interface IDataSession
     IUndoStore Undo { get; }
     IChecklistConversionStore ChecklistConversions { get; }
     IPadStore Pad { get; }
+    IRecurrenceStore Recurrence { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
+}
+
+/// <summary>Versioned series and occurrence rows within the caller's transaction.</summary>
+public interface IRecurrenceStore
+{
+    Task<RecurrenceSeriesRecord?> GetSeriesAsync(string id, CancellationToken ct);
+    Task<long> NextRevisionAsync(string seriesId, CancellationToken ct);
+    Task<RecurrenceOccurrenceRecord?> GetOccurrenceAsync(string id, CancellationToken ct);
+    Task<RecurrenceOccurrenceRecord?> FindByKeyAsync(string seriesId, string nominalKey, CancellationToken ct);
+    Task<RecurrenceOccurrenceRecord?> FindByTaskAsync(string taskId, CancellationToken ct);
+    Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListOccurrencesAsync(string seriesId, CancellationToken ct);
+    Task AddSeriesAsync(RecurrenceSeriesRecord row, CancellationToken ct);
+    Task<RecurrenceSeriesRecord?> UpdateSeriesAsync(RecurrenceSeriesRecord row, long expectedVersion, CancellationToken ct);
+    Task AddOccurrenceAsync(RecurrenceOccurrenceRecord row, CancellationToken ct);
+    Task<RecurrenceOccurrenceRecord?> UpdateOccurrenceAsync(RecurrenceOccurrenceRecord row, long expectedVersion, CancellationToken ct);
 }
 
 /// <summary>

@@ -17,6 +17,42 @@ public enum ChangeKind
     Tag = 6,
     Diary = 7,
     Pad = 8,
+    RecurrenceSeries = 9,
+    RecurrenceOccurrence = 10,
+}
+
+internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
+{
+    public Task<RecurrenceSeriesRecord?> GetSeriesAsync(string id, CancellationToken ct) => inner.GetSeriesAsync(id, ct);
+    public Task<long> NextRevisionAsync(string seriesId, CancellationToken ct) => inner.NextRevisionAsync(seriesId, ct);
+    public Task<RecurrenceOccurrenceRecord?> GetOccurrenceAsync(string id, CancellationToken ct) => inner.GetOccurrenceAsync(id, ct);
+    public Task<RecurrenceOccurrenceRecord?> FindByKeyAsync(string seriesId, string nominalKey, CancellationToken ct) => inner.FindByKeyAsync(seriesId, nominalKey, ct);
+    public Task<RecurrenceOccurrenceRecord?> FindByTaskAsync(string taskId, CancellationToken ct) => inner.FindByTaskAsync(taskId, ct);
+    public Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListOccurrencesAsync(string seriesId, CancellationToken ct) => inner.ListOccurrencesAsync(seriesId, ct);
+    public async Task AddSeriesAsync(RecurrenceSeriesRecord row, CancellationToken ct)
+    {
+        await inner.AddSeriesAsync(row, ct);
+        recorder.RecordEntity<RecurrenceSeriesRecord>(ChangeKind.RecurrenceSeries, row.Id, null, row.Version);
+    }
+    public async Task<RecurrenceSeriesRecord?> UpdateSeriesAsync(RecurrenceSeriesRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.RecurrenceSeries, row.Id) ? null : await inner.GetSeriesAsync(row.Id, ct);
+        var applied = await inner.UpdateSeriesAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.RecurrenceSeries, row.Id, before, row.Version);
+        return applied;
+    }
+    public async Task AddOccurrenceAsync(RecurrenceOccurrenceRecord row, CancellationToken ct)
+    {
+        await inner.AddOccurrenceAsync(row, ct);
+        recorder.RecordEntity<RecurrenceOccurrenceRecord>(ChangeKind.RecurrenceOccurrence, row.Id, null, row.Version);
+    }
+    public async Task<RecurrenceOccurrenceRecord?> UpdateOccurrenceAsync(RecurrenceOccurrenceRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.RecurrenceOccurrence, row.Id) ? null : await inner.GetOccurrenceAsync(row.Id, ct);
+        var applied = await inner.UpdateOccurrenceAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.RecurrenceOccurrence, row.Id, before, row.Version);
+        return applied;
+    }
 }
 
 public enum LinkKind
@@ -91,6 +127,7 @@ public sealed class RecordingDataSession : IDataSession
     public IUndoStore Undo => _inner.Undo;
     public IChecklistConversionStore ChecklistConversions => _inner.ChecklistConversions;
     public IPadStore Pad { get; }
+    public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
 

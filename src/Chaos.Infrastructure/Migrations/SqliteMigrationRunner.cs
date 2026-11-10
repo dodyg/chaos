@@ -13,7 +13,7 @@ namespace Chaos.Infrastructure.Migrations;
 public sealed class SqliteMigrationRunner
 {
     /// <summary>Highest schema version this build knows how to open.</summary>
-    public const int MaxKnownSchemaVersion = 5;
+    public const int MaxKnownSchemaVersion = 6;
 
     public static async Task<long> MigrateAsync(SqliteConnection connection, CancellationToken ct)
     {

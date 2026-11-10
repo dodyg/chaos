@@ -11,6 +11,33 @@ namespace Chaos.Infrastructure.Tests.Migrations;
 /// </summary>
 public sealed class SqliteMigrationRunnerTests
 {
+    [Test]
+    public async Task RecurrenceOccurrences_SecondActiveSlot_IsRejected()
+    {
+        using var connection = NewConnection(TestPaths.NewDataRoot());
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        using var setup = connection.CreateCommand();
+        setup.CommandText = """
+            INSERT INTO Profiles (Id, DisplayName, ZoneId, Locale, DateFormat, FirstWeekday, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('profile', 'Person', 'UTC', 'en', 'YMD', 1, 'now', 'now');
+            INSERT INTO Spaces (Id, OwnerProfileId, Kind, Name, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('space', 'profile', 1, 'Personal', 'now', 'now');
+            INSERT INTO Containers (Id, SpaceId, Kind, Name, NormalizedName, Position, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('container', 'space', 0, 'Inbox', 'inbox', 0, 'now', 'now');
+            INSERT INTO RecurrenceSeries (Id, SpaceId, ContainerId, RuleJson, TemplateJson, Revision, Version, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('series', 'space', 'container', '{}', '{}', 1, 1, 'now', 'now');
+            INSERT INTO RecurrenceOccurrences (Id, SeriesId, NominalKey, ScheduleKey, EffectiveLocal, State, SeriesRevision, Version, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('first', 'series', '2026-01-01', '2026-01-01', '2026-01-01', 0, 1, 1, 'now', 'now');
+            """;
+        await setup.ExecuteNonQueryAsync();
+        using var duplicate = connection.CreateCommand();
+        duplicate.CommandText = """
+            INSERT INTO RecurrenceOccurrences (Id, SeriesId, NominalKey, ScheduleKey, EffectiveLocal, State, SeriesRevision, Version, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('second', 'series', '2026-01-02', '2026-01-02', '2026-01-02', 0, 1, 1, 'now', 'now');
+            """;
+        await Assert.That(async () => await duplicate.ExecuteNonQueryAsync()).Throws<SqliteException>();
+    }
+
     private static SqliteConnection NewConnection(string dataRoot)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -30,17 +57,17 @@ public sealed class SqliteMigrationRunnerTests
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(version).IsEqualTo(5L);
+        await Assert.That(version).IsEqualTo(6L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(5L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(6L);
         using var checksum = connection.CreateCommand();
         checksum.CommandText = "SELECT Checksum FROM SchemaMigrations WHERE Version = 1;";
         var storedChecksum = await checksum.ExecuteScalarAsync() as string;
         await Assert.That(storedChecksum).IsNotNull();
         await Assert.That(storedChecksum!.Length).IsEqualTo(64);
         // Core tables exist (spot check across the 001 schema map).
-        foreach (var table in new[] { "Profiles", "Spaces", "Containers", "Tasks", "TaskHistory", "OperationReceipts", "BackupCatalog", "TaskTemplates", "SearchDocuments", "SearchIndex", "SearchIndexState", "ScratchPadTags" })
+        foreach (var table in new[] { "Profiles", "Spaces", "Containers", "Tasks", "TaskHistory", "OperationReceipts", "BackupCatalog", "TaskTemplates", "SearchDocuments", "SearchIndex", "SearchIndexState", "ScratchPadTags", "RecurrenceSeries", "RecurrenceOccurrences", "RecurrenceExceptions" })
         {
             using var probe = connection.CreateCommand();
             probe.CommandText = $"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}';";
@@ -56,10 +83,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var second = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(second).IsEqualTo(5L);
+        await Assert.That(second).IsEqualTo(6L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(5L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(6L);
     }
 
     [Test]
@@ -187,7 +214,7 @@ public sealed class SqliteMigrationRunnerTests
                 await set.ExecuteNonQueryAsync();
             }
 
-            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(5L);
+            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(6L);
         }
 
         // A real content change is still refused.
