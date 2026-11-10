@@ -3,7 +3,8 @@ using Chaos.Domain.Tasks;
 namespace Chaos.Application.Contracts;
 
 /// <summary>
-/// Built-in task views (PLAN §10). My Day joins with package 8; Waiting groups by outside
+/// Built-in task views (PLAN §10). My Day lists one local date's day-plan items in their
+/// manual order; Waiting groups by outside
 /// person once package 10 stores waiting details, and until then lists Waiting-on-someone tasks.
 /// </summary>
 public enum TaskView
@@ -17,6 +18,7 @@ public enum TaskView
     RecentlyCompleted = 6,
     Waiting = 7,
     Search = 8,
+    MyDay = 9,
 }
 
 /// <summary>An inclusive range of local dates; either end may be open.</summary>
@@ -45,6 +47,8 @@ public sealed record TaskQuerySpec
     public bool IncludeArchived { get; init; }
     public int UpcomingDays { get; init; } = 14;
     public int RecentDays { get; init; } = 30;
+    /// <summary>My Day: the local date whose plan to show; null means the profile's today.</summary>
+    public DateOnly? Day { get; init; }
     public int Limit { get; init; } = 100;
     /// <summary>Opaque cursor from the previous page; null for the first page.</summary>
     public string? Cursor { get; init; }
@@ -86,6 +90,8 @@ public sealed record TaskQueryCriteria
     public DateOnly? OverdueBefore { get; init; }
     /// <summary>Overdue view: per-zone "now" for timed due values.</summary>
     public IReadOnlyList<ZoneCutoff> OverdueZoneCutoffs { get; init; } = [];
+    /// <summary>My Day view: active (not removed) items of the profile's plan for this local date.</summary>
+    public DateOnly? DayPlanOn { get; init; }
     public required int Limit { get; init; }
     public string? Cursor { get; init; }
 }

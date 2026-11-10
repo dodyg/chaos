@@ -5,6 +5,7 @@ using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
+using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Tags;
 using Chaos.Desktop.Services;
@@ -48,6 +49,7 @@ internal static class Program
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -246,5 +248,18 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(CapturePreviewResponse))]
 [JsonSerializable(typeof(CaptureCreateRequest))]
 [JsonSerializable(typeof(CaptureCreateResponse))]
+[JsonSerializable(typeof(DayClockResponse))]
+[JsonSerializable(typeof(DayClockRequest))]
+[JsonSerializable(typeof(DayClockResult))]
+[JsonSerializable(typeof(DaySummaryResponse))]
+[JsonSerializable(typeof(DayOpenRequest))]
+[JsonSerializable(typeof(DayOpenResponse))]
+[JsonSerializable(typeof(DaySuggestionsRequest))]
+[JsonSerializable(typeof(DaySuggestionResponse))]
+[JsonSerializable(typeof(DaySuggestionsResponse))]
+[JsonSerializable(typeof(DayItemRequest))]
+[JsonSerializable(typeof(DayMoveRequest))]
+[JsonSerializable(typeof(DayCarryOverRequest))]
+[JsonSerializable(typeof(DayChangeResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

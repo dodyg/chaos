@@ -732,6 +732,18 @@ Package remains unchecked until the exit is shown in a native window: type a tas
 
 **Tests:** unique day init across races, no duplicate carry-over, manual removal persists, planned-in-past vs due-overdue, DST/local dates and no automatic suggestion insertion. **Exit:** yesterday remains reviewable and today's view refreshes without a restart.
 
+Progress note (2026-11-10): implemented and verified headlessly; not yet accepted in a native window.
+
+- **Storage.** Migration 008 adds `DayPlans` (unique profile + local date, nullable week-seed revision for package 9) and `DayPlanItems` (Task kind only until package 10 adds follow-ups; origin Manual/Week/CarryOver; one row per task per day, removal keeps the row with `RemovedAtUtc`).
+- **Application.** `MyDayCommands` opens a day (today and later are created once with `ON CONFLICT DO NOTHING`; earlier dates are read-only), adds, removes, moves (shared `RankOrdering`) and carries open items to the next date once. Every change has an OperationId receipt. Membership never edits planned/due dates. `EnsurePlanAsync` is the integration point for week seeding. Suggestions are computed on request from the shared query specifications (Overdue, Today, due within two days, active recurrence on today, yesterday's open selected items), deduplicated by most urgent reason and ordered by reason, due, priority, ID; selected, terminal, deleted and archived tasks are excluded.
+- **Queries.** `TaskView.MyDay` (with an optional `Day`) runs through the same query store as every other view, ordered by item position; the sidebar count uses the same specification (open items).
+- **Desktop.** New `myDay` RPC service (`clock`, `open`, `suggestions`, `add`, `remove`, `move`, `carryOver`); `queries.run` accepts `day`.
+- **Frontend.** `MyDay.tsx`: chosen tasks with move up/down and remove, a collapsible Finished section, remaining estimate with an unknown-estimate count, a suggestions panel with explicit Add, previous/next day navigation (earlier days read-only) and carry-over. `useDayClock` re-reads the local date just after the profile's next midnight, every minute and on focus/visibility (resume), so views and counts refresh without a restart. The task editor has an Add to My Day action. Sidebar entry with count.
+
+Not done, deliberately: app-level undo of My Day membership (remove/re-add is the reversal; membership is profile-owned, not task history); drag-and-drop reordering inside My Day (keyboard buttons cover it); follow-up items (package 10); weekly seeding and reconciliation (package 9).
+
+Results: Release build 0 warnings; 316 TUnit tests pass (Infrastructure 144 with 11 new My Day tests, Desktop 26 with 1 new); frontend type check, `vite build` and 48 tests (5 new) pass; Slopwatch clean. Package remains unchecked until the exit is shown in a native window: choose tasks, see the view switch to the new date after midnight without restarting, and review yesterday.
+
 ### [ ] 9 — My Week planning ritual
 
 **Depends on:** 8. Implement weekly drafts vs confirmed plans, goals/task links, look-back/leftover decisions, seven-day drag/keyboard assignments, availability overrides/work category, overload warnings, confirm/reconcile today and midweek check-in query. Implement the reusable historical-facts query for look-back here; package 11 adds persisted journal snapshots and scheduled summary generation, replacing live look-back with those snapshots when available.

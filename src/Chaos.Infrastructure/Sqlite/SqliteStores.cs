@@ -24,6 +24,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IPadStore Pad { get; } = new SqlitePadStore(connection);
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
+    public IDayPlanStore DayPlans { get; } = new SqliteDayPlanStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }

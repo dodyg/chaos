@@ -24,8 +24,32 @@ public interface IDataSession
     IPadStore Pad { get; }
     IRecurrenceStore Recurrence { get; }
     IReminderRuleStore ReminderRules { get; }
+    IDayPlanStore DayPlans { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
+}
+
+/// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
+public interface IDayPlanStore
+{
+    Task<DayPlanRecord?> FindAsync(string profileId, DateOnly localDate, CancellationToken ct);
+    /// <summary>
+    /// Inserts the plan unless one already exists for the same profile and date (the unique
+    /// key settles midnight/restart races).
+    /// </summary>
+    /// <returns>True when this call created the plan.</returns>
+    Task<bool> TryAddAsync(DayPlanRecord plan, CancellationToken ct);
+    /// <summary>Items ordered by (Position, Id); removed ones only when asked.</summary>
+    Task<IReadOnlyList<DayPlanItemRecord>> ListItemsAsync(string dayPlanId, bool includeRemoved, CancellationToken ct);
+    /// <summary>The task's row in this plan, active or removed.</summary>
+    Task<DayPlanItemRecord?> FindItemAsync(string dayPlanId, string taskId, CancellationToken ct);
+    Task AddItemAsync(DayPlanItemRecord item, CancellationToken ct);
+    Task<DayPlanItemRecord?> UpdateItemAsync(DayPlanItemRecord item, long expectedVersion, CancellationToken ct);
+    /// <summary>
+    /// Open, nondeleted tasks of active containers in the space whose active recurrence
+    /// occurrence falls on this local date.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListRecurrenceTaskIdsDueOnAsync(string spaceId, DateOnly localDate, CancellationToken ct);
 }
 
 public interface IReminderRuleStore

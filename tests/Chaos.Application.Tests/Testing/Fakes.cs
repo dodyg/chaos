@@ -73,6 +73,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
+        public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
     }
 }
 
