@@ -1,4 +1,6 @@
 import React from "react";
+import { GripVertical } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 /**
  * Final position of an item dropped on a target row, using the same insertion-index
@@ -19,10 +21,11 @@ type Dragged = { id: string; group: string };
 export function useDragReorder() {
   const dragged = React.useRef<Dragged | null>(null);
 
-  function handle(id: string, group: string, disabled: boolean) {
-    return <span className="drag-handle" draggable={!disabled} aria-hidden="true" title="Drag to reorder"
+  function handle(id: string, group: string, disabled: boolean, className?: string) {
+    return <span className={cn("inline-flex shrink-0 cursor-grab items-center px-0.5 py-1 text-muted-foreground opacity-40 transition-opacity group-hover/row:opacity-90 data-[disabled=true]:cursor-default", className)}
+      data-disabled={disabled} draggable={!disabled} aria-hidden="true" title="Drag to reorder"
       onDragStart={event => { dragged.current = { id, group }; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
-      onDragEnd={() => { dragged.current = null; }}><svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" focusable="false"><circle cx="2" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="13" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg></span>;
+      onDragEnd={() => { dragged.current = null; }}><GripVertical className="size-4"/></span>;
   }
 
   /** Props for a row; `order` is the sibling IDs in display order and `index` the row's position in it. */

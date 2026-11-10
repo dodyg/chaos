@@ -4,10 +4,15 @@ import { Templates } from "./Templates";
 import { ContainerManagement } from "./ContainerManagement";
 import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
-import { Icon } from "./Icon";
-
-const statuses = ["NotStarted", "InProgress", "WaitingOnSomeone", "NeedsReview", "Done", "Cancelled"];
-const label = (value: string) => value.replace(/([a-z])([A-Z])/g, "$1 $2");
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarDays, Clock, FolderKanban, Inbox, LayoutTemplate, ListTodo, Plus, Settings2, Trash2, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 
 export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc }; templates?: React.ReactNode }) {
   const { taskRpc, containerRpc } = api;
@@ -168,162 +173,168 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
   }
   function taskMeta(task: TaskResponse) {
     const parts: React.ReactNode[] = [];
-    if (task.dueDate) parts.push(<span key="due" className="meta-item"><Icon name="calendar" size={13}/>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime}` : ""}</span>);
-    else if (task.plannedDate) parts.push(<span key="planned" className="meta-item"><Icon name="calendar" size={13}/>Planned {task.plannedDate}</span>);
-    if (task.estimateMinutes) parts.push(<span key="estimate" className="meta-item"><Icon name="clock" size={13}/>{task.estimateMinutes} min</span>);
-    if (task.priority === "High" || task.priority === "Urgent") parts.push(<span key="priority" className={`pill priority-${task.priority}`}>{task.priority}</span>);
+    if (task.status !== "NotStarted") parts.push(<StatusBadge key="status" status={task.status}/>);
+    if (task.dueDate) parts.push(<span key="due" className="inline-flex items-center gap-1"><CalendarDays className="size-3.5"/>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime}` : ""}</span>);
+    else if (task.plannedDate) parts.push(<span key="planned" className="inline-flex items-center gap-1"><CalendarDays className="size-3.5"/>Planned {task.plannedDate}</span>);
+    if (task.estimateMinutes) parts.push(<span key="estimate" className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{task.estimateMinutes} min</span>);
+    if (task.priority === "High" || task.priority === "Urgent") parts.push(<PriorityBadge key="priority" priority={task.priority}/>);
     return parts;
+  }
+  function rowClass(selected: boolean, status: string, compact = false) {
+    return cn("group/row flex items-center gap-2 rounded-lg border bg-card py-1 pr-1.5 pl-1 shadow-xs transition-colors hover:border-input",
+      compact ? "min-h-9" : "min-h-11",
+      selected && "border-primary ring-1 ring-primary hover:border-primary",
+      isFinished(status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through");
+  }
+  function rowActions(name: string, index: number, count: number, onMove: (to: number) => void, onDelete: () => void) {
+    return <div className="flex gap-0.5 opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100">
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move ${name} up`} title="Move up" onClick={() => onMove(index - 1)}><ArrowUp/></Button>
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === count - 1} aria-label={`Move ${name} down`} title="Move down" onClick={() => onMove(index + 1)}><ArrowDown/></Button>
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete ${name}`} title="Delete" onClick={onDelete}><Trash2/></Button>
+    </div>;
   }
   function taskList(rows: TaskResponse[], name: string) {
     const order = rows.map(row => row.id);
     const byId = (id: string) => rows.find(row => row.id === id)!;
-    return <ol className="rows" aria-label={name}>{rows.map((task, index) => <li key={task.id} className={`row-item${editing?.id === task.id ? " selected" : ""}${task.status === "Done" || task.status === "Cancelled" ? " finished" : ""}`}
+    return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id} className={rowClass(editing?.id === task.id, task.status)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => reorderTask(byId(id), insertionIndex))}>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
-      <div className="row-main">
-        <button className="row-title" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
-        {taskMeta(task).length > 0 && <div className="row-meta">{taskMeta(task)}</div>}
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
+        {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
-      {task.status !== "NotStarted" && <span className={`pill status-${task.status}`}>{label(task.status)}</span>}
-      <div className="row-actions">
-        <button className="icon-button" disabled={busy || index === 0} aria-label={`Move ${task.title} up`} title="Move up" onClick={() => reorderTask(task, index - 1)}><Icon name="up"/></button>
-        <button className="icon-button" disabled={busy || index === rows.length - 1} aria-label={`Move ${task.title} down`} title="Move down" onClick={() => reorderTask(task, index + 1)}><Icon name="down"/></button>
-        <button className="icon-button danger" disabled={busy} aria-label={`Delete ${task.title}`} title="Delete" onClick={() => void run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); })}><Icon name="trash"/></button>
-      </div>
+      {rowActions(task.title, index, rows.length, to => reorderTask(task, to), () => void run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }))}
     </li>)}</ol>;
+  }
+  function groupHeading(text: string, count?: number) {
+    return <h3 className="flex items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{text}{count !== undefined && <Count>{count}</Count>}</h3>;
   }
   const unsectioned = tasks.filter(task => task.sectionId === null);
   const knownSectionIds = new Set(sections.map(section => section.id));
   const unknownSections = [...new Set(tasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
   const selected = containers.find(c => c.id === containerId);
   const listName = selected?.name ?? "Inbox";
-  const openCount = tasks.filter(t => t.status !== "Done" && t.status !== "Cancelled").length;
+  const openCount = tasks.filter(t => !isFinished(t.status)).length;
   const userContainers = containers.filter(c => c.kind !== "Inbox");
+  const navItem = "h-8 min-w-0 flex-1 justify-start gap-2.5 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 [&_svg]:text-muted-foreground aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary aria-[current=page]:[&_svg]:text-primary";
+  const showDetail = editing !== null && view === "tasks";
 
-  return <div className={`app-shell${editing && view === "tasks" ? " has-detail" : ""}`} aria-busy={busy}>
-    <aside className="sidebar">
-      <h1 className="brand"><span className="brand-mark" aria-hidden="true">✷</span>Chaos</h1>
-      <nav aria-label="Views" className="nav-group">
-        <button type="button" className="nav-item" aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Icon name="inbox"/>Inbox</button>
-        <button type="button" className="nav-item" aria-current={view === "templates" ? "page" : undefined} onClick={() => setView("templates")}><Icon name="template"/>Templates</button>
+  return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+    <aside className="sticky top-0 flex h-screen flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
+      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><span className="text-xl leading-none text-primary" aria-hidden="true">✷</span>Chaos</h1>
+      <nav aria-label="Views" className="grid gap-px">
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => setView("templates")}><LayoutTemplate/>Templates</Button>
       </nav>
-      <div className="nav-heading">Lists &amp; projects</div>
+      <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Lists &amp; projects</div>
       {userContainers.length > 0
-        ? <nav aria-label="Lists and projects" className="nav-group"><ol className="nav-list">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className={c.archived ? "archived" : undefined}
+        ? <nav aria-label="Lists and projects"><ol className="grid gap-px">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className="group/row flex items-center rounded-md"
             {...drag.target(containers.map(row => row.id), index, "containers", busy, (id, insertionIndex) => { const moving = containers.find(row => row.id === id)!; void runContainer(() => containerRpc.reorder({ operationId: operationId(), containerId: moving.id, expectedVersion: moving.version, insertionIndex }), "Could not reorder lists."); })}>
-            {drag.handle(c.id, "containers", busy)}
-            <button type="button" className="nav-item" disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}><Icon name={c.kind === "Project" ? "project" : "list"}/>{c.name}</button>
-            {c.archived && <span className="nav-tag">archived</span>}
+            {drag.handle(c.id, "containers", busy, "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5")}
+            <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span></Button>
+            {c.archived && <span className="pr-2 text-[0.7rem] text-muted-foreground">archived</span>}
           </li>)}</ol></nav>
-        : <p className="nav-empty">No lists yet. Create one below.</p>}
-      <form className="new-list" onSubmit={createContainer}>
+        : <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>}
+      <form className="mt-2 grid gap-2 rounded-lg border border-dashed border-input p-2" onSubmit={createContainer}>
         <label className="sr-only" htmlFor="new-container">New list or project</label>
-        <input id="new-container" placeholder="New list or project" value={containerName} onChange={e => setContainerName(e.target.value)} autoComplete="off"/>
-        <div className="new-list-actions">
+        <Input id="new-container" placeholder="New list or project" className="bg-background" value={containerName} onChange={e => setContainerName(e.target.value)} autoComplete="off"/>
+        <div className="flex gap-2">
           <label className="sr-only" htmlFor="new-container-kind">Type</label>
-          <select id="new-container-kind" value={containerKind} onChange={e => setContainerKind(e.target.value)}><option>List</option><option>Project</option></select>
-          <button className="primary" disabled={busy || !containerName.trim()}>Create</button>
+          <div className="flex-1 [&_[data-slot=native-select-wrapper]]:w-full"><NativeSelect id="new-container-kind" className="bg-background" value={containerKind} onChange={e => setContainerKind(e.target.value)}><NativeSelectOption>List</NativeSelectOption><NativeSelectOption>Project</NativeSelectOption></NativeSelect></div>
+          <Button disabled={busy || !containerName.trim()}>Create</Button>
         </div>
       </form>
-      {deletedContainers.length > 0 && <details className="trash"><summary>Deleted lists ({deletedContainers.length})</summary><ul className="trash-list">{deletedContainers.map(item => <li key={item.id}><span>{item.name}</span> <button type="button" className="link-button" disabled={busy} onClick={() => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}>Restore</button></li>)}</ul></details>}
+      <DeletedItems className="mt-auto pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
     </aside>
 
-    <div className="content">
-      {error && <div className="banner error" role="alert"><span>{error}</span><button type="button" className="icon-button" aria-label="Dismiss error" onClick={() => setError(null)}><Icon name="close"/></button></div>}
-      {warning && <div className="banner warning" role="status"><span>{warning}</span><button type="button" className="icon-button" aria-label="Dismiss warning" onClick={() => setWarning(null)}><Icon name="close"/></button></div>}
+    <div className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16">
+      {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
+      {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
 
       {view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
-        <header className="page-header">
-          <div>
-            <p className="eyebrow">{selected ? selected.kind : "Inbox"}{selected?.archived ? " · archived" : ""}{selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}</p>
-            <h2>{listName}</h2>
-            <p className="subtle">{tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}</p>
-          </div>
-          {selected && <div className="header-actions">
-            <button type="button" disabled={busy} onClick={() => { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; void runContainer(() => selected.archived ? containerRpc.unarchive(request) : containerRpc.archive(request), "Could not update archive state."); }}><Icon name="archive"/>{selected.archived ? "Unarchive" : "Archive"}</button>
-            <button type="button" aria-expanded={showSettings} aria-controls="list-settings" onClick={() => setShowSettings(v => !v)}><Icon name="settings"/>{showSettings ? "Hide settings" : "Settings"}</button>
-          </div>}
-        </header>
+        <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
+          subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
+          actions={selected && <>
+            <Button type="button" variant="outline" disabled={busy} onClick={() => { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; void runContainer(() => selected.archived ? containerRpc.unarchive(request) : containerRpc.archive(request), "Could not update archive state."); }}>{selected.archived ? <ArchiveRestore/> : <Archive/>}{selected.archived ? "Unarchive" : "Archive"}</Button>
+            <Button type="button" variant={showSettings ? "secondary" : "outline"} aria-expanded={showSettings} aria-controls="list-settings" onClick={() => setShowSettings(v => !v)}><Settings2/>{showSettings ? "Hide settings" : "Settings"}</Button>
+          </>}/>
 
-        {selected && showSettings && <div id="list-settings" className="settings-panel"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={async () => { if (selectedContainer.current === containerId) selectContainer(""); await refreshContainers(); }} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (selectedContainer.current !== containerId) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
+        {selected && showSettings && <div id="list-settings" className="rounded-xl border bg-muted/50 p-4"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={async () => { if (selectedContainer.current === containerId) selectContainer(""); await refreshContainers(); }} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (selectedContainer.current !== containerId) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
 
-        <form className="capture" onSubmit={capture}>
+        <form className="flex items-center gap-2 rounded-xl border border-input bg-card py-1.5 pr-1.5 pl-3.5 shadow-sm transition-[box-shadow,border-color] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={capture}>
           <label htmlFor="capture" className="sr-only">Add a task</label>
-          <Icon name="plus"/>
-          <input id="capture" value={title} onChange={e => setTitle(e.target.value)} autoComplete="off" placeholder={`Add a task to ${listName}`}/>
-          <button className="primary" disabled={busy || !title.trim()}>Add task</button>
+          <Plus className="size-4 shrink-0 text-primary"/>
+          <input id="capture" className="h-9 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground" value={title} onChange={e => setTitle(e.target.value)} autoComplete="off" placeholder={`Add a task to ${listName}`}/>
+          <Button disabled={busy || !title.trim()}>Add task</Button>
         </form>
 
-        {tasks.length === 0 && <div className="empty-state"><p className="empty-title">No tasks in this list.</p><p className="subtle">Type above and press Enter to capture one.</p></div>}
-        {unsectioned.length > 0 && <section className="group" aria-label="Unsectioned tasks">{sections.length > 0 && <h3 className="group-heading">Unsectioned</h3>}{taskList(unsectioned, "Unsectioned tasks")}</section>}
-        {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className="group" aria-label={`${section.title} tasks`}><h3 className="group-heading">{section.title}<span className="count">{rows.length}</span></h3>{rows.length === 0 ? <p className="group-empty">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
-        {unknownSections.map(id => <section key={id} className="group" aria-label="Other section tasks"><h3 className="group-heading">Other section</h3>{taskList(tasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
+        {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one.</EmptyState>}
+        {unsectioned.length > 0 && <section className="grid gap-1.5" aria-label="Unsectioned tasks">{sections.length > 0 && groupHeading("Unsectioned")}{taskList(unsectioned, "Unsectioned tasks")}</section>}
+        {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className="grid gap-1.5" aria-label={`${section.title} tasks`}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
+        {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(tasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
 
-        {containerId && <form className="inline-add" onSubmit={createSection}>
+        {containerId && <form className="flex gap-2" onSubmit={createSection}>
           <label htmlFor="new-section" className="sr-only">New section</label>
-          <input id="new-section" value={sectionTitle} onChange={e => setSectionTitle(e.target.value)} placeholder="New section" autoComplete="off"/>
-          <button disabled={busy || !sectionTitle.trim()}>Add section</button>
+          <Input id="new-section" className="border-dashed bg-transparent focus-visible:border-solid" value={sectionTitle} onChange={e => setSectionTitle(e.target.value)} placeholder="New section" autoComplete="off"/>
+          <Button variant="outline" disabled={busy || !sectionTitle.trim()}>Add section</Button>
         </form>}
 
-        {deleted.length > 0 && <details className="trash"><summary>Deleted tasks ({deleted.length})</summary><ul className="trash-list">{deleted.map(task => <li key={task.id}><span>{task.title}</span> <button type="button" className="link-button" disabled={busy} onClick={() => void run(() => taskRpc.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}>Restore</button></li>)}</ul></details>}
+        <DeletedItems noun="tasks" items={deleted} name={task => task.title} busy={busy} onRestore={task => void run(() => taskRpc.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}/>
       </>}
     </div>
 
-    {editing && view === "tasks" && <aside className="detail" aria-labelledby="editor-heading">
-      <div className="detail-header">
-        <h2 id="editor-heading">Edit task</h2>
-        <button type="button" className="icon-button" aria-label="Close task editor" onClick={() => setEditing(null)}><Icon name="close" size={18}/></button>
+    {editing && view === "tasks" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
+      <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
+        <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
       </div>
-      <div className="detail-body">
-        <form className="stack" onSubmit={save}>
-          <label className="field">Title<input required className="title-input" value={editing.title} onChange={e => change({ title: e.target.value })}/></label>
-          <label className="field">Notes<textarea rows={4} value={editing.notes} onChange={e => change({ notes: e.target.value })} placeholder="Add details…"/></label>
-          <div className="field-grid">
-            <label className="field">Status<select value={editing.status} disabled={busy} onChange={e => { const status = e.target.value; const hasOpen = subtasks.some(s => s.status !== "Done" && s.status !== "Cancelled"); const choice = status === "Done" && hasOpen ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null; void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, status, subtaskChoice: choice }), saved => { setEditing(current => current ? { ...current, status: saved.status, version: saved.version } : null); void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}>{statuses.map(s => <option key={s} value={s}>{label(s)}</option>)}</select></label>
-            <label className="field">Priority<select value={editing.priority} onChange={e => change({ priority: e.target.value })}>{["None", "Low", "Normal", "High", "Urgent"].map(s => <option key={s}>{s}</option>)}</select></label>
-            <label className="field">Category<select value={editing.category} onChange={e => change({ category: e.target.value })}><option>Personal</option><option>Work</option></select></label>
-            <label className="field">Estimate (minutes)<input type="number" min="0" value={editing.estimateMinutes ?? ""} onChange={e => change({ estimateMinutes: e.target.value === "" ? null : Number(e.target.value) })}/></label>
+      <div className="grid flex-1 content-start gap-7 overflow-x-hidden overflow-y-auto p-5">
+        <form className="grid gap-4" onSubmit={save}>
+          <Field label="Title"><Input required className="h-10 text-base font-semibold md:text-base" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
+          <Field label="Notes"><Textarea rows={4} value={editing.notes} onChange={e => change({ notes: e.target.value })} placeholder="Add details…"/></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Status"><NativeSelect value={editing.status} disabled={busy} onChange={e => { const status = e.target.value; const hasOpen = subtasks.some(s => !isFinished(s.status)); const choice = status === "Done" && hasOpen ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null; void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, status, subtaskChoice: choice }), saved => { setEditing(current => current ? { ...current, status: saved.status, version: saved.version } : null); void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
+            <Field label="Priority"><NativeSelect value={editing.priority} onChange={e => change({ priority: e.target.value })}>{priorities.map(s => <NativeSelectOption key={s}>{s}</NativeSelectOption>)}</NativeSelect></Field>
+            <Field label="Category"><NativeSelect value={editing.category} onChange={e => change({ category: e.target.value })}><NativeSelectOption>Personal</NativeSelectOption><NativeSelectOption>Work</NativeSelectOption></NativeSelect></Field>
+            <Field label="Estimate (minutes)"><Input type="number" min="0" value={editing.estimateMinutes ?? ""} onChange={e => change({ estimateMinutes: e.target.value === "" ? null : Number(e.target.value) })}/></Field>
           </div>
-          {(["planned", "due"] as const).map(kind => <fieldset key={kind} className="when"><legend>{label(kind)}</legend>
-            <div className="field-grid three">
-              <label className="field">Date<input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change({ [`${kind}Date`]: e.target.value || null })}/></label>
-              <label className="field">Time<input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null })}/></label>
-              <label className="field">Time zone<input value={editing[`${kind}ZoneId`] ?? ""} onChange={e => change({ [`${kind}ZoneId`]: e.target.value || null })} placeholder="e.g. Africa/Cairo"/></label>
+          {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change({ [`${kind}Date`]: e.target.value || null })}/></Field>
+              <Field label="Time"><Input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null })}/></Field>
+              <Field label="Time zone" className="col-span-2"><Input value={editing[`${kind}ZoneId`] ?? ""} onChange={e => change({ [`${kind}ZoneId`]: e.target.value || null })} placeholder="e.g. Africa/Cairo"/></Field>
             </div>
-          </fieldset>)}
-          <div className="field-grid">
-            <label className="field">Move to list or project<select value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-            {editing.containerId === containerId && sections.length > 0 && <label className="field">Section<select value={editing.sectionId ?? ""} disabled={busy} onChange={e => { const sectionId = e.target.value || null; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: editing.containerId, sectionId }), saved => setEditing(current => current ? { ...current, sectionId: saved.sectionId, version: saved.version } : null)); }}><option value="">No section</option>{sections.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label>}
+          </FieldGroup>)}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Move to list or project"><NativeSelect value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <NativeSelectOption key={c.id} value={c.id}>{c.name}</NativeSelectOption>)}</NativeSelect></Field>
+            {editing.containerId === containerId && sections.length > 0 && <Field label="Section"><NativeSelect value={editing.sectionId ?? ""} disabled={busy} onChange={e => { const sectionId = e.target.value || null; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: editing.containerId, sectionId }), saved => setEditing(current => current ? { ...current, sectionId: saved.sectionId, version: saved.version } : null)); }}><NativeSelectOption value="">No section</NativeSelectOption>{sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>}
           </div>
-          <div className="form-actions"><button className="primary" disabled={busy}>Save</button><button type="button" onClick={() => setEditing(null)}>Cancel</button></div>
+          <div className="flex gap-2 pt-1"><Button disabled={busy}>Save</Button><Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button></div>
         </form>
 
-        <section className="subtasks" aria-labelledby="subtasks-heading">
-          <h3 id="subtasks-heading">Subtasks{subtasks.length > 0 && <span className="count">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</h3>
-          {subtasks.length > 0 && <ol className="rows compact" aria-label="Subtasks">{subtasks.map((subtask, index) => <li key={subtask.id} className={`row-item${subtaskEdit?.id === subtask.id ? " selected" : ""}${subtask.status === "Done" || subtask.status === "Cancelled" ? " finished" : ""}`}
+        <section className="grid gap-3" aria-labelledby="subtasks-heading">
+          <Separator/>
+          <h3 id="subtasks-heading" className="flex items-center font-semibold">Subtasks{subtasks.length > 0 && <Count>{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</Count>}</h3>
+          {subtasks.length > 0 && <ol className="grid gap-1" aria-label="Subtasks">{subtasks.map((subtask, index) => <li key={subtask.id} className={rowClass(subtaskEdit?.id === subtask.id, subtask.status, true)}
             {...drag.target(subtasks.map(row => row.id), index, `subtasks|${editing.id}`, busy, (id, insertionIndex) => reorderSubtask(subtasks.find(row => row.id === id)!, insertionIndex))}>
             {drag.handle(subtask.id, `subtasks|${editing.id}`, busy)}
-            <div className="row-main"><button className="row-title" disabled={busy} onClick={() => setSubtaskEdit(subtask)}>{subtask.title}</button></div>
-            {subtask.status !== "NotStarted" && <span className={`pill status-${subtask.status}`}>{label(subtask.status)}</span>}
-            <div className="row-actions">
-              <button className="icon-button" disabled={busy || index === 0} aria-label={`Move ${subtask.title} up`} title="Move up" onClick={() => reorderSubtask(subtask, index - 1)}><Icon name="up"/></button>
-              <button className="icon-button" disabled={busy || index === subtasks.length - 1} aria-label={`Move ${subtask.title} down`} title="Move down" onClick={() => reorderSubtask(subtask, index + 1)}><Icon name="down"/></button>
-              <button className="icon-button danger" disabled={busy} aria-label={`Delete ${subtask.title}`} title="Delete" onClick={() => void runSubtask(() => subtaskRpc.delete({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, title: subtask.title, notes: subtask.notes }), () => { if (subtaskEdit?.id === subtask.id) setSubtaskEdit(null); })}><Icon name="trash"/></button>
-            </div>
+            <div className="min-w-0 flex-1"><button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setSubtaskEdit(subtask)}>{subtask.title}</button></div>
+            <StatusBadge status={subtask.status}/>
+            {rowActions(subtask.title, index, subtasks.length, to => reorderSubtask(subtask, to), () => void runSubtask(() => subtaskRpc.delete({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, title: subtask.title, notes: subtask.notes }), () => { if (subtaskEdit?.id === subtask.id) setSubtaskEdit(null); }))}
           </li>)}</ol>}
-          <form className="inline-add" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.add({ operationId: operationId(), taskId: editing.id, title: subtaskTitle, notes: "" }), () => setSubtaskTitle("")); }}>
+          <form className="flex gap-2" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.add({ operationId: operationId(), taskId: editing.id, title: subtaskTitle, notes: "" }), () => setSubtaskTitle("")); }}>
             <label htmlFor="new-subtask" className="sr-only">New subtask</label>
-            <input id="new-subtask" value={subtaskTitle} onChange={e => setSubtaskTitle(e.target.value)} placeholder="Add a subtask" autoComplete="off"/>
-            <button disabled={busy || !subtaskTitle.trim()}>Add subtask</button>
+            <Input id="new-subtask" className="border-dashed bg-transparent focus-visible:border-solid" value={subtaskTitle} onChange={e => setSubtaskTitle(e.target.value)} placeholder="Add a subtask" autoComplete="off"/>
+            <Button variant="outline" disabled={busy || !subtaskTitle.trim()}>Add subtask</Button>
           </form>
-          {subtaskEdit && <form className="stack card" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.edit({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, title: subtaskEdit.title, notes: subtaskEdit.notes }), () => setSubtaskEdit(null)); }}>
-            <h4>Edit subtask</h4>
-            <label className="field">Title<input required value={subtaskEdit.title} onChange={e => setSubtaskEdit({ ...subtaskEdit, title: e.target.value })}/></label>
-            <label className="field">Notes<textarea value={subtaskEdit.notes} onChange={e => setSubtaskEdit({ ...subtaskEdit, notes: e.target.value })}/></label>
-            <label className="field">Status<select value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null)); }}>{statuses.map(s => <option key={s} value={s}>{label(s)}</option>)}</select></label>
-            <div className="form-actions"><button className="primary" disabled={busy}>Save subtask</button><button type="button" onClick={() => setSubtaskEdit(null)}>Cancel</button></div>
-          </form>}
-          {deletedSubtasks.length > 0 && <details className="trash"><summary>Deleted subtasks ({deletedSubtasks.length})</summary><ul className="trash-list">{deletedSubtasks.map(subtask => <li key={subtask.id}><span>{subtask.title}</span> <button type="button" className="link-button" disabled={busy} onClick={() => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}>Restore</button></li>)}</ul></details>}
+          {subtaskEdit && <Card className="gap-4 py-4"><CardContent className="px-4"><form className="grid gap-4" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.edit({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, title: subtaskEdit.title, notes: subtaskEdit.notes }), () => setSubtaskEdit(null)); }}>
+            <h4 className="font-semibold">Edit subtask</h4>
+            <Field label="Title"><Input required value={subtaskEdit.title} onChange={e => setSubtaskEdit({ ...subtaskEdit, title: e.target.value })}/></Field>
+            <Field label="Notes"><Textarea value={subtaskEdit.notes} onChange={e => setSubtaskEdit({ ...subtaskEdit, notes: e.target.value })}/></Field>
+            <Field label="Status"><NativeSelect value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null)); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
+            <div className="flex gap-2"><Button disabled={busy}>Save subtask</Button><Button type="button" variant="outline" onClick={() => setSubtaskEdit(null)}>Cancel</Button></div>
+          </form></CardContent></Card>}
+          <DeletedItems noun="subtasks" items={deletedSubtasks} name={subtask => subtask.title} busy={busy} onRestore={subtask => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}/>
         </section>
       </div>
     </aside>}
