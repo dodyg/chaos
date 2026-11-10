@@ -4,9 +4,10 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownPreview, htmlToMarkdown, type MarkdownLinks } from "./markdown";
-import { formatEdit, linkQueryAt, taskLinkMarkdown, type FormatAction, type TextEdit } from "./markdownEditing";
+import { formatEdit, linkQueryAt, padLinkMarkdown, taskLinkMarkdown, type FormatAction, type TextEdit } from "./markdownEditing";
 
-export type LinkCandidate = { id: string; title: string };
+/** A `[[` autocomplete target: a task (default) or a pad note. */
+export type LinkCandidate = { id: string; title: string; kind?: "task" | "pad" };
 
 type Props = {
   id: string;
@@ -22,6 +23,11 @@ type Props = {
   onBlur?: () => void;
   /** Extra classes for the source area and preview box, e.g. a taller minimum height. */
   areaClassName?: string;
+  /** Reports the source selection as UTF-16 offsets (the same units the store uses). */
+  onSelectionChange?: (start: number, end: number) => void;
+  /** Selects this range in the source when `key` changes (e.g. following a backlink). */
+  selectRange?: { start: number; end: number; key: number } | null;
+  autoFocus?: boolean;
 };
 
 const tools: { action: FormatAction; label: string; icon: React.ReactNode; shortcut?: string }[] = [
@@ -46,7 +52,7 @@ const tools: { action: FormatAction; label: string; icon: React.ReactNode; short
  * links, and a sanitized preview. Edits go through the browser's own insertText command when
  * available so Ctrl+Z inside the text keeps working.
  */
-export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName }: Props) {
+export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName, onSelectionChange, selectRange, autoFocus }: Props) {
   const area = React.useRef<HTMLTextAreaElement | null>(null);
   const pendingSelection = React.useRef<[number, number] | null>(null);
   const [mode, setMode] = React.useState<"source" | "preview">("source");
@@ -62,6 +68,16 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
       pendingSelection.current = null;
     }
   }, [value]);
+
+  React.useEffect(() => {
+    if (!selectRange) return;
+    setMode("source");
+    const element = area.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(selectRange.start, selectRange.end);
+    onSelectionChange?.(selectRange.start, selectRange.end);
+  }, [selectRange?.key]);
 
   React.useEffect(() => {
     if (!linkQuery || !searchLinks) { setCandidates([]); return; }
@@ -98,7 +114,7 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
   function pick(candidate: LinkCandidate) {
     const element = area.current;
     if (!element || !linkQuery) return;
-    const insert = taskLinkMarkdown(candidate.title, candidate.id);
+    const insert = candidate.kind === "pad" ? padLinkMarkdown(candidate.title, candidate.id) : taskLinkMarkdown(candidate.title, candidate.id);
     apply({ start: linkQuery.start, end: element.selectionStart, insert, selectionStart: linkQuery.start + insert.length, selectionEnd: linkQuery.start + insert.length });
     setLinkQuery(null);
   }
@@ -148,15 +164,16 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
           role={searchLinks ? "combobox" : undefined} aria-expanded={searchLinks ? showList : undefined} aria-controls={showList ? listId : undefined}
           aria-autocomplete={searchLinks ? "list" : undefined} aria-activedescendant={showList ? `${listId}-${active}` : undefined}
           onChange={event => { onChange(event.target.value); trackLinkQuery(event.target.value, event.target.selectionStart); }}
-          onSelect={event => trackLinkQuery(event.currentTarget.value, event.currentTarget.selectionStart)}
+          onSelect={event => { trackLinkQuery(event.currentTarget.value, event.currentTarget.selectionStart); onSelectionChange?.(event.currentTarget.selectionStart, event.currentTarget.selectionEnd); }}
+          autoFocus={autoFocus}
           onKeyDown={keyDown} onPaste={paste} onBlur={() => { setTimeout(() => setLinkQuery(null), 150); onBlur?.(); }}/>
-        {showList && <ul id={listId} role="listbox" aria-label="Link to a task" className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md">
+        {showList && <ul id={listId} role="listbox" aria-label="Link to a task or note" className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md">
           {candidates.map((candidate, index) => <li key={candidate.id} id={`${listId}-${index}`} role="option" aria-selected={index === active}
             className={cn("cursor-pointer truncate rounded-sm px-2 py-1.5", index === active && "bg-accent text-accent-foreground")}
-            onMouseDown={event => { event.preventDefault(); pick(candidate); }}>{candidate.title}</li>)}
+            onMouseDown={event => { event.preventDefault(); pick(candidate); }}>{candidate.kind === "pad" && <span className="mr-1.5 text-xs text-muted-foreground">Note</span>}{candidate.title}</li>)}
         </ul>}
       </div>
-      <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task.</p>
+      <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task or note.</p>
     </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
   </div>;
 }

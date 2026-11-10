@@ -92,3 +92,9 @@ export function taskLinkMarkdown(title: string, taskId: string): string {
   const label = title.replace(/[[\]\\]/g, character => `\\${character}`);
   return `[${label}](chaos:task/${taskId})`;
 }
+
+/** Markdown for an internal pad-note link: a readable label plus the stable note ID. */
+export function padLinkMarkdown(label: string, itemId: string): string {
+  const text = label.replace(/[[\]\\]/g, character => `\\${character}`);
+  return `[${text}](chaos:pad/${itemId})`;
+}

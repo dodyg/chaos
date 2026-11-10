@@ -100,6 +100,21 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct) =>
         await LinkAsync("DELETE FROM SubtaskTags WHERE SubtaskId = $target AND TagId = $tag;", subtaskId, tagId, ct);
 
+    public async Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct) =>
+        await IdsAsync("""
+            SELECT l.TagId FROM ScratchPadTags l JOIN Tags t ON t.Id = l.TagId
+            WHERE l.PadItemId = $id AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
+            """, padItemId, ct);
+
+    public async Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct) =>
+        await IdsAsync("SELECT PadItemId FROM ScratchPadTags WHERE TagId = $id ORDER BY PadItemId;", tagId, ct);
+
+    public async Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct) =>
+        await LinkAsync("INSERT OR IGNORE INTO ScratchPadTags (PadItemId, TagId) VALUES ($target, $tag);", padItemId, tagId, ct);
+
+    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct) =>
+        await LinkAsync("DELETE FROM ScratchPadTags WHERE PadItemId = $target AND TagId = $tag;", padItemId, tagId, ct);
+
     private async Task<bool> LinkAsync(string sql, string targetId, string tagId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

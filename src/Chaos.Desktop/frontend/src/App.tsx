@@ -1,5 +1,5 @@
 import React from "react";
-import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
 import { extractChecklist, type MarkdownLinks } from "./markdown";
@@ -9,7 +9,9 @@ import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tags";
-import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Plus, Search, Settings2, SlidersHorizontal, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
+import { DraftRegistry } from "./padAutosave";
+import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Plus, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,7 +22,7 @@ import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc };
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -35,6 +37,11 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const undoApi = api.undoRpc ?? undoRpc;
   const markdownApi = api.markdownRpc ?? markdownRpc;
   const journalApi = { diaryRpc: api.diaryRpc ?? diaryRpc, historyRpc: api.historyRpc ?? historyRpc };
+  const padApi = api.padRpc ?? padRpc;
+  const drafts = React.useRef(new DraftRegistry()).current;
+  const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
+  const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
+  const [padMatches, setPadMatches] = React.useState<PadItemResponse[]>([]);
   const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
@@ -58,7 +65,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
-  const [view, setView] = React.useState<"tasks" | "templates" | "query">("tasks");
+  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad">("tasks");
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
   const [tags, setTags] = React.useState<TagResponse[]>([]);
@@ -142,10 +149,60 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         event.preventDefault();
         void undoRef.current();
       }
+      // The Personal-pad shortcut (PLAN §2 capture surface): a new note from anywhere in the app.
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        openPadRef.current({ itemId: null });
+      }
     }
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
+  /** Shows the pad: a note (optionally at a backlink's anchor) or a new note. */
+  function openPad(request: Omit<PadFocus, "key">) {
+    setShowTagSettings(false);
+    setView("pad");
+    setPadFocus(current => ({ ...request, key: (current?.key ?? 0) + 1 }));
+  }
+  const openPadRef = React.useRef(openPad);
+  openPadRef.current = openPad;
+  // Leaving the pad saves its notes at once; a failure keeps the text and says where it is.
+  const previousView = React.useRef(view);
+  React.useEffect(() => {
+    if (previousView.current === "pad" && view !== "pad") {
+      void drafts.flushAll().then(ok => { if (!ok) setError("A pad note could not be saved. Its text is kept: open the Personal pad to retry or copy it."); });
+    }
+    previousView.current = view;
+  }, [view]);
+  // Closing or hiding the window saves unsaved pad text now instead of after the idle delay.
+  React.useEffect(() => {
+    function hidden() { if (document.visibilityState === "hidden" && drafts.dirty) void drafts.flushAll(); }
+    function closing(event: BeforeUnloadEvent) {
+      if (!drafts.dirty) return;
+      void drafts.flushAll();
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("beforeunload", closing);
+    return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("beforeunload", closing); };
+  }, [drafts]);
+  // The task editor shows where a task made from the pad came from.
+  React.useEffect(() => {
+    let current = true;
+    setPadAnchor(null);
+    if (editing?.id) void padApi.locate({ taskId: editing.id }).then(result => { if (current && result.ok) setPadAnchor(result.anchor); }).catch(() => { if (current) setPadAnchor(null); });
+    return () => { current = false; };
+  }, [editing?.id, padApi]);
+  // Search also covers typed pad text (PLAN §9).
+  React.useEffect(() => {
+    let current = true;
+    setPadMatches([]);
+    if (view === "query" && query.view === "Search" && query.text?.trim()) {
+      void padApi.search({ text: query.text, limit: 20 }).then(result => { if (current && result.ok) setPadMatches([...result.items]); }).catch(() => { if (current) setPadMatches([]); });
+    }
+    return () => { current = false; };
+  }, [view, query.view, query.text, revision, padApi]);
   async function openLinkedTask(taskId: string) {
     const result = await taskRpc.get({ taskId });
     if (result.ok && result.task) setEditing(result.task);
@@ -155,12 +212,19 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
     resolve: async (taskIds: string[]) => { const result = await markdownApi.resolveLinks({ taskIds }); return result.ok ? [...result.targets] : []; },
     onOpenTask: (taskId: string) => void openLinkedTask(taskId),
     onOpenExternal: (url: string) => void markdownApi.openExternal({ url }).then(result => { if (!result.ok) setError(result.error?.message ?? "Could not open that link."); }),
-  }), [markdownApi]);
+    resolvePads: async (itemIds: string[]) => { const result = await padApi.resolveLinks({ itemIds }); return result.ok ? [...result.targets] : []; },
+    onOpenPad: (itemId: string) => openPadRef.current({ itemId }),
+  }), [markdownApi, padApi]);
   const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
     if (!text.trim()) return [];
-    const result = await queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null });
-    return result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
-  }, [queryApi]);
+    const [result, notes] = await Promise.all([
+      queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null }),
+      padApi.search({ text, limit: 4 }).catch(() => null),
+    ]);
+    const tasks: LinkCandidate[] = result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
+    const pads: LinkCandidate[] = notes?.ok ? notes.items.map(item => ({ id: item.id, title: padExcerpt(item.markdown), kind: "pad" as const })) : [];
+    return [...tasks.slice(0, 6), ...pads];
+  }, [queryApi, padApi]);
   async function convertChecklist(items: { itemKey: string; title: string; done: boolean }[]) {
     if (busy || !editing) return;
     const taskId = editing.id;
@@ -393,7 +457,13 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const activeTag = view === "query" && query.view === "Tag" ? tags.find(tag => tag.id === query.tagId) ?? null : null;
   const builtIn = builtInViews.find(item => item.view === query.view);
   const queryHeader = query.view === "Search"
-    ? <PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks and diary entries. Completed tasks and archived lists need a filter."/>
+    ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries and pad notes. Completed tasks and archived lists need a filter."/>
+      {padMatches.length > 0 && <section aria-label="Matching pad notes" className="grid gap-1.5">
+        <h3 className="flex items-center border-b px-1 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">Pad notes<Count>{padMatches.length}</Count></h3>
+        <ul className="grid gap-1">{padMatches.map(item => <li key={item.id}><button type="button" className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-left text-sm hover:border-input" onClick={() => openPad({ itemId: item.id })}>
+          <StickyNote className="size-4 shrink-0 text-muted-foreground"/><span className="truncate">{padExcerpt(item.markdown)}</span>{item.archived && <span className="ml-auto text-xs text-muted-foreground">archived</span>}
+        </button></li>)}</ul>
+      </section>}</>
     : query.view === "Tag"
       ? <><PageHeader eyebrow="Tag" title={activeTag ? `#${activeTag.path}` : "Tag"} subtitle="Open tasks with this tag or a tag nested inside it, including tagged subtasks."
           actions={activeTag && <Button type="button" variant={showTagSettings ? "secondary" : "outline"} aria-expanded={showTagSettings} onClick={() => setShowTagSettings(v => !v)}><Settings2/>{showTagSettings ? "Hide settings" : "Settings"}</Button>}/>
@@ -412,6 +482,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       </form>
       <nav aria-label="Views" className="grid gap-px">
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
         {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
           {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
         </Button>)}
@@ -447,7 +518,9 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
 
-      {view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} onOpen={task => setEditing(task)} header={queryHeader}/>
+      {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
+          links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
           subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
@@ -501,6 +574,10 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
             <MarkdownEditor id="task-notes" label="Notes" value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}
               areaClassName="min-h-[max(16rem,calc(100vh-24rem))]"/>
             {checklistPanel()}
+            {padAnchor && <p className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <StickyNote className="size-3.5"/>Made from a pad note{padAnchor.deleted ? " (deleted)" : padAnchor.archived ? " (archived)" : ""}: <q className="max-w-full truncate">{padAnchor.quote}</q>
+              {!padAnchor.deleted && <Button type="button" size="xs" variant="outline" onClick={() => openPad({ itemId: padAnchor.padItemId, anchor: padAnchor })}>Open in pad</Button>}
+            </p>}
           </TabsContent>
           <TabsContent value="details" className="grid gap-4">
           <div className="grid grid-cols-2 gap-3">

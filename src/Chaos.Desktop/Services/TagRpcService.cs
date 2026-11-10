@@ -16,7 +16,7 @@ public sealed record TagMoveRequest(string OperationId, string TagId, string Exp
 public sealed record TagChangeRequest(string OperationId, string TagId, string ExpectedVersion);
 public sealed record TagMergePreviewRequest(string SourceId, string TargetId);
 public sealed record TagMergeRequest(string OperationId, string SourceId, string SourceVersion, string TargetId, string TargetVersion);
-public sealed record TagMergePreviewResponse(bool Ok, int TaskLinksMoved, int TaskLinksAlreadyPresent, int SubtaskLinksMoved, int SubtaskLinksAlreadyPresent, int ChildTagsMoved, int ChildTagsMerged, TaskErrorResponse? Error);
+public sealed record TagMergePreviewResponse(bool Ok, int TaskLinksMoved, int TaskLinksAlreadyPresent, int SubtaskLinksMoved, int SubtaskLinksAlreadyPresent, int ChildTagsMoved, int ChildTagsMerged, int PadLinksMoved, int PadLinksAlreadyPresent, TaskErrorResponse? Error);
 public sealed record TagOperationResponse(bool Ok, TagResponse? Tag, TaskErrorResponse? Error);
 /// <summary>Target kind is "Task" or "Subtask".</summary>
 public sealed record TagTargetRequest(string TargetKind, string TargetId);
@@ -70,9 +70,9 @@ public sealed class TagRpcService(TagCommands tags)
         try
         {
             var preview = await tags.PreviewMergeAsync(request.SourceId, request.TargetId, ct);
-            return new(true, Count(preview.TaskLinksMoved), Count(preview.TaskLinksAlreadyPresent), Count(preview.SubtaskLinksMoved), Count(preview.SubtaskLinksAlreadyPresent), Count(preview.ChildTagsMoved), Count(preview.ChildTagsMerged), null);
+            return new(true, Count(preview.TaskLinksMoved), Count(preview.TaskLinksAlreadyPresent), Count(preview.SubtaskLinksMoved), Count(preview.SubtaskLinksAlreadyPresent), Count(preview.ChildTagsMoved), Count(preview.ChildTagsMerged), Count(preview.PadLinksMoved), Count(preview.PadLinksAlreadyPresent), null);
         }
-        catch (AppException error) { return new(false, 0, 0, 0, 0, 0, 0, TaskRpcService.ToErrorResponse(error)); }
+        catch (AppException error) { return new(false, 0, 0, 0, 0, 0, 0, 0, 0, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("merge")]
@@ -135,5 +135,5 @@ public sealed class TagRpcService(TagCommands tags)
 
     private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
 
-    private static TagTargetKind Kind(string value) => Enum.TryParse<TagTargetKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("targetKind", "Tags can be added to tasks and subtasks.");
+    private static TagTargetKind Kind(string value) => Enum.TryParse<TagTargetKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("targetKind", "Tags can be added to tasks, subtasks and pad notes.");
 }

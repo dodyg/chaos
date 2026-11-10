@@ -27,10 +27,16 @@ export function parseMarkdown(source: string): Root {
 }
 
 export const internalLinkPattern = /^chaos:task\/([0-9a-fA-F-]{36})$/;
+export const padLinkPattern = /^chaos:pad\/([0-9a-fA-F-]{36})$/;
 
 /** The ID of an internal task link, or null. */
 export function internalTaskId(url: string): string | null {
   return internalLinkPattern.exec(url)?.[1] ?? null;
+}
+
+/** The ID of an internal pad-note link, or null. */
+export function internalPadId(url: string): string | null {
+  return padLinkPattern.exec(url)?.[1] ?? null;
 }
 
 /** External URLs the host opener accepts; everything else renders as inert text. */
@@ -42,10 +48,10 @@ export function isSafeExternalUrl(url: string): boolean {
 }
 
 /** IDs of every internal task link in a document (for one batched resolve call). */
-export function internalLinkIds(source: string): string[] {
+export function internalLinkIds(source: string, read: (url: string) => string | null = internalTaskId): string[] {
   const ids = new Set<string>();
   const visit = (node: Root | RootContent) => {
-    if (node.type === "link") { const id = internalTaskId(node.url); if (id) ids.add(id.toLowerCase()); }
+    if (node.type === "link") { const id = read(node.url); if (id) ids.add(id.toLowerCase()); }
     if ("children" in node) for (const child of node.children) visit(child as RootContent);
   };
   visit(parseMarkdown(source));
@@ -100,6 +106,10 @@ export type MarkdownLinks = {
   resolve?: (taskIds: string[]) => Promise<LinkTarget[]>;
   onOpenTask?: (taskId: string) => void;
   onOpenExternal?: (url: string) => void;
+  /** Resolved pad-note link targets, keyed by lowercase note ID. */
+  padTargets?: ReadonlyMap<string, LinkTarget>;
+  resolvePads?: (itemIds: string[]) => Promise<LinkTarget[]>;
+  onOpenPad?: (itemId: string) => void;
 };
 
 /** Renders raw Markdown safely. `compact` tightens spacing for timeline entries. */
@@ -114,7 +124,16 @@ export function MarkdownPreview({ source, links = {}, compact = false, className
     void resolve(ids.split(",")).then(targets => { if (current) setResolved(new Map(targets.map(target => [target.id.toLowerCase(), target]))); }).catch(() => { if (current) setResolved(undefined); });
     return () => { current = false; };
   }, [ids, resolve]);
-  const effective = resolved ? { ...links, targets: resolved } : links;
+  const padIds = React.useMemo(() => internalLinkIds(source, internalPadId).sort().join(","), [source]);
+  const [resolvedPads, setResolvedPads] = React.useState<ReadonlyMap<string, LinkTarget> | undefined>(undefined);
+  const resolvePads = links.resolvePads;
+  React.useEffect(() => {
+    if (!resolvePads || !padIds) { setResolvedPads(undefined); return; }
+    let current = true;
+    void resolvePads(padIds.split(",")).then(targets => { if (current) setResolvedPads(new Map(targets.map(target => [target.id.toLowerCase(), target]))); }).catch(() => { if (current) setResolvedPads(undefined); });
+    return () => { current = false; };
+  }, [padIds, resolvePads]);
+  const effective = { ...links, ...(resolved ? { targets: resolved } : {}), ...(resolvedPads ? { padTargets: resolvedPads } : {}) };
   if (!source.trim()) return <p className="text-muted-foreground italic">Nothing written yet.</p>;
   return <div data-slot="markdown" className={cn("markdown grid min-w-0 [overflow-wrap:anywhere]", compact ? "gap-1.5" : "gap-3", className)}>{renderBlocks(tree.children, effective)}</div>;
 }
@@ -209,11 +228,22 @@ function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLi
     return <button type="button" className={linkClass} title={target ? `Open “${target.title}”` : "Open task"} onClick={() => links.onOpenTask?.(taskId)}>{target?.title ?? children}</button>;
   }
 
+  const padId = internalPadId(url);
+  if (padId) {
+    const target = links.padTargets?.get(padId.toLowerCase());
+    if (links.padTargets && (!target || target.deleted)) {
+      return <span className="inline-flex items-center gap-1 text-muted-foreground" title={target ? "This pad note is deleted. Restore it from the pad's deleted notes to follow the link." : "This pad note no longer exists on this computer."}>
+        <Link2Off className="size-3.5"/><span className="line-through">{children}</span><span className="text-xs">({target ? "deleted note" : "missing note"})</span>
+      </span>;
+    }
+    return <button type="button" className={linkClass} title={target ? `Open pad note “${target.title}”` : "Open pad note"} onClick={() => links.onOpenPad?.(padId)}>{children}</button>;
+  }
+
   if (isSafeExternalUrl(url)) {
     return <button type="button" className={linkClass} title={url} onClick={() => links.onOpenExternal?.(url)}>{children}</button>;
   }
 
-  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email and task links open.">{children}</span>;
+  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task and pad-note links open.">{children}</span>;
 }
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {

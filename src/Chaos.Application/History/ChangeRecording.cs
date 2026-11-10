@@ -16,12 +16,14 @@ public enum ChangeKind
     Template = 5,
     Tag = 6,
     Diary = 7,
+    Pad = 8,
 }
 
 public enum LinkKind
 {
     TaskTag = 1,
     SubtaskTag = 2,
+    PadTag = 3,
 }
 
 /// <summary>
@@ -72,6 +74,7 @@ public sealed class RecordingDataSession : IDataSession
         Templates = new RecordingTemplateStore(this, inner.Templates);
         Tags = new RecordingTagStore(this, inner.Tags);
         Diary = new RecordingDiaryStore(this, inner.Diary);
+        Pad = new RecordingPadStore(this, inner.Pad);
     }
 
     public IProfileStore Profiles => _inner.Profiles;
@@ -87,6 +90,7 @@ public sealed class RecordingDataSession : IDataSession
     public IDiaryStore Diary { get; }
     public IUndoStore Undo => _inner.Undo;
     public IChecklistConversionStore ChecklistConversions => _inner.ChecklistConversions;
+    public IPadStore Pad { get; }
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
 
@@ -276,6 +280,8 @@ public sealed class RecordingDataSession : IDataSession
         _ when commandKind.StartsWith("section.", StringComparison.Ordinal) => ChangeKind.Section,
         _ when commandKind.StartsWith("template.", StringComparison.Ordinal) => ChangeKind.Template,
         _ when commandKind.StartsWith("tag.", StringComparison.Ordinal) => ChangeKind.Tag,
+        "pad.make-task" => null,
+        _ when commandKind.StartsWith("pad.", StringComparison.Ordinal) => ChangeKind.Pad,
         _ => null,
     };
 
@@ -290,6 +296,7 @@ public sealed class RecordingDataSession : IDataSession
                 ChangeKind.Template => (await _inner.Templates.GetIncludingDeletedAsync(change.Id, ct))?.Name,
                 ChangeKind.Tag => (await _inner.Tags.GetIncludingDeletedAsync(change.Id, ct))?.DisplayName,
                 ChangeKind.Subtask => (await _inner.Subtasks.GetIncludingDeletedAsync(change.Id, ct))?.Title,
+                ChangeKind.Pad => PadExcerpt.Of((await _inner.Pad.GetIncludingDeletedAsync(change.Id, ct))?.RawMarkdown),
                 _ => null,
             };
             if (name is not null)
@@ -411,6 +418,14 @@ internal static class UndoLabels
         ["diary.edit"] = "Edit diary entry of",
         ["diary.delete"] = "Delete diary entry of",
         ["diary.restore"] = "Restore diary entry of",
+        ["pad.create"] = "Add pad note",
+        ["pad.archive"] = "Archive pad note",
+        ["pad.unarchive"] = "Unarchive pad note",
+        ["pad.delete"] = "Delete pad note",
+        ["pad.restore"] = "Restore pad note",
+        ["pad.reorder"] = "Reorder pad note",
+        ["pad.review"] = "Archive pad notes in review",
+        ["pad.make-task"] = "Make task",
     };
 
     public static string For(string commandKind, string? subject)
@@ -645,6 +660,23 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
+    public Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct) => inner.ListPadTagIdsAsync(padItemId, ct);
+    public Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct) => inner.ListPadItemIdsAsync(tagId, ct);
+
+    public async Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct)
+    {
+        var changed = await inner.AddPadLinkAsync(padItemId, tagId, ct);
+        if (changed) recorder.RecordLink(LinkKind.PadTag, padItemId, tagId, presentAfter: true);
+        return changed;
+    }
+
+    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct)
+    {
+        var changed = await inner.RemovePadLinkAsync(padItemId, tagId, ct);
+        if (changed) recorder.RecordLink(LinkKind.PadTag, padItemId, tagId, presentAfter: false);
+        return changed;
+    }
+
     private async Task TouchSubtaskParentAsync(string subtaskId, CancellationToken ct)
     {
         if (await recorder.Subtasks.GetIncludingDeletedAsync(subtaskId, ct) is { } subtask)
@@ -681,5 +713,65 @@ internal sealed class RecordingDiaryStore(RecordingDataSession recorder, IDiaryS
         }
 
         return applied;
+    }
+}
+
+internal sealed class RecordingPadStore(RecordingDataSession recorder, IPadStore inner) : IPadStore
+{
+    public Task<PadItemRecord?> GetAsync(string itemId, CancellationToken ct) => inner.GetAsync(itemId, ct);
+    public Task<PadItemRecord?> GetIncludingDeletedAsync(string itemId, CancellationToken ct) => inner.GetIncludingDeletedAsync(itemId, ct);
+    public Task<IReadOnlyList<PadItemRecord>> ListBySpaceAsync(string spaceId, bool archived, CancellationToken ct) => inner.ListBySpaceAsync(spaceId, archived, ct);
+    public Task<IReadOnlyList<PadItemRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct) => inner.ListDeletedBySpaceAsync(spaceId, ct);
+    public Task<long> GetNextPositionAsync(string spaceId, CancellationToken ct) => inner.GetNextPositionAsync(spaceId, ct);
+    public Task AddTaskLinkAsync(ScratchTaskLinkRecord link, CancellationToken ct) => inner.AddTaskLinkAsync(link, ct);
+    public Task<IReadOnlyList<ScratchTaskLinkRecord>> ListTaskLinksAsync(string itemId, CancellationToken ct) => inner.ListTaskLinksAsync(itemId, ct);
+    public Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => inner.FindTaskLinkAsync(taskId, ct);
+    public Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct) => inner.SearchAsync(spaceId, text, limit, ct);
+
+    public async Task AddAsync(PadItemRecord item, CancellationToken ct)
+    {
+        await inner.AddAsync(item, ct);
+        recorder.RecordEntity<PadItemRecord>(ChangeKind.Pad, item.Id, null, item.Version);
+    }
+
+    public async Task<PadItemRecord?> UpdateAsync(PadItemRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.Pad, updated.Id) ? null : await inner.GetIncludingDeletedAsync(updated.Id, ct);
+        var applied = await inner.UpdateAsync(updated, expectedVersion, ct);
+        if (applied is not null)
+        {
+            recorder.RecordEntity(ChangeKind.Pad, applied.Id, before, applied.Version);
+        }
+
+        return applied;
+    }
+}
+
+/// <summary>A short readable name for an untitled pad item: its first line of text.</summary>
+public static class PadExcerpt
+{
+    /// <returns>The first line of text, or null when the note is empty.</returns>
+    public static string? Of(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return null; // an empty note has nothing to name it by
+        }
+
+        foreach (var raw in markdown.Split('\n'))
+        {
+            var line = raw.Trim().TrimStart('#', '>', '-', '*', '+', ' ').Trim();
+            if (line.StartsWith("[ ] ", StringComparison.Ordinal) || line.StartsWith("[x] ", StringComparison.OrdinalIgnoreCase))
+            {
+                line = line[4..];
+            }
+
+            if (line.Length > 0)
+            {
+                return line.Length > 80 ? string.Concat(line.AsSpan(0, 79), "…") : line;
+            }
+        }
+
+        return null;
     }
 }

@@ -30,7 +30,7 @@ public sealed class TagQueryRpcTests
             taskId = created.Task!.Id;
 
             var linked = await tagRpc.LinkAsync(new("link", "Task", taskId, null, "home/garden"), CancellationToken.None);
-            var invalid = await tagRpc.LinkAsync(new("bad", "Pad", taskId, null, "x"), CancellationToken.None);
+            var invalid = await tagRpc.LinkAsync(new("bad", "Diary", taskId, null, "x"), CancellationToken.None);
 
             await Assert.That(linked.Ok).IsTrue();
             await Assert.That(linked.TagIds.Count).IsEqualTo(1);

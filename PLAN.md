@@ -646,6 +646,42 @@ Package remains unchecked until the exit is shown in a native window: type and p
 
 **Depends on:** 4. Add untitled items/tags/archive, revision-aware autosave/flush, selected-text-to-task preview/backlink and weekly review affordance. Reuse the parser shell initially with explicit fields until package 7 completes grammar.
 
+Progress note (2026-11-10): implemented end to end, but not yet accepted in a native window. Migration 005 adds `ScratchPadTags`, a unique task index on `ScratchTaskLinks`, and two context columns on it. `ScratchPadItems` and `ScratchTaskLinks` already existed. The schema ceiling is now 5.
+
+`PadCommands` covers the Personal pad:
+- **Notes.** Create untitled notes. Archive and unarchive several at once. Delete and restore. Reorder with the shared rank rules. Tag notes and filter by a tag group, with nested tags included. All of these are recorded operations: receipt, history and undo, through a new `RecordingPadStore` and pad tag links in the recorder.
+- **Autosave.** Not an undo entry: typing keeps the editor's own text undo. Each save carries the editor's revision, and the store applies it only when it is newer than `DraftVersion`. A delayed, repeated or out-of-order save never replaces newer text. Undo restores a note's earlier state but never moves `DraftVersion` backwards.
+- **Make task.** Creates the task and its backlink in one transaction and leaves the note untouched. The selection is checked in UTF-16 units: it must match the quote exactly and must not split a surrogate pair. If the note moved on since the editor's revision, the quote is found again or the command is refused. The link stores the quote, its offsets and 32 characters of context on each side.
+- **Locating a backlink.** Returns Exact while the text is unchanged. Otherwise it returns Relocated, choosing the copy of the quote whose surroundings best match (nearest on a tie). If the quote is gone it returns Missing with the old quote, so it never points at unrelated text.
+- **Weekly review.** Suggests notes untouched for 7 days. It is due when a week has passed since the last review, recorded as a `pad.review` receipt. Finishing it archives the chosen notes as one undoable change.
+- **Search.** Pad text is indexed in the same transaction as each write. Archived notes stay searchable; deleted ones do not.
+- **Tags.** Deleting, restoring and merging tags now carry pad links too. The merge preview counts them.
+
+Shutdown: `SqliteApplicationStore.Dispose` now waits up to 10 s for a write in progress (an autosave) to commit before closing the writer. Later writes are refused as storage-unavailable instead of racing the close.
+
+Desktop RPC: a new `pad` service with list/get/listDeleted/create/save/archive/unarchive/delete/restore/reorder/makeTask/locate/search/resolveLinks/reviewStatus/completeReview.
+
+Frontend:
+- **Autosave.** `padAutosave.ts` has `DraftSaver`, which saves 500 ms after typing stops or at once on flush, with one save in flight. Edits made meanwhile go out next with a newer revision. A failed save keeps the text, shows Failed, and is retried by the next edit or by Retry. `DraftRegistry` sits above the pad view, so a draft and a failed save survive view switches.
+- **When saves happen.** Leaving the pad saves every note; a failure is reported and the text is kept. Hiding the window saves too. `beforeunload` saves and asks for confirmation only while text is unsaved.
+- **Pad view.** `ScratchPad.tsx` reuses the shared Markdown editor and adds save status with Retry and Copy text. It also adds Make task on the selection (explicit title/notes/list/planned/due until package 7), task chips that open the task, a tag picker, archive/delete/restore, up/down and drag order, a tag filter, an archived view and the weekly review panel.
+- **Elsewhere in the app.** The sidebar has a Personal pad entry, and Ctrl+Shift+P opens a new note from anywhere in the app. The task editor shows "Made from a pad note" with Open in pad, which selects the anchor or shows the old quote when it is gone. Search lists matching pad notes, `[[` offers notes as well as tasks, and the preview renders `chaos:pad/<id>` links with a deleted/missing state.
+
+Results: Release build has 0 warnings. 149 TUnit tests pass (Domain 6, Application 22, Infrastructure 101, Desktop 20), 14 more than before. Frontend: the `tsrs` type check and `vite build` pass, and 33 tests pass (10 new). Slopwatch is clean, and the Release exe starts offline on a fresh data folder with migration 005 applied.
+
+New tests caught three real problems, now fixed:
+- The schema ceiling still said 4, so a migrated database was refused on restart as "newer".
+- An empty note's undo label read "empty note".
+- Relocation by nearest offset picked the wrong copy of a repeated phrase, which led to the context columns.
+
+Not done, deliberately:
+- A per-save revision trail for pad notes. Structural changes are in undo; typing is not.
+- Waiting on the native window-close request. NeoAstra's renderer close handler needs capability authorization that the app does not enable yet (package 13). Closing relies on `beforeunload`, `visibilitychange` and the storage drain, so at most the last moment of typing before the title-bar close may be unsent; everything acknowledged is durable.
+- Tags in the Make task form. The command accepts tag IDs, but the form does not offer them yet. Quick-add grammar: package 7.
+- Global (system-wide) shortcut and clipboard capture: package 13.
+
+Package remains unchecked until the exit is shown in a native window: type rapidly in a note, switch views, close and restart, and see the latest saved text; make a task from a selection, edit the note, and follow the backlink.
+
 **Tests:** debounce/flush with fake time, overlapping saves, navigation with failed save, source revision mismatch, Unicode selections/backlink after edit, archive undo. **Exit:** rapidly type, switch views, close/restart and recover the latest acknowledged text.
 
 ### [ ] 6 — Recurrence engine and occurrence persistence
