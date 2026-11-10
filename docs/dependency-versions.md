@@ -37,6 +37,13 @@ build under `obj/neoastra/client`) is installed as a packed copy via
 `frontend/.npmrc` (`install-links=true`) because Windows symlink creation requires
 privileges not present in all environments; build order and version alignment are unchanged.
 
+For package 2 interaction tests, the lockfile adds `@testing-library/react` 16.3.3,
+`@testing-library/user-event` 14.6.9, `jsdom` 31.0.0 and `@types/jsdom` 30.0.0
+as development dependencies. On 2026-11-10, `npm audit` reported three high-severity
+development-graph advisories involving the existing Vite, nanoid and source-map-js
+versions; `npm audit --omit=dev` reported none. Review and update the locked development
+graph separately, including Vite compatibility, before release.
+
 ## Templates
 
 | Template | Version |

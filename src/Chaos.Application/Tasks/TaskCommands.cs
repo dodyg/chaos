@@ -543,6 +543,11 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 "This task still has open subtasks. Choose \"completeAll\" to complete them together, or \"keepOpen\" to complete only this task.");
         }
 
+        if (!Enum.IsDefined(choice.Value))
+        {
+            throw AppException.Validation("openSubtaskChoice", "Choose whether to complete open subtasks or keep them open.");
+        }
+
         if (choice == OpenSubtaskChoice.KeepOpen)
         {
             return;

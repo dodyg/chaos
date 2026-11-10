@@ -10,6 +10,100 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class LifecycleTests
 {
     [Test]
+    public async Task UpdateDetails_AllDayDatesAndInvalidTimedAnchor_PreserveEnteredDates()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Task", null))).Task;
+        var planned = new DateOnly(2027, 1, 2);
+        var due = new DateOnly(2027, 1, 1);
+        var result = await tasks.UpdateDetailsAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, "Task", "", planned, null, null, due, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        await Assert.That(result.Warning).IsNotNull();
+        var saved = (await tasks.GetAsync(task.Id))!;
+        await Assert.That(saved.PlannedDate).IsEqualTo(planned);
+        await Assert.That(saved.DueDate).IsEqualTo(due);
+        await Assert.That(saved.PlannedTime).IsNull();
+        Chaos.Application.Abstractions.AppException? error = null;
+        try { await tasks.UpdateDetailsAsync(new(Guid.NewGuid().ToString(), task.Id, saved.Version, "Task", "", null, new TimeOnly(9, 0), "UTC", due, null, null, TaskPriority.Normal, null, CapacityCategory.Personal)); }
+        catch (Chaos.Application.Abstractions.AppException caught) { error = caught; }
+        await Assert.That(error!.Kind).IsEqualTo(Chaos.Application.Abstractions.AppErrorKind.Validation);
+        await Assert.That((await tasks.GetAsync(task.Id))!.PlannedDate).IsEqualTo(planned);
+    }
+
+    [Test]
+    [Arguments(TaskItemStatus.NotStarted)]
+    [Arguments(TaskItemStatus.InProgress)]
+    [Arguments(TaskItemStatus.WaitingOnSomeone)]
+    [Arguments(TaskItemStatus.NeedsReview)]
+    [Arguments(TaskItemStatus.Done)]
+    [Arguments(TaskItemStatus.Cancelled)]
+    public async Task SetStatus_EachBuiltInStatus_PersistsMatchingTerminalTimestamp(TaskItemStatus status)
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Task", null))).Task;
+        await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, status, null));
+        var saved = (await tasks.GetAsync(task.Id))!;
+        await Assert.That(saved.Status).IsEqualTo(status);
+        await Assert.That(saved.CompletedAtUtc is not null).IsEqualTo(status == TaskItemStatus.Done);
+        await Assert.That(saved.CancelledAtUtc is not null).IsEqualTo(status == TaskItemStatus.Cancelled);
+    }
+
+    [Test]
+    [Arguments(OpenSubtaskChoice.CompleteAll, TaskItemStatus.Done)]
+    [Arguments(OpenSubtaskChoice.KeepOpen, TaskItemStatus.NotStarted)]
+    public async Task CompleteParent_ExplicitSubtaskChoice_AppliesOnlyRequestedChange(OpenSubtaskChoice choice, TaskItemStatus expected)
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var subtasks = new SubtaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Parent", null))).Task;
+        await subtasks.AddAsync(new(Guid.NewGuid().ToString(), task.Id, "Child", null));
+        Chaos.Application.Abstractions.AppException? error = null;
+        try { await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, TaskItemStatus.Done, null)); }
+        catch (Chaos.Application.Abstractions.AppException caught) { error = caught; }
+        await Assert.That(error!.Kind).IsEqualTo(Chaos.Application.Abstractions.AppErrorKind.Validation);
+        await Assert.That((await tasks.GetAsync(task.Id))!.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        error = null;
+        try { await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, TaskItemStatus.Done, (OpenSubtaskChoice)99)); }
+        catch (Chaos.Application.Abstractions.AppException caught) { error = caught; }
+        await Assert.That(error!.Kind).IsEqualTo(Chaos.Application.Abstractions.AppErrorKind.Validation);
+        await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, TaskItemStatus.Done, choice));
+        var detail = await tasks.GetDetailAsync(task.Id);
+        await Assert.That(detail.Task!.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That(detail.Subtasks.Single().Status).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Reorder_NoRankGap_CompactsWithoutLosingOrder()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var first = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "First", null))).Task;
+        var second = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Second", null))).Task;
+        var third = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Third", null))).Task;
+        await storage.Store.ExecuteAsync(async (session, token) =>
+        {
+            await session.Tasks.UpdateAsync(second with { Position = 1, Version = 2 }, second.Version, token);
+            await session.Tasks.UpdateAsync(third with { Position = 2, Version = 2 }, third.Version, token);
+            return true;
+        });
+        await tasks.ReorderAsync(new(Guid.NewGuid().ToString(), third.Id, 2, 1));
+        var rows = await tasks.ListInboxAsync();
+        await Assert.That(string.Join(",", rows.Select(x => x.Title))).IsEqualTo("First,Third,Second");
+        await Assert.That(string.Join(",", rows.Select(x => x.Position))).IsEqualTo("0,1024,2048");
+        await Assert.That(rows[0].Id).IsEqualTo(first.Id);
+    }
+
+    [Test]
     [Arguments(ContainerContentsChoice.MoveToInbox)]
     [Arguments(ContainerContentsChoice.DeleteContents)]
     public async Task RestoreContainer_AfterRestart_RestoresOnlyItsDeletion(ContainerContentsChoice choice)

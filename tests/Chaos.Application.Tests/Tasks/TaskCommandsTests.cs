@@ -18,6 +18,21 @@ public sealed class TaskCommandsTests
     private static TaskCommands NewCommands(InMemoryStore store) =>
         new(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
 
+    [Test]
+    public async Task MoveAsync_TargetInAnotherSpace_RejectsWithoutChangingTask()
+    {
+        var store = new InMemoryStore();
+        Seed(store);
+        store.Containers.Add(new ContainerRecord { Id = "foreign", SpaceId = "other-space", Kind = ContainerKind.Project, Name = "Foreign", Position = 0, Version = 1, CreatedAtUtc = Now, UpdatedAtUtc = Now });
+        var commands = NewCommands(store);
+        var task = (await commands.CaptureAsync(new("capture", "", "Task", null))).Task;
+        AppException? error = null;
+        try { await commands.MoveAsync(new("move", task.Id, task.Version, "foreign", null)); }
+        catch (AppException caught) { error = caught; }
+        await Assert.That(error!.Kind).IsEqualTo(AppErrorKind.Validation);
+        await Assert.That((await commands.GetAsync(task.Id))!.ContainerId).IsEqualTo(task.ContainerId);
+    }
+
     private static (string ProfileId, string SpaceId, string InboxId) Seed(InMemoryStore store)
     {
         var profile = new ProfileRecord
