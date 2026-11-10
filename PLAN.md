@@ -880,6 +880,77 @@ Package remains unchecked until the exit is shown in a native window: a week of 
 
 **Tests:** WAL-active backup/restore, corrupt/newer backup refusal, interrupted restore, no-space failure, export/import round-trip, duplicate import, hostile paths/archives and deleted/tombstoned relationships. **Exit:** restore to another clean data root and compare semantic contents, then recover from a simulated bad import using a local backup.
 
+Progress note (2026-11-10): implemented and verified headlessly. Not yet accepted in a native window. Formats, field mapping and limitations are in `docs/data-transfer.md`; decisions are in `docs/decisions.md`.
+
+- **Storage.**
+  - Migration 012 adds `ImportBatches` (one row per committed import, naming the backup made just before it) and `ImportedItems` (item fingerprint → task). The schema ceiling is now 12.
+  - The migration runner can stop at a target version, which archive restores need.
+  - `SqliteApplicationStore.RunExclusiveAsync` closes every connection for file work: it holds writes and new reads, and waits for reads in flight.
+- **Backups.** `BackupManager` replaces the WP1 primitive:
+  - It uses the online backup API into a `.partial` file in rollback-journal mode. The copy must pass `integrity_check`, `foreign_key_check` and a readable schema version before it is checksummed, renamed and described.
+  - The `.db.json` description beside each backup is written last; the backups folder, not the database, is the record of which backups exist.
+  - Retention keeps the newest backup, 7 daily, 4 weekly and 3 safety backups, and runs only after a backup succeeds.
+  - The daily backup runs when the newest backup is a day old and something changed since. Disk-full failures are reported as `StorageFull`, and the last error is kept for Settings.
+- **Restore.** `DataProtectionService` restores a backup (bound to the checksum shown in the review) or a JSON archive.
+  - It makes a safety backup, pauses the reminder engine and takes back OS notification schedules. With the store exclusive, `DatabaseReplacement` moves the old files aside and the new file in, recording each step in a marker file.
+  - The new file is migrated, the search index rebuilt and OS schedule columns reset. On failure the old files go back.
+  - Startup finishes or undoes an interrupted replacement before opening the database, and Settings shows a notice once.
+  - Backup, restore, reset, import and purge never overlap.
+- **Export.**
+  - **JSON archive:** a ZIP with a manifest (format, schema version, import policy, SHA-256, row counts, exclusions) and a typed dump of every user-data table, including tombstones. It leaves out migrations, the backup log, receipts, the search index and OS schedule IDs.
+  - **Markdown:** a ZIP with one file per task and per pad note, with front matter and safe, unique file names.
+  - **Org:** one `.org` file with TODO keywords, priorities, SCHEDULED/DEADLINE/CLOSED, `:ID:` and `CHAOS_` properties, LOGBOOK status changes, and Markdown notes and diary entries in escaped src blocks.
+  - Exports are written to a temporary file and renamed.
+- **Import.**
+  - **Parsers:** `CsvImport` (RFC 4180, delimiter detection, header aliases, a column mapping chosen in the preview, ISO dates only, `parent_id` subtasks); `OrgImport` (the documented subset, including custom `#+TODO` keywords); `ArchiveMerge` (JSON merge keeping IDs).
+  - `ImportCommands` validates everything first. It previews new, duplicate and conflicting items and the target lists, then commits in one transaction with a `task.imported` history entry per task.
+  - Fingerprints stop re-imports from duplicating tasks. A source ID equal to a local task ID counts as already present, and a JSON ID taken by a different task is a conflict that keeps the local task.
+  - Archives are checked for unsafe paths, entry count, size (declared and actual), exact entries, checksum and schema before anything is read.
+- **Deletion.**
+  - `DataPurge` removes deleted items permanently with every dependent row, and drops undo entries that mention them. It replaces purged titles in journal facts, removes unreferenced deleted lists, sections, tags, templates and series, takes back their OS notifications and runs `VACUUM`.
+  - "Delete all local data" needs the typed phrase `DELETE`. It pauses reminders, takes back OS schedules, deletes the database (and optionally Chaos's backup files, never export folders) and starts a fresh seeded database.
+- **Desktop.**
+  - New `data` RPC service: `status`, `backupNow`, `inspectBackup`, `restoreBackup`, `export`, `openFolder` (backups or last export folder only), `importPreview`, `importCommit` (token-bound to the previewed bytes, format and mapping; makes the pre-import backup), `purgePreview`, `purge` and `reset`.
+  - A `BackupScheduler` checks every 30 minutes, the first time 2 minutes after start.
+  - `ReminderEngine.RunPausedAsync` quiesces reminders and resyncs them afterwards.
+- **Frontend.** `DataSettings.tsx` adds a "Data & backups" page:
+  - Backups: latest backup and last error, Back up now, the backup list, and a restore review showing the backup's counts against the current ones, with a confirmation checkbox.
+  - Export: format and folder, then Show in folder.
+  - Import: file picker, CSV column mapping, list targets, default list, problems by line, notes, items and recent imports. Replacing all data from an archive has its own confirmation.
+  - Deleted items: review, then remove permanently.
+  - Delete all local data, which needs the typed phrase.
+
+Not done, deliberately:
+- **Save and open dialogs.** NeoAstra exposes no save dialog. The export folder is typed (default `Documents\Chaos exports`), and a backup from elsewhere is restored by copying it into the backups folder first. Imports use the WebView's file picker.
+- **Markdown export as a folder.** Only the ZIP is offered.
+- **Recurrence from Org or CSV.** Repeaters and `CHAOS_RECURRENCE` become a single date, with a note. Recurrence, reminders, plans, the pad and history come back only through a JSON restore, not a merge.
+- **Undo entries for imports.** An import is undone by restoring its pre-import backup.
+- **Week-plan revision snapshots on purge.** They keep task IDs (not titles) and are left as plan history.
+
+Results: Release build has 0 warnings, and `eng/verify.ps1` passes (locked restore, build, solution test run and Slopwatch). 438 TUnit tests pass, 33 more than before:
+- Domain 159
+- Application 29 (7 new parser and validation tests)
+- Infrastructure 217 (23 new on real SQLite). They cover:
+  - a WAL-active backup and retention
+  - a simulated full disk
+  - tampered, foreign and newer backups
+  - restore with a safety backup and a restart
+  - three interrupted-restore cases
+  - restore into another clean root, compared table by table
+  - a lossless JSON round trip including tombstones
+  - hostile archives (traversal, extra entry, edited data, newer schema, not a ZIP)
+  - Org round trip, and Markdown file-name safety
+  - CSV import, re-import and last-row-invalid
+  - rollback when the last write fails
+  - a bad import recovered from its backup
+  - JSON merge with and without conflicts
+  - purge, scheduled backup and reset
+- Desktop 33 (3 new RPC tests)
+
+Frontend: type check and `vite build` pass, and 66 tests pass (5 new). The Release exe starts offline on a fresh data folder with migration 012 applied.
+
+Package remains unchecked until the exit is shown in a native window: back up, restore a backup and see the data change, export all three formats, import a CSV through the preview, and restore the pre-import backup.
+
 ### [ ] 13 — Desktop polish, packaging and release gate
 
 **Depends on:** all prior packages. Complete settings/global shortcuts/tray/activation, accessibility/RTL/dark/high-DPI, performance checks, privacy/offline verification, MSIX packaging/update preservation, README and acceptance evidence. Remove spike/template/demo UI and unused registrations.

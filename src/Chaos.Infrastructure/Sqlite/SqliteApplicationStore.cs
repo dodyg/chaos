@@ -10,13 +10,25 @@ namespace Chaos.Infrastructure.Sqlite;
 /// thread; the async surface is the application boundary. A failed write rolls the whole
 /// transaction back and maps SQLite errors to stable AppErrorKind values; nothing is
 /// published until commit.
+/// <para>
+/// Restore and reset (PLAN §14) need every connection closed while database files are
+/// replaced. <see cref="RunExclusiveAsync"/> takes the write gate, holds new reads, waits for
+/// reads in flight, closes the writer and clears the pool, runs the file work, then reopens.
+/// </para>
 /// </summary>
 public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApplicationStore, IDisposable
 {
     private readonly SqliteConnectionSource _source = source;
-    private readonly SqliteConnection _writer = source.Open();
+    private SqliteConnection _writer = source.Open();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly Lock _readSync = new();
+    private int _activeReads;
+    private TaskCompletionSource? _readsHeld;
+    private TaskCompletionSource? _readsDrained;
     private volatile bool _closed;
+
+    /// <summary>The connection source this store opens; data protection opens its own connections from it.</summary>
+    public SqliteConnectionSource Source => _source;
 
     public async Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default)
     {
@@ -24,10 +36,7 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
         try
         {
             ct.ThrowIfCancellationRequested();
-            if (_closed)
-            {
-                throw new AppException(AppErrorKind.StorageUnavailable, "Chaos is closing, so this change was not saved. Reopen Chaos and try again.");
-            }
+            ThrowIfClosed();
 
             using var transaction = _writer.BeginTransaction();
             try
@@ -55,14 +64,113 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
     public async Task<TResult> QueryAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> query, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await using var connection = _source.Open();
+        await EnterReadAsync(ct).ConfigureAwait(false);
         try
         {
+            ThrowIfClosed();
+            await using var connection = _source.Open();
             return await query(new SqliteDataSession(connection), ct).ConfigureAwait(false);
         }
         catch (Exception error)
         {
             throw SqliteErrorMapper.Map(error);
+        }
+        finally
+        {
+            ExitRead();
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> with no connection open on the database: writes wait at
+    /// the gate, new reads wait until it finishes, and reads in flight finish first. The
+    /// writer is reopened afterwards even when the action fails, so the app keeps working on
+    /// whatever database file is then in place.
+    /// </summary>
+    public async Task<TResult> RunExclusiveAsync<TResult>(Func<CancellationToken, Task<TResult>> action, CancellationToken ct = default)
+    {
+        await _writeGate.WaitAsync(ct).ConfigureAwait(false);
+        Task drained;
+        lock (_readSync)
+        {
+            _readsHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _readsDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (_activeReads == 0)
+            {
+                _readsDrained.TrySetResult();
+            }
+
+            drained = _readsDrained.Task;
+        }
+
+        try
+        {
+            ThrowIfClosed();
+            await drained.WaitAsync(ct).ConfigureAwait(false);
+            _writer.Dispose();
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                return await action(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                _writer = _source.Open();
+            }
+        }
+        finally
+        {
+            TaskCompletionSource? held;
+            lock (_readSync)
+            {
+                held = _readsHeld;
+                _readsHeld = null;
+                _readsDrained = null;
+            }
+
+            held?.TrySetResult();
+            _writeGate.Release();
+        }
+    }
+
+    private async Task EnterReadAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            Task wait;
+            lock (_readSync)
+            {
+                if (_readsHeld is null)
+                {
+                    _activeReads++;
+                    return;
+                }
+
+                wait = _readsHeld.Task;
+            }
+
+            await wait.WaitAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    private void ExitRead()
+    {
+        lock (_readSync)
+        {
+            _activeReads--;
+            if (_activeReads == 0)
+            {
+                _readsDrained?.TrySetResult();
+            }
+        }
+    }
+
+    private void ThrowIfClosed()
+    {
+        if (_closed)
+        {
+            throw new AppException(AppErrorKind.StorageUnavailable, "Chaos is closing, so this change was not saved. Reopen Chaos and try again.");
         }
     }
 

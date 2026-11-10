@@ -217,3 +217,46 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
 - **Look-back reads the journal.** When a complete weekly summary of last week exists, My
   Week's look-back takes the completed tasks (with their captured titles) and planned-task
   counts from it. Unfinished tasks and goals stay live because the ritual acts on them now.
+
+## 2026-11-10 (package 12)
+
+- **The backups folder is the source of truth.** Each backup has a `.db.json` description
+  beside it, written last. The `BackupCatalog` table is kept only as a log, because it lives
+  in the database a restore replaces. Retention and the restore list read the folder. Files
+  without a description are listed as "not checked yet" and are never deleted by retention.
+- **Online backup API instead of `VACUUM INTO`.** PLAN §14 names
+  `SqliteConnection.BackupDatabase`. The copy is switched to rollback-journal mode, so a
+  backup is one self-contained file with no WAL beside it.
+- **Retention uses UTC days and Monday weeks.** It keeps the newest backup, the newest of each
+  of the last 7 days and of the last 4 weeks, and the 3 newest safety backups. It runs only
+  after a backup succeeds. Backup files do not depend on the profile's zone or week start.
+- **Restore swaps files under the live store.** `SqliteApplicationStore.RunExclusiveAsync`
+  holds writes at the gate, holds new reads, waits for reads in flight, closes the writer and
+  clears the pool. `DatabaseReplacement` then moves the old files aside (never deletes them),
+  moves the new file in and records each step in `replace-pending.json`. Startup finishes or
+  undoes an interrupted replacement before opening the database. All backup, restore, reset,
+  import and purge work runs one operation at a time, so a scheduled backup cannot open the
+  file during a swap.
+- **The JSON archive is a table dump, not a parallel object model.** Every user-data table is
+  exported with its columns and typed values, so features added later are included without
+  exporter changes. A restore builds the database at the archive's schema version, inserts
+  the rows with deferred foreign keys (`INSERT OR REPLACE`, because the recurrence trigger
+  pre-creates revision rows), then runs the newer migrations. Rebuildable or device-specific
+  data is excluded and listed in the manifest.
+- **Imports write through the stores, not the recorder.** An import can create thousands of
+  tasks. It writes a `task.imported` history entry per task but no undo entry. It is undone by
+  restoring the backup made just before it, which the import record names.
+- **Imported tasks get new IDs, except in a JSON merge.** Org and CSV keep their source IDs
+  only as fingerprints. A source ID that equals a local task's ID marks the item as already
+  present. A JSON merge keeps free IDs and reports taken ones as conflicts, keeping the local
+  task.
+- **A commit is bound to its preview.** The import token hashes the file bytes, the format
+  and the CSV column mapping, and a restore needs the checksum shown in its review. A file
+  changed between preview and confirmation is refused.
+- **Export goes to a folder the user names.** NeoAstra has no save dialog. Settings proposes
+  `Documents\Chaos exports` and can open it, or the backups folder, and no other path.
+  Imports use the WebView's file picker; the file content is sent over RPC.
+- **Purge removes dependents explicitly.** Most foreign keys have no `ON DELETE CASCADE`, so
+  the purge deletes each dependent table in one transaction. It replaces the captured titles
+  of purged tasks in journal facts and drops undo entries that mention them. It then runs
+  `VACUUM` with the store exclusive.

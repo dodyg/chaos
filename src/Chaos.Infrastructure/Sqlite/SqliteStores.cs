@@ -8,6 +8,9 @@ namespace Chaos.Infrastructure.Sqlite;
 /// <summary>SQLite implementations of the typed stores bound to one session connection (PLAN §4).</summary>
 public sealed class SqliteDataSession(SqliteConnection connection) : IDataSession
 {
+    /// <summary>The open connection (inside the caller's transaction for writes), for storage-level work such as purge.</summary>
+    public SqliteConnection Connection => connection;
+
     public IProfileStore Profiles { get; } = new SqliteProfileStore(connection);
     public ISpaceStore Spaces { get; } = new SqliteSpaceStore(connection);
     public IContainerStore Containers { get; } = new SqliteContainerStore(connection);
@@ -31,6 +34,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public ISummaryStore Summaries { get; } = new SqliteSummaryStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
+    public IImportStore Imports { get; } = new SqliteImportStore(connection);
 }
 
 public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileStore

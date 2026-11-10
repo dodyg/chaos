@@ -2,6 +2,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Bootstrap;
+using Chaos.Infrastructure.DataProtection;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Tests.Testing;
 using Microsoft.Data.Sqlite;
@@ -73,7 +74,7 @@ public sealed class StorageBootstrapTests
     {
         using var handle = await StartAsync(TestPaths.NewDataRoot());
 
-        await Assert.That(handle.SchemaVersion).IsEqualTo(11L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(12L);
         await Assert.That(handle.PrimaryProfileId).IsNotEmpty();
         await Assert.That(CountRows(handle.DatabasePath, "Profiles")).IsEqualTo(1L);
         await Assert.That(CountRows(handle.DatabasePath, "Spaces")).IsEqualTo(1L);
@@ -289,35 +290,37 @@ public sealed class StorageBootstrapTests
     }
 
     [Test]
-    public async Task BackupService_CreatesValidBackupAndCatalogsIt()
+    public async Task BackupManager_CreatesValidBackupWithManifestAndCatalogsIt()
     {
         using var handle = await StartAsync(TestPaths.NewDataRoot());
-        var source = new SqliteConnectionSource(handle.DatabasePath);
         var backupsDirectory = Path.Combine(Path.GetTempPath(), "chaos-tests", "backups", Guid.NewGuid().ToString("N"));
 
-        var record = await new SqliteBackupService(source).CreateBackupAsync(
-            backupsDirectory, "0.1.0", handle.SchemaVersion, BackupReason.PreMigration, Now, CancellationToken.None);
+        var manifest = await new BackupManager(handle.Store.Source, backupsDirectory, "0.1.0", new FixedTimeProvider(Now))
+            .CreateAsync(BackupReason.PreMigration, CancellationToken.None);
 
-        await Assert.That(File.Exists(Path.Combine(backupsDirectory, record.FileName))).IsTrue();
-        await Assert.That(record.ValidationStatus).IsEqualTo(BackupValidationStatus.Valid);
-        await Assert.That(record.Reason).IsEqualTo(BackupReason.PreMigration);
-        await Assert.That(record.ChecksumSha256.Length).IsEqualTo(64);
-        await Assert.That(record.AppVersion).IsEqualTo("0.1.0");
+        var path = Path.Combine(backupsDirectory, manifest.FileName);
+        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(File.Exists(path + BackupManager.ManifestSuffix)).IsTrue();
+        await Assert.That(manifest.Reason).IsEqualTo(BackupReason.PreMigration);
+        await Assert.That(manifest.ChecksumSha256).IsEqualTo(BackupManager.ComputeChecksum(path));
+        await Assert.That(manifest.AppVersion).IsEqualTo("0.1.0");
+        await Assert.That(manifest.SchemaVersion).IsEqualTo(handle.SchemaVersion);
 
-        var catalogued = await handle.Store.QueryAsync((session, token) => session.Backups.FindByFileNameAsync(record.FileName, token));
-        await Assert.That(catalogued).IsEqualTo(record);
+        var catalogued = await handle.Store.QueryAsync((session, token) => session.Backups.FindByFileNameAsync(manifest.FileName, token));
+        await Assert.That(catalogued!.ValidationStatus).IsEqualTo(BackupValidationStatus.Valid);
+        await Assert.That(catalogued.ChecksumSha256).IsEqualTo(manifest.ChecksumSha256);
     }
 
     [Test]
-    public async Task ValidateBackupFile_NonDatabaseFile_ReportsInvalid()
+    public async Task CheckDatabaseFile_NonDatabaseFile_ReportsInvalid()
     {
         var junkPath = Path.Combine(Path.GetTempPath(), "chaos-tests", Guid.NewGuid().ToString("N") + ".db");
         Directory.CreateDirectory(Path.GetDirectoryName(junkPath)!);
         await File.WriteAllTextAsync(junkPath, "definitely not a sqlite database");
 
-        var status = SqliteBackupService.ValidateBackupFile(junkPath);
+        var check = BackupManager.CheckDatabaseFile(junkPath);
 
-        await Assert.That(status).IsEqualTo(BackupValidationStatus.Invalid);
+        await Assert.That(check.Valid).IsFalse();
     }
 
     private static async Task<AppException?> CatchAsync(Func<Task> action)

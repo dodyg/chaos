@@ -29,6 +29,13 @@ public sealed class ChaosStorageHandle(DataRootLock lockHandle) : IDisposable
 
     public required SqliteApplicationStore Store { get; init; }
 
+    public required StorageOptions Options { get; init; }
+
+    public required string AppVersion { get; init; }
+
+    /// <summary>What startup did about an interrupted restore or reset, shown once in Settings; null when nothing happened.</summary>
+    public DataProtection.RecoveryNotice? RecoveryNotice { get; init; }
+
     private readonly DataRootLock _lockHandle = lockHandle;
 
     public void Dispose()
@@ -59,6 +66,10 @@ public static class StorageBootstrap
             // Layout (PLAN §5): the database lives under data/; create the folder before first open.
             Directory.CreateDirectory(Path.GetDirectoryName(options.DatabasePath)!);
 
+            // A restore or reset interrupted by a crash is finished or undone before anything
+            // opens the database (PLAN §14), so startup always sees one consistent file.
+            var recovery = DataProtection.DatabaseReplacement.RecoverInterrupted(options);
+
             var source = new SqliteConnectionSource(options.DatabasePath);
 
             await using (var probe = source.Open())
@@ -78,8 +89,8 @@ public static class StorageBootstrap
 
                 if (currentVersion > 0 && currentVersion < SqliteMigrationRunner.MaxKnownSchemaVersion)
                 {
-                    await new SqliteBackupService(source).CreateBackupAsync(
-                        options.BackupsDirectory, appVersion, currentVersion, BackupReason.PreMigration, clock.GetUtcNow(), ct);
+                    await new DataProtection.BackupManager(source, options.BackupsDirectory, appVersion, clock)
+                        .CreateAsync(BackupReason.PreMigration, ct);
                 }
             }
 
@@ -102,6 +113,9 @@ public static class StorageBootstrap
                     SchemaVersion = schemaVersion,
                     PrimaryProfileId = profileId,
                     Store = store,
+                    Options = options,
+                    AppVersion = appVersion,
+                    RecoveryNotice = recovery,
                 };
             }
             catch

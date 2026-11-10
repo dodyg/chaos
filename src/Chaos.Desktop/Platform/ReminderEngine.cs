@@ -45,6 +45,35 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
         }
     }
 
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with no tick in progress and none starting (PLAN §14: restore
+    /// and reset quiesce reminders), then resynchronizes every desired notification against
+    /// whatever database is in place afterwards.
+    /// </summary>
+    public async Task RunPausedAsync(Func<Task> work, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await work();
+        }
+        finally
+        {
+            try
+            {
+                await reminders.ResyncAllAsync(CancellationToken.None);
+            }
+            catch (AppException error)
+            {
+                LastError = "Reminders will be scheduled again on the next pass.";
+                Trace.TraceWarning("Reminder resync after data replacement failed: {0}", error);
+            }
+
+            _gate.Release();
+        }
+    }
+
     /// <summary>Delivers everything due and brings OS schedules in line.</summary>
     public async Task TickAsync(CancellationToken ct)
     {
