@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
+using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
@@ -46,6 +47,7 @@ internal static class Program
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -230,5 +232,19 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(PadReviewStatusRequest))]
 [JsonSerializable(typeof(PadReviewStatusResponse))]
 [JsonSerializable(typeof(PadReviewRequest))]
+[JsonSerializable(typeof(CaptureSpanDto))]
+[JsonSerializable(typeof(CapturePreviewRequest))]
+[JsonSerializable(typeof(CaptureTokenDto))]
+[JsonSerializable(typeof(CaptureWarningDto))]
+[JsonSerializable(typeof(CaptureReminderDto))]
+[JsonSerializable(typeof(CaptureTagDto))]
+[JsonSerializable(typeof(CaptureContainerDto))]
+[JsonSerializable(typeof(CaptureSubtaskDto))]
+[JsonSerializable(typeof(CaptureDraftDto))]
+[JsonSerializable(typeof(CaptureItemDto))]
+[JsonSerializable(typeof(CaptureBatchErrorDto))]
+[JsonSerializable(typeof(CapturePreviewResponse))]
+[JsonSerializable(typeof(CaptureCreateRequest))]
+[JsonSerializable(typeof(CaptureCreateResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

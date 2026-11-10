@@ -444,6 +444,7 @@ internal static class UndoLabels
     private static readonly Dictionary<string, string> Verbs = new(StringComparer.Ordinal)
     {
         ["task.capture"] = "Add task",
+        ["task.quick-add"] = "Add",
         ["task.update-details"] = "Edit task",
         ["task.set-status"] = "Change status of",
         ["task.move"] = "Move task",

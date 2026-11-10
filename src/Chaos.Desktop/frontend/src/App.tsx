@@ -1,5 +1,5 @@
 import React from "react";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
@@ -12,7 +12,8 @@ import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tags";
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
-import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Plus, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { QuickAdd } from "./QuickAdd";
+import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +24,7 @@ import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc };
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -40,6 +41,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const journalApi = { diaryRpc: api.diaryRpc ?? diaryRpc, historyRpc: api.historyRpc ?? historyRpc };
   const padApi = api.padRpc ?? padRpc;
   const recurrenceApi = api.recurrenceRpc ?? recurrenceRpc;
+  const captureApi = api.captureRpc ?? captureRpc;
+  const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
   const drafts = React.useRef(new DraftRegistry()).current;
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
   const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
@@ -48,7 +51,6 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [notice, setNotice] = React.useState<string | null>(null);
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [editorTab, setEditorTab] = React.useState("notes");
-  const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
   const [recurrenceDelete, setRecurrenceDelete] = React.useState<TaskResponse | null>(null);
@@ -162,6 +164,11 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         event.preventDefault();
         openPadRef.current({ itemId: null });
       }
+      // Quick add from anywhere in the app (PLAN §13 Ctrl+N).
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        focusQuickAddRef.current();
+      }
     }
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -174,6 +181,22 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   }
   const openPadRef = React.useRef(openPad);
   openPadRef.current = openPad;
+  function focusQuickAdd() {
+    setShowTagSettings(false);
+    if (view !== "tasks") { setEditing(null); setView("tasks"); }
+    setTimeout(() => quickAddInput.current?.focus(), 0);
+  }
+  const focusQuickAddRef = React.useRef(focusQuickAdd);
+  focusQuickAddRef.current = focusQuickAdd;
+  /** Saves confirmed quick-add drafts as one operation; the list and counts reload after commit. */
+  async function saveCaptured(captured: CaptureDraftDto[], operation: string): Promise<string | null> {
+    const result = await captureApi.create({ operationId: operation, drafts: captured });
+    if (!result.ok) return result.error?.fields.map(field => field.message).join("; ") || result.error?.message || "The tasks could not be saved.";
+    setNotice(result.tasks.length === 1 ? null : `Added ${result.tasks.length} tasks.`);
+    await refresh();
+    changed();
+    return null;
+  }
   // Leaving the pad saves its notes at once; a failure keeps the text and says where it is.
   const previousView = React.useRef(view);
   React.useEffect(() => {
@@ -302,10 +325,6 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
     finally { setBusy(false); }
   }
   const operationId = () => crypto.randomUUID();
-  function capture(event: React.FormEvent) {
-    event.preventDefault();
-    void run(() => taskRpc.create({ operationId: operationId(), title, notes: null, containerId: containerId || null }), () => setTitle(""));
-  }
   function save(event: React.FormEvent) {
     event.preventDefault();
     if (!editing) return;
@@ -536,7 +555,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
 
-      {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
+      {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
@@ -549,14 +568,10 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
 
         {selected && showSettings && <div id="list-settings" className="rounded-xl border bg-muted/50 p-4"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={async () => { if (selectedContainer.current === containerId) selectContainer(""); await refreshContainers(); }} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (selectedContainer.current !== containerId) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
 
-        <form className="flex items-center gap-2 rounded-xl border border-input bg-card py-1.5 pr-1.5 pl-3.5 shadow-sm transition-[box-shadow,border-color] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={capture}>
-          <label htmlFor="capture" className="sr-only">Add a task</label>
-          <Plus className="size-4 shrink-0 text-primary"/>
-          <input id="capture" className="h-9 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground" value={title} onChange={e => setTitle(e.target.value)} autoComplete="off" placeholder={`Add a task to ${listName}`}/>
-          <Button disabled={busy || !title.trim()}>Add task</Button>
-        </form>
+        <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
+          placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home`} onSubmit={saveCaptured}/>
 
-        {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one.</EmptyState>}
+        {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {unsectioned.length > 0 && <section className="grid gap-1.5" aria-label="Unsectioned tasks">{sections.length > 0 && groupHeading("Unsectioned")}{taskList(unsectioned, "Unsectioned tasks")}</section>}
         {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className="grid gap-1.5" aria-label={`${section.title} tasks`}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
         {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(tasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}

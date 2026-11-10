@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { padRpc, tagRpc, type PadItemResponse, type PadMakeTaskRequest, type PadSaveRequest } from "#neoastra";
+import { padRpc, tagRpc, type CaptureDraftDto, type CapturePreviewRequest, type PadItemResponse, type PadMakeTaskRequest, type PadSaveRequest } from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -49,8 +49,21 @@ function padApi(notes: PadItemResponse[], options: { failSaves?: boolean } = {})
 
 const tagApi = { ...tagRpc, targetTags: async () => ({ ok: true, tagIds: [], error: null }), suggest: async () => ({ ok: true, tags: [], error: null }) } as unknown as typeof tagRpc;
 
+/** Quick add for Make task: "today" in the selection becomes the planned date. */
+const captureApi = {
+  preview: async (request: CapturePreviewRequest) => {
+    const at = request.text.indexOf("today");
+    const title = at < 0 ? request.text : request.text.slice(0, at).trim();
+    const draft: CaptureDraftDto = { title, notes: null, containerId: null, priority: "Normal", estimateMinutes: null, plannedDate: at < 0 ? null : "2026-11-10", plannedTime: null,
+      dueDate: null, dueTime: null, zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [] };
+    const tokens = at < 0 ? [] : [{ kind: "PlannedDate", start: at, end: at + 5, text: "today", language: "en", state: "Applied", summary: "Planned today" }];
+    return { ok: true, isBatch: false, errors: [], capturedAtUtc: null, error: null,
+      items: [{ lineNumber: 1, sourceStart: 0, text: request.text, draft, tokens, warnings: [], languages: [], needsTitle: !title, tags: [], containerCandidates: [], firstOccurrence: null }] };
+  },
+};
+
 function renderPad(api: typeof padRpc, registry: InstanceType<typeof DraftRegistry>, errors: string[] = []) {
-  return render(<ScratchPad api={api} tagApi={tagApi} registry={registry} containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null }]}
+  return render(<ScratchPad api={api} tagApi={tagApi} captureApi={captureApi} registry={registry} containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null }]}
     tags={[]} revision={0} focus={null} links={{}} onChanged={() => {}} onOpenTask={() => {}} onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
 }
 
@@ -60,7 +73,7 @@ test("a selection's first line becomes the quick-add title without list or headi
   assert.equal(titleFromSelection("   \n"), "");
 });
 
-test("Make task saves the latest text first, then sends the selection as UTF-16 offsets", async () => {
+test("Make task reads the selection with quick add, saves the latest text first, then sends UTF-16 offsets", async () => {
   const notes = [note("n1", "Ideas\n- call 😀 Sam")];
   const { api, saves, made } = padApi(notes);
   const user = userEvent.setup({ document: dom.window.document });
@@ -77,8 +90,9 @@ test("Make task saves the latest text first, then sends the selection as UTF-16 
   fireEvent.select(area);
 
   await user.click(screen.getByRole("button", { name: "Make task" }));
-  const title = screen.getByLabelText("Title") as HTMLInputElement;
-  assert.equal(title.value, quote);
+  assert.equal((screen.getByLabelText("Make task from selection") as HTMLTextAreaElement).value, quote);
+  const title = await screen.findByLabelText("Title") as HTMLInputElement;
+  assert.equal(title.value, "call 😀 Sam"); // "today" became the planned date
   await user.click(screen.getByRole("button", { name: "Create task" }));
 
   await waitFor(() => assert.equal(made.length, 1));
@@ -89,6 +103,8 @@ test("Make task saves the latest text first, then sends the selection as UTF-16 
   assert.equal(made[0].start, start); // the emoji counts as two UTF-16 units, like the store
   assert.equal(made[0].end, start + quote.length);
   assert.equal(made[0].quote, quote);
+  assert.equal(made[0].draft?.title, "call 😀 Sam");
+  assert.equal(made[0].draft?.plannedDate, "2026-11-10");
   cleanup();
 });
 

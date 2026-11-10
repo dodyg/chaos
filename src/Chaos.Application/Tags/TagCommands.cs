@@ -92,7 +92,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     }
 
                     await RequireDepthAsync(session, parent, segments.Count, inner);
-                    var (leaf, created) = await EnsurePathAsync(session, profile.Id, parent?.Id, segments, now, inner);
+                    var (leaf, created) = await EnsurePathAsync(session, ids, profile.Id, parent?.Id, segments, now, inner);
                     if (color is not null && leaf.ColorKey != color)
                     {
                         leaf = await ApplyUpdateAsync(session, leaf with { ColorKey = color, Version = leaf.Version + 1, UpdatedAtUtc = now }, leaf.Version, inner);
@@ -367,7 +367,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     else
                     {
                         await RequireDepthAsync(session, null, segments.Count, inner);
-                        (tag, created) = await EnsurePathAsync(session, profile.Id, null, segments, now, inner);
+                        (tag, created) = await EnsurePathAsync(session, ids, profile.Id, null, segments, now, inner);
                     }
 
                     var changed = command.TargetKind switch
@@ -659,8 +659,9 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
     }
 
     /// <summary>Selects existing segments by identity key and creates the missing ones (PLAN §6 slash-delimited tags).</summary>
-    private async Task<(TagRecord Leaf, IReadOnlyList<TagRecord> Created)> EnsurePathAsync(
+    internal static async Task<(TagRecord Leaf, IReadOnlyList<TagRecord> Created)> EnsurePathAsync(
         IDataSession session,
+        IIdGenerator ids,
         string ownerId,
         string? parentId,
         IReadOnlyList<TagSegment> segments,
