@@ -10,6 +10,46 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class LifecycleTests
 {
     [Test]
+    public async Task ReorderContainer_AboveInbox_KeepsInboxFirst()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var containers = new ContainerCommands(storage.Store, ids, clock);
+        await containers.CreateAsync(new(Guid.NewGuid().ToString(), "First", ContainerKind.List, null));
+        var second = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Second", ContainerKind.List, null))).Container;
+
+        await containers.ReorderAsync(new ReorderContainerCommand(Guid.NewGuid().ToString(), second.Id, second.Version, 0));
+
+        var rows = await containers.ListPersonalAsync();
+        await Assert.That(rows[0].IsInbox).IsTrue();
+        await Assert.That(string.Join(",", rows.Skip(1).Select(x => x.Name))).IsEqualTo("Second,First");
+    }
+
+    [Test]
+    public async Task ReorderTask_InSection_LeavesOtherSectionsUntouched()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var containers = new ContainerCommands(storage.Store, ids, clock);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var project = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+        var section = (await containers.CreateSectionAsync(new(Guid.NewGuid().ToString(), project.Id, "Section"))).Section;
+        var outside = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Outside", null))).Task;
+        var first = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "First", null))).Task;
+        var second = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Second", null))).Task;
+        await tasks.MoveAsync(new(Guid.NewGuid().ToString(), first.Id, first.Version, project.Id, section.Id));
+        var moved = (await tasks.MoveAsync(new(Guid.NewGuid().ToString(), second.Id, second.Version, project.Id, section.Id))).Task;
+        await tasks.ReorderAsync(new(Guid.NewGuid().ToString(), moved.Id, moved.Version, 0));
+        var rows = await tasks.ListAsync(project.Id);
+        await Assert.That(string.Join(",", rows.Where(x => x.SectionId == section.Id).Select(x => x.Title))).IsEqualTo("Second,First");
+        var unchanged = rows.Single(x => x.Id == outside.Id);
+        await Assert.That(unchanged.Position).IsEqualTo(outside.Position);
+        await Assert.That(unchanged.Version).IsEqualTo(outside.Version);
+    }
+
+    [Test]
     public async Task UpdateDetails_AllDayDatesAndInvalidTimedAnchor_PreserveEnteredDates()
     {
         var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));

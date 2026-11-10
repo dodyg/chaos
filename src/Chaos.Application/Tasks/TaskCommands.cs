@@ -310,7 +310,8 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var task = await RequireTaskAsync(session, command.TaskId, inner);
                     RequireCurrentVersion(task, command.ExpectedVersion);
-                    var siblings = await session.Tasks.ListByContainerAsync(task.ContainerId, inner);
+                    var siblings = (await session.Tasks.ListByContainerAsync(task.ContainerId, inner))
+                        .Where(row => row.SectionId == task.SectionId).ToList();
 
                     var assignments = RankOrdering.Place(
                         [.. siblings.Select(row => (row.Id, row.Position, row.Version))],
