@@ -38,7 +38,7 @@ function overview(patch: Partial<WeekOverviewDto> = {}): WeekOverviewDto {
   return {
     weekStart: dates[0], weekEnd: dates[6], today, firstWeekday: "Sunday", planId: null, state: null, confirmedRevision: "0", confirmedAtUtc: null,
     editable: true, availabilityConfigured: true, confirmed: board(), draft: null, draftRevision: "0", draftBoard: null,
-    lookBack: { weekStart: "2026-11-01", weekEnd: "2026-11-07", hadPlan: true, completedTaskIds: [], completedCount: 2, assignedCount: 3, assignedDone: 2, assignedCancelled: 0, unfinishedTaskIds: ["left"], goals: [] },
+    lookBack: { weekStart: "2026-11-01", weekEnd: "2026-11-07", hadPlan: true, completedTaskIds: [], completedCount: 2, assignedCount: 3, assignedDone: 2, assignedCancelled: 0, unfinishedTaskIds: ["left"], goals: [], journalSummaryId: null, journalCompleted: [] },
     candidates: [{ taskId: "due", reason: "DueThisWeek" }], goalSuggestions: [{ title: "Finish Due report", projectId: null, taskIds: ["due"], reason: "ImportantTask" }],
     pendingReconciliation: [], checkIn: null,
     tasks: [{ task: task("left", "Left over"), containerName: "Inbox", containerArchived: false }, { task: task("due", "Due report", { dueDate: "2026-11-12" }), containerName: "Inbox", containerArchived: false }],

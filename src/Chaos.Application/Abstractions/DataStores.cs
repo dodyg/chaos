@@ -28,6 +28,7 @@ public interface IDataSession
     INotificationJobStore Notifications { get; }
     IDayPlanStore DayPlans { get; }
     IWeekPlanStore Weeks { get; }
+    ISummaryStore Summaries { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
 }
@@ -90,6 +91,34 @@ public interface IWeekPlanStore
     Task<IReadOnlyList<AvailabilityRecord>> ListOverridesAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct);
     Task UpsertOverrideAsync(string profileId, DateOnly date, int totalMinutes, int? workMinutes, DateTimeOffset now, CancellationToken ct);
     Task DeleteOverrideAsync(string profileId, DateOnly date, CancellationToken ct);
+}
+
+/// <summary>
+/// Stored summary revisions and the period reads that build them (PLAN §12, work package 11).
+/// Summaries are derived records: they are not part of undo and never edited after insert,
+/// except for the prompt-seen mark.
+/// </summary>
+public interface ISummaryStore
+{
+    Task<SummaryRecord?> GetAsync(string id, CancellationToken ct);
+    /// <summary>The newest revision of one period, if any.</summary>
+    Task<SummaryRecord?> FindLatestAsync(string profileId, Chaos.Domain.Summaries.SummaryKind kind, DateOnly periodStart, CancellationToken ct);
+    /// <summary>All revisions of one period, newest first.</summary>
+    Task<IReadOnlyList<SummaryRecord>> ListRevisionsAsync(string profileId, Chaos.Domain.Summaries.SummaryKind kind, DateOnly periodStart, CancellationToken ct);
+    /// <returns>False when the same period and revision already exist (a concurrent generation won).</returns>
+    Task<bool> TryAddAsync(SummaryRecord row, CancellationToken ct);
+    Task MarkPromptSeenAsync(string id, DateTimeOffset seenAtUtc, CancellationToken ct);
+    /// <summary>
+    /// The journal: the newest revision of each period, ordered by (PeriodEnd, Kind)
+    /// descending. The cursor is exclusive: rows strictly before (endBefore, kindBefore).
+    /// </summary>
+    Task<IReadOnlyList<SummaryRecord>> ListJournalAsync(string profileId, DateOnly? endBefore, Chaos.Domain.Summaries.SummaryKind? kindBefore, int limit, CancellationToken ct);
+    /// <summary>Newest revisions whose prompt time has come and that were not opened or dismissed, newest first.</summary>
+    Task<IReadOnlyList<SummaryRecord>> ListPromptsDueAsync(string profileId, DateTimeOffset now, CancellationToken ct);
+    /// <summary>History rows of the space's tasks effective at or after <paramref name="fromUtc"/>, in recorded order.</summary>
+    Task<IReadOnlyList<TaskHistoryRecord>> ListHistorySinceAsync(string spaceId, DateTimeOffset fromUtc, CancellationToken ct);
+    /// <summary>Nondeleted diary entries of the space's tasks written in [fromUtc, beforeUtc), oldest first.</summary>
+    Task<IReadOnlyList<DiaryEntryRecord>> ListDiaryEntriesAsync(string spaceId, DateTimeOffset fromUtc, DateTimeOffset beforeUtc, CancellationToken ct);
 }
 
 /// <summary>
@@ -235,6 +264,8 @@ public interface IProfileStore
     Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
     /// <summary>Optimistic update of the default reminder time and quiet hours (PLAN §11).</summary>
     Task<ProfileRecord?> UpdateReminderSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
+    /// <summary>Optimistic update of the morning, evening and weekly summary schedule (PLAN §12).</summary>
+    Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
 }
 
 public interface ISpaceStore

@@ -376,8 +376,13 @@ function LookBack({ week, tasks, disabled, onOpen, onOutcome }: { week: WeekOver
     </ul>
     {!back.hadPlan && <p className="text-sm text-muted-foreground">Last week was not planned.</p>}
     <Goals goals={back.goals} disabled={disabled} onOutcome={onOutcome}/>
+    {back.journalSummaryId && <p className="text-xs text-muted-foreground">From the weekly summary in your journal.</p>}
     {back.completedTaskIds.length > 0 && <details><summary className="cursor-pointer text-sm font-medium">Completed tasks<Count>{back.completedCount}</Count></summary>
-      <ul className="grid gap-1 pt-1">{back.completedTaskIds.map(id => <TaskLine key={id} item={tasks.get(id)} onOpen={onOpen}/>)}</ul>
+      {back.journalSummaryId
+        ? <ul className="grid gap-1 pt-1">{back.journalCompleted.map(item => <li key={item.taskId} className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]" dir="auto">{item.title}</span><span className="text-xs text-muted-foreground" dir="auto">{item.containerName}</span>
+          </li>)}</ul>
+        : <ul className="grid gap-1 pt-1">{back.completedTaskIds.map(id => <TaskLine key={id} item={tasks.get(id)} onOpen={onOpen}/>)}</ul>}
     </details>}
   </div>;
 }

@@ -200,6 +200,7 @@ public sealed class RecordingDataSession : IDataSession
     public INotificationJobStore Notifications => _inner.Notifications;
     public IDayPlanStore DayPlans => _inner.DayPlans;
     public IWeekPlanStore Weeks => _inner.Weeks;
+    public ISummaryStore Summaries => _inner.Summaries;
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
 

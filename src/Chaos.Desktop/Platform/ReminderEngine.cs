@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Reminders;
+using Chaos.Application.Summaries;
 
 namespace Chaos.Desktop.Platform;
 
@@ -10,9 +11,11 @@ namespace Chaos.Desktop.Platform;
 /// a full resync and reconciliation at startup (which also covers anything missed while the
 /// app was closed: missed repeats are coalesced by delivery), then a tick on a timer and
 /// whenever the frontend asks for alerts. Ticks never overlap. A failed tick is traced with a
-/// correlation ID and retried on the next one; capture never waits on reminders.
+/// correlation ID and retried on the next one; capture never waits on reminders. The same
+/// tick generates scheduled plain summaries (PLAN §12) when one is given: morning, evening and
+/// weekly at their times, and missed periods once at the next start.
 /// </summary>
-public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock) : IDisposable
+public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null) : IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
@@ -48,6 +51,11 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
         await _gate.WaitAsync(ct);
         try
         {
+            if (summaries is not null)
+            {
+                await summaries.GenerateDueAsync(ct);
+            }
+
             foreach (var delivered in await reminders.DeliverDueAsync(ct))
             {
                 var presentation = delivered.Job.OsState == NotificationOsState.Scheduled

@@ -21,7 +21,12 @@ public sealed record ProfileRecord : AggregateRecord
     public required string DateFormat { get; init; } // DMY | MDY | YMD
     public required DayOfWeek FirstWeekday { get; init; }
     public TimeOnly? PlanningTime { get; init; }
+    /// <summary>Evening daily summary time; null = not scheduled (PLAN §12).</summary>
     public TimeOnly? SummaryTime { get; init; }
+    /// <summary>Morning summary time; null = not scheduled.</summary>
+    public TimeOnly? MorningTime { get; init; }
+    /// <summary>Weekday the weekly summary is due; null = not scheduled.</summary>
+    public DayOfWeek? WeeklySummaryDay { get; init; }
     public required TimeOnly DefaultReminderTime { get; init; }
     public bool QuietHoursEnabled { get; init; }
     public TimeOnly? QuietStart { get; init; }
