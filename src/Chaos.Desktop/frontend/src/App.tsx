@@ -1,10 +1,12 @@
 import React from "react";
-import { taskRpc, subtaskRpc, containerRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse } from "#neoastra";
+import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse } from "#neoastra";
 import { Templates } from "./Templates";
 import { ContainerManagement } from "./ContainerManagement";
 import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarDays, Clock, FolderKanban, Inbox, LayoutTemplate, ListTodo, Plus, Settings2, Trash2, X } from "lucide-react";
+import { QueryView, builtInViews, type QueryState } from "./QueryView";
+import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tags";
+import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, Plus, Search, Settings2, Trash2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,8 +16,14 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 
-export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc }; templates?: React.ReactNode }) {
+const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
+
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc };
+
+export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api; templates?: React.ReactNode }) {
   const { taskRpc, containerRpc } = api;
+  const tagApi = api.tagRpc ?? tagRpc;
+  const queryApi = api.queryRpc ?? queryRpc;
   const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
@@ -35,7 +43,15 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
-  const [view, setView] = React.useState<"tasks" | "templates">("tasks");
+  const [view, setView] = React.useState<"tasks" | "templates" | "query">("tasks");
+  const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
+  const [searchText, setSearchText] = React.useState("");
+  const [tags, setTags] = React.useState<TagResponse[]>([]);
+  const [deletedTags, setDeletedTags] = React.useState<TagResponse[]>([]);
+  const [viewCounts, setViewCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  const [tagCounts, setTagCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  const [revision, setRevision] = React.useState(0);
+  const [showTagSettings, setShowTagSettings] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
   const listRequests = React.useRef(createLatestRequest());
   const selectedContainer = React.useRef("");
@@ -65,7 +81,24 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
     setContainers([...response.containers]);
     setDeletedContainers([...removed.containers]);
   }
+  /** Tags, deleted tags and sidebar counts; counts use the same query as each view (PLAN §10). */
+  async function refreshMeta() {
+    const [list, removed, counts] = await Promise.all([tagApi.list({}), tagApi.listDeleted({}), queryApi.counts({})]);
+    if (!list.ok) throw new Error(list.error?.message ?? "Could not load tags.");
+    setTags([...list.tags]);
+    if (removed.ok) setDeletedTags([...removed.tags]);
+    if (counts.ok) {
+      setViewCounts(new Map(counts.views.map(entry => [entry.view, entry.count])));
+      setTagCounts(new Map(counts.tags.map(entry => [entry.tagId, entry.count])));
+    }
+  }
+  /** After any committed change: reload the open query view and the sidebar counts. */
+  function changed() {
+    setRevision(current => current + 1);
+    void refreshMeta().catch((e: unknown) => setError(String(e)));
+  }
   React.useEffect(() => { void refreshContainers().catch((e: unknown) => setError(String(e))); }, []);
+  React.useEffect(() => { void refreshMeta().catch((e: unknown) => setError(String(e))); }, []);
   React.useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [containerId]);
   React.useEffect(() => {
     let active = true;
@@ -99,6 +132,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
       if (!deleted.ok) throw new Error(deleted.error?.message ?? "Could not load deleted subtasks.");
       setDeletedSubtasks([...deleted.subtasks]);
       setSubtaskRevision(current => current + 1);
+      changed();
     } catch (e) { setError(e instanceof Error ? e.message : "The subtask could not be saved."); }
     finally { setBusy(false); }
   }
@@ -112,6 +146,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
       setWarning(result.warning);
       after?.(result.task);
       await refresh();
+      changed();
     } catch (e) { setError(e instanceof Error ? e.message : "The change could not be saved."); }
     finally { setBusy(false); }
   }
@@ -139,13 +174,54 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
   async function runContainer(action: () => Promise<{ ok: boolean; error: { message: string } | null }>, failure: string) {
     if (busy) return;
     setBusy(true); setError(null);
-    try { const result = await action(); if (!result.ok) throw new Error(result.error?.message ?? failure); await refreshContainers(); }
+    try { const result = await action(); if (!result.ok) throw new Error(result.error?.message ?? failure); await refreshContainers(); changed(); }
     catch (e) { setError(e instanceof Error ? e.message : failure); }
     finally { setBusy(false); }
   }
   function openContainer(id: string) {
+    if (view === "query") setEditing(null);
     setView("tasks");
     if (id !== containerId) selectContainer(id);
+  }
+  function openQuery(next: QueryState) {
+    setEditing(null); setShowTagSettings(false);
+    setQuery(next); setView("query");
+  }
+  function search(event: React.FormEvent) {
+    event.preventDefault();
+    if (searchText.trim()) openQuery({ view: "Search", text: searchText.trim() });
+  }
+  async function createTag(path: string) {
+    if (busy) return false;
+    setBusy(true); setError(null);
+    try {
+      const result = await tagApi.create({ operationId: operationId(), path, parentId: null, color: null });
+      if (!result.ok) throw new Error(result.error?.fields.map(f => f.message).join("; ") || result.error?.message || "Could not create the tag.");
+      await refreshMeta();
+      return true;
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not create the tag."); return false; }
+    finally { setBusy(false); }
+  }
+  /** Drag-to-tag (PLAN §6): adds the tag without moving the task. */
+  async function tagTask(taskId: string, tag: TagResponse) {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await tagApi.link({ operationId: operationId(), targetKind: "Task", targetId: taskId, tagId: tag.id, path: null });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not tag the task.");
+      changed();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not tag the task."); }
+    finally { setBusy(false); }
+  }
+  async function restoreTag(tag: TagResponse) {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await tagApi.restore({ operationId: operationId(), tagId: tag.id, expectedVersion: tag.version });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not restore the tag.");
+      changed();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not restore the tag."); }
+    finally { setBusy(false); }
   }
   function createContainer(event: React.FormEvent) {
     event.preventDefault();
@@ -197,6 +273,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
     const order = rows.map(row => row.id);
     const byId = (id: string) => rows.find(row => row.id === id)!;
     return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id} className={rowClass(editing?.id === task.id, task.status)}
+      onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => reorderTask(byId(id), insertionIndex))}>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
       <div className="grid min-w-0 flex-1 gap-0.5">
@@ -217,14 +294,33 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
   const openCount = tasks.filter(t => !isFinished(t.status)).length;
   const userContainers = containers.filter(c => c.kind !== "Inbox");
   const navItem = "h-8 min-w-0 flex-1 justify-start gap-2.5 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 [&_svg]:text-muted-foreground aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary aria-[current=page]:[&_svg]:text-primary";
-  const showDetail = editing !== null && view === "tasks";
+  const showDetail = editing !== null && view !== "templates";
+  const activeTag = view === "query" && query.view === "Tag" ? tags.find(tag => tag.id === query.tagId) ?? null : null;
+  const builtIn = builtInViews.find(item => item.view === query.view);
+  const queryHeader = query.view === "Search"
+    ? <PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks and diary entries. Completed tasks and archived lists need a filter."/>
+    : query.view === "Tag"
+      ? <><PageHeader eyebrow="Tag" title={activeTag ? `#${activeTag.path}` : "Tag"} subtitle="Open tasks with this tag or a tag nested inside it, including tagged subtasks."
+          actions={activeTag && <Button type="button" variant={showTagSettings ? "secondary" : "outline"} aria-expanded={showTagSettings} onClick={() => setShowTagSettings(v => !v)}><Settings2/>{showTagSettings ? "Hide settings" : "Settings"}</Button>}/>
+        {activeTag && showTagSettings && <div className="rounded-xl border bg-muted/50 p-4"><TagSettings tag={activeTag} tags={tags} api={tagApi}
+          onChanged={async () => { await refreshMeta(); setRevision(current => current + 1); }}
+          onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}</>
+      : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
   return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
     <aside className="sticky top-0 flex h-screen flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
       <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><span className="text-xl leading-none text-primary" aria-hidden="true">✷</span>Chaos</h1>
+      <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
+        <Search className="size-4 shrink-0 text-muted-foreground"/>
+        <label htmlFor="search" className="sr-only">Search tasks</label>
+        <input id="search" type="search" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
+      </form>
       <nav aria-label="Views" className="grid gap-px">
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => setView("templates")}><LayoutTemplate/>Templates</Button>
+        {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
+          {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
+        </Button>)}
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => { setEditing(null); setView("templates"); }}><LayoutTemplate/>Templates</Button>
       </nav>
       <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Lists &amp; projects</div>
       {userContainers.length > 0
@@ -244,6 +340,10 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
           <Button disabled={busy || !containerName.trim()}>Create</Button>
         </div>
       </form>
+      <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Tags</div>
+      <TagTree tags={tags} counts={tagCounts} activeTagId={activeTag?.id ?? null} busy={busy} onOpen={tag => openQuery({ view: "Tag", tagId: tag.id })} onTagTask={(taskId, tag) => void tagTask(taskId, tag)}/>
+      <NewTagForm busy={busy} onCreate={createTag}/>
+      <DeletedItems className="pt-2" noun="tags" items={deletedTags} name={tag => tag.name} busy={busy} onRestore={tag => void restoreTag(tag)}/>
       <DeletedItems className="mt-auto pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
     </aside>
 
@@ -251,7 +351,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
 
-      {view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
+      {view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} onOpen={task => setEditing(task)} header={queryHeader}/>
+      : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
           subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
           actions={selected && <>
@@ -283,7 +384,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
       </>}
     </div>
 
-    {editing && view === "tasks" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
+    {editing && view !== "templates" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
       <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
         <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
@@ -312,6 +413,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
           <div className="flex gap-2 pt-1"><Button disabled={busy}>Save</Button><Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button></div>
         </form>
 
+        <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
+
         <section className="grid gap-3" aria-labelledby="subtasks-heading">
           <Separator/>
           <h3 id="subtasks-heading" className="flex items-center font-semibold">Subtasks{subtasks.length > 0 && <Count>{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</Count>}</h3>
@@ -334,6 +437,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: { ta
             <Field label="Status"><NativeSelect value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null)); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
             <div className="flex gap-2"><Button disabled={busy}>Save subtask</Button><Button type="button" variant="outline" onClick={() => setSubtaskEdit(null)}>Cancel</Button></div>
           </form></CardContent></Card>}
+          {subtaskEdit && <TagPicker targetKind="Subtask" targetId={subtaskEdit.id} label={`Tags on “${subtaskEdit.title}”`} tags={tags} api={tagApi} revision={revision} onChanged={changed}/>}
           <DeletedItems noun="subtasks" items={deletedSubtasks} name={subtask => subtask.title} busy={busy} onRestore={subtask => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}/>
         </section>
       </div>

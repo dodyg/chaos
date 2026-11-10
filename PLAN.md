@@ -566,6 +566,36 @@ Further progress: `App` was extracted from `main.tsx` and drag/drop reordering w
 
 **Depends on:** 2. Implement tag tree/sidebar, suggestions, links, rename/merge/delete and descendant filters. Add FTS maintenance/rebuild, built-in query/count service, paging and temporary filters. Tag pad links become available with package 5.
 
+Progress note (2026-11-10): implemented end to end, but not yet accepted in a native window. Migration 003 does three things. It scopes sibling tag uniqueness to the owner (root tags included). It adds triggers that stop a tag from being its own parent. It creates the FTS5 index: `SearchDocuments` plus `SearchIndex`, with a `SearchIndexState` normalization version. Startup checks that FTS5 is available and rebuilds the index whenever that version is stale, which includes the first start after the upgrade.
+
+Task and subtask search documents are written in the same transaction as their source rows, and tombstoned sources lose their document. Indexed text and search input are normalized the same way: NFKD, combining marks removed, tatweel dropped, Arabic-Indic and Persian digits folded, then NFKC. User text becomes quoted prefix terms joined with AND, so quotes, operators and punctuation can never break a query.
+
+`TagCommands` covers:
+- create a nested path, reusing existing segments
+- rename, color (fixed palette) and move, with cycle and depth checks
+- merge with a preview: links deduplicated, same-name children merged recursively, done atomically
+- delete the whole subtree, removing its links but keeping the tasks, with recovery data stored in the receipt
+- restore, refused if a tag changed after deletion or its name or parent is now in conflict
+- tag or untag a task or subtask, by ID or by path
+- suggestions, so errand and errands are offered instead of duplicated
+
+`TaskQueries` builds one specification that produces both the rows and the count for every view. It covers Container, Tag (descendant tags and tagged subtasks included), Today, Upcoming (grouped by the earliest relevant date), Overdue (a timed due is judged in its own zone), Assigned to me, Recently completed, Waiting and Search. Temporary filters compose with any view: status, priority, planned/due/completed ranges, completed, and archived lists. Pages use keyset cursors with the task ID as the last tie-breaker, at most 100 rows, and a cursor from another view is rejected.
+
+The desktop UI adds sidebar search, the built-in views with counts, a nested tag tree with counts that also accepts dropped tasks (drag-to-tag), and a tag view whose settings rename, recolor, move, merge (preview first) and delete. The task and subtask editors get a tag picker with suggestions, and deleted tags can be restored. A rebuild-index RPC also exists.
+
+Results: Release build has 0 warnings; 118 TUnit tests pass (Domain 6, Application 19, Infrastructure 80, Desktop 13), 41 more than before. Frontend: `tsrs` type check and `vite build` pass, and 14 jsdom tests pass. Slopwatch is clean. The Release exe starts offline on a fresh isolated data folder.
+
+The paging test caught a real bug, now fixed: Upcoming gave planned-only tasks a NULL group date, which broke their cursor.
+
+Not done, deliberately, and mapped to later packages:
+- Waiting grouped by outside person, and searching waiting-person text: package 10 (no WaitingDetails table yet).
+- My Day: package 8.
+- Pad-item tagging and pad search results: package 5. Pad and diary text is already included by the rebuild.
+- Keeping diary documents current on each write: package 4, along with tag history and undo.
+- Recurrence projections in Upcoming and Overdue: package 6.
+
+Package remains unchecked until the exit is shown in a native window: search typed notes, filter by a tag group, reopen the result, and drag a task onto a tag with a real pointer.
+
 **Tests:** normalization and sibling uniqueness, cycles, recursive merge collisions, deduplication, deleted-target exclusion, FTS quotes/punctuation/Arabic, count-row parity and cursor stability. **Exit:** search typed notes and task metadata offline, filter by tag group and reopen the result.
 
 ### [ ] 4 — Markdown, diary, full history and safe undo

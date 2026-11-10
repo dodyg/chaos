@@ -87,6 +87,9 @@ public static class StorageBootstrap
             await using (var migrationConnection = source.Open())
             {
                 schemaVersion = await SqliteMigrationRunner.MigrateAsync(migrationConnection, ct);
+                // Verifies FTS5 and (re)builds the search index when its normalization is stale,
+                // including the first start after migration 003 (PLAN §5).
+                await Search.SearchIndexWriter.EnsureCurrentAsync(migrationConnection, clock.GetUtcNow(), ct);
             }
 
             var store = new SqliteApplicationStore(source);

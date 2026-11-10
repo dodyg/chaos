@@ -15,6 +15,8 @@ public interface IDataSession
     ITaskStore Tasks { get; }
     ISubtaskStore Subtasks { get; }
     ITemplateStore Templates { get; }
+    ITagStore Tags { get; }
+    ITaskQueryStore Queries { get; }
     ITaskHistoryStore History { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
@@ -82,6 +84,8 @@ public interface ITaskStore
 public interface ISubtaskStore
 {
     Task<SubtaskRecord?> GetAsync(string subtaskId, CancellationToken ct);
+    /// <summary>The row even when tombstoned (tag restore re-links tombstoned subtasks too).</summary>
+    Task<SubtaskRecord?> GetIncludingDeletedAsync(string subtaskId, CancellationToken ct);
     /// <summary>Active subtasks of one task, ordered by (Position, Id).</summary>
     Task<IReadOnlyList<SubtaskRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
     /// <summary>All subtasks of one task including tombstoned ones (history snapshots, restore).</summary>
@@ -102,6 +106,52 @@ public interface ITemplateStore
     Task<IReadOnlyList<TemplateRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct);
     Task AddAsync(TemplateRecord template, CancellationToken ct);
     Task<TemplateRecord?> UpdateAsync(TemplateRecord updated, long expectedVersion, CancellationToken ct);
+}
+
+/// <summary>
+/// Tags and their task/subtask links (PLAN §5/§6). Tags are profile-owned and nested by
+/// adjacency; link writes are set operations that report whether anything changed.
+/// </summary>
+public interface ITagStore
+{
+    Task<TagRecord?> GetAsync(string tagId, CancellationToken ct);
+    Task<TagRecord?> GetIncludingDeletedAsync(string tagId, CancellationToken ct);
+    /// <summary>Active tags of one owner, ordered by (Position, NormalizedName, Id).</summary>
+    Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string ownerProfileId, CancellationToken ct);
+    Task<IReadOnlyList<TagRecord>> ListDeletedByOwnerAsync(string ownerProfileId, CancellationToken ct);
+    /// <summary>The active child of <paramref name="parentTagId"/> (null = root) with this identity key.</summary>
+    Task<TagRecord?> FindChildAsync(string ownerProfileId, string? parentTagId, string normalizedName, CancellationToken ct);
+    /// <summary>Active direct children of a tag, ordered by (Position, NormalizedName, Id).</summary>
+    Task<IReadOnlyList<TagRecord>> ListChildrenAsync(string tagId, CancellationToken ct);
+    Task AddAsync(TagRecord tag, CancellationToken ct);
+    Task<TagRecord?> UpdateAsync(TagRecord updated, long expectedVersion, CancellationToken ct);
+    Task<long> GetNextPositionAsync(string ownerProfileId, string? parentTagId, CancellationToken ct);
+
+    Task<IReadOnlyList<string>> ListTaskTagIdsAsync(string taskId, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListSubtaskTagIdsAsync(string subtaskId, CancellationToken ct);
+    /// <summary>Task IDs linked to this exact tag (no descendants), including tombstoned tasks.</summary>
+    Task<IReadOnlyList<string>> ListTaskIdsAsync(string tagId, CancellationToken ct);
+    Task<IReadOnlyList<string>> ListSubtaskIdsAsync(string tagId, CancellationToken ct);
+    /// <returns>False when the link already existed.</returns>
+    Task<bool> AddTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
+    /// <returns>False when there was no such link.</returns>
+    Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
+    Task<bool> AddSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
+    Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
+}
+
+/// <summary>
+/// The shared built-in query/search service port (PLAN §10): one criteria object yields both
+/// rows and counts, ordered deterministically with keyset cursors.
+/// </summary>
+public interface ITaskQueryStore
+{
+    Task<TaskQueryPage> QueryAsync(TaskQueryCriteria criteria, CancellationToken ct);
+    Task<long> CountAsync(TaskQueryCriteria criteria, CancellationToken ct);
+    /// <summary>Distinct due zones among open timed tasks of a space (to resolve per-zone overdue cutoffs).</summary>
+    Task<IReadOnlyList<string>> ListOpenDueZoneIdsAsync(string spaceId, CancellationToken ct);
+    /// <summary>Drops and rebuilds every search document from the source tables (PLAN §5: tested rebuild command).</summary>
+    Task<long> RebuildSearchIndexAsync(DateTimeOffset now, CancellationToken ct);
 }
 
 public interface ITaskHistoryStore

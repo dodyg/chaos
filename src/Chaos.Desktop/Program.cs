@@ -2,6 +2,8 @@ using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
 using Chaos.Application.Containers;
+using Chaos.Application.Queries;
+using Chaos.Application.Tags;
 using Chaos.Desktop.Services;
 using Chaos.Infrastructure.Bootstrap;
 using NeoAstra;
@@ -33,6 +35,8 @@ internal static class Program
                 rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddQueryRpcService(new QueryRpcService(new TaskQueries(storage.Store, TimeProvider.System)));
             });
         });
     }
@@ -120,5 +124,31 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(TemplateDeleteRequest))]
 [JsonSerializable(typeof(TemplateInstantiateRequest))]
 [JsonSerializable(typeof(TemplateOperationResponse))]
+[JsonSerializable(typeof(TagListRequest))]
+[JsonSerializable(typeof(TagSuggestRequest))]
+[JsonSerializable(typeof(TagResponse))]
+[JsonSerializable(typeof(TagListResponse))]
+[JsonSerializable(typeof(TagCreateRequest))]
+[JsonSerializable(typeof(TagRenameRequest))]
+[JsonSerializable(typeof(TagColorRequest))]
+[JsonSerializable(typeof(TagMoveRequest))]
+[JsonSerializable(typeof(TagChangeRequest))]
+[JsonSerializable(typeof(TagMergePreviewRequest))]
+[JsonSerializable(typeof(TagMergeRequest))]
+[JsonSerializable(typeof(TagMergePreviewResponse))]
+[JsonSerializable(typeof(TagOperationResponse))]
+[JsonSerializable(typeof(TagTargetRequest))]
+[JsonSerializable(typeof(TagLinkRequest))]
+[JsonSerializable(typeof(TagUnlinkRequest))]
+[JsonSerializable(typeof(TagIdsResponse))]
+[JsonSerializable(typeof(TaskQueryRequest))]
+[JsonSerializable(typeof(QueryRowResponse))]
+[JsonSerializable(typeof(TaskQueryResponse))]
+[JsonSerializable(typeof(ViewCountsRequest))]
+[JsonSerializable(typeof(ViewCountResponse))]
+[JsonSerializable(typeof(TagCountResponse))]
+[JsonSerializable(typeof(ViewCountsResponse))]
+[JsonSerializable(typeof(RebuildSearchRequest))]
+[JsonSerializable(typeof(RebuildSearchResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

@@ -50,3 +50,30 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   `frontend/src/components/common.tsx`. Add components with
   `npx shadcn@latest add <name>` from `frontend/`, then check the `cn` import resolves to
   `@/lib/utils`.
+
+## 2026-11-10 (package 3)
+
+- **Tag identity key.** `TagName.Normalize` applies NFKC and then invariant upper- and
+  lower-casing, so `Work`, `work` and fullwidth `ｗｏｒｋ` are one identity. The display
+  spelling is kept as typed. A single leading `#` is dropped, `/` separates nested
+  segments, and nesting stops at 8 levels. Near duplicates such as errand and errands are
+  only ever suggested, never merged.
+- **Tag links do not bump the task version.** Links are a set: adding one that exists, or
+  removing one that does not, changes nothing. The OperationId receipt still guards
+  retries. Tag history and undo come with package 4, which wires history into every
+  mutation.
+- **Search index holds active rows only.** A tombstoned task or subtask loses its search
+  document in the same transaction, and restoring it adds the document back. Queries still
+  filter deletion and archive state in SQL; finding a match never decides visibility.
+  Index text is normalized: NFKD, combining marks removed, tatweel dropped, Arabic-Indic and
+  Persian digits made ASCII, then NFKC. Changing that normalization means raising
+  `SearchText.NormalizationVersion`; startup then rebuilds the index.
+- **One trigger per line in migrations.** The migration runner ends a statement at any line
+  that ends in `;`. Trigger bodies (`BEGIN … END;`) are therefore written on one line
+  rather than changing how the runner splits statements.
+- **Sidebar counts count open tasks.** Every query-service view except Recently completed
+  shows open tasks by default. "Include completed" is a temporary filter. That way a
+  sidebar count always equals the row total of the view it opens.
+- **Counts cross the RPC as 32-bit integers.** NeoAstra RPC refuses `long` unless it is
+  serialized as a string. Counts and totals are clamped to `int` at the RPC edge;
+  application and store code keeps `long`.
