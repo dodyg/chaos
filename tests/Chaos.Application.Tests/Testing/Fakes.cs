@@ -70,6 +70,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ITaskHistoryStore History { get; } = new FakeTaskHistoryStore(owner.History);
         public IOperationReceiptStore Receipts { get; } = new FakeReceiptStore(owner.Receipts);
         public IBackupCatalogStore Backups { get; } = new FakeBackupCatalogStore(owner.Backups);
+        public IImportStore Imports => throw new NotSupportedException("This test store does not implement imports.");
         public IDiaryStore Diary { get; } = new FakeDiaryStore(owner.Diary, owner.DiaryRevisions);
         public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);

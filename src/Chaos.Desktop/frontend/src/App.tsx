@@ -17,7 +17,8 @@ import { MyDay, useDayClock } from "./MyDay";
 import { MyWeek } from "./MyWeek";
 import { AlertStack, NotificationCenter, TaskReminders, TaskWaiting } from "./Reminders";
 import { Journal, SummaryPrompts } from "./Journal";
-import { AlarmClock, Archive, Bell, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { DataSettings } from "./DataSettings";
+import { AlarmClock, Archive, Bell, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -81,7 +82,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
-  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal">("tasks");
+  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data">("tasks");
   const [journalOpenId, setJournalOpenId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
@@ -567,6 +568,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
           {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
         </Button>)}
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => { setEditing(null); setView("templates"); }}><LayoutTemplate/>Templates</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "data" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("data"); }}><Database/>Data &amp; backups</Button>
       </nav>
       <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Lists &amp; projects</div>
       {userContainers.length > 0
@@ -604,6 +606,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => setEditing(task)} onChanged={changed}/>
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
+      : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>

@@ -10,9 +10,12 @@ using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
+using Chaos.Application.Transfer;
 using Chaos.Desktop.Platform;
 using Chaos.Desktop.Services;
 using Chaos.Infrastructure.Bootstrap;
+using Chaos.Infrastructure.DataProtection;
+using Chaos.Infrastructure.Transfer;
 using NeoAstra;
 using NeoAstra.Rpc;
 
@@ -42,6 +45,31 @@ internal static class Program
         using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries);
         reminderEngine.Start();
 
+        // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
+        // reminder engine and take back OS notification schedules before files are replaced.
+        var protection = new DataProtectionService(storage.Store, storage.Options,
+            new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, TimeProvider.System), new GuidIdGenerator(), TimeProvider.System);
+        protection.Quiesce = (work, ct) => reminderEngine.RunPausedAsync(async () =>
+        {
+            foreach (var osId in await protection.ListScheduledOsNotificationIdsAsync(ct))
+            {
+                await notifications.CancelAsync(osId, ct);
+            }
+
+            await work();
+        }, ct);
+        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System);
+        backupScheduler.Start();
+        var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System),
+            new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store), storage.RecoveryNotice,
+            async (osIds, ct) =>
+            {
+                foreach (var osId in osIds)
+                {
+                    await notifications.CancelAsync(osId, ct);
+                }
+            });
+
         return NeoApp.Run(args, app =>
         {
             app.Title = "Chaos";
@@ -66,6 +94,7 @@ internal static class Program
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddJournalRpcService(new JournalRpcService(summaries));
+                rpc.AddDataRpcService(dataRpc);
             });
         });
     }
@@ -370,5 +399,35 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(SummarySettingsRequest))]
 [JsonSerializable(typeof(SummarySettingsResponse))]
 [JsonSerializable(typeof(SummarySettingsUpdateRequest))]
+[JsonSerializable(typeof(DataCountsDto))]
+[JsonSerializable(typeof(BackupDto))]
+[JsonSerializable(typeof(ImportBatchDto))]
+[JsonSerializable(typeof(DataStatusRequest))]
+[JsonSerializable(typeof(DataStatusResponse))]
+[JsonSerializable(typeof(BackupNowRequest))]
+[JsonSerializable(typeof(BackupNowResponse))]
+[JsonSerializable(typeof(BackupInspectRequest))]
+[JsonSerializable(typeof(BackupInspectResponse))]
+[JsonSerializable(typeof(BackupRestoreRequest))]
+[JsonSerializable(typeof(RestoreResponse))]
+[JsonSerializable(typeof(ExportRequest))]
+[JsonSerializable(typeof(ExportResponse))]
+[JsonSerializable(typeof(OpenFolderRequest))]
+[JsonSerializable(typeof(OpenFolderResponse))]
+[JsonSerializable(typeof(CsvColumnDto))]
+[JsonSerializable(typeof(ImportPreviewRequest))]
+[JsonSerializable(typeof(ImportIssueDto))]
+[JsonSerializable(typeof(ImportListPlanDto))]
+[JsonSerializable(typeof(ImportItemDto))]
+[JsonSerializable(typeof(ArchiveSummaryDto))]
+[JsonSerializable(typeof(ImportPreviewResponse))]
+[JsonSerializable(typeof(ListTargetDto))]
+[JsonSerializable(typeof(ImportCommitRequest))]
+[JsonSerializable(typeof(ImportCommitResponse))]
+[JsonSerializable(typeof(PurgeRequest))]
+[JsonSerializable(typeof(PurgeCountsDto))]
+[JsonSerializable(typeof(PurgeResponse))]
+[JsonSerializable(typeof(ResetRequest))]
+[JsonSerializable(typeof(ResetResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

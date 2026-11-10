@@ -203,6 +203,7 @@ public sealed class RecordingDataSession : IDataSession
     public ISummaryStore Summaries => _inner.Summaries;
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
+    public IImportStore Imports => _inner.Imports;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
     public string? OperationId { get; private set; }

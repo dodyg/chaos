@@ -13,9 +13,11 @@ namespace Chaos.Infrastructure.Migrations;
 public sealed class SqliteMigrationRunner
 {
     /// <summary>Highest schema version this build knows how to open.</summary>
-    public const int MaxKnownSchemaVersion = 11;
+    public const int MaxKnownSchemaVersion = 12;
 
-    public static async Task<long> MigrateAsync(SqliteConnection connection, CancellationToken ct)
+    /// <param name="targetVersion">Stops after this version; null applies every pending migration. A JSON archive
+    /// restore builds its staging database at the archive's version, loads the rows, then migrates the rest (PLAN §14).</param>
+    public static async Task<long> MigrateAsync(SqliteConnection connection, CancellationToken ct, long? targetVersion = null)
     {
         EnsureMigrationsTable(connection);
 
@@ -34,6 +36,10 @@ public sealed class SqliteMigrationRunner
         foreach (var migration in LoadEmbeddedMigrations())
         {
             ct.ThrowIfCancellationRequested();
+            if (targetVersion is { } target && migration.Version > target)
+            {
+                break;
+            }
 
             if (applied.TryGetValue(migration.Version, out var appliedChecksum))
             {

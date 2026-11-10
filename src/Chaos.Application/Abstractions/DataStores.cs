@@ -31,6 +31,7 @@ public interface IDataSession
     ISummaryStore Summaries { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
+    IImportStore Imports { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
@@ -431,4 +432,15 @@ public interface IApplicationStore
 
     /// <summary>Runs one bounded read. Never mutates.</summary>
     Task<TResult> QueryAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> query, CancellationToken ct = default);
+}
+
+/// <summary>Import bookkeeping (PLAN §14): committed batches and which task each imported source item became.</summary>
+public interface IImportStore
+{
+    /// <summary>The task an item with this fingerprint became, when it still exists (deleted or not).</summary>
+    Task<string?> FindTaskForFingerprintAsync(string itemFingerprint, CancellationToken ct);
+    Task AddBatchAsync(Transfer.ImportBatchRecord batch, CancellationToken ct);
+    /// <summary>Records (or re-points, after the earlier task was deleted) the task an item became.</summary>
+    Task MapItemAsync(string itemFingerprint, string batchId, string taskId, string sourceKey, CancellationToken ct);
+    Task<IReadOnlyList<Transfer.ImportBatchRecord>> ListBatchesAsync(int limit, CancellationToken ct);
 }

@@ -14,8 +14,11 @@ public sealed class SqliteConnectionSource
 
     private readonly string _connectionString;
 
+    public string DatabasePath { get; }
+
     public SqliteConnectionSource(string databasePath)
     {
+        DatabasePath = databasePath;
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
