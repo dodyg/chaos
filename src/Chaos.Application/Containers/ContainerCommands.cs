@@ -612,7 +612,7 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) =>
-        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 
     private static async Task<SpaceRecord> ResolveSpaceAsync(IDataSession session, string? spaceId, string profileId, CancellationToken token)
     {

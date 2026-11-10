@@ -336,7 +336,7 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) =>
-        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 
     private static async Task<TemplateRecord> RequireTemplateAsync(IDataSession session, string templateId, CancellationToken token) =>
         await session.Templates.GetAsync(templateId, token)

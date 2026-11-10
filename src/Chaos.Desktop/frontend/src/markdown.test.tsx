@@ -1,0 +1,242 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
+import React from "react";
+import { containerRpc, diaryRpc, historyRpc, markdownRpc, queryRpc, tagRpc, taskRpc, undoRpc, type TaskResponse } from "#neoastra";
+
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
+Object.defineProperties(globalThis, {
+  window: { value: dom.window, configurable: true },
+  document: { value: dom.window.document, configurable: true },
+  navigator: { value: dom.window.navigator, configurable: true },
+  HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  KeyboardEvent: { value: dom.window.KeyboardEvent, configurable: true },
+});
+const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
+const userEvent = (await import("@testing-library/user-event")).default;
+const { MarkdownPreview, extractChecklist, htmlToMarkdown, internalLinkIds } = await import("./markdown");
+const { formatEdit, linkQueryAt, taskLinkMarkdown } = await import("./markdownEditing");
+const { MarkdownEditor } = await import("./MarkdownEditor");
+const { App } = await import("./App");
+
+const taskId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+test("GFM renders headings, emphasis, strike, tables, task lists and highlighted code as elements", () => {
+  const source = [
+    "# Plan", "", "Some **bold**, *italic* and ~~gone~~ text with `code`.", "",
+    "| Item | Qty |", "| :--- | ---: |", "| Eggs | 12 |", "",
+    "- [x] Buy milk", "- [ ] Call Sam", "", "> quoted", "",
+    "```ts", "const answer: number = 42;", "```",
+  ].join("\n");
+  const { container } = render(<MarkdownPreview source={source}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  assert.equal(container.querySelector("h3")?.textContent, "Plan");
+  assert.equal(container.querySelector("strong")?.textContent, "bold");
+  assert.equal(container.querySelector("em")?.textContent, "italic");
+  assert.equal(container.querySelector("del")?.textContent, "gone");
+  assert.equal(container.querySelector("th")?.textContent, "Item");
+  assert.equal((container.querySelectorAll("td")[1] as HTMLElement).style.textAlign, "right");
+  const boxes = [...container.querySelectorAll("input[type=checkbox]")] as HTMLInputElement[];
+  assert.deepEqual(boxes.map(box => box.checked), [true, false]);
+  assert.ok(boxes.every(box => box.disabled));
+  assert.ok(container.querySelector("blockquote"));
+  assert.ok(container.querySelector("pre code .hljs-keyword"), "code is highlighted locally");
+  cleanup();
+});
+
+test("scripts, raw HTML, unsafe links and images never become live elements", async () => {
+  const opened: string[] = [];
+  const source = [
+    "<script>window.hacked = true</script>",
+    "", "<img src=x onerror=alert(1)> inline <b onclick=alert(1)>b</b>",
+    "", "[bad](javascript:alert(1)) [file](file:///C:/x) [web](https://example.org/page)",
+    "", "![cat](https://example.org/cat.png)",
+  ].join("\n");
+  const { container } = render(<MarkdownPreview source={source} links={{ onOpenExternal: url => opened.push(url) }}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  assert.equal(container.querySelector("script"), null);
+  assert.equal(container.querySelector("img"), null);
+  assert.equal(container.querySelector("a"), null, "no anchor can navigate the WebView");
+  assert.equal(container.querySelector("[onclick],[onerror]"), null);
+  assert.match(container.textContent ?? "", /<script>window\.hacked = true<\/script>/);
+  assert.equal((globalThis as { hacked?: boolean }).hacked, undefined);
+  assert.ok(screen.getByRole("img", { name: "Image not loaded: cat" }));
+  assert.equal(screen.queryByRole("button", { name: "bad" }), null);
+  assert.equal(screen.queryByRole("button", { name: "file" }), null);
+  fireEvent.click(screen.getByRole("button", { name: "web" }));
+  assert.deepEqual(opened, ["https://example.org/page"]);
+  cleanup();
+});
+
+test("internal links resolve by ID: a renamed task shows its new title, a deleted one is a broken link", async () => {
+  const source = `[Old name](chaos:task/${taskId}) and [Gone](chaos:task/11111111-2222-3333-4444-555555555555)`;
+  assert.deepEqual(internalLinkIds(source).sort(), [taskId, "11111111-2222-3333-4444-555555555555"].sort());
+  const openedTasks: string[] = [];
+  render(<MarkdownPreview source={source} links={{
+    resolve: async () => [{ id: taskId, title: "New name", deleted: false }, { id: "11111111-2222-3333-4444-555555555555", title: "Gone", deleted: true }],
+    onOpenTask: id => openedTasks.push(id),
+  }}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  const renamed = await screen.findByRole("button", { name: "New name" });
+  fireEvent.click(renamed);
+  assert.deepEqual(openedTasks, [taskId]);
+  await screen.findByText("(deleted task)");
+  assert.equal(screen.queryByRole("button", { name: "Gone" }), null);
+  cleanup();
+});
+
+test("checklist items are read from the AST with occurrence keys, in document order", () => {
+  const items = extractChecklist("- [ ] Passport\n- [x] **Charger**\n  - [ ] Cable\n- [ ] Passport\n- not a task\n\n```\n- [ ] in code\n```");
+  assert.deepEqual(items, [
+    { itemKey: "Passport#0", title: "Passport", done: false },
+    { itemKey: "Charger#0", title: "Charger", done: true },
+    { itemKey: "Cable#0", title: "Cable", done: false },
+    { itemKey: "Passport#1", title: "Passport", done: false },
+  ]);
+});
+
+test("toolbar transforms act on the selection and toggle off", () => {
+  assert.deepEqual(formatEdit("say hello now", 4, 9, "bold"), { start: 4, end: 9, insert: "**hello**", selectionStart: 6, selectionEnd: 11 });
+  assert.equal(formatEdit("say **hello** now", 4, 13, "bold").insert, "hello");
+  assert.equal(formatEdit("one\ntwo", 0, 7, "bullets").insert, "- one\n- two");
+  assert.equal(formatEdit("- one\n- two", 0, 11, "bullets").insert, "one\ntwo");
+  assert.equal(formatEdit("a\nb", 0, 3, "numbers").insert, "1. a\n2. b");
+  assert.equal(formatEdit("buy", 0, 3, "checklist").insert, "- [ ] buy");
+  const link = formatEdit("docs", 0, 4, "link");
+  assert.equal(link.insert, "[docs](https://)");
+  assert.equal("[docs](https://)".slice(link.selectionStart, link.selectionEnd), "https://");
+  assert.deepEqual(linkQueryAt("see [[pla", 9), { start: 4, query: "pla" });
+  assert.equal(linkQueryAt("see [[pla]] x", 13), null);
+  assert.equal(taskLinkMarkdown("a [b]", taskId), `[a \\[b\\]](chaos:task/${taskId})`);
+});
+
+test("rich HTML paste becomes GFM without script content", () => {
+  const markdown = htmlToMarkdown("<h2>Trip</h2><p><b>Pack</b> <i>light</i><script>steal()</script></p><ul><li>socks</li></ul><table><tr><th>A</th></tr><tr><td>1</td></tr></table><p><del>old</del></p>");
+  assert.match(markdown, /^## Trip/);
+  assert.match(markdown, /\*\*Pack\*\* \*light\*/);
+  assert.match(markdown, /- {1,3}socks/);
+  assert.match(markdown, /\| A \|/);
+  assert.match(markdown, /~+old~+/);
+  assert.doesNotMatch(markdown, /steal/);
+});
+
+function Harness({ search }: { search?: (query: string) => Promise<{ id: string; title: string }[]> }) {
+  const [value, setValue] = React.useState("say hello");
+  return <><MarkdownEditor id="notes" label="Notes" value={value} onChange={setValue} searchLinks={search}/><output data-testid="value">{value}</output></>;
+}
+
+test("the editor applies Ctrl+B to the selection, converts pasted HTML and completes [[ task links", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<Harness search={async query => query.startsWith("pl") ? [{ id: taskId, title: "Plan the trip" }] : []}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  const area = screen.getByLabelText("Notes") as HTMLTextAreaElement;
+  area.focus();
+  area.setSelectionRange(4, 9);
+  fireEvent.keyDown(area, { key: "b", ctrlKey: true });
+  await waitFor(() => assert.equal(screen.getByTestId("value").textContent, "say **hello**"));
+
+  area.setSelectionRange(area.value.length, area.value.length);
+  fireEvent.paste(area, { clipboardData: { getData: (type: string) => type === "text/html" ? "<p> and <b>more</b></p>" : " and more" } });
+  await waitFor(() => assert.equal(screen.getByTestId("value").textContent, "say **hello**and **more**"));
+
+  await user.type(area, " [[[[pl"); // user-event: "[[" types one literal "["
+  const option = await screen.findByRole("option", { name: "Plan the trip" });
+  assert.ok(option);
+  await user.keyboard("{Enter}");
+  await waitFor(() => assert.match(screen.getByTestId("value").textContent ?? "", new RegExp(`\\[Plan the trip\\]\\(chaos:task/${taskId}\\)$`)));
+
+  await user.click(within(screen.getByRole("group", { name: "Notes view" })).getByRole("button", { name: "Preview" }));
+  assert.ok(screen.getByRole("button", { name: "Plan the trip" }));
+  cleanup();
+});
+
+function task(id: string, title: string, notes = ""): TaskResponse {
+  return { id, title, spaceId: "space", containerId: "inbox", notes, status: "NotStarted", plannedDate: null, dueDate: null, version: "3", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null };
+}
+
+test("app undo: the newest change is offered, Ctrl+Z outside text fields undoes it, inside a field it does not", async () => {
+  const undone: string[] = [];
+  const inbox = [task(taskId, "Pack", "- [ ] Passport\n- [x] Charger")];
+  const converted: { items: readonly { itemKey: string; title: string; done: boolean }[] }[] = [];
+  const api = {
+    taskRpc: { ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: inbox, error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      get: async () => ({ ok: true, task: inbox[0], error: null }),
+      delete: async () => ({ ok: true, operationId: "op", task: inbox[0], error: null, warning: null }),
+    },
+    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    tagRpc: { ...tagRpc, list: async () => ({ ok: true, tags: [], error: null }), listDeleted: async () => ({ ok: true, tags: [], error: null }), targetTags: async () => ({ ok: true, tagIds: [], error: null }) },
+    queryRpc: { ...queryRpc, counts: async () => ({ ok: true, views: [], tags: [], error: null }) },
+    undoRpc: { ...undoRpc,
+      list: async () => ({ ok: true, entries: undone.length ? [] : [{ operationId: "op-delete", label: "Delete task “Pack”", appliedAtUtc: "2026-11-10T09:00:00.0000000Z" }], error: null }),
+      undo: async (request: { targetOperationId: string }) => { undone.push(request.targetOperationId); return { ok: true, label: "Delete task “Pack”", error: null }; },
+    },
+    markdownRpc: { ...markdownRpc,
+      resolveLinks: async () => ({ ok: true, targets: [], error: null }),
+      convertChecklist: async (request: { items: readonly { itemKey: string; title: string; done: boolean }[] }) => { converted.push(request); return { ok: true, created: [], alreadyConverted: 0, error: null }; },
+    },
+    diaryRpc: { ...diaryRpc, timeline: async () => ({ ok: true, items: [], error: null }), list: async () => ({ ok: true, entries: [], error: null }) },
+    historyRpc,
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  const row = await screen.findByRole("button", { name: "Pack" });
+  await user.click(screen.getByRole("button", { name: "Delete Pack" }));
+  const toast = await screen.findByRole("status", { name: "Undo" });
+  assert.match(toast.textContent ?? "", /Delete task “Pack”/);
+
+  // In a text field Ctrl+Z belongs to the field.
+  const capture = screen.getByLabelText("Add a task");
+  capture.focus();
+  fireEvent.keyDown(capture, { key: "z", ctrlKey: true });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(undone, []);
+
+  capture.blur();
+  fireEvent.keyDown(dom.window.document.body, { key: "z", ctrlKey: true });
+  await waitFor(() => assert.deepEqual(undone, ["op-delete"]));
+  await screen.findByText("Undid Delete task “Pack”.");
+
+  // Checklist conversion offers the AST items and sends the chosen ones.
+  await user.click(row);
+  await user.click(await screen.findByText(/Convert checklist to subtasks/));
+  await user.click(screen.getByRole("checkbox", { name: "Charger" }));
+  await user.click(screen.getByRole("button", { name: "Convert 1 to subtasks" }));
+  await waitFor(() => assert.equal(converted.length, 1));
+  assert.deepEqual(converted[0].items, [{ itemKey: "Passport#0", title: "Passport", done: false }]);
+  cleanup();
+});
+
+test("the journal shows diary Markdown and history events, opens an earlier version and restores chosen values", async () => {
+  const { TaskJournal } = await import("./TaskJournal");
+  const restored: { fields: readonly string[]; entryId: string; expectedVersion: string }[] = [];
+  const event = { id: "h1", operationId: "o1", eventKind: "task.updated", changedFields: ["Title", "Notes"], effectiveAtUtc: "2026-11-10T09:00:00.0000000Z", version: "2" };
+  const journalApi = {
+    diaryRpc: { ...diaryRpc,
+      timeline: async () => ({ ok: true, error: null, items: [
+        { atUtc: event.effectiveAtUtc, diary: null, event },
+        { atUtc: "2026-11-10T10:00:00.0000000Z", event: null, diary: { id: "d1", taskId, entryAtUtc: "2026-11-10T10:00:00.0000000Z", markdown: "Called **twice**", revision: "1", editedAtUtc: null, version: "1", deleted: false } },
+      ] }),
+      list: async () => ({ ok: true, entries: [], error: null }),
+    },
+    historyRpc: { ...historyRpc,
+      asOf: async () => ({ ok: true, existed: true, error: null, entry: event, snapshot: { task: task(taskId, "Old title", "old *notes*"), deleted: false, subtasks: [], tagIds: [] } }),
+      restoreFields: async (request: { fields: readonly string[]; entryId: string; expectedVersion: string }) => { restored.push(request); return { ok: true, operationId: "r", task: task(taskId, "Old title"), error: null, warning: null }; },
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  let saved: TaskResponse | undefined;
+  render(<TaskJournal task={task(taskId, "New title")} api={journalApi} revision={0} busy={false} onChanged={value => { saved = value; }} onError={message => assert.fail(message)}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  const timeline = await screen.findByRole("list", { name: "Timeline" });
+  assert.equal(within(timeline).getByText("twice").tagName, "STRONG");
+  assert.ok(within(timeline).getByText("Edited: title, notes"));
+  await user.click(within(timeline).getByRole("button", { name: "View" }));
+  const version = await screen.findByRole("region", { name: "Earlier version" });
+  assert.ok(within(version).getByText("Old title"));
+  assert.equal(within(version).getByText("notes").tagName, "EM");
+  await user.click(within(version).getByRole("checkbox", { name: "Title" }));
+  await user.click(within(version).getByRole("button", { name: "Restore selected" }));
+  await waitFor(() => assert.equal(restored.length, 1));
+  assert.deepEqual(restored[0].fields, ["Title"]);
+  assert.equal(restored[0].entryId, "h1");
+  assert.equal(restored[0].expectedVersion, "3");
+  assert.equal(saved?.title, "Old title");
+  cleanup();
+});

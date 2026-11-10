@@ -38,6 +38,10 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<TaskHistoryRecord> History = [];
     public readonly List<OperationReceiptRecord> Receipts = [];
     public readonly List<BackupCatalogRecord> Backups = [];
+    public readonly List<DiaryEntryRecord> Diary = [];
+    public readonly List<DiaryRevisionRecord> DiaryRevisions = [];
+    public readonly List<UndoEntryRecord> Undo = [];
+    public readonly List<ChecklistConversionRecord> ChecklistConversions = [];
 
     public Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default) =>
         operation(new Session(this), ct);
@@ -59,6 +63,82 @@ public sealed class InMemoryStore : IApplicationStore
         public ITaskHistoryStore History { get; } = new FakeTaskHistoryStore(owner.History);
         public IOperationReceiptStore Receipts { get; } = new FakeReceiptStore(owner.Receipts);
         public IBackupCatalogStore Backups { get; } = new FakeBackupCatalogStore(owner.Backups);
+        public IDiaryStore Diary { get; } = new FakeDiaryStore(owner.Diary, owner.DiaryRevisions);
+        public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
+        public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);
+    }
+}
+
+public sealed class FakeDiaryStore(List<DiaryEntryRecord> rows, List<DiaryRevisionRecord> revisions) : IDiaryStore
+{
+    public Task<DiaryEntryRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
+    public Task<DiaryEntryRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
+    public Task<IReadOnlyList<DiaryEntryRecord>> ListByTaskAsync(string taskId, bool includeDeleted, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<DiaryEntryRecord>>(rows.Where(x => x.TaskId == taskId && (includeDeleted || x.DeletedAtUtc is null)).OrderBy(x => x.EntryAtUtc).ThenBy(x => x.Id, StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<DiaryRevisionRecord>> ListRevisionsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<DiaryRevisionRecord>>(revisions.Where(x => x.EntryId == id).OrderBy(x => x.Revision).ToList());
+
+    public Task AddAsync(DiaryEntryRecord row, CancellationToken ct)
+    {
+        rows.Add(row);
+        Revise(row);
+        return Task.CompletedTask;
+    }
+
+    public async Task<DiaryEntryRecord?> UpdateAsync(DiaryEntryRecord row, long version, CancellationToken ct)
+    {
+        var applied = await FakeUpdate.Apply(rows, row, version);
+        if (applied is not null) Revise(applied);
+        return applied;
+    }
+
+    private void Revise(DiaryEntryRecord row)
+    {
+        if (!revisions.Any(x => x.EntryId == row.Id && x.Revision == row.Revision))
+        {
+            revisions.Add(new DiaryRevisionRecord(row.Id, row.Revision, row.RawMarkdown, row.DeletedAtUtc is not null, row.UpdatedAtUtc));
+        }
+    }
+}
+
+public sealed class FakeUndoStore(List<UndoEntryRecord> rows) : IUndoStore
+{
+    public Task AddAsync(UndoEntryRecord entry, CancellationToken ct) { rows.Add(entry); return Task.CompletedTask; }
+    public Task<UndoEntryRecord?> FindByOperationAsync(string profileId, string operationId, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.ProfileId == profileId && x.OperationId == operationId));
+    public Task<IReadOnlyList<UndoEntryRecord>> ListOpenAsync(string profileId, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<UndoEntryRecord>>(rows.Where(x => x.ProfileId == profileId && x.UndoneAtUtc is null).Reverse().Take(limit).ToList());
+
+    public Task<bool> MarkUndoneAsync(string entryId, DateTimeOffset undoneAtUtc, CancellationToken ct)
+    {
+        var index = rows.FindIndex(x => x.Id == entryId && x.UndoneAtUtc is null);
+        if (index < 0) return Task.FromResult(false);
+        rows[index] = rows[index] with { UndoneAtUtc = undoneAtUtc };
+        return Task.FromResult(true);
+    }
+
+    public Task ReplacePayloadAsync(string entryId, string inversePayload, string expectedVersions, CancellationToken ct)
+    {
+        var index = rows.FindIndex(x => x.Id == entryId && x.UndoneAtUtc is null);
+        if (index >= 0) rows[index] = rows[index] with { InversePayload = inversePayload, ExpectedVersions = expectedVersions };
+        return Task.CompletedTask;
+    }
+
+    public Task PruneAsync(string profileId, int keep, CancellationToken ct)
+    {
+        var mine = rows.Where(x => x.ProfileId == profileId).ToList();
+        foreach (var old in mine.Take(Math.Max(0, mine.Count - keep))) rows.Remove(old);
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class FakeChecklistConversionStore(List<ChecklistConversionRecord> rows) : IChecklistConversionStore
+{
+    public Task<ChecklistConversionRecord?> FindAsync(string taskId, string itemKey, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.TaskId == taskId && x.ItemKey == itemKey));
+
+    public Task UpsertAsync(ChecklistConversionRecord marker, CancellationToken ct)
+    {
+        rows.RemoveAll(x => x.TaskId == marker.TaskId && x.ItemKey == marker.ItemKey);
+        rows.Add(marker);
+        return Task.CompletedTask;
     }
 }
 

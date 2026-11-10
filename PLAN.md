@@ -602,6 +602,44 @@ Package remains unchecked until the exit is shown in a native window: search typ
 
 **Depends on:** 2–3. Build shared Markdown source/preview/toolbar, paste conversion, safe links, checklist conversion, task diary/history-as-of and operation-level undo. Wire history/inverses into every existing mutation, including tags/containers.
 
+Progress note (2026-11-10): implemented end to end, but not yet accepted in a native window. Migration 004 adds `DiaryRevisions`, `ChecklistConversions` and an index for open undo entries (`DiaryEntries`, `TaskHistory` and `UndoEntries` already existed).
+
+History and undo come from one mechanism instead of per-command code. Every command already runs through `TaskMutationSupport.InWriteTransactionAsync`, which now hands the body a `RecordingDataSession`. That session wraps the task, subtask, container, section, template, tag and diary stores:
+- each row write records the row's before-image (null when the operation created it) and the version it was left at
+- each effective tag-link change records its direction
+- each task the operation reaches, directly or through a subtask, a tag link, a tag row or a diary entry, has its aggregate captured before the first write
+
+When the body returns, still inside the same transaction, the recorder writes one history entry per changed task and one undo entry for the operation, then prunes undo to the newest 100 per profile. Snapshots now include the task's tag links and each subtask's tag links. A command's explicit history call only declares the event kind and fields, and the recorder supplies the before/after aggregates. So tag, container, section, template and diary mutations all gained history and undo without command-specific inverse code. Replays write neither history nor undo.
+
+`UndoCommands` first checks that every affected row is still at the version the operation left it. Only then does it reverse the link changes and restore each before-image as a new version, tombstoning what the operation created. Any later edit anywhere in the set refuses the whole undo with the conflicting item's name, and nothing is written. After an undo, older open entries that expected a restored row's before-version are re-pointed to the new version, so undoing several changes newest-first stays exact. The undo itself is recorded history (`undo`) but is not undoable (redo stays optional).
+
+`TaskHistoryCommands` lists the append-only feed and returns the task as of an instant or entry: "did not exist" before creation, deleted after deletion. Restoring chosen fields goes through the ordinary editor command, so it is a new recorded, undoable edit. Task restore now finds the subtasks to bring back from the entry that produced the tombstoned version, which also covers container deletion with contents and an undone restore.
+
+Other additions:
+- **Diary.** `DiaryCommands` adds, edits, deletes and restores dated entries, keeps every saved text as a revision, keeps diary search documents current on each write, and offers a timeline merged with field events.
+- **Checklist conversion.** `ChecklistCommands` turns chosen checklist items into subtasks in document order (checked → Done). It leaves the notes untouched and keeps a per-item marker, so a second conversion creates nothing while the subtask exists. One conversion is one undo.
+- **Desktop RPC.** New services `history`, `diary`, `undo` and `markdown`. The `markdown` service converts checklists, resolves internal links by ID, and runs `openExternal`, which accepts only absolute http/https/mailto URLs and opens them through the system shell.
+- **Frontend.** One `MarkdownEditor` (source textarea, selection-aware toolbar, Ctrl+B/I/K, rich-HTML paste via Turndown + GFM, `[[` task-link autocomplete inserting `[label](chaos:task/<id>)`, Write/Preview switch) replaces the task and subtask notes textareas and is used for diary entries. `MarkdownPreview` turns the remark/remark-gfm tree into React elements only, and fenced code is highlighted with locally bundled lowlight:
+  - raw HTML shows as text
+  - images show a placeholder
+  - only http/https/mailto links are clickable, through the host opener
+  - internal links show the current title, or a deleted/missing state
+- **Editor panel.** It gains checklist conversion with per-item choice and a Diary & history section: timeline, add/edit/delete/restore entries, a read-only version viewer opened from any event or a chosen date and time, and "Restore selected" values.
+- **Undo in the app.** A toast offers the newest change, and Ctrl+Z outside text fields undoes it. Inside a text field Ctrl+Z stays with the field.
+
+Results: Release build has 0 warnings. 135 TUnit tests pass (Domain 6, Application 22, Infrastructure 88, Desktop 19), 17 more than before. Frontend: the `tsrs` type check and `vite build` pass, and 23 jsdom tests pass (9 new). Slopwatch is clean, and the Release exe starts offline on a fresh isolated data folder.
+
+Two real bugs were caught by the new tests and fixed. Undoing two changes newest-first was refused, because the first undo's new version no longer matched the older entry; older entries are now re-pointed. And the undo label for list deletion named a moved task instead of the list.
+
+Not done, deliberately:
+- Replacing converted checklist lines with internal links. Links target tasks and pad items; subtask links need a target kind of their own.
+- `[[` links to pad items: package 5.
+- Pad-item history: package 5.
+- Private planning history (My Day/My Week/reminders): packages 8–10.
+- The `ContentLinks` table. Links live in the Markdown and are resolved by ID on render.
+
+Package remains unchecked until the exit is shown in a native window: type and preview notes with a table, a checklist and a link, add a diary entry, delete a task and recover it with Ctrl+Z, then edit a task after an older change and see that change's undo refused.
+
 **Tests:** GFM fixtures, script/link/image blocking, checklist conversion twice, as-of before create/edit/delete, atomic undo and conflict detection across aggregates. **Exit:** notes/diary render correctly offline, a mistaken deletion is recovered, and later edits are protected from stale undo.
 
 ### [ ] 5 — Personal scratch pad and reliable editor saving

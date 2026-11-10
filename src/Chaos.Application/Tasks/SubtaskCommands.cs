@@ -230,7 +230,7 @@ public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, T
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) =>
-        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 
     private static async Task<TaskRecord> RequireTaskAsync(IDataSession session, string taskId, CancellationToken token) =>
         await session.Tasks.GetAsync(taskId, token)

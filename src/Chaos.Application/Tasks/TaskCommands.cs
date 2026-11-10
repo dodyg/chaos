@@ -119,6 +119,26 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 : new TaskDetail(task, await session.Subtasks.ListByTaskAsync(taskId, token));
         }, ct);
 
+    /// <summary>
+    /// Targets of internal links (PLAN §9): links hold stable IDs, so a renamed task resolves
+    /// to its new title and a deleted one reports Deleted for the recoverable broken-link state.
+    /// Unknown IDs are omitted.
+    /// </summary>
+    public async Task<IReadOnlyList<TaskRecord>> ResolveLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct = default) =>
+        await store.QueryAsync<IReadOnlyList<TaskRecord>>(async (session, token) =>
+        {
+            var found = new List<TaskRecord>();
+            foreach (var id in taskIds.Distinct(StringComparer.Ordinal).Take(200))
+            {
+                if (await session.Tasks.GetIncludingDeletedAsync(id, token) is { } task)
+                {
+                    found.Add(task);
+                }
+            }
+
+            return found;
+        }, ct);
+
     /// <summary>Active top-level tasks of one container, ordered by (Position, Id).</summary>
     public async Task<IReadOnlyList<TaskRecord>> ListAsync(string containerId, CancellationToken ct = default) =>
         await store.QueryAsync((session, token) => session.Tasks.ListByContainerAsync(containerId, token), ct);
@@ -418,8 +438,13 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                     var allSubtasks = await session.Subtasks.ListByTaskIncludingDeletedAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, allSubtasks.Where(subtask => subtask.DeletedAtUtc is null).ToList());
                     var history = await session.History.ListByTaskAsync(task.Id, inner);
-                    var deletion = history.LastOrDefault(entry => entry.EventKind == "task.deleted" && entry.AggregateVersion == task.Version);
-                    var snapshot = deletion?.SnapshotBefore is { } json ? StoredJsonFormats.ReadSnapshot<TaskAggregateSnapshot>(json) : null;
+                    // The entry that produced this tombstoned version: a delete, a container
+                    // deletion with contents, or an undo of a restore. Its before-snapshot names
+                    // the subtasks that were active right before.
+                    var snapshot = history
+                        .Where(entry => entry.AggregateVersion == task.Version && entry.SnapshotBefore is not null)
+                        .Select(entry => StoredJsonFormats.ReadSnapshot<TaskAggregateSnapshot>(entry.SnapshotBefore!))
+                        .LastOrDefault(candidate => candidate is not null && candidate.Task.DeletedAtUtc is null);
                     var childIds = snapshot?.Subtasks.Where(child => child.DeletedAtUtc is null).Select(child => child.Id).ToHashSet(StringComparer.Ordinal) ?? [];
 
                     var restoredSubtasks = new List<SubtaskRecord>();
@@ -502,7 +527,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) =>
-        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 
     private static async Task<TaskRecord> RequireTaskAsync(IDataSession session, string taskId, CancellationToken token) =>
         await session.Tasks.GetAsync(taskId, token)

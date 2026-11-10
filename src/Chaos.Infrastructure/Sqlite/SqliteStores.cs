@@ -18,6 +18,9 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public ITagStore Tags { get; } = new SqliteTagStore(connection);
     public ITaskQueryStore Queries { get; } = new Chaos.Infrastructure.Search.SqliteTaskQueryStore(connection);
     public ITaskHistoryStore History { get; } = new SqliteTaskHistoryStore(connection);
+    public IDiaryStore Diary { get; } = new SqliteDiaryStore(connection);
+    public IUndoStore Undo { get; } = new SqliteUndoStore(connection);
+    public IChecklistConversionStore ChecklistConversions { get; } = new SqliteChecklistConversionStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }

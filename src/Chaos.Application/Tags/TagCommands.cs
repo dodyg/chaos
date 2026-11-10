@@ -730,5 +730,5 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) =>
-        await TaskMutationSupport.InWriteTransactionAsync(store, clock, body, ct);
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 }

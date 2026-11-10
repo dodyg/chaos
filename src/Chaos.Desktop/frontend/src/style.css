@@ -118,3 +118,18 @@
   body { @apply min-w-80 bg-background font-sans text-sm text-foreground antialiased; }
   #app { @apply min-h-screen outline-none; }
 }
+
+/* Locally bundled syntax highlighting for fenced code in Markdown (lowlight emits hljs-* classes). */
+@layer components {
+  [data-slot="markdown"] .hljs-keyword, [data-slot="markdown"] .hljs-built_in, [data-slot="markdown"] .hljs-selector-tag { color: oklch(0.5 0.18 300); }
+  [data-slot="markdown"] .hljs-string, [data-slot="markdown"] .hljs-attr, [data-slot="markdown"] .hljs-regexp { color: oklch(0.5 0.13 150); }
+  [data-slot="markdown"] .hljs-number, [data-slot="markdown"] .hljs-literal, [data-slot="markdown"] .hljs-type { color: oklch(0.55 0.15 50); }
+  [data-slot="markdown"] .hljs-comment, [data-slot="markdown"] .hljs-quote { color: var(--muted-foreground); font-style: italic; }
+  [data-slot="markdown"] .hljs-title, [data-slot="markdown"] .hljs-function, [data-slot="markdown"] .hljs-section { color: oklch(0.5 0.15 250); }
+  @media (prefers-color-scheme: dark) {
+    [data-slot="markdown"] .hljs-keyword, [data-slot="markdown"] .hljs-built_in, [data-slot="markdown"] .hljs-selector-tag { color: oklch(0.78 0.13 300); }
+    [data-slot="markdown"] .hljs-string, [data-slot="markdown"] .hljs-attr, [data-slot="markdown"] .hljs-regexp { color: oklch(0.8 0.12 150); }
+    [data-slot="markdown"] .hljs-number, [data-slot="markdown"] .hljs-literal, [data-slot="markdown"] .hljs-type { color: oklch(0.8 0.12 60); }
+    [data-slot="markdown"] .hljs-title, [data-slot="markdown"] .hljs-function, [data-slot="markdown"] .hljs-section { color: oklch(0.8 0.11 250); }
+  }
+}

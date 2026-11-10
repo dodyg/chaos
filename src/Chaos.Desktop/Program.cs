@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
 using Chaos.Application.Containers;
+using Chaos.Application.History;
 using Chaos.Application.Queries;
 using Chaos.Application.Tags;
 using Chaos.Desktop.Services;
@@ -24,6 +25,7 @@ internal static class Program
             .GetAwaiter().GetResult();
 
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var history = new TaskHistoryCommands(storage.Store, tasks);
 
         return NeoApp.Run(args, app =>
         {
@@ -37,6 +39,10 @@ internal static class Program
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddQueryRpcService(new QueryRpcService(new TaskQueries(storage.Store, TimeProvider.System)));
+                rpc.AddHistoryRpcService(new HistoryRpcService(history));
+                rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
             });
         });
     }
@@ -150,5 +156,38 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(ViewCountsResponse))]
 [JsonSerializable(typeof(RebuildSearchRequest))]
 [JsonSerializable(typeof(RebuildSearchResponse))]
+[JsonSerializable(typeof(HistoryTaskRequest))]
+[JsonSerializable(typeof(HistoryEntryResponse))]
+[JsonSerializable(typeof(HistoryListResponse))]
+[JsonSerializable(typeof(HistoryAsOfRequest))]
+[JsonSerializable(typeof(SnapshotSubtaskResponse))]
+[JsonSerializable(typeof(TaskSnapshotResponse))]
+[JsonSerializable(typeof(HistoryAsOfResponse))]
+[JsonSerializable(typeof(RestoreFieldsRequest))]
+[JsonSerializable(typeof(DiaryEntryResponse))]
+[JsonSerializable(typeof(DiaryListRequest))]
+[JsonSerializable(typeof(DiaryListResponse))]
+[JsonSerializable(typeof(TimelineItemResponse))]
+[JsonSerializable(typeof(TimelineResponse))]
+[JsonSerializable(typeof(DiaryAddRequest))]
+[JsonSerializable(typeof(DiaryEditRequest))]
+[JsonSerializable(typeof(DiaryChangeRequest))]
+[JsonSerializable(typeof(DiaryOperationResponse))]
+[JsonSerializable(typeof(DiaryRevisionsRequest))]
+[JsonSerializable(typeof(DiaryRevisionResponse))]
+[JsonSerializable(typeof(DiaryRevisionsResponse))]
+[JsonSerializable(typeof(UndoListRequest))]
+[JsonSerializable(typeof(UndoEntryResponse))]
+[JsonSerializable(typeof(UndoListResponse))]
+[JsonSerializable(typeof(UndoRequest))]
+[JsonSerializable(typeof(UndoResponse))]
+[JsonSerializable(typeof(ChecklistItemRequest))]
+[JsonSerializable(typeof(ChecklistConvertRequest))]
+[JsonSerializable(typeof(ChecklistConvertResponse))]
+[JsonSerializable(typeof(LinkResolveRequest))]
+[JsonSerializable(typeof(LinkTargetResponse))]
+[JsonSerializable(typeof(LinkResolveResponse))]
+[JsonSerializable(typeof(OpenExternalRequest))]
+[JsonSerializable(typeof(OpenExternalResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

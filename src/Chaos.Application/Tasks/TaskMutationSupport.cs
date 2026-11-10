@@ -1,11 +1,20 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.History;
 using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.Tasks;
 
-/// <summary>The task aggregate as one versioned snapshot: task row plus its subtasks (PLAN §9).</summary>
-public sealed record TaskAggregateSnapshot(TaskRecord Task, IReadOnlyList<SubtaskRecord> Subtasks);
+/// <summary>
+/// The task aggregate as one versioned snapshot (PLAN §9): the task row, its active subtasks
+/// and the active tag links of both. Snapshots written before package 4 carry no tag links;
+/// those read back as null.
+/// </summary>
+public sealed record TaskAggregateSnapshot(
+    TaskRecord Task,
+    IReadOnlyList<SubtaskRecord> Subtasks,
+    IReadOnlyList<string>? TagIds = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? SubtaskTagIds = null);
 
 /// <summary>Envelope for stored operation results; the replay flag is composed at the caller, never stored.</summary>
 public sealed record StoredResultEnvelope<T>(T Result);
@@ -20,12 +29,24 @@ internal static class TaskMutationSupport
 {
     /// <summary>
     /// One write transaction with the primary profile and current time bound in. Throwing
-    /// inside rolls the whole transaction back (the store's contract).
+    /// inside rolls the whole transaction back (the store's contract). The body sees a
+    /// <see cref="RecordingDataSession"/>: after it returns, the history entries and the undo
+    /// entry for everything it changed are written in the same transaction (PLAN §9).
     /// </summary>
     public static async Task<T> InWriteTransactionAsync<T>(
         IApplicationStore store,
         TimeProvider clock,
+        IIdGenerator ids,
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
+        CancellationToken ct) =>
+        await InRecordedTransactionAsync(store, clock, ids, (recording, profile, now, token) => body(recording, profile, now, token), ct);
+
+    /// <summary>The same transaction, handing the body the recorder itself (undo configures it).</summary>
+    public static async Task<T> InRecordedTransactionAsync<T>(
+        IApplicationStore store,
+        TimeProvider clock,
+        IIdGenerator ids,
+        Func<RecordingDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,
         CancellationToken ct) => await store.ExecuteAsync(async (session, token) =>
         {
             var profile = await session.Profiles.GetPrimaryAsync(token)
@@ -33,7 +54,10 @@ internal static class TaskMutationSupport
                     AppErrorKind.StorageUnavailable,
                     "No local profile exists yet. Restart Chaos to complete first-run setup.");
             var now = clock.GetUtcNow();
-            return await body(session, profile, now, token);
+            var recording = new RecordingDataSession(session);
+            var result = await body(recording, profile, now, token);
+            await recording.CompleteAsync(profile, ids, now, token);
+            return result;
         }, ct);
 
     /// <summary>
@@ -88,6 +112,11 @@ internal static class TaskMutationSupport
             return (stored.Result, true);
         }
 
+        if (session is RecordingDataSession recording)
+        {
+            recording.Begin(operationId, commandKind);
+        }
+
         var result = await run(token);
         await session.Receipts.AddAsync(new OperationReceiptRecord
         {
@@ -101,7 +130,12 @@ internal static class TaskMutationSupport
         return (result, false);
     }
 
-    /// <summary>Appends one history entry with versioned before/after aggregate snapshots.</summary>
+    /// <summary>
+    /// Declares one history entry for a task. Inside a recorded transaction (every command)
+    /// the entry is written at completion with the recorder's own before/after aggregates, so
+    /// tag links and later writes of the same operation are included; elsewhere it is written
+    /// at once with the snapshots given.
+    /// </summary>
     public static async Task WriteTaskHistoryAsync(
         IDataSession session,
         IIdGenerator ids,
@@ -111,7 +145,15 @@ internal static class TaskMutationSupport
         string eventKind,
         IReadOnlyList<string> changedFields,
         DateTimeOffset now,
-        CancellationToken token) => await session.History.AddAsync(new TaskHistoryRecord
+        CancellationToken token)
+    {
+        if (session is RecordingDataSession recording)
+        {
+            recording.RegisterHistory(after.Task.Id, eventKind, changedFields);
+            return;
+        }
+
+        await session.History.AddAsync(new TaskHistoryRecord
         {
             Id = ids.NewId().ToString(),
             TaskId = after.Task.Id,
@@ -125,6 +167,7 @@ internal static class TaskMutationSupport
             AggregateVersion = after.Task.Version,
             RecordedAtUtc = now,
         }, token);
+    }
 
     /// <summary>Names of the task fields whose value actually changed between two versions.</summary>
     public static IReadOnlyList<string> ChangedTaskFields(TaskRecord before, TaskRecord after)
