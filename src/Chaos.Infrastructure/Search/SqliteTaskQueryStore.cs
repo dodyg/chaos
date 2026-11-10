@@ -36,10 +36,13 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
         var order = string.Join(", ", plan.Keys.Select((key, index) => $"x.K{index}{(key.Descending ? " DESC" : string.Empty)}"));
         command.CommandText = $"""
             {plan.With}
-            SELECT t.*, c.Name AS ContainerName, c.ArchivedAtUtc AS ContainerArchivedAtUtc, x.GroupDate AS GroupDate, x.Kinds AS Kinds, {keyColumns}
+            SELECT t.*, c.Name AS ContainerName, c.ArchivedAtUtc AS ContainerArchivedAtUtc, x.GroupDate AS GroupDate, x.Kinds AS Kinds,
+                w.Person AS WaitingPerson, f.DueAtUtc AS FollowUpDueAtUtc, {keyColumns}
             FROM Candidates x
             JOIN Tasks t ON t.Id = x.Id
             JOIN Containers c ON c.Id = t.ContainerId
+            LEFT JOIN WaitingDetails w ON w.TaskId = t.Id AND w.DeletedAtUtc IS NULL
+            LEFT JOIN FollowUps f ON f.TaskId = t.Id AND f.DeletedAtUtc IS NULL AND f.ResolvedAtUtc IS NULL
             WHERE {seek}
             ORDER BY {order}, x.Id
             LIMIT $limit;
@@ -59,7 +62,9 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                     !reader.IsDBNull(reader.GetOrdinal("ContainerArchivedAtUtc")),
                     [],
                     ParseKinds(reader.Sn("Kinds")),
-                    reader.Dn("GroupDate")), keys));
+                    reader.Dn("GroupDate"),
+                    reader.Sn("WaitingPerson"),
+                    reader.In("FollowUpDueAtUtc")), keys));
             }
         }
 
@@ -244,17 +249,26 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                     Matches AS MATERIALIZED (
                         SELECT rowid AS RowId, bm25(SearchIndex, 10.0, 1.0) AS Rank FROM SearchIndex WHERE SearchIndex MATCH {builder.P(match)})
                     """);
-                ctes.Add("""
+                // The outside person's name also matches (PLAN §10 search by waiting-person text):
+                // every search term must occur in the normalized name.
+                var terms = SearchText.Terms(SearchText.Normalize(criteria.Text).ToLowerInvariant());
+                var personMatch = terms.Count == 0
+                    ? "0"
+                    : string.Join(" AND ", terms.Select(term => $"instr(w.PersonNormalized, {builder.P(term)}) > 0"));
+                ctes.Add($"""
                     Hits AS (
-                        SELECT d.TaskId AS TaskId, MIN(m.Rank) AS Rank, group_concat(DISTINCT d.TargetKind) AS Kinds
-                        FROM Matches m
-                        JOIN SearchDocuments d ON d.RowId = m.RowId
-                        LEFT JOIN Subtasks s ON d.TargetKind = 2 AND s.Id = d.TargetId
-                        LEFT JOIN DiaryEntries e ON d.TargetKind = 3 AND e.Id = d.TargetId
-                        WHERE d.TaskId IS NOT NULL
-                          AND (d.TargetKind <> 2 OR s.DeletedAtUtc IS NULL)
-                          AND (d.TargetKind <> 3 OR e.DeletedAtUtc IS NULL)
-                        GROUP BY d.TaskId)
+                        SELECT TaskId, MIN(Rank) AS Rank, group_concat(DISTINCT Kind) AS Kinds FROM (
+                            SELECT d.TaskId AS TaskId, m.Rank AS Rank, d.TargetKind AS Kind
+                            FROM Matches m
+                            JOIN SearchDocuments d ON d.RowId = m.RowId
+                            LEFT JOIN Subtasks s ON d.TargetKind = 2 AND s.Id = d.TargetId
+                            LEFT JOIN DiaryEntries e ON d.TargetKind = 3 AND e.Id = d.TargetId
+                            WHERE d.TaskId IS NOT NULL
+                              AND (d.TargetKind <> 2 OR s.DeletedAtUtc IS NULL)
+                              AND (d.TargetKind <> 3 OR e.DeletedAtUtc IS NULL)
+                            UNION ALL
+                            SELECT w.TaskId, -1000.0, 5 FROM WaitingDetails w WHERE w.DeletedAtUtc IS NULL AND {personMatch})
+                        GROUP BY TaskId)
                     """);
                 join = "JOIN Hits h ON h.TaskId = t.Id";
                 kinds = "h.Kinds";
@@ -352,7 +366,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                 TaskView.Upcoming => [new(groupDate, false), new("t.Priority", true)],
                 TaskView.Overdue => [new("COALESCE(t.DueDate, t.PlannedDate)", false), new("COALESCE(t.DueTime, t.PlannedTime, '24:00:00')", false)],
                 TaskView.RecentlyCompleted => [new("t.CompletedAtUtc", true)],
-                TaskView.Waiting => [new("t.UpdatedAtUtc", false)],
+                TaskView.Waiting => [new("(w.PersonNormalized IS NULL)", false), new("COALESCE(w.PersonNormalized, '')", false), new("COALESCE(f.DueAtUtc, '9999-12-31')", false)],
                 TaskView.Search when criteria.Text is not null => [new("h.Rank", false)],
                 TaskView.Search => [new("t.UpdatedAtUtc", true)],
                 _ => [new("c.Position", false), new("t.Position", false)],
@@ -364,6 +378,8 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                     SELECT t.Id AS Id{keyColumns}, {groupDate} AS GroupDate, {kinds} AS Kinds
                     FROM Tasks t
                     JOIN Containers c ON c.Id = t.ContainerId
+                    LEFT JOIN WaitingDetails w ON w.TaskId = t.Id AND w.DeletedAtUtc IS NULL
+                    LEFT JOIN FollowUps f ON f.TaskId = t.Id AND f.DeletedAtUtc IS NULL AND f.ResolvedAtUtc IS NULL
                     {join}
                     WHERE {string.Join("\n      AND ", where)})
                 """);

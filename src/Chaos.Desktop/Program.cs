@@ -7,7 +7,9 @@ using Chaos.Application.History;
 using Chaos.Application.Pad;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
+using Chaos.Application.Reminders;
 using Chaos.Application.Tags;
+using Chaos.Desktop.Platform;
 using Chaos.Desktop.Services;
 using Chaos.Infrastructure.Bootstrap;
 using NeoAstra;
@@ -30,6 +32,13 @@ internal static class Program
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
+        // Reminders are delivered after commit on a background timer (PLAN §11). The engine is
+        // declared after storage, so it stops before storage closes.
+        var notifications = new InAppNotificationAdapter();
+        var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System);
+        reminderEngine.Start();
+
         return NeoApp.Run(args, app =>
         {
             app.Title = "Chaos";
@@ -51,6 +60,8 @@ internal static class Program
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
+                rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -295,5 +306,32 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(WeekStartPreviewResponse))]
 [JsonSerializable(typeof(WeekStartChangeRequest))]
 [JsonSerializable(typeof(WeekStartChangeResponse))]
+[JsonSerializable(typeof(ReminderRuleDto))]
+[JsonSerializable(typeof(ReminderRuleResponse))]
+[JsonSerializable(typeof(ReminderListRequest))]
+[JsonSerializable(typeof(ReminderListResponse))]
+[JsonSerializable(typeof(ReminderAddRequest))]
+[JsonSerializable(typeof(ReminderUpdateRequest))]
+[JsonSerializable(typeof(ReminderDeleteRequest))]
+[JsonSerializable(typeof(ReminderOperationResponse))]
+[JsonSerializable(typeof(NotificationCapabilitiesResponse))]
+[JsonSerializable(typeof(ReminderSettingsRequest))]
+[JsonSerializable(typeof(ReminderSettingsResponse))]
+[JsonSerializable(typeof(ReminderSettingsUpdateRequest))]
+[JsonSerializable(typeof(NotificationItemResponse))]
+[JsonSerializable(typeof(NotificationListRequest))]
+[JsonSerializable(typeof(NotificationListResponse))]
+[JsonSerializable(typeof(NotificationActRequest))]
+[JsonSerializable(typeof(NotificationActResponse))]
+[JsonSerializable(typeof(FollowUpDto))]
+[JsonSerializable(typeof(WaitingRequest))]
+[JsonSerializable(typeof(WaitingResponse))]
+[JsonSerializable(typeof(WaitingSetRequest))]
+[JsonSerializable(typeof(WaitingClearRequest))]
+[JsonSerializable(typeof(WaitingLogRequest))]
+[JsonSerializable(typeof(FollowUpSnoozeRequest))]
+[JsonSerializable(typeof(FollowUpDueRequest))]
+[JsonSerializable(typeof(FollowUpItemResponse))]
+[JsonSerializable(typeof(FollowUpDueResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

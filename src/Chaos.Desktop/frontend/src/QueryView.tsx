@@ -1,6 +1,6 @@
 import React from "react";
 import { queryRpc, recurrenceRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { CalendarDays, FolderKanban, SearchX } from "lucide-react";
+import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -119,9 +119,11 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
     {projected.length > 0 && <section className="grid gap-2" aria-label="Projected repetitions"><h3 className="font-semibold">Projected repetitions</h3><p className="text-xs text-muted-foreground">These are read-only estimates. A task becomes available after its current occurrence is finished.</p><ol className="grid gap-1">{projected.map(item => <li key={`${item.sourceTaskId}|${item.nominalLocal}`} className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">{item.title} · {item.nominalLocal.replace("T", " ")} <Badge variant="outline">Projected</Badge></li>)}</ol></section>}
     {rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{rows.map((row, index) => {
       const heading = grouped && row.groupDate && row.groupDate !== rows[index - 1]?.groupDate;
+      const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== rows[index - 1]?.waitingPerson);
       const task = row.task;
       return <React.Fragment key={task.id}>
         {heading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><CalendarDays className="size-3.5"/>{row.groupDate}</li>}
+        {personHeading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><UserRound className="size-3.5"/><bdi>{row.waitingPerson ?? "No person named"}</bdi></li>}
         <li draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
           className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card px-2 py-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
           <div className="grid min-w-0 flex-1 gap-1">
@@ -131,9 +133,11 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
               {task.dueDate && <span>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime.slice(0, 5)}` : ""}</span>}
               {task.plannedDate && <span>Planned {task.plannedDate}</span>}
               {query.view === "Overdue" && !task.dueDate && <Badge variant="outline">Missed recurrence</Badge>}
+              {row.waitingPerson && query.view !== "Waiting" && <span className="inline-flex items-center gap-1"><UserRound className="size-3.5"/>Waiting on <bdi>{row.waitingPerson}</bdi></span>}
+              {row.nextFollowUpAtUtc && <Badge variant="outline">Follow up {new Date(row.nextFollowUpAtUtc).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</Badge>}
               <StatusBadge status={task.status}/>
               <PriorityBadge priority={task.priority}/>
-              {row.matches.filter(match => match !== "Task").map(match => <Badge key={match} variant="outline">Matched in {match === "Subtask" ? "a subtask" : "the diary"}</Badge>)}
+              {row.matches.filter(match => match !== "Task").map(match => <Badge key={match} variant="outline">{match === "WaitingPerson" ? "Matched the waiting person" : `Matched in ${match === "Subtask" ? "a subtask" : "the diary"}`}</Badge>)}
               {row.tagIds.map(id => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined).map(tag => <TagChip key={tag.id} tag={tag}/>)}
             </div>
           </div>

@@ -197,7 +197,7 @@ public sealed class CaptureTests
     }
 
     [Test]
-    public async Task Create_ReminderAndWaiting_StoresRuleStatusAndNotes()
+    public async Task Create_ReminderAndWaiting_StoresRuleStatusAndWaitingRecords()
     {
         using var host = await Host.StartAsync(TestPaths.NewDataRoot());
         var (_, dentist) = await host.AddAsync("Dentist tomorrow 10:30 remind me 1h before");
@@ -211,8 +211,13 @@ public sealed class CaptureTests
         var task = contract.Tasks.Single();
         await Assert.That(task.Status).IsEqualTo(TaskItemStatus.WaitingOnSomeone);
         await Assert.That(task.Title).IsEqualTo("Contract");
-        await Assert.That(task.Notes).StartsWith("Waiting on: Omar\nFollow up: ");
-        await Assert.That(preview.Items.Single().Parse.Warnings.Select(warning => warning.Code)).Contains("waitingInNotes");
+        await Assert.That(task.Notes).IsEqualTo(string.Empty);
+        await Assert.That(preview.Items.Single().Parse.Warnings.Select(warning => warning.Code)).Contains("waitingPrivate");
+        var (waiting, followUp) = await host.Storage.Store.QueryAsync(async (session, ct) =>
+            (await session.Waiting.FindActiveAsync(task.Id, ct), await session.Waiting.FindActiveFollowUpAsync(task.Id, ct)));
+        await Assert.That(waiting!.Person).IsEqualTo("Omar");
+        await Assert.That(followUp!.Kind).IsEqualTo(Chaos.Domain.Reminders.FollowUpKind.Fixed);
+        await Assert.That(followUp.DueAtUtc).IsEqualTo(followUp.FixedAtUtc);
     }
 
     [Test]

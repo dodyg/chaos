@@ -1,5 +1,5 @@
 import React from "react";
-import { myDayRpc, queryRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { ArrowDown, ArrowUp, CalendarArrowUp, ChevronLeft, ChevronRight, Clock, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Count, EmptyState, InlineError, PageHeader, PriorityBadge, StatusBadge } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
 import { taskDragType } from "./tags";
+import { FollowUps } from "./Reminders";
 
 const operationId = () => crypto.randomUUID();
 
@@ -84,9 +85,9 @@ function minutes(total: number) {
  * to the next day. Earlier days are read-only and stay reviewable. Choosing a task here never
  * changes its planned or due date.
  */
-export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, onOpen, onChanged }: {
+export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged }: {
   clock: DayClockResponse | null; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof myDayRpc; queryApi?: typeof queryRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void;
+  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void;
 }) {
   const today = clock?.today ?? null;
   const [day, setDay] = React.useState<string | null>(today);
@@ -181,6 +182,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
               onClick={() => void change(() => api.remove({ operationId: operationId(), date: day, taskId: row.task.id }), "Could not remove the task.")}><X/></Button>
           </div>}
         </DayRow>)}</ol>}
+
+    {editable && waitingApi && <FollowUps day={day} revision={revision + local} busy={disabled} api={waitingApi} onOpen={onOpen} onChanged={onChanged}/>}
 
     {canCarry && <div><Button type="button" variant="outline" size="sm" disabled={disabled}
       onClick={() => void change(() => api.carryOver({ operationId: operationId(), fromDate: day, taskIds: null }), "Could not carry the tasks over.")}>

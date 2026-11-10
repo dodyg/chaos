@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tags;
@@ -54,8 +52,8 @@ public sealed record CapturePreview(bool IsBatch, IReadOnlyList<CaptureItemPrevi
 /// <summary>
 /// Quick add (PLAN §15 WP7): a read-only preview over the pure parser and the atomic create
 /// of what the person confirmed. Preview reads the profile settings, lists and tags once and
-/// never writes. Waiting/follow-up proposals set the Waiting status and are kept in the notes
-/// until the reminder package adds their dedicated records.
+/// never writes. A waiting person becomes the task's private waiting details (with a fixed
+/// follow-up when a date was given); a follow-up date without a person becomes a reminder.
 /// </summary>
 public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
@@ -91,8 +89,10 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             var parse = QuickAddParser.Parse(line.Text, context with { ExcludedSpans = shifted });
             if (parse.Draft.WaitingOn is not null || parse.Draft.FollowUpDate is not null)
             {
-                parse = parse with { Warnings = [.. parse.Warnings, new CaptureWarning("waitingInNotes",
-                    "The task gets the Waiting status; the person and follow-up date are written into its notes until follow-up reminders arrive.")] };
+                parse = parse with { Warnings = [.. parse.Warnings, new CaptureWarning(parse.Draft.WaitingOn is null ? "followUpReminder" : "waitingPrivate",
+                    parse.Draft.WaitingOn is null
+                        ? "With no person named, the follow-up becomes a reminder at that time."
+                        : "The task waits on this person privately; nothing is sent to them.")] };
             }
 
             return new CaptureItemPreview(line.LineNumber, line.SourceStart, parse, [.. item.Subtasks.Select(sub => new CaptureSubtask(sub.Text, sub.Checked))]);
@@ -209,7 +209,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             SpaceId = container.SpaceId,
             ContainerId = container.Id,
             Title = draft.Title,
-            Notes = ComposeNotes(draft),
+            Notes = draft.Notes ?? string.Empty,
             Status = draft.WaitingOn is null ? TaskItemStatus.NotStarted : TaskItemStatus.WaitingOnSomeone,
             Priority = draft.Priority,
             EstimateMinutes = draft.EstimateMinutes,
@@ -286,6 +286,37 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             }, ct);
         }
 
+        if (draft.FollowUpDate is { } followUpDate)
+        {
+            var zone = (draft.FollowUpTime is not null && draft.ZoneId is not null ? Queries.TaskQueries.FindZone(draft.ZoneId) : null)
+                ?? Reminders.ReminderSync.ProfileZone(profile);
+            var at = Chaos.Domain.Reminders.ReminderTiming.ResolveLocal(zone, followUpDate, draft.FollowUpTime ?? profile.DefaultReminderTime);
+            if (draft.WaitingOn is null)
+            {
+                await session.ReminderRules.AddAsync(new ReminderRuleRecord
+                {
+                    Id = ids.NewId().ToString(),
+                    ProfileId = profile.Id,
+                    TaskId = task.Id,
+                    Anchor = ReminderAnchor.Absolute,
+                    AbsoluteAtUtc = at,
+                    Enabled = true,
+                    Version = 1,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                }, ct);
+            }
+            else
+            {
+                await Reminders.WaitingCommands.SetInSessionAsync(session, ids, profile, task.Id, draft.WaitingOn,
+                    new Reminders.FollowUpSpec(Chaos.Domain.Reminders.FollowUpKind.Fixed, at, null, null), now, ct);
+            }
+        }
+        else if (draft.WaitingOn is { } person)
+        {
+            await Reminders.WaitingCommands.SetInSessionAsync(session, ids, profile, task.Id, person, null, now, ct);
+        }
+
         if (draft.Recurrence is { } rule)
         {
             await RecurrenceCommands.StartInSessionAsync(session, ids, task, rule, operationId, now, ct);
@@ -295,25 +326,6 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, operationId, before: null, after: new TaskAggregateSnapshot(task, subtasks),
             eventKind: "task.created", changedFields: [.. new[] { "Title", "Notes", "ContainerId" }.Concat(extraHistoryFields)], now, ct);
         return task;
-    }
-
-    /// <summary>The typed notes plus the waiting person and follow-up, until package 10 gives them their own records.</summary>
-    private static string ComposeNotes(CaptureTaskDraft draft)
-    {
-        var notes = new StringBuilder(draft.Notes ?? string.Empty);
-        void Line(string text)
-        {
-            if (notes.Length > 0 && notes[^1] != '\n') notes.Append('\n');
-            notes.Append(text).Append('\n');
-        }
-
-        if (draft.WaitingOn is { } person) Line($"Waiting on: {person}");
-        if (draft.FollowUpDate is { } date)
-        {
-            Line($"Follow up: {date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}{(draft.FollowUpTime is { } time ? " " + time.ToString("HH:mm", CultureInfo.InvariantCulture) : string.Empty)}");
-        }
-
-        return draft.WaitingOn is null && draft.FollowUpDate is null ? draft.Notes ?? string.Empty : TaskFieldValidation.Notes(notes.ToString().TrimEnd('\n'), "notes");
     }
 
     private static async Task<ProfileRecord> RequireProfileAsync(IDataSession session, CancellationToken token) =>

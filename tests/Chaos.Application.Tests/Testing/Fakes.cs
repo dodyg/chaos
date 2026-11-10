@@ -44,6 +44,9 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<ChecklistConversionRecord> ChecklistConversions = [];
     public readonly List<PadItemRecord> PadItems = [];
     public readonly List<ReminderRuleRecord> ReminderRules = [];
+    public readonly List<WaitingDetailRecord> Waiting = [];
+    public readonly List<FollowUpRecord> FollowUps = [];
+    public readonly List<NotificationJobRecord> Jobs = [];
     public readonly List<ScratchTaskLinkRecord> PadTaskLinks = [];
     public readonly HashSet<(string PadItemId, string TagId)> PadTags = [];
 
@@ -73,6 +76,8 @@ public sealed class InMemoryStore : IApplicationStore
         public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
+        public IWaitingStore Waiting { get; } = new FakeWaitingStore(owner.Waiting, owner.FollowUps);
+        public INotificationJobStore Notifications { get; } = new FakeNotificationJobStore(owner.Jobs);
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
         public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
     }
@@ -84,6 +89,54 @@ public sealed class FakeReminderRuleStore(List<ReminderRuleRecord> rows) : IRemi
     public Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReminderRuleRecord>>([.. rows.Where(row => row.TaskId == taskId && row.DeletedAtUtc is null)]);
     public Task AddAsync(ReminderRuleRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
     public Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(rows, row, version);
+}
+
+public sealed class FakeWaitingStore(List<WaitingDetailRecord> waiting, List<FollowUpRecord> followUps) : IWaitingStore
+{
+    public Task<WaitingDetailRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(waiting.FirstOrDefault(row => row.Id == id));
+    public Task<WaitingDetailRecord?> FindActiveAsync(string taskId, CancellationToken ct) => Task.FromResult(waiting.FirstOrDefault(row => row.TaskId == taskId && row.DeletedAtUtc is null));
+    public Task AddAsync(WaitingDetailRecord row, CancellationToken ct) { waiting.Add(row); return Task.CompletedTask; }
+    public Task<WaitingDetailRecord?> UpdateAsync(WaitingDetailRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(waiting, row, version);
+    public Task<FollowUpRecord?> GetFollowUpAsync(string id, CancellationToken ct) => Task.FromResult(followUps.FirstOrDefault(row => row.Id == id));
+    public Task<FollowUpRecord?> FindActiveFollowUpAsync(string taskId, CancellationToken ct) =>
+        Task.FromResult(followUps.FirstOrDefault(row => row.TaskId == taskId && row.DeletedAtUtc is null && row.ResolvedAtUtc is null));
+    public Task AddFollowUpAsync(FollowUpRecord row, CancellationToken ct) { followUps.Add(row); return Task.CompletedTask; }
+    public Task<FollowUpRecord?> UpdateFollowUpAsync(FollowUpRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(followUps, row, version);
+    public Task SetFollowUpDueAsync(string followUpId, DateTimeOffset? dueAtUtc, CancellationToken ct)
+    {
+        var index = followUps.FindIndex(row => row.Id == followUpId);
+        if (index >= 0) followUps[index] = followUps[index] with { DueAtUtc = dueAtUtc };
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyList<FollowUpRecord>> ListActiveFollowUpsAsync(string profileId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<FollowUpRecord>>([.. followUps.Where(row => row.ProfileId == profileId && row.DeletedAtUtc is null && row.ResolvedAtUtc is null)]);
+}
+
+/// <summary>In-memory notification jobs; delivery and OS reconciliation are tested against SQLite.</summary>
+public sealed class FakeNotificationJobStore(List<NotificationJobRecord> rows) : INotificationJobStore
+{
+    public Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(row => row.Id == id));
+    public Task<NotificationJobRecord?> FindLatestAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct) =>
+        Task.FromResult(rows.Where(row => row.SourceKind == kind && row.SourceId == sourceId).OrderByDescending(row => row.Generation).ThenByDescending(row => row.Sequence).FirstOrDefault());
+    public Task<IReadOnlyList<NotificationJobRecord>> ListBySourceAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.SourceKind == kind && row.SourceId == sourceId).OrderBy(row => row.Generation).ThenBy(row => row.Sequence)]);
+    public Task<IReadOnlyList<NotificationJobRecord>> ListPendingByTaskAsync(string taskId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.TaskId == taskId && row.State == NotificationJobState.Pending)]);
+    public Task AddAsync(NotificationJobRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
+    public Task<bool> UpdateAsync(NotificationJobRecord row, NotificationJobState expectedState, CancellationToken ct)
+    {
+        var index = rows.FindIndex(existing => existing.Id == row.Id && existing.State == expectedState);
+        if (index < 0) return Task.FromResult(false);
+        rows[index] = row;
+        return Task.FromResult(true);
+    }
+    public Task<IReadOnlyList<NotificationJobRecord>> ListDueAsync(string profileId, DateTimeOffset now, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.ProfileId == profileId && row.State == NotificationJobState.Pending && row.DeliverAtUtc <= now).Take(limit)]);
+    public Task<IReadOnlyList<NotificationJobRecord>> ListOsWorkAsync(string profileId, int limit, CancellationToken ct) => Task.FromResult<IReadOnlyList<NotificationJobRecord>>([]);
+    public Task<IReadOnlyList<NotificationJobRecord>> ListDeliveredAsync(string profileId, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.ProfileId == profileId && row.DeliveredAtUtc is not null).OrderByDescending(row => row.DeliveredAtUtc).Take(limit)]);
+    public Task<IReadOnlyList<string>> ListTasksWithSourcesAsync(string profileId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<string>>([.. rows.Where(row => row.ProfileId == profileId && row.State == NotificationJobState.Pending).Select(row => row.TaskId).Distinct()]);
 }
 
 public sealed class FakeDiaryStore(List<DiaryEntryRecord> rows, List<DiaryRevisionRecord> revisions) : IDiaryStore
@@ -172,6 +225,9 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
         rows.Add(profile);
         return Task.CompletedTask;
     }
+
+    public Task<ProfileRecord?> UpdateReminderSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
+        UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
 
     public Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
     {

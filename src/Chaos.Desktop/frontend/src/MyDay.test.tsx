@@ -19,7 +19,7 @@ const { MyDay, addDays, nextCheckDelay } = await import("./MyDay");
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
   return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
 }
-const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null });
+const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null });
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
 const summary = (date: string, today: string, open = 0): DaySummaryResponse =>
   ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open });

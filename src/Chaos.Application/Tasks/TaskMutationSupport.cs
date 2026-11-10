@@ -15,7 +15,9 @@ public sealed record TaskAggregateSnapshot(
     IReadOnlyList<SubtaskRecord> Subtasks,
     IReadOnlyList<string>? TagIds = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? SubtaskTagIds = null,
-    IReadOnlyList<ReminderRuleRecord>? ReminderRules = null);
+    IReadOnlyList<ReminderRuleRecord>? ReminderRules = null,
+    WaitingDetailRecord? Waiting = null,
+    FollowUpRecord? FollowUp = null);
 
 /// <summary>Envelope for stored operation results; the replay flag is composed at the caller, never stored.</summary>
 public sealed record StoredResultEnvelope<T>(T Result);
@@ -57,7 +59,19 @@ internal static class TaskMutationSupport
             var now = clock.GetUtcNow();
             var recording = new RecordingDataSession(session);
             var result = await body(recording, profile, now, token);
+            if (recording.OperationId is not null)
+            {
+                // Waiting ends when a task leaves the Waiting status; recorded, so undo restores it.
+                await Reminders.ReminderSync.ResolveWaitingAsync(recording, recording.TouchedTaskIds, now, token);
+            }
+
             await recording.CompleteAsync(profile, ids, now, token);
+            if (recording.OperationId is not null)
+            {
+                // Desired notifications follow the committed state in the same transaction (PLAN §11).
+                await Reminders.ReminderSync.SyncTasksAsync(session, profile, recording.TouchedTaskIds, now, ids, token);
+            }
+
             return result;
         }, ct);
 
