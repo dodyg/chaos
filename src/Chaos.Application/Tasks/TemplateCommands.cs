@@ -222,6 +222,27 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
                         subtasks.Add(subtask);
                     }
 
+                    foreach (var reminder in payload.ReminderOffsets)
+                    {
+                        await session.ReminderRules.AddAsync(new ReminderRuleRecord
+                        {
+                            Id = ids.NewId().ToString(), ProfileId = profile.Id, TaskId = task.Id, Anchor = reminder.Anchor,
+                            OffsetMinutes = reminder.OffsetMinutes, InsistentMinutes = reminder.InsistentMinutes, Enabled = true,
+                            Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
+                        }, inner);
+                    }
+
+                    if (payload.RecurrenceDefault is { } defaultRule)
+                    {
+                        var anchor = task.PlannedDate ?? task.DueDate ?? today;
+                        var offset = anchor.DayNumber - defaultRule.AnchorDate.DayNumber;
+                        var rule = defaultRule with { AnchorDate = anchor, UntilDate = defaultRule.UntilDate?.AddDays(offset),
+                            AnchorTime = task.PlannedTime ?? task.DueTime ?? defaultRule.AnchorTime,
+                            ZoneId = task.PlannedTime is not null ? task.PlannedZoneId! : task.DueTime is not null ? task.DueZoneId! : defaultRule.ZoneId };
+                        await RecurrenceCommands.StartInSessionAsync(session, ids, task, rule, command.OperationId, now, inner);
+                        task = await session.Tasks.GetAsync(task.Id, inner) ?? throw AppException.NotFound("That task no longer exists.");
+                    }
+
                     await TaskMutationSupport.WriteTaskHistoryAsync(
                         session, ids, command.OperationId,
                         before: null,
@@ -244,6 +265,19 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
     /// </summary>
     internal static TemplatePayload NormalizePayload(TemplatePayload payload)
     {
+        if (payload.RecurrenceDefault is { } recurrence)
+        {
+            try { recurrence.Validate(); }
+            catch (Chaos.Domain.Validation.DomainValidationException error) { throw AppException.Validation("recurrenceDefault", error.Message); }
+        }
+        foreach (var reminder in payload.ReminderOffsets)
+        {
+            if (reminder.Anchor is not (ReminderAnchor.Planned or ReminderAnchor.Due) || reminder.InsistentMinutes is <= 0)
+                throw AppException.Validation("reminderOffsets", "Choose a planned or due anchor and a positive insistent interval.");
+            if ((reminder.Anchor == ReminderAnchor.Planned && payload.PlannedDayOffset is null) ||
+                (reminder.Anchor == ReminderAnchor.Due && payload.DueDayOffset is null))
+                throw AppException.Validation("reminderOffsets", "A relative reminder needs its planned or due date.");
+        }
         var title = TaskFieldValidation.Title(payload.Title, "title");
         var notes = TaskFieldValidation.Notes(payload.Notes, "notes");
         var estimate = TaskFieldValidation.Estimate(payload.EstimateMinutes, "estimateMinutes");
@@ -284,6 +318,8 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
             DueTime = due.Time,
             DueZoneId = due.ZoneId,
             Subtasks = subtasks,
+            RecurrenceDefault = payload.RecurrenceDefault,
+            ReminderOffsets = payload.ReminderOffsets,
         };
     }
 

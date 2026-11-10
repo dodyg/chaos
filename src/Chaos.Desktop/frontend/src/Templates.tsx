@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Banner, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, priorities } from "@/components/common";
 import { templateRpc, type TemplateResponse, type TemplatePayloadResponse } from "#neoastra";
 
-const emptyPayload = (): TemplatePayloadResponse => ({ title: "", notes: "", priority: "Normal", estimateMinutes: null, category: "Personal", plannedDayOffset: null, plannedTime: null, plannedZoneId: null, dueDayOffset: null, dueTime: null, dueZoneId: null, subtasks: [] });
+const emptyPayload = (): TemplatePayloadResponse => ({ title: "", notes: "", priority: "Normal", estimateMinutes: null, category: "Personal", plannedDayOffset: null, plannedTime: null, plannedZoneId: null, dueDayOffset: null, dueTime: null, dueZoneId: null, subtasks: [], recurrenceDefault: null, reminderOffsets: [] });
 const operationId = () => crypto.randomUUID();
 
 export function Templates({ containerId, containerName = "Inbox", onCreated }: { containerId: string; containerName?: string; onCreated: () => Promise<void> }) {
@@ -92,6 +92,16 @@ export function Templates({ containerId, containerName = "Inbox", onCreated }: {
             <Field label="Time zone"><Input value={payload[`${kind}ZoneId`] ?? ""} onChange={e => change({ [`${kind}ZoneId`]: e.target.value || null })} placeholder="e.g. Africa/Cairo"/></Field>
           </div>
         </FieldGroup>)}
+        <FieldGroup legend="Repeat by default">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={payload.recurrenceDefault !== null} onChange={e => change({ recurrenceDefault: e.target.checked ? { mode: "FixedSchedule", frequency: "Day", interval: 1, anchorDate: "2000-01-01", anchorTime: null, zoneId: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null } : null })}/>Create a repeating task</label>
+          {payload.recurrenceDefault && <div className="grid grid-cols-2 gap-3 pt-2">
+            <Field label="Repeat mode"><NativeSelect value={payload.recurrenceDefault.mode} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, mode: e.target.value, weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null } })}><NativeSelectOption value="FixedSchedule">Fixed schedule</NativeSelectOption><NativeSelectOption value="AfterCompletion">Completion</NativeSelectOption></NativeSelect></Field>
+            <Field label="Repeat frequency"><NativeSelect value={payload.recurrenceDefault.frequency} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, frequency: e.target.value, weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null } })}>{["Day", "Week", "Month", "Year"].map(value => <NativeSelectOption key={value}>{value}</NativeSelectOption>)}</NativeSelect></Field>
+            <Field label="Repeat every"><Input type="number" min="1" max="999" value={payload.recurrenceDefault.interval} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, interval: Number(e.target.value) } })}/></Field>
+            <Field label="Repeat time zone"><Input value={payload.recurrenceDefault.zoneId} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, zoneId: e.target.value } })}/></Field>
+          </div>}
+          <p className="text-xs text-muted-foreground">The new series starts on the task's planned date, due date, or creation date. Further rule options are available on the task.</p>
+        </FieldGroup>
         <FieldGroup legend="Subtask structure">
           {payload.subtasks.length > 0 && <ol className="grid gap-3">{payload.subtasks.map((part, index) => <li key={index} className="grid gap-3 border-b pb-3">
             <div className="flex items-end gap-2"><Field label="Title" className="flex-1"><Input value={part.title} onChange={e => change({ subtasks: payload.subtasks.map((p, i) => i === index ? { ...p, title: e.target.value } : p) })}/></Field><Button type="button" variant="ghost" size="icon" className={removeButton} aria-label="Remove subtask" title="Remove subtask" onClick={() => change({ subtasks: payload.subtasks.filter((_, i) => i !== index) })}><Trash2/></Button></div>

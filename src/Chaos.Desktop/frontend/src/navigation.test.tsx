@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { containerRpc, taskRpc, type ContainerResponse, type TaskResponse, type ListTasksResponse } from "#neoastra";
+import { containerRpc, recurrenceRpc, taskRpc, type ContainerResponse, type TaskResponse, type ListTasksResponse } from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -21,6 +21,28 @@ const { App } = await import("./App");
 function row(id: string, title: string): TaskResponse {
   return { id, title, spaceId: "space", containerId: id, notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null };
 }
+
+test("deleting an active repeating task offers skip or end and delete", async () => {
+  const repeated = { ...row("repeat", "Repeated"), containerId: "inbox" };
+  let ended = false;
+  const api = {
+    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [repeated], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
+    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    recurrenceRpc: { ...recurrenceRpc,
+      get: async () => ({ ok: true, rule: { mode: "FixedSchedule", frequency: "Day", interval: 1, anchorDate: "2026-11-10", anchorTime: null, zoneId: "UTC", weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null }, ended: false, occurrences: [{ taskId: repeated.id, nominalKey: "2026-11-10T00:00:00", effectiveLocal: "2026-11-10T00:00:00", state: "Active", completedAtUtc: null, revision: "1" }], error: null }),
+      endAndDelete: async (request: { operationId: string }) => { ended = true; return { ok: true, task: repeated, operationId: request.operationId, error: null, warning: null }; },
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body });
+  await screen.findByRole("button", { name: "Repeated" });
+  await user.click(screen.getByRole("button", { name: "Delete Repeated" }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete repeating task?" });
+  assert.ok(within(dialog).getByRole("button", { name: "Skip this occurrence" }));
+  await user.click(within(dialog).getByRole("button", { name: "End and delete" }));
+  await waitFor(() => assert.equal(ended, true));
+  cleanup();
+});
 
 test("a delayed previous list cannot replace the selected list", async () => {
   let finishA!: (value: ListTasksResponse) => void;

@@ -1,6 +1,9 @@
 using Chaos.Application.Tasks;
 using Chaos.Application.History;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Tags;
+using Chaos.Application.Queries;
+using Chaos.Application.Contracts;
 using Chaos.Domain.Recurrence;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Bootstrap;
@@ -11,6 +14,147 @@ namespace Chaos.Infrastructure.Tests;
 
 public sealed class RecurrenceTests
 {
+    [Test]
+    public async Task CompleteLate_Restart_KeepsDiaryOnOriginalOccurrence()
+    {
+        var root = TestPaths.NewDataRoot();
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        string originalId;
+        string successorId;
+        using (var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None))
+        {
+            var tasks = new TaskCommands(storage.Store, ids, clock);
+            var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Repeat", null))).Task;
+            originalId = task.Id;
+            var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 1, 1), null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+            await new RecurrenceCommands(storage.Store, ids, clock).StartAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, rule));
+            await new DiaryCommands(storage.Store, ids, clock).AddAsync(new(Guid.NewGuid().ToString(), task.Id, "First occurrence notes", null));
+            var started = (await tasks.GetAsync(task.Id))!;
+            await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), task.Id, started.Version, TaskItemStatus.Done, null));
+            var rows = await tasks.ListInboxAsync();
+            await Assert.That(rows.Count).IsEqualTo(2);
+            successorId = rows.Single(row => row.Id != task.Id).Id;
+        }
+        using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None);
+        var diary = new DiaryCommands(reopened.Store, ids, clock);
+        await Assert.That((await diary.ListAsync(originalId, false)).Single().RawMarkdown).IsEqualTo("First occurrence notes");
+        await Assert.That((await diary.ListAsync(successorId, false)).Count).IsEqualTo(0);
+        await Assert.That((await new TaskCommands(reopened.Store, ids, clock).ListInboxAsync()).Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task EndAndDelete_Restore_KeepsSeriesEndedAndRestoresOccurrence()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Repeat", null))).Task;
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 10), null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        var recurrence = new RecurrenceCommands(storage.Store, ids, clock);
+        await recurrence.StartAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, rule));
+        var started = (await tasks.GetAsync(task.Id))!;
+        var deleted = await recurrence.EndAndDeleteAsync(new(Guid.NewGuid().ToString(), task.Id, started.Version));
+        await Assert.That(await tasks.GetAsync(task.Id)).IsNull();
+        await tasks.RestoreAsync(new(Guid.NewGuid().ToString(), task.Id, deleted.Task.Version));
+        var detail = (await recurrence.GetForTaskAsync(task.Id))!;
+        await Assert.That(detail.Series.EndedAtUtc).IsNotNull();
+        await Assert.That(detail.Occurrences.Single().State).IsEqualTo(OccurrenceState.Active);
+    }
+
+    [Test]
+    public async Task Start_NewAnchor_ShiftsPlannedAndDueTogether()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Repeat", null))).Task;
+        task = (await tasks.UpdateDetailsAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, task.Title, "", new(2026, 11, 1), new(9, 0), "UTC", new(2026, 11, 2), new(10, 0), "UTC", TaskPriority.Normal, null, CapacityCategory.Personal))).Task;
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 10), new(15, 30),
+            "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        await new RecurrenceCommands(storage.Store, ids, clock).StartAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, rule));
+        var saved = (await tasks.GetAsync(task.Id))!;
+        await Assert.That(saved.PlannedDate).IsEqualTo(new DateOnly(2026, 11, 10));
+        await Assert.That(saved.PlannedTime).IsEqualTo(new TimeOnly(15, 30));
+        await Assert.That(saved.DueDate).IsEqualTo(new DateOnly(2026, 11, 11));
+        await Assert.That(saved.DueTime).IsEqualTo(new TimeOnly(16, 30));
+    }
+
+    [Test]
+    public async Task InstantiateTemplate_RecurrenceDefault_CreatesSeriesInSameOperation()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var templates = new TemplateCommands(storage.Store, ids, clock);
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 2, new(2020, 1, 1), null,
+            "UTC", [], null, null, null, null, RecurrenceEndKind.Count, 3, null);
+        var template = (await templates.CreateAsync(new(Guid.NewGuid().ToString(), "Repeated", new TemplatePayload { Title = "Task", PlannedDayOffset = 2, RecurrenceDefault = rule,
+            ReminderOffsets = [new(ReminderAnchor.Planned, -30, null)] }, null))).Template;
+        var operation = Guid.NewGuid().ToString();
+        var created = await templates.InstantiateAsync(new(operation, template.Id, null));
+        var replay = await templates.InstantiateAsync(new(operation, template.Id, null));
+        var detail = await new RecurrenceCommands(storage.Store, ids, clock).GetForTaskAsync(created.Task.Id);
+        await Assert.That(replay.Task.Id).IsEqualTo(created.Task.Id);
+        await Assert.That(detail!.Rule.AnchorDate).IsEqualTo(new DateOnly(2026, 11, 12));
+        await Assert.That(detail.Occurrences.Count).IsEqualTo(1);
+        await Assert.That(created.Task.RecurrenceOccurrenceKey).IsNotNull();
+        var originalRules = await storage.Store.QueryAsync((s, ct) => s.ReminderRules.ListByTaskAsync(created.Task.Id, ct));
+        await Assert.That(originalRules.Single().OffsetMinutes).IsEqualTo(-30);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        await tasks.SetStatusAsync(new(Guid.NewGuid().ToString(), created.Task.Id, created.Task.Version, TaskItemStatus.Done, null));
+        var successor = (await tasks.ListInboxAsync()).Single(row => row.Id != created.Task.Id);
+        var copied = await storage.Store.QueryAsync((s, ct) => s.ReminderRules.ListByTaskAsync(successor.Id, ct));
+        await Assert.That(copied.Single().OffsetMinutes).IsEqualTo(-30);
+        await Assert.That(copied.Single().Id == originalRules.Single().Id).IsFalse();
+    }
+
+    [Test]
+    public async Task Overdue_MissedRecurringSchedule_ExcludesOrdinaryPastPlannedTask()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var recurring = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Repeating", null))).Task;
+        var ordinary = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Ordinary", null))).Task;
+        await tasks.UpdateDetailsAsync(new(Guid.NewGuid().ToString(), ordinary.Id, ordinary.Version, ordinary.Title, "", new(2026, 11, 1), null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 1), null,
+            "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        await new RecurrenceCommands(storage.Store, ids, clock).StartAsync(new(Guid.NewGuid().ToString(), recurring.Id, recurring.Version, rule));
+        var query = new TaskQueries(storage.Store, clock);
+        var spec = new TaskQuerySpec { View = TaskView.Overdue };
+        var result = await query.RunAsync(spec);
+        await Assert.That(result.Rows.Select(row => row.Task.Id).ToArray()).IsEquivalentTo(new[] { recurring.Id });
+        await Assert.That(await query.CountAsync(spec)).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task SubtaskAndTagEdits_CreateOccurrenceExceptionAndUndoRestoresIt()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Repeat", null))).Task;
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 10), null,
+            "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        var recurrence = new RecurrenceCommands(storage.Store, ids, clock);
+        var start = await recurrence.StartAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, rule));
+        var operation = Guid.NewGuid().ToString();
+        await new SubtaskCommands(storage.Store, ids, clock).AddAsync(new(operation, task.Id, "Only this occurrence", null));
+        var occurrence = await storage.Store.QueryAsync((s, ct) => s.Recurrence.GetOccurrenceAsync(start.Occurrence.Id, ct));
+        await Assert.That(occurrence!.EditSnapshotJson!.Contains("Only this occurrence", StringComparison.Ordinal)).IsTrue();
+        await new UndoCommands(storage.Store, ids, clock).UndoAsync(new(Guid.NewGuid().ToString(), operation));
+        occurrence = await storage.Store.QueryAsync((s, ct) => s.Recurrence.GetOccurrenceAsync(start.Occurrence.Id, ct));
+        await Assert.That(occurrence!.EditSnapshotJson).IsNull();
+        await new TagCommands(storage.Store, ids, clock).LinkAsync(new(Guid.NewGuid().ToString(), TagTargetKind.Task, task.Id, null, "home"));
+        occurrence = await storage.Store.QueryAsync((s, ct) => s.Recurrence.GetOccurrenceAsync(start.Occurrence.Id, ct));
+        await Assert.That(occurrence!.EditSnapshotJson).IsNotNull();
+    }
+
     [Test]
     public async Task EditOccurrence_RecordsExceptionAndDoesNotChangeNextTemplate()
     {
@@ -104,6 +248,10 @@ public sealed class RecurrenceTests
         await Assert.That(projected.Count).IsEqualTo(2);
         await Assert.That(projected.All(item => item.Projected)).IsTrue();
         await Assert.That((await tasks.ListInboxAsync()).Count).IsEqualTo(1);
+        var upcoming = await recurrence.UpcomingAsync(14, 100);
+        await Assert.That(upcoming.Count).IsEqualTo(2);
+        await Assert.That(upcoming[0].NominalLocal).IsEqualTo(new DateTime(2026, 11, 11));
+        await Assert.That((await tasks.ListInboxAsync()).Count).IsEqualTo(1);
     }
 
     [Test]
@@ -172,7 +320,10 @@ public sealed class RecurrenceTests
         await tasks.SetStatusAsync(new(operation, task.Id, started.Version, TaskItemStatus.Done, null));
         var successor = (await tasks.ListInboxAsync()).Single(x => x.Id != task.Id);
         await new DiaryCommands(storage.Store, ids, clock).AddAsync(new(Guid.NewGuid().ToString(), successor.Id, "A later note", null));
-        await Assert.That(async () => await new UndoCommands(storage.Store, ids, clock).UndoAsync(new(Guid.NewGuid().ToString(), operation))).Throws<AppException>();
+        AppException? conflict = null;
+        try { await new UndoCommands(storage.Store, ids, clock).UndoAsync(new(Guid.NewGuid().ToString(), operation)); }
+        catch (AppException error) { conflict = error; }
+        await Assert.That(conflict!.Fields.Single(field => field.FieldPath == "recurrenceSuccessorId").Message).IsEqualTo(successor.Id);
         await Assert.That((await tasks.GetAsync(task.Id))!.Status).IsEqualTo(TaskItemStatus.Done);
         await Assert.That(await tasks.GetAsync(successor.Id)).IsNotNull();
     }

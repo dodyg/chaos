@@ -14,7 +14,8 @@ public sealed record TaskAggregateSnapshot(
     TaskRecord Task,
     IReadOnlyList<SubtaskRecord> Subtasks,
     IReadOnlyList<string>? TagIds = null,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? SubtaskTagIds = null);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? SubtaskTagIds = null,
+    IReadOnlyList<ReminderRuleRecord>? ReminderRules = null);
 
 /// <summary>Envelope for stored operation results; the replay flag is composed at the caller, never stored.</summary>
 public sealed record StoredResultEnvelope<T>(T Result);

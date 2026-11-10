@@ -5,6 +5,36 @@ namespace Chaos.Domain.Tests.Recurrence;
 
 public sealed class RecurrenceCalculatorTests
 {
+    [Test]
+    [Arguments(RecurrenceFrequency.Day, 3, "2024-01-01", "2024-01-07")]
+    [Arguments(RecurrenceFrequency.Week, 2, "2024-01-01", "2024-01-29")]
+    [Arguments(RecurrenceFrequency.Month, 2, "2024-01-01", "2024-05-01")]
+    [Arguments(RecurrenceFrequency.Year, 2, "2024-01-01", "2028-01-01")]
+    public async Task Expand_Interval_UsesCalendarFrequency(RecurrenceFrequency frequency, int interval, string anchor, string expected)
+    {
+        var first = DateOnly.ParseExact(anchor, "yyyy-MM-dd");
+        var last = DateOnly.ParseExact(expected, "yyyy-MM-dd");
+        var dates = RecurrenceCalculator.Expand(Rule(first, frequency) with { Interval = interval }, first, last, 20);
+        await Assert.That(DateOnly.FromDateTime(dates[^1])).IsEqualTo(last);
+        await Assert.That(dates.Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Expand_FifthWeekday_SkipsMonthsWithoutOne()
+    {
+        var rule = Rule(new(2024, 1, 1), RecurrenceFrequency.Month) with { Ordinal = 5, OrdinalWeekday = DayOfWeek.Monday };
+        var dates = RecurrenceCalculator.Expand(rule, new(2024, 1, 1), new(2024, 4, 30), 10);
+        await Assert.That(dates.Select(DateOnly.FromDateTime).ToArray()).IsEquivalentTo(new[] { new DateOnly(2024, 1, 29), new(2024, 4, 29) });
+    }
+
+    [Test]
+    public async Task AfterCompletion_LeapYear_ClampsAndHonorsUntil()
+    {
+        var rule = Rule(new(2024, 2, 29), RecurrenceFrequency.Year) with { Mode = RecurrenceMode.AfterCompletion, EndKind = RecurrenceEndKind.UntilDate, UntilDate = new(2025, 2, 28) };
+        var next = RecurrenceCalculator.AfterCompletion(rule, new DateTime(2024, 2, 29));
+        await Assert.That(next).IsEqualTo(new DateTime(2025, 2, 28));
+        await Assert.That(RecurrenceCalculator.AfterCompletion(rule, next!.Value)).IsNull();
+    }
     private static RecurrenceRule Rule(DateOnly anchor, RecurrenceFrequency frequency) =>
         new(RecurrenceMode.FixedSchedule, frequency, 1, anchor, null, "UTC", [], null, null, null, null,
             RecurrenceEndKind.Never, null, null);

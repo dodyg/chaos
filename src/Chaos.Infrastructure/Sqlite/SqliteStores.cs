@@ -23,6 +23,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IChecklistConversionStore ChecklistConversions { get; } = new SqliteChecklistConversionStore(connection);
     public IPadStore Pad { get; } = new SqlitePadStore(connection);
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
+    public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }

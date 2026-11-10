@@ -23,8 +23,17 @@ public interface IDataSession
     IChecklistConversionStore ChecklistConversions { get; }
     IPadStore Pad { get; }
     IRecurrenceStore Recurrence { get; }
+    IReminderRuleStore ReminderRules { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
+}
+
+public interface IReminderRuleStore
+{
+    Task<ReminderRuleRecord?> GetAsync(string id, CancellationToken ct);
+    Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
+    Task AddAsync(ReminderRuleRecord row, CancellationToken ct);
+    Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long expectedVersion, CancellationToken ct);
 }
 
 /// <summary>Versioned series and occurrence rows within the caller's transaction.</summary>
@@ -34,6 +43,7 @@ public interface IRecurrenceStore
     Task<long> NextRevisionAsync(string seriesId, CancellationToken ct);
     Task<RecurrenceOccurrenceRecord?> GetOccurrenceAsync(string id, CancellationToken ct);
     Task<RecurrenceOccurrenceRecord?> FindByKeyAsync(string seriesId, string nominalKey, CancellationToken ct);
+    Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListActiveBySpaceAsync(string spaceId, CancellationToken ct);
     Task<RecurrenceOccurrenceRecord?> FindByTaskAsync(string taskId, CancellationToken ct);
     Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListOccurrencesAsync(string seriesId, CancellationToken ct);
     Task AddSeriesAsync(RecurrenceSeriesRecord row, CancellationToken ct);

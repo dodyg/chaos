@@ -30,6 +30,8 @@ public sealed record RecurrenceRule(
             throw new DomainValidationException("This recurrence rule is not supported.");
         if (Interval is < 1 or > 999)
             throw new DomainValidationException("The recurrence interval must be between 1 and 999.");
+        if (AnchorTime is { } time && time.Ticks % TimeSpan.TicksPerSecond != 0)
+            throw new DomainValidationException("Recurrence times must use whole seconds.");
         try { _ = TimeZoneInfo.FindSystemTimeZoneById(ZoneId); }
         catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException)
         { throw new DomainValidationException("Choose a valid recurrence time zone."); }

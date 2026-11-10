@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { containerRpc, diaryRpc, historyRpc, markdownRpc, queryRpc, tagRpc, taskRpc, undoRpc, type TaskResponse } from "#neoastra";
+import { containerRpc, diaryRpc, historyRpc, markdownRpc, queryRpc, recurrenceRpc, tagRpc, taskRpc, undoRpc, type TaskResponse } from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -165,6 +165,7 @@ test("app undo: the newest change is offered, Ctrl+Z outside text fields undoes 
       delete: async () => ({ ok: true, operationId: "op", task: inbox[0], error: null, warning: null }),
     },
     containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    recurrenceRpc: { ...recurrenceRpc, get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null }) },
     tagRpc: { ...tagRpc, list: async () => ({ ok: true, tags: [], error: null }), listDeleted: async () => ({ ok: true, tags: [], error: null }), targetTags: async () => ({ ok: true, tagIds: [], error: null }) },
     queryRpc: { ...queryRpc, counts: async () => ({ ok: true, views: [], tags: [], error: null }) },
     undoRpc: { ...undoRpc,

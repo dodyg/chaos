@@ -1,4 +1,5 @@
 using Chaos.Domain.Tasks;
+using Chaos.Domain.Recurrence;
 
 namespace Chaos.Application.Contracts;
 
@@ -59,6 +60,9 @@ public sealed record TemplatePayload
     public TimeOnly? DueTime { get; init; }
     public string? DueZoneId { get; init; }
     public IReadOnlyList<TemplateSubtask> Subtasks { get; init; } = [];
+    /// <summary>Rule anchored to a reference date; instantiation shifts that anchor to the new task's date.</summary>
+    public RecurrenceRule? RecurrenceDefault { get; init; }
+    public IReadOnlyList<TemplateReminderOffset> ReminderOffsets { get; init; } = [];
 }
 
 /// <summary>Subtask structure inside a template payload (title/notes/order; always open when instantiated).</summary>

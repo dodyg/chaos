@@ -91,7 +91,14 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             SELECT DISTINCT DueZoneId FROM Tasks
             WHERE SpaceId = $space AND DeletedAtUtc IS NULL AND Status NOT IN (4,5)
               AND DueTime IS NOT NULL AND DueZoneId IS NOT NULL
-            ORDER BY DueZoneId;
+            UNION
+            SELECT DISTINCT json_extract(s.RuleJson, '$.payload.zoneId') FROM RecurrenceSeries s
+            JOIN RecurrenceOccurrences o ON o.SeriesId = s.Id
+            JOIN Tasks t ON t.Id = o.TaskId
+            WHERE t.SpaceId = $space AND t.DeletedAtUtc IS NULL AND t.Status NOT IN (4,5)
+              AND t.DueDate IS NULL AND o.State = 0 AND o.DeletedAtUtc IS NULL
+              AND json_extract(s.RuleJson, '$.payload.zoneId') IS NOT NULL
+            ORDER BY 1;
             """;
         command.Parameters.AddWithValue("$space", spaceId);
         using var reader = await command.ExecuteReaderAsync(ct);
@@ -316,8 +323,16 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                         var date = builder.P(StorageFormats.Date(cutoff.LocalDate));
                         return $"(t.DueZoneId = {builder.P(cutoff.ZoneId)} AND (t.DueDate < {date} OR (t.DueDate = {date} AND t.DueTime < {builder.P(StorageFormats.Time(cutoff.LocalTime))})))";
                     }));
-                where.Add($"t.DueDate IS NOT NULL AND ((t.DueTime IS NULL AND t.DueDate < {builder.P(StorageFormats.Date(overdueBefore))}) OR (t.DueTime IS NOT NULL AND ({timed})))");
-                groupDate = "t.DueDate";
+                var recurrenceCutoffs = criteria.OverdueZoneCutoffs.Count == 0 ? "0" : string.Join(" OR ", criteria.OverdueZoneCutoffs.Select(cutoff =>
+                {
+                    var date = builder.P(StorageFormats.Date(cutoff.LocalDate));
+                    var time = builder.P(StorageFormats.Time(cutoff.LocalTime));
+                    var zone = builder.P(cutoff.ZoneId);
+                    return $"(json_extract(rs.RuleJson, '$.payload.zoneId') = {zone} AND (substr(ro.EffectiveLocal,1,10) < {date} OR (json_extract(rs.RuleJson, '$.payload.anchorTime') IS NOT NULL AND substr(ro.EffectiveLocal,1,10) = {date} AND substr(ro.EffectiveLocal,12,8) < {time})))";
+                }));
+                var missed = $"(t.DueDate IS NULL AND EXISTS (SELECT 1 FROM RecurrenceOccurrences ro JOIN RecurrenceSeries rs ON rs.Id=ro.SeriesId WHERE ro.TaskId=t.Id AND ro.State=0 AND ro.DeletedAtUtc IS NULL AND ({recurrenceCutoffs})))";
+                where.Add($"((t.DueDate IS NOT NULL AND ((t.DueTime IS NULL AND t.DueDate < {builder.P(StorageFormats.Date(overdueBefore))}) OR (t.DueTime IS NOT NULL AND ({timed})))) OR {missed})");
+                groupDate = "COALESCE(t.DueDate, t.PlannedDate)";
             }
 
             IReadOnlyList<SortKey> keys = criteria.View switch
@@ -325,7 +340,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                 TaskView.Container => [new("t.Position", false)],
                 TaskView.Today => [new("t.Priority", true), new("c.Position", false), new("t.Position", false)],
                 TaskView.Upcoming => [new(groupDate, false), new("t.Priority", true)],
-                TaskView.Overdue => [new("t.DueDate", false), new("COALESCE(t.DueTime, '24:00:00')", false)],
+                TaskView.Overdue => [new("COALESCE(t.DueDate, t.PlannedDate)", false), new("COALESCE(t.DueTime, t.PlannedTime, '24:00:00')", false)],
                 TaskView.RecentlyCompleted => [new("t.CompletedAtUtc", true)],
                 TaskView.Waiting => [new("t.UpdatedAtUtc", false)],
                 TaskView.Search when criteria.Text is not null => [new("h.Rank", false)],

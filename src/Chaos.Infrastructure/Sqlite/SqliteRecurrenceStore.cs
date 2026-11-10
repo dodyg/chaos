@@ -41,6 +41,15 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
     public Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListOccurrencesAsync(string seriesId, CancellationToken ct) =>
         ReadOccurrencesAsync("SELECT * FROM RecurrenceOccurrences WHERE SeriesId=$value AND DeletedAtUtc IS NULL ORDER BY NominalKey, Id", seriesId, ct);
 
+    public Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListActiveBySpaceAsync(string spaceId, CancellationToken ct) =>
+        ReadOccurrencesAsync("""
+            SELECT o.* FROM RecurrenceOccurrences o
+            JOIN RecurrenceSeries s ON s.Id=o.SeriesId JOIN Tasks t ON t.Id=o.TaskId JOIN Containers c ON c.Id=t.ContainerId
+            WHERE s.SpaceId=$value AND s.DeletedAtUtc IS NULL AND s.EndedAtUtc IS NULL AND o.State=0 AND o.DeletedAtUtc IS NULL
+              AND t.DeletedAtUtc IS NULL AND t.Status NOT IN (4,5) AND c.DeletedAtUtc IS NULL AND c.ArchivedAtUtc IS NULL
+            ORDER BY o.Id
+            """, spaceId, ct);
+
     public async Task AddSeriesAsync(RecurrenceSeriesRecord row, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

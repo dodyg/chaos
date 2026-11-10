@@ -8,7 +8,8 @@ namespace Chaos.Desktop.Services;
 
 public sealed record TemplateListRequest();
 public sealed record TemplatePartResponse(string Title, string Notes);
-public sealed record TemplatePayloadResponse(string Title, string Notes, string Priority, int? EstimateMinutes, string Category, int? PlannedDayOffset, string? PlannedTime, string? PlannedZoneId, int? DueDayOffset, string? DueTime, string? DueZoneId, IReadOnlyList<TemplatePartResponse> Subtasks);
+public sealed record TemplateReminderOffsetDto(string Anchor, int OffsetMinutes, int? InsistentMinutes);
+public sealed record TemplatePayloadResponse(string Title, string Notes, string Priority, int? EstimateMinutes, string Category, int? PlannedDayOffset, string? PlannedTime, string? PlannedZoneId, int? DueDayOffset, string? DueTime, string? DueZoneId, IReadOnlyList<TemplatePartResponse> Subtasks, RecurrenceRuleDto? RecurrenceDefault = null, IReadOnlyList<TemplateReminderOffsetDto>? ReminderOffsets = null);
 public sealed record TemplateResponse(string Id, string Name, string Version, TemplatePayloadResponse Payload);
 public sealed record TemplateListResponse(bool Ok, IReadOnlyList<TemplateResponse> Templates, TaskErrorResponse? Error);
 public sealed record TemplateSaveRequest(string OperationId, string? TemplateId, string? ExpectedVersion, string Name, TemplatePayloadResponse Payload);
@@ -73,11 +74,13 @@ public sealed class TemplateRpcService(TemplateCommands commands)
         PlannedTime = Time(value.PlannedTime, "plannedTime"), PlannedZoneId = value.PlannedZoneId,
         DueDayOffset = value.DueDayOffset, DueTime = Time(value.DueTime, "dueTime"), DueZoneId = value.DueZoneId,
         Subtasks = [.. value.Subtasks.Select((part, index) => new TemplateSubtask { Title = part.Title, Notes = part.Notes, Position = (long)index * 1024 })],
+        RecurrenceDefault = value.RecurrenceDefault is null ? null : RecurrenceRpcService.Parse(value.RecurrenceDefault),
+        ReminderOffsets = [.. (value.ReminderOffsets ?? []).Select(item => new TemplateReminderOffset(Parse<ReminderAnchor>(item.Anchor, "reminderOffsets.anchor"), item.OffsetMinutes, item.InsistentMinutes))],
     };
     private static TemplateResponse Map(TemplateRecord row)
     {
         var payload = StoredJsonFormats.ReadSnapshot<TemplatePayload>(row.PayloadJson) ?? throw new AppException(AppErrorKind.StorageUnavailable, "The template could not be read.");
-        return new(row.Id, row.Name, row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), new(payload.Title, payload.Notes, payload.Priority.ToString(), payload.EstimateMinutes, payload.CapacityCategory.ToString(), payload.PlannedDayOffset, payload.PlannedTime?.ToString("HH:mm:ss"), payload.PlannedZoneId, payload.DueDayOffset, payload.DueTime?.ToString("HH:mm:ss"), payload.DueZoneId, [.. payload.Subtasks.OrderBy(x => x.Position).Select(x => new TemplatePartResponse(x.Title, x.Notes))]));
+        return new(row.Id, row.Name, row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), new(payload.Title, payload.Notes, payload.Priority.ToString(), payload.EstimateMinutes, payload.CapacityCategory.ToString(), payload.PlannedDayOffset, payload.PlannedTime?.ToString("HH:mm:ss"), payload.PlannedZoneId, payload.DueDayOffset, payload.DueTime?.ToString("HH:mm:ss"), payload.DueZoneId, [.. payload.Subtasks.OrderBy(x => x.Position).Select(x => new TemplatePartResponse(x.Title, x.Notes))], payload.RecurrenceDefault is null ? null : RecurrenceRpcService.Map(payload.RecurrenceDefault), [.. payload.ReminderOffsets.Select(item => new TemplateReminderOffsetDto(item.Anchor.ToString(), item.OffsetMinutes, item.InsistentMinutes))]));
     }
     private static long Version(string? value) => long.TryParse(value, out var result) && result > 0 ? result : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
     private static TimeOnly? Time(string? value, string field) => string.IsNullOrEmpty(value) ? null : TimeOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, "Enter a valid time.");

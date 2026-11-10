@@ -43,6 +43,7 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<UndoEntryRecord> Undo = [];
     public readonly List<ChecklistConversionRecord> ChecklistConversions = [];
     public readonly List<PadItemRecord> PadItems = [];
+    public readonly List<ReminderRuleRecord> ReminderRules = [];
     public readonly List<ScratchTaskLinkRecord> PadTaskLinks = [];
     public readonly HashSet<(string PadItemId, string TagId)> PadTags = [];
 
@@ -71,7 +72,16 @@ public sealed class InMemoryStore : IApplicationStore
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);
         public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
+        public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
     }
+}
+
+public sealed class FakeReminderRuleStore(List<ReminderRuleRecord> rows) : IReminderRuleStore
+{
+    public Task<ReminderRuleRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(row => row.Id == id));
+    public Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReminderRuleRecord>>([.. rows.Where(row => row.TaskId == taskId && row.DeletedAtUtc is null)]);
+    public Task AddAsync(ReminderRuleRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
+    public Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(rows, row, version);
 }
 
 public sealed class FakeDiaryStore(List<DiaryEntryRecord> rows, List<DiaryRevisionRecord> revisions) : IDiaryStore

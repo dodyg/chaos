@@ -1,7 +1,8 @@
 import React from "react";
-import { taskRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
+import { RecurrenceEditor } from "./RecurrenceEditor";
 import { extractChecklist, type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
 import { ContainerManagement } from "./ContainerManagement";
@@ -22,7 +23,7 @@ import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc };
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -38,6 +39,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const markdownApi = api.markdownRpc ?? markdownRpc;
   const journalApi = { diaryRpc: api.diaryRpc ?? diaryRpc, historyRpc: api.historyRpc ?? historyRpc };
   const padApi = api.padRpc ?? padRpc;
+  const recurrenceApi = api.recurrenceRpc ?? recurrenceRpc;
   const drafts = React.useRef(new DraftRegistry()).current;
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
   const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
@@ -49,6 +51,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
+  const [recurrenceDelete, setRecurrenceDelete] = React.useState<TaskResponse | null>(null);
+  const [recurrenceConflict, setRecurrenceConflict] = React.useState<{ taskId: string; message: string } | null>(null);
   const [deleted, setDeleted] = React.useState<TaskResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [warning, setWarning] = React.useState<string | null>(null);
@@ -128,7 +132,11 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       const latest = (await undoApi.list({ limit: 1 })).entries[0];
       if (!latest) { setNotice("There is nothing to undo."); return; }
       const result = await undoApi.undo({ operationId: operationId(), targetOperationId: latest.operationId });
-      if (!result.ok) throw new Error(result.error?.message ?? "Could not undo that change.");
+      if (!result.ok) {
+        const successor = result.error?.fields.find(field => field.fieldPath === "recurrenceSuccessorId");
+        if (successor) { setRecurrenceConflict({ taskId: successor.message, message: result.error?.message ?? "Review the successor before undoing." }); return; }
+        throw new Error(result.error?.message ?? "Could not undo that change.");
+      }
       setNotice(`Undid ${result.label}.`);
       await Promise.all([refresh(), refreshContainers()]);
       if (editing) {
@@ -308,6 +316,16 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       priority: t.priority, estimateMinutes: t.estimateMinutes, category: t.category }), () => setEditing(null));
   }
   function change(patch: Partial<TaskResponse>) { setEditing(t => t ? { ...t, ...patch } : null); }
+  async function requestTaskDeletion(task: TaskResponse) {
+    try {
+      const result = await recurrenceApi.get({ taskId: task.id });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not inspect recurrence.");
+      if (result.rule && !result.ended && result.occurrences.some(item => item.taskId === task.id && item.state === "Active")) {
+        setRecurrenceDelete(task); return;
+      }
+      await run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); });
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+  }
   function reorderTask(task: TaskResponse, insertionIndex: number) {
     void run(() => taskRpc.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex }));
   }
@@ -439,7 +457,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
-      {rowActions(task.title, index, rows.length, to => reorderTask(task, to), () => void run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }))}
+      {rowActions(task.title, index, rows.length, to => reorderTask(task, to), () => void requestTaskDeletion(task))}
     </li>)}</ol>;
   }
   function groupHeading(text: string, count?: number) {
@@ -520,7 +538,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
-      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} onOpen={task => setEditing(task)} header={queryHeader}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
           subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
@@ -566,6 +584,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
             <TabsTrigger value="details"><SlidersHorizontal/>Details</TabsTrigger>
             <TabsTrigger value="subtasks"><ListTodo/>Subtasks{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
             <TabsTrigger value="diary"><History/>Diary</TabsTrigger>
+            <TabsTrigger value="recurrence"><CalendarRange/>Repeat</TabsTrigger>
           </TabsList>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
@@ -632,6 +651,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
           onError={setError}
           onChanged={saved => { if (saved) { setEditing(saved); void refresh().catch((e: unknown) => setError(String(e))); } changed(); }}/>
         </TabsContent>
+        <TabsContent value="recurrence"><RecurrenceEditor task={editing} revision={revision} busy={busy} onError={setError} taskApi={taskRpc} api={recurrenceApi}
+          onChanged={saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version, plannedDate: saved.plannedDate, plannedTime: saved.plannedTime, plannedZoneId: saved.plannedZoneId, dueDate: saved.dueDate, dueTime: saved.dueTime, dueZoneId: saved.dueZoneId } : current); void refresh().catch((e: unknown) => setError(String(e))); changed(); }}/></TabsContent>
         </div>
       </Tabs>
       <div className="flex gap-2 border-t px-5 py-3">
@@ -640,6 +661,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       </div>
     </aside>}
 
+    {recurrenceConflict && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-conflict-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-conflict-title" className="font-semibold">Review the later occurrence</h2><p className="text-sm">{recurrenceConflict.message}</p><p className="text-sm">The completion and the later work are unchanged. Open the later task to review its edits and diary before deciding how to reconcile them.</p><div className="flex gap-2"><Button type="button" onClick={() => { const id = recurrenceConflict.taskId; setRecurrenceConflict(null); void taskRpc.get({ taskId: id }).then(result => { if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task."); }).catch((error: unknown) => setError(String(error))); }}>Open later task</Button><Button type="button" variant="outline" onClick={() => setRecurrenceConflict(null)}>Keep current state</Button></div></div></div>}
+    {recurrenceDelete && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-delete-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-delete-title" className="font-semibold">Delete repeating task?</h2><p className="text-sm">Skip this occurrence and continue the series, or end the series and delete this task. Earlier history stays available.</p><div className="flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.skip({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>Skip this occurrence</Button><Button type="button" variant="outline" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.endAndDelete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>End and delete</Button><Button type="button" variant="ghost" onClick={() => setRecurrenceDelete(null)}>Cancel</Button></div></div></div>}
     {lastUndo && <div role="status" aria-label="Undo" className="fixed bottom-4 left-1/2 z-30 flex max-w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border bg-popover py-1.5 pr-1.5 pl-4 text-sm shadow-lg">
       <span className="truncate">{lastUndo.label}</span>
       <Button type="button" size="sm" variant="outline" disabled={busy} title="Undo (Ctrl+Z outside text fields)" onClick={() => void undoLatest()}><Undo2/>Undo</Button>
