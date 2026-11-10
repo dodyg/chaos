@@ -113,6 +113,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.Template => await session.Templates.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Name) : (null, null),
         ChangeKind.Tag => await session.Tags.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.DisplayName) : (null, null),
         ChangeKind.Diary => await session.Diary.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, "diary entry") : (null, null),
+        ChangeKind.Pad => await session.Pad.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, PadExcerpt.Of(row.RawMarkdown)) : (null, null),
         _ => (null, null),
     };
 
@@ -125,7 +126,9 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
             (LinkKind.TaskTag, true) => await session.Tags.RemoveTaskLinkAsync(link.TargetId, link.TagId, ct),
             (LinkKind.TaskTag, false) => await session.Tags.AddTaskLinkAsync(link.TargetId, link.TagId, ct),
             (LinkKind.SubtaskTag, true) => await session.Tags.RemoveSubtaskLinkAsync(link.TargetId, link.TagId, ct),
-            _ => await session.Tags.AddSubtaskLinkAsync(link.TargetId, link.TagId, ct),
+            (LinkKind.SubtaskTag, false) => await session.Tags.AddSubtaskLinkAsync(link.TargetId, link.TagId, ct),
+            (LinkKind.PadTag, true) => await session.Tags.RemovePadLinkAsync(link.TargetId, link.TagId, ct),
+            _ => await session.Tags.AddPadLinkAsync(link.TargetId, link.TagId, ct),
         };
         if (!applied)
         {
@@ -180,6 +183,13 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                         UpdatedAtUtc = now,
                     },
                     (row, expected) => session.Diary.UpdateAsync(row, expected, ct));
+            case ChangeKind.Pad:
+                // The editor revision only moves forward, so a later autosave of the restored
+                // text is never mistaken for a stale one.
+                return await RevertAsync(change, label, row => PadExcerpt.Of(row.RawMarkdown) ?? "pad note",
+                    id => session.Pad.GetIncludingDeletedAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { DraftVersion = current.DraftVersion, Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Pad.UpdateAsync(row, expected, ct));
             default:
                 throw new AppException(AppErrorKind.StorageUnavailable, "The saved undo information names an unknown kind of item. Nothing was changed.");
         }

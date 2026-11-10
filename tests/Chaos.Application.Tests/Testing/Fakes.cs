@@ -42,6 +42,9 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<DiaryRevisionRecord> DiaryRevisions = [];
     public readonly List<UndoEntryRecord> Undo = [];
     public readonly List<ChecklistConversionRecord> ChecklistConversions = [];
+    public readonly List<PadItemRecord> PadItems = [];
+    public readonly List<ScratchTaskLinkRecord> PadTaskLinks = [];
+    public readonly HashSet<(string PadItemId, string TagId)> PadTags = [];
 
     public Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default) =>
         operation(new Session(this), ct);
@@ -57,7 +60,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ISectionStore Sections { get; } = new FakeSectionStore(owner.Sections);
         public ISubtaskStore Subtasks { get; } = new FakeSubtaskStore(owner.Subtasks);
         public ITemplateStore Templates { get; } = new FakeTemplateStore(owner.Templates);
-        public ITagStore Tags { get; } = new FakeTagStore(owner.Tags, owner.TaskTags, owner.SubtaskTags);
+        public ITagStore Tags { get; } = new FakeTagStore(owner.Tags, owner.TaskTags, owner.SubtaskTags, owner.PadTags);
         public ITaskQueryStore Queries { get; } = new UnsupportedQueryStore();
         public ITaskStore Tasks { get; } = new FakeTaskStore(owner.Tasks);
         public ITaskHistoryStore History { get; } = new FakeTaskHistoryStore(owner.History);
@@ -66,6 +69,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IDiaryStore Diary { get; } = new FakeDiaryStore(owner.Diary, owner.DiaryRevisions);
         public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);
+        public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
     }
 }
 
@@ -307,7 +311,7 @@ public sealed class FakeBackupCatalogStore(List<BackupCatalogRecord> rows) : IBa
         Task.FromResult(rows.FirstOrDefault(row => row.FileName == fileName));
 }
 
-public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, string TagId)> taskLinks, HashSet<(string SubtaskId, string TagId)> subtaskLinks) : ITagStore
+public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, string TagId)> taskLinks, HashSet<(string SubtaskId, string TagId)> subtaskLinks, HashSet<(string PadItemId, string TagId)> padLinks) : ITagStore
 {
     private IEnumerable<TagRecord> Active => rows.Where(x => x.DeletedAtUtc is null);
     private static IReadOnlyList<TagRecord> Ordered(IEnumerable<TagRecord> tags) => tags.OrderBy(x => x.Position).ThenBy(x => x.NormalizedName, StringComparer.Ordinal).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
@@ -329,6 +333,27 @@ public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, s
     public Task<bool> RemoveTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
     public Task<bool> AddSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Add((target, tag)));
     public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
+    public Task<IReadOnlyList<string>> ListPadTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.PadItemId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<string>> ListPadItemIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.TagId == id).Select(x => x.PadItemId).Order(StringComparer.Ordinal).ToList());
+    public Task<bool> AddPadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Add((target, tag)));
+    public Task<bool> RemovePadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Remove((target, tag)));
+}
+
+public sealed class FakePadStore(List<PadItemRecord> rows, List<ScratchTaskLinkRecord> links) : IPadStore
+{
+    public Task<PadItemRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
+    public Task<PadItemRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
+    public Task<IReadOnlyList<PadItemRecord>> ListBySpaceAsync(string space, bool archived, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PadItemRecord>>(rows.Where(x => x.SpaceId == space && x.DeletedAtUtc is null && (x.ArchivedAtUtc is not null) == archived).OrderBy(x => x.Position).ThenBy(x => x.Id, StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<PadItemRecord>> ListDeletedBySpaceAsync(string space, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<PadItemRecord>>(rows.Where(x => x.SpaceId == space && x.DeletedAtUtc is not null).ToList());
+    public Task AddAsync(PadItemRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
+    public Task<PadItemRecord?> UpdateAsync(PadItemRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(rows, row, version);
+    public Task<long> GetNextPositionAsync(string space, CancellationToken ct) => Task.FromResult(rows.Where(x => x.SpaceId == space && x.DeletedAtUtc is null).Select(x => x.Position + 1024).DefaultIfEmpty(0).Max());
+    public Task AddTaskLinkAsync(ScratchTaskLinkRecord link, CancellationToken ct) { links.Add(link); return Task.CompletedTask; }
+    public Task<IReadOnlyList<ScratchTaskLinkRecord>> ListTaskLinksAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<ScratchTaskLinkRecord>>(links.Where(x => x.PadItemId == id).ToList());
+    public Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => Task.FromResult(links.FirstOrDefault(x => x.TaskId == taskId));
+    public Task<IReadOnlyList<string>> SearchAsync(string space, string text, int limit, CancellationToken ct) => throw new NotSupportedException("Search runs against SQLite; see Chaos.Infrastructure.Tests.");
 }
 
 /// <summary>

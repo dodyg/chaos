@@ -21,6 +21,7 @@ public interface IDataSession
     IDiaryStore Diary { get; }
     IUndoStore Undo { get; }
     IChecklistConversionStore ChecklistConversions { get; }
+    IPadStore Pad { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
 }
@@ -39,6 +40,29 @@ public interface IDiaryStore
     Task<DiaryEntryRecord?> UpdateAsync(DiaryEntryRecord updated, long expectedVersion, CancellationToken ct);
     /// <summary>All saved states of one entry, oldest first.</summary>
     Task<IReadOnlyList<DiaryRevisionRecord>> ListRevisionsAsync(string entryId, CancellationToken ct);
+}
+
+/// <summary>
+/// Personal scratch pad items and the task backlinks made from them (PLAN §9). Add and Update
+/// keep the item's search document current in the caller's transaction; archived items stay
+/// searchable, tombstoned ones do not.
+/// </summary>
+public interface IPadStore
+{
+    Task<PadItemRecord?> GetAsync(string itemId, CancellationToken ct);
+    Task<PadItemRecord?> GetIncludingDeletedAsync(string itemId, CancellationToken ct);
+    /// <summary>Active items of one space ordered by (Position, Id); archived ones only when asked.</summary>
+    Task<IReadOnlyList<PadItemRecord>> ListBySpaceAsync(string spaceId, bool archived, CancellationToken ct);
+    Task<IReadOnlyList<PadItemRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct);
+    Task AddAsync(PadItemRecord item, CancellationToken ct);
+    Task<PadItemRecord?> UpdateAsync(PadItemRecord updated, long expectedVersion, CancellationToken ct);
+    Task<long> GetNextPositionAsync(string spaceId, CancellationToken ct);
+    Task AddTaskLinkAsync(ScratchTaskLinkRecord link, CancellationToken ct);
+    /// <summary>Tasks made from one item, oldest first.</summary>
+    Task<IReadOnlyList<ScratchTaskLinkRecord>> ListTaskLinksAsync(string itemId, CancellationToken ct);
+    Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct);
+    /// <summary>IDs of active items in the space whose text matches the search words, best match first.</summary>
+    Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct);
 }
 
 /// <summary>Reversible operations per profile (PLAN §9: latest 100 kept).</summary>
@@ -179,6 +203,12 @@ public interface ITagStore
     Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
     Task<bool> AddSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
     Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
+
+    Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct);
+    /// <summary>Pad item IDs linked to this exact tag, including tombstoned items.</summary>
+    Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct);
+    Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct);
+    Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct);
 }
 
 /// <summary>

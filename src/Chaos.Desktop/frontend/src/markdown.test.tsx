@@ -18,7 +18,7 @@ Object.defineProperties(globalThis, {
 const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { MarkdownPreview, extractChecklist, htmlToMarkdown, internalLinkIds } = await import("./markdown");
-const { formatEdit, linkQueryAt, taskLinkMarkdown } = await import("./markdownEditing");
+const { formatEdit, linkQueryAt, padLinkMarkdown, taskLinkMarkdown } = await import("./markdownEditing");
 const { MarkdownEditor } = await import("./MarkdownEditor");
 const { App } = await import("./App");
 
@@ -277,5 +277,24 @@ test("the task editor opens on a roomy Notes tab, keeps fields on Details and sa
   await user.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => assert.equal(edits.length, 1));
   assert.deepEqual({ title: edits[0].title, notes: edits[0].notes }, { title: "Write report", notes: "Draft v2" });
+  cleanup();
+});
+
+test("pad-note links resolve by ID, open the note, and show a deleted note as a broken link", async () => {
+  const live = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  const gone = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+  const source = `See ${padLinkMarkdown("Trip [ideas]", live)} and ${padLinkMarkdown("old note", gone)}.`;
+  const opened: string[] = [];
+  const asked: string[][] = [];
+  render(<MarkdownPreview source={source} links={{
+    resolvePads: async ids => { asked.push(ids); return [{ id: live, title: "Trip ideas", deleted: false }, { id: gone, title: "old note", deleted: true }]; },
+    onOpenPad: id => opened.push(id),
+  }}/>, { container: dom.window.document.body });
+
+  await screen.findByText("(deleted note)");
+  assert.deepEqual(asked[0].sort(), [live, gone].sort());
+  assert.deepEqual(internalLinkIds(source), []); // pad links are not task links
+  fireEvent.click(screen.getByRole("button", { name: "Trip [ideas]" }));
+  assert.deepEqual(opened, [live]);
   cleanup();
 });

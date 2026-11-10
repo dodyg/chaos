@@ -14,11 +14,12 @@ public sealed record MergeTagCommand(string OperationId, string SourceTagId, lon
 public sealed record DeleteTagCommand(string OperationId, string TagId, long ExpectedVersion);
 public sealed record RestoreTagCommand(string OperationId, string TagId, long ExpectedVersion);
 
-/// <summary>What a tag is attached to. Pad items join with package 5.</summary>
+/// <summary>What a tag is attached to.</summary>
 public enum TagTargetKind
 {
     Task = 0,
     Subtask = 1,
+    Pad = 2,
 }
 
 /// <summary>Attach a tag by ID, or by a path such as home/garden that selects or creates nested segments.</summary>
@@ -30,7 +31,8 @@ public sealed record TagDeletionRecovery(
     IReadOnlyList<TagRecord> TagsBefore,
     IReadOnlyList<TagRecord> TagsAfter,
     IReadOnlyList<TagLink> TaskLinks,
-    IReadOnlyList<TagLink> SubtaskLinks);
+    IReadOnlyList<TagLink> SubtaskLinks,
+    IReadOnlyList<TagLink>? PadLinks = null);
 
 public sealed record TagMutationResult(TagRecord Tag, bool Replayed, IReadOnlyList<TagRecord> Created, TagDeletionRecovery? Recovery = null);
 public sealed record TagLinkResult(string? TagId, IReadOnlyList<string> TagIds, bool Changed, bool Replayed, IReadOnlyList<TagRecord> Created);
@@ -46,7 +48,9 @@ public sealed record TagMergePreview(
     long SubtaskLinksMoved,
     long SubtaskLinksAlreadyPresent,
     long ChildTagsMoved,
-    long ChildTagsMerged);
+    long ChildTagsMerged,
+    long PadLinksMoved = 0,
+    long PadLinksAlreadyPresent = 0);
 
 public sealed record TagMergeResult(TagRecord Target, TagMergePreview Applied, bool Replayed);
 
@@ -222,6 +226,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     var after = new List<TagRecord>();
                     var taskLinks = new List<TagLink>();
                     var subtaskLinks = new List<TagLink>();
+                    var padLinks = new List<TagLink>();
                     foreach (var row in await ListSubtreeAsync(session, tag, inner))
                     {
                         foreach (var taskId in await session.Tags.ListTaskIdsAsync(row.Id, inner))
@@ -236,11 +241,17 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                             subtaskLinks.Add(new TagLink(subtaskId, row.Id));
                         }
 
+                        foreach (var padItemId in await session.Tags.ListPadItemIdsAsync(row.Id, inner))
+                        {
+                            await session.Tags.RemovePadLinkAsync(padItemId, row.Id, inner);
+                            padLinks.Add(new TagLink(padItemId, row.Id));
+                        }
+
                         before.Add(row);
                         after.Add(await ApplyUpdateAsync(session, row with { DeletedAtUtc = now, Version = row.Version + 1, UpdatedAtUtc = now }, row.Version, inner));
                     }
 
-                    return new TagMutationResult(after[0], Replayed: false, [], new TagDeletionRecovery(before, after, taskLinks, subtaskLinks));
+                    return new TagMutationResult(after[0], Replayed: false, [], new TagDeletionRecovery(before, after, taskLinks, subtaskLinks, padLinks));
                 }, token);
 
             return replayed ? result with { Replayed = true } : result;
@@ -314,6 +325,14 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                         }
                     }
 
+                    foreach (var link in recovery.PadLinks ?? [])
+                    {
+                        if (await session.Pad.GetIncludingDeletedAsync(link.TargetId, inner) is not null)
+                        {
+                            await session.Tags.AddPadLinkAsync(link.TargetId, link.TagId, inner);
+                        }
+                    }
+
                     return new TagMutationResult(restoredRoot, Replayed: false, []);
                 }, token);
 
@@ -351,9 +370,12 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                         (tag, created) = await EnsurePathAsync(session, profile.Id, null, segments, now, inner);
                     }
 
-                    var changed = command.TargetKind == TagTargetKind.Task
-                        ? await session.Tags.AddTaskLinkAsync(command.TargetId, tag.Id, inner)
-                        : await session.Tags.AddSubtaskLinkAsync(command.TargetId, tag.Id, inner);
+                    var changed = command.TargetKind switch
+                    {
+                        TagTargetKind.Task => await session.Tags.AddTaskLinkAsync(command.TargetId, tag.Id, inner),
+                        TagTargetKind.Subtask => await session.Tags.AddSubtaskLinkAsync(command.TargetId, tag.Id, inner),
+                        _ => await session.Tags.AddPadLinkAsync(command.TargetId, tag.Id, inner),
+                    };
                     return new TagLinkResult(tag.Id, await ListTargetTagIdsAsync(session, command.TargetKind, command.TargetId, inner), changed, Replayed: false, created);
                 }, token);
 
@@ -372,9 +394,12 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                 session, profile.Id, command.OperationId, "tag.unlink", command, now, async inner =>
                 {
                     await RequireTargetAsync(session, command.TargetKind, command.TargetId, inner);
-                    var changed = command.TargetKind == TagTargetKind.Task
-                        ? await session.Tags.RemoveTaskLinkAsync(command.TargetId, command.TagId, inner)
-                        : await session.Tags.RemoveSubtaskLinkAsync(command.TargetId, command.TagId, inner);
+                    var changed = command.TargetKind switch
+                    {
+                        TagTargetKind.Task => await session.Tags.RemoveTaskLinkAsync(command.TargetId, command.TagId, inner),
+                        TagTargetKind.Subtask => await session.Tags.RemoveSubtaskLinkAsync(command.TargetId, command.TagId, inner),
+                        _ => await session.Tags.RemovePadLinkAsync(command.TargetId, command.TagId, inner),
+                    };
                     return new TagLinkResult(command.TagId, await ListTargetTagIdsAsync(session, command.TargetKind, command.TargetId, inner), changed, Replayed: false, []);
                 }, token);
 
@@ -476,9 +501,9 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
 
     private sealed class MergeCounter
     {
-        public long TaskMoved, TaskPresent, SubtaskMoved, SubtaskPresent, ChildMoved, ChildMerged;
+        public long TaskMoved, TaskPresent, SubtaskMoved, SubtaskPresent, ChildMoved, ChildMerged, PadMoved, PadPresent;
 
-        public TagMergePreview ToPreview() => new(TaskMoved, TaskPresent, SubtaskMoved, SubtaskPresent, ChildMoved, ChildMerged);
+        public TagMergePreview ToPreview() => new(TaskMoved, TaskPresent, SubtaskMoved, SubtaskPresent, ChildMoved, ChildMerged, PadMoved, PadPresent);
     }
 
     private static async Task MergeIntoAsync(
@@ -510,6 +535,17 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
             {
                 await session.Tags.RemoveSubtaskLinkAsync(subtaskId, source.Id, token);
                 await session.Tags.AddSubtaskLinkAsync(subtaskId, target.Id, token);
+            }
+        }
+
+        var targetPads = (await session.Tags.ListPadItemIdsAsync(target.Id, token)).ToHashSet(StringComparer.Ordinal);
+        foreach (var padItemId in await session.Tags.ListPadItemIdsAsync(source.Id, token))
+        {
+            if (targetPads.Contains(padItemId)) counter.PadPresent++; else counter.PadMoved++;
+            if (apply)
+            {
+                await session.Tags.RemovePadLinkAsync(padItemId, source.Id, token);
+                await session.Tags.AddPadLinkAsync(padItemId, target.Id, token);
             }
         }
 
@@ -672,27 +708,36 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
 
     private static async Task RequireTargetAsync(IDataSession session, TagTargetKind kind, string targetId, CancellationToken token)
     {
-        var exists = kind == TagTargetKind.Task
-            ? await session.Tasks.GetAsync(targetId, token) is not null
-            : await session.Subtasks.GetAsync(targetId, token) is not null;
+        var exists = kind switch
+        {
+            TagTargetKind.Task => await session.Tasks.GetAsync(targetId, token) is not null,
+            TagTargetKind.Subtask => await session.Subtasks.GetAsync(targetId, token) is not null,
+            _ => await session.Pad.GetAsync(targetId, token) is not null,
+        };
         if (!exists)
         {
-            throw AppException.NotFound(kind == TagTargetKind.Task
-                ? "That task no longer exists. Refresh and try again."
-                : "That subtask no longer exists. Refresh and try again.");
+            throw AppException.NotFound(kind switch
+            {
+                TagTargetKind.Task => "That task no longer exists. Refresh and try again.",
+                TagTargetKind.Subtask => "That subtask no longer exists. Refresh and try again.",
+                _ => "That pad note no longer exists. Refresh and try again.",
+            });
         }
     }
 
     private static async Task<IReadOnlyList<string>> ListTargetTagIdsAsync(IDataSession session, TagTargetKind kind, string targetId, CancellationToken token) =>
-        kind == TagTargetKind.Task
-            ? await session.Tags.ListTaskTagIdsAsync(targetId, token)
-            : await session.Tags.ListSubtaskTagIdsAsync(targetId, token);
+        kind switch
+        {
+            TagTargetKind.Task => await session.Tags.ListTaskTagIdsAsync(targetId, token),
+            TagTargetKind.Subtask => await session.Tags.ListSubtaskTagIdsAsync(targetId, token),
+            _ => await session.Tags.ListPadTagIdsAsync(targetId, token),
+        };
 
     private static void RequireTargetKind(TagTargetKind kind)
     {
         if (!Enum.IsDefined(kind))
         {
-            throw AppException.Validation("targetKind", "Tags can be added to tasks and subtasks.");
+            throw AppException.Validation("targetKind", "Tags can be added to tasks, subtasks and pad notes.");
         }
     }
 

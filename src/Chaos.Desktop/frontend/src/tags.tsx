@@ -40,7 +40,7 @@ type TagApi = typeof tagRpc;
  * home/garden only when nothing existing is picked. Keyboard alternative to drag-to-tag.
  */
 export function TagPicker({ targetKind, targetId, label, tags, api = tagRpc, revision = 0, onChanged }: {
-  targetKind: "Task" | "Subtask"; targetId: string; label: string; tags: TagResponse[]; api?: TagApi; revision?: number; onChanged: () => void;
+  targetKind: "Task" | "Subtask" | "Pad"; targetId: string; label: string; tags: TagResponse[]; api?: TagApi; revision?: number; onChanged: () => void;
 }) {
   const [ids, setIds] = React.useState<string[]>([]);
   const [text, setText] = React.useState("");
@@ -179,7 +179,7 @@ export function TagSettings({ tag, tags, api = tagRpc, onChanged, onDeleted }: {
     const result = await api.previewMerge({ sourceId: tag.id, targetId });
     if (!result.ok) { setError(result.error?.message ?? "Could not preview the merge."); return; }
     const target = tags.find(candidate => candidate.id === targetId);
-    setPreview(`Merging into #${target?.path}: ${result.taskLinksMoved} task tag(s) move, ${result.taskLinksAlreadyPresent} already there; ${result.subtaskLinksMoved + result.subtaskLinksAlreadyPresent} subtask tag(s); ${result.childTagsMoved} nested tag(s) move, ${result.childTagsMerged} combine with same-named tags. #${tag.path} is then removed.`);
+    setPreview(`Merging into #${target?.path}: ${result.taskLinksMoved} task tag(s) move, ${result.taskLinksAlreadyPresent} already there; ${result.subtaskLinksMoved + result.subtaskLinksAlreadyPresent} subtask tag(s); ${result.padLinksMoved + result.padLinksAlreadyPresent} pad note tag(s); ${result.childTagsMoved} nested tag(s) move, ${result.childTagsMerged} combine with same-named tags. #${tag.path} is then removed.`);
   }
 
   const base = { operationId: operationId(), tagId: tag.id, expectedVersion: tag.version };

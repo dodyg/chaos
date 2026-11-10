@@ -3,6 +3,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
+using Chaos.Application.Pad;
 using Chaos.Application.Queries;
 using Chaos.Application.Tags;
 using Chaos.Desktop.Services;
@@ -43,6 +44,7 @@ internal static class Program
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
+                rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -189,5 +191,30 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(LinkResolveResponse))]
 [JsonSerializable(typeof(OpenExternalRequest))]
 [JsonSerializable(typeof(OpenExternalResponse))]
+[JsonSerializable(typeof(PadListRequest))]
+[JsonSerializable(typeof(PadTaskLinkResponse))]
+[JsonSerializable(typeof(PadItemResponse))]
+[JsonSerializable(typeof(PadListResponse))]
+[JsonSerializable(typeof(PadGetRequest))]
+[JsonSerializable(typeof(PadCreateRequest))]
+[JsonSerializable(typeof(PadSaveRequest))]
+[JsonSerializable(typeof(PadSaveResponse))]
+[JsonSerializable(typeof(PadItemChangeRequest))]
+[JsonSerializable(typeof(PadItemsRequest))]
+[JsonSerializable(typeof(PadItemRequest))]
+[JsonSerializable(typeof(PadReorderRequest))]
+[JsonSerializable(typeof(PadOperationResponse))]
+[JsonSerializable(typeof(PadMakeTaskRequest))]
+[JsonSerializable(typeof(PadMakeTaskResponse))]
+[JsonSerializable(typeof(PadLocateRequest))]
+[JsonSerializable(typeof(PadAnchorResponse))]
+[JsonSerializable(typeof(PadLocateResponse))]
+[JsonSerializable(typeof(PadSearchRequest))]
+[JsonSerializable(typeof(PadResolveRequest))]
+[JsonSerializable(typeof(PadLinkTargetResponse))]
+[JsonSerializable(typeof(PadResolveResponse))]
+[JsonSerializable(typeof(PadReviewStatusRequest))]
+[JsonSerializable(typeof(PadReviewStatusResponse))]
+[JsonSerializable(typeof(PadReviewRequest))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

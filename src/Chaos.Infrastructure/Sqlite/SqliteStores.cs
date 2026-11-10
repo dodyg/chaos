@@ -21,6 +21,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IDiaryStore Diary { get; } = new SqliteDiaryStore(connection);
     public IUndoStore Undo { get; } = new SqliteUndoStore(connection);
     public IChecklistConversionStore ChecklistConversions { get; } = new SqliteChecklistConversionStore(connection);
+    public IPadStore Pad { get; } = new SqlitePadStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }

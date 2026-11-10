@@ -16,6 +16,7 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
     private readonly SqliteConnectionSource _source = source;
     private readonly SqliteConnection _writer = source.Open();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private volatile bool _closed;
 
     public async Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default)
     {
@@ -23,6 +24,11 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
         try
         {
             ct.ThrowIfCancellationRequested();
+            if (_closed)
+            {
+                throw new AppException(AppErrorKind.StorageUnavailable, "Chaos is closing, so this change was not saved. Reopen Chaos and try again.");
+            }
+
             using var transaction = _writer.BeginTransaction();
             try
             {
@@ -60,9 +66,28 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
         }
     }
 
+    /// <summary>Time a closing application waits for an in-flight write (an autosave) to commit.</summary>
+    public static readonly TimeSpan ShutdownDrainTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Waits for the write in progress, if any, to commit or roll back before closing the
+    /// writer (PLAN §9: flush outstanding saves before disposing storage). Writes that arrive
+    /// afterwards fail as storage-unavailable instead of racing the close.
+    /// </summary>
     public void Dispose()
     {
-        _writer.Dispose();
-        _writeGate.Dispose();
+        var drained = _writeGate.Wait(ShutdownDrainTimeout);
+        try
+        {
+            _closed = true;
+            _writer.Dispose();
+        }
+        finally
+        {
+            if (drained)
+            {
+                _writeGate.Release();
+            }
+        }
     }
 }
