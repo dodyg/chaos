@@ -123,6 +123,13 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
     public async Task<IReadOnlyList<TaskRecord>> ListAsync(string containerId, CancellationToken ct = default) =>
         await store.QueryAsync((session, token) => session.Tasks.ListByContainerAsync(containerId, token), ct);
 
+    public async Task<IReadOnlyList<TaskRecord>> ListDeletedAsync(string? containerId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var container = await ResolveContainerAsync(session, containerId, token);
+            return await session.Tasks.ListDeletedByContainerAsync(container.Id, token);
+        }, ct);
+
     public async Task<IReadOnlyList<TaskRecord>> ListInboxAsync(CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) =>
         {
@@ -386,8 +393,8 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
     }
 
     /// <summary>
-    /// Restores a tombstoned task together with the subtasks its deletion tombstoned
-    /// (matched by the shared deletion instant); subtasks deleted separately stay deleted.
+    /// Restores a tombstoned task and the subtasks recorded as active immediately before
+    /// its deletion; separately deleted subtasks remain deleted even when clocks coincide.
     /// </summary>
     public async Task<TaskMutationResult> RestoreAsync(DeleteTaskCommand command, CancellationToken ct = default)
     {
@@ -400,20 +407,24 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var task = await session.Tasks.GetIncludingDeletedAsync(command.TaskId, inner)
                         ?? throw AppException.NotFound("No task with that ID exists on this computer.");
+                    RequireCurrentVersion(task, command.ExpectedVersion);
                     if (task.DeletedAtUtc is null)
                     {
                         return new TaskMutationResult(task, Replayed: false, Warning: null); // already active
                     }
 
-                    RequireCurrentVersion(task, command.ExpectedVersion);
-                    var deletedAt = task.DeletedAtUtc.Value;
+                    _ = await session.Containers.GetAsync(task.ContainerId, inner) ?? throw AppException.Validation("containerId", "Restore the task's list or project first.");
                     var allSubtasks = await session.Subtasks.ListByTaskIncludingDeletedAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, allSubtasks.Where(subtask => subtask.DeletedAtUtc is null).ToList());
+                    var history = await session.History.ListByTaskAsync(task.Id, inner);
+                    var deletion = history.LastOrDefault(entry => entry.EventKind == "task.deleted" && entry.AggregateVersion == task.Version);
+                    var snapshot = deletion?.SnapshotBefore is { } json ? StoredJsonFormats.ReadSnapshot<TaskAggregateSnapshot>(json) : null;
+                    var childIds = snapshot?.Subtasks.Where(child => child.DeletedAtUtc is null).Select(child => child.Id).ToHashSet(StringComparer.Ordinal) ?? [];
 
                     var restoredSubtasks = new List<SubtaskRecord>();
                     foreach (var subtask in allSubtasks)
                     {
-                        if (subtask.DeletedAtUtc != deletedAt)
+                        if (subtask.DeletedAtUtc is null || !childIds.Contains(subtask.Id))
                         {
                             continue;
                         }

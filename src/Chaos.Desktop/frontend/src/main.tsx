@@ -12,11 +12,12 @@ function App() {
   const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
-  const [deleted, setDeleted] = React.useState<TaskResponse | null>(null);
+  const [deleted, setDeleted] = React.useState<TaskResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [warning, setWarning] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [subtasks, setSubtasks] = React.useState<SubtaskResponse[]>([]);
+  const [deletedSubtasks, setDeletedSubtasks] = React.useState<SubtaskResponse[]>([]);
   const [subtaskTitle, setSubtaskTitle] = React.useState("");
   const [subtaskEdit, setSubtaskEdit] = React.useState<SubtaskResponse | null>(null);
   const [containers, setContainers] = React.useState<ContainerResponse[]>([]);
@@ -30,7 +31,10 @@ function App() {
   async function refresh() {
     const response = containerId ? await containerRpc.tasks({ containerId }) : await taskRpc.listInbox({});
     if (!response.ok) throw new Error(response.error?.message ?? "Could not load the Inbox.");
+    const removed = await taskRpc.listDeleted({ containerId: containerId || null });
+    if (!removed.ok) throw new Error(removed.error?.message ?? "Could not load deleted tasks.");
     setTasks([...response.tasks]);
+    setDeleted([...removed.tasks]);
   }
   async function refreshContainers() {
     const response = await containerRpc.list({});
@@ -52,8 +56,8 @@ function App() {
   }
   React.useEffect(() => {
     let current = true;
-    setSubtasks([]); setSubtaskEdit(null); setSubtaskTitle("");
-    if (editing?.id) void refreshSubtasks(editing.id).then(rows => { if (current) setSubtasks(rows); }).catch((e: unknown) => { if (current) setError(String(e)); });
+    setSubtasks([]); setDeletedSubtasks([]); setSubtaskEdit(null); setSubtaskTitle("");
+    if (editing?.id) void Promise.all([refreshSubtasks(editing.id), subtaskRpc.listDeleted({ taskId: editing.id })]).then(([rows, deleted]) => { if (!deleted.ok) throw new Error(deleted.error?.message ?? "Could not load deleted subtasks."); if (current) { setSubtasks(rows); setDeletedSubtasks([...deleted.subtasks]); } }).catch((e: unknown) => { if (current) setError(String(e)); });
     return () => { current = false; };
   }, [editing?.id]);
 
@@ -67,6 +71,9 @@ function App() {
       after?.(result.subtask);
       const rows = await refreshSubtasks(taskId);
       setSubtasks(rows);
+      const deleted = await subtaskRpc.listDeleted({ taskId });
+      if (!deleted.ok) throw new Error(deleted.error?.message ?? "Could not load deleted subtasks.");
+      setDeletedSubtasks([...deleted.subtasks]);
       setSubtaskRevision(current => current + 1);
     } catch (e) { setError(e instanceof Error ? e.message : "The subtask could not be saved."); }
     finally { setBusy(false); }
@@ -104,7 +111,7 @@ function App() {
     <form onSubmit={capture}><label htmlFor="capture">Add a task</label><div className="row"><input id="capture" value={title} onChange={e => setTitle(e.target.value)} autoComplete="off"/><button disabled={busy || !title.trim()}>Add task</button></div></form>
     {error && <p role="alert">{error}</p>}
     {warning && <p role="status">{warning}</p>}
-    {deleted && <p>Task deleted. <button disabled={busy} onClick={() => void run(() => taskRpc.restore({ operationId: operationId(), taskId: deleted.id, expectedVersion: deleted.version }), () => setDeleted(null))}>Restore</button></p>}
+    {deleted.length > 0 && <details><summary>Deleted tasks</summary><ul>{deleted.map(task => <li key={task.id}>{task.title} <button disabled={busy} onClick={() => void run(() => taskRpc.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}>Restore</button></li>)}</ul></details>}
     <label>List or project<select value={containerId} onChange={e => { setContainerId(e.target.value); setEditing(null); }}><option value="">Inbox</option>{containers.filter(c => c.kind !== "Inbox").map(c => <option key={c.id} value={c.id}>{c.name}{c.archived ? " (archived)" : ""}</option>)}</select></label>
     {containerId && containers.find(c => c.id === containerId) && <button type="button" disabled={busy} onClick={() => { const selected = containers.find(c => c.id === containerId)!; void (async () => { setBusy(true); setError(null); try { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; const result = selected.archived ? await containerRpc.unarchive(request) : await containerRpc.archive(request); if (!result.ok) throw new Error(result.error?.message ?? "Could not update archive state."); await refreshContainers(); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}>{containers.find(c => c.id === containerId)?.archived ? "Unarchive" : "Archive"}</button>}
     <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); setError(null); try { const result = await containerRpc.create({ operationId: operationId(), name: containerName, kind: containerKind }); if (!result.ok || !result.container) throw new Error(result.error?.message ?? "Could not create list."); await refreshContainers(); setContainerId(result.container.id); setContainerName(""); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}><div className="row"><label>New list or project<input value={containerName} onChange={e => setContainerName(e.target.value)}/></label><label>Type<select value={containerKind} onChange={e => setContainerKind(e.target.value)}><option>List</option><option>Project</option></select></label><button disabled={busy || !containerName.trim()}>Create</button></div></form>
@@ -115,7 +122,7 @@ function App() {
       <div><button className="task-title" onClick={() => setEditing(task)}>{task.title}</button> <span>{label(task.status)}</span></div>
       <div className="row"><button disabled={busy || index === 0} aria-label={`Move ${task.title} up`} onClick={() => void run(() => taskRpc.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex: index - 1 }))}>↑</button>
       <button disabled={busy || index === tasks.length - 1} aria-label={`Move ${task.title} down`} onClick={() => void run(() => taskRpc.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex: index + 1 }))}>↓</button>
-      <button disabled={busy} onClick={() => void run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), setDeleted)}>Delete</button></div>
+      <button disabled={busy} onClick={() => void run(() => taskRpc.delete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); })}>Delete</button></div>
     </li>)}</ol>}
     {editing && <section aria-labelledby="editor-heading"><h2 id="editor-heading">Edit task</h2><form onSubmit={save}>
       <label>Title<input required value={editing.title} onChange={e => change({ title: e.target.value })}/></label>
@@ -138,7 +145,9 @@ function App() {
       <ol className="tasks">{subtasks.map((subtask, index) => <li key={subtask.id}><div><button onClick={() => setSubtaskEdit(subtask)}>{subtask.title}</button> <span>{label(subtask.status)}</span></div><div className="row">
         <button disabled={busy || index === 0} aria-label={`Move ${subtask.title} up`} onClick={() => void runSubtask(() => subtaskRpc.reorder({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, insertionIndex: index - 1 }))}>↑</button>
         <button disabled={busy || index === subtasks.length - 1} aria-label={`Move ${subtask.title} down`} onClick={() => void runSubtask(() => subtaskRpc.reorder({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, insertionIndex: index + 1 }))}>↓</button>
+        <button disabled={busy} onClick={() => void runSubtask(() => subtaskRpc.delete({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, title: subtask.title, notes: subtask.notes }), () => { if (subtaskEdit?.id === subtask.id) setSubtaskEdit(null); })}>Delete</button>
       </div></li>)}</ol>
+      {deletedSubtasks.length > 0 && <details><summary>Deleted subtasks</summary><ul>{deletedSubtasks.map(subtask => <li key={subtask.id}>{subtask.title} <button type="button" disabled={busy} onClick={() => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}>Restore</button></li>)}</ul></details>}
       {subtaskEdit && <form onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.edit({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, title: subtaskEdit.title, notes: subtaskEdit.notes }), () => setSubtaskEdit(null)); }}>
         <h4>Edit subtask</h4><label>Title<input required value={subtaskEdit.title} onChange={e => setSubtaskEdit({ ...subtaskEdit, title: e.target.value })}/></label>
         <label>Notes<textarea value={subtaskEdit.notes} onChange={e => setSubtaskEdit({ ...subtaskEdit, notes: e.target.value })}/></label>

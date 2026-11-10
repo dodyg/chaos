@@ -108,6 +108,7 @@ public sealed class FakeContainerStore(List<ContainerRecord> rows, List<TaskReco
 
 public sealed class FakeTaskStore(List<TaskRecord> rows) : ITaskStore
 {
+    public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == id && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == taskId));
     public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == containerId && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) =>
@@ -182,6 +183,7 @@ public sealed class FakeSubtaskStore(List<SubtaskRecord> rows) : ISubtaskStore
 
 public sealed class FakeTemplateStore(List<TemplateRecord> rows) : ITemplateStore
 {
+    public Task<IReadOnlyList<TemplateRecord>> ListDeletedBySpaceAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TemplateRecord>>(rows.Where(x => x.SpaceId == id && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
     public Task<TemplateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
     public Task<TemplateRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
     public Task<TemplateRecord?> FindByNameAsync(string id, string name, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.SpaceId == id && x.NormalizedName == name && x.DeletedAtUtc is null));

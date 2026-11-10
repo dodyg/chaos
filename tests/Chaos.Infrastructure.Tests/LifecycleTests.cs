@@ -10,6 +10,63 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class LifecycleTests
 {
     [Test]
+    public async Task RestoreTask_ChildDeletedSeparatelyAtSameInstant_StaysDeletedAfterRestart()
+    {
+        var root = TestPaths.NewDataRoot();
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        string taskId;
+        long taskVersion;
+        string deletedChildId;
+        using (var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None))
+        {
+            var tasks = new TaskCommands(storage.Store, ids, clock);
+            var subtasks = new SubtaskCommands(storage.Store, ids, clock);
+            var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Parent", null))).Task;
+            taskId = task.Id;
+            var separate = (await subtasks.AddAsync(new(Guid.NewGuid().ToString(), taskId, "Separate", null))).Subtask;
+            deletedChildId = separate.Id;
+            await subtasks.AddAsync(new(Guid.NewGuid().ToString(), taskId, "Together", null));
+            await subtasks.DeleteAsync(new(Guid.NewGuid().ToString(), separate.Id, separate.Version, separate.Title, separate.Notes));
+            taskVersion = (await tasks.DeleteAsync(new(Guid.NewGuid().ToString(), taskId, task.Version))).Task.Version;
+        }
+        using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None);
+        var restoredTasks = new TaskCommands(reopened.Store, ids, clock);
+        var restoredSubtasks = new SubtaskCommands(reopened.Store, ids, clock);
+        await Assert.That((await restoredTasks.ListDeletedAsync(null)).Single().Id).IsEqualTo(taskId);
+        await restoredTasks.RestoreAsync(new(Guid.NewGuid().ToString(), taskId, taskVersion));
+        var detail = await restoredTasks.GetDetailAsync(taskId);
+        await Assert.That(detail.Subtasks.Single().Title).IsEqualTo("Together");
+        var deleted = await restoredSubtasks.ListDeletedAsync(taskId);
+        await Assert.That(deleted.Single().Id).IsEqualTo(deletedChildId);
+        await restoredSubtasks.RestoreAsync(new(Guid.NewGuid().ToString(), taskId, deletedChildId, deleted.Single().Version));
+        await Assert.That((await restoredTasks.GetDetailAsync(taskId)).Subtasks.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task DeletedTemplate_AfterRestart_CanBeDiscoveredAndRestored()
+    {
+        var root = TestPaths.NewDataRoot();
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        string templateId;
+        using (var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None))
+        {
+            var commands = new TemplateCommands(storage.Store, ids, clock);
+            var item = (await commands.CreateAsync(new(Guid.NewGuid().ToString(), "Template", new TemplatePayload { Title = "Task" }, null))).Template;
+            templateId = item.Id;
+            await commands.DeleteAsync(new(Guid.NewGuid().ToString(), item.Id, item.Version));
+        }
+        using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None);
+        var templates = new TemplateCommands(reopened.Store, ids, clock);
+        var deleted = (await templates.ListDeletedAsync()).Single();
+        await Assert.That(deleted.Id).IsEqualTo(templateId);
+        await templates.RestoreAsync(new(Guid.NewGuid().ToString(), deleted.Id, deleted.Version));
+        await Assert.That((await templates.ListAsync(null)).Single().Id).IsEqualTo(templateId);
+        await Assert.That((await templates.ListDeletedAsync()).Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ProjectProgress_CancelledTasksExcluded_AndDeleteMovesContentsToInbox()
     {
         var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));

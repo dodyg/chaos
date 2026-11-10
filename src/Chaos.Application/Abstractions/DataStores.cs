@@ -63,6 +63,7 @@ public interface ITaskStore
     Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct);
     /// <summary>Active top-level tasks of one container, ordered by (Position, Id).</summary>
     Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct);
+    Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct);
     Task AddAsync(TaskRecord task, CancellationToken ct);
     /// <summary>
     /// Optimistic-concurrency update: rewrites the row only when its stored version equals
@@ -94,6 +95,7 @@ public interface ITemplateStore
     Task<TemplateRecord?> FindByNameAsync(string spaceId, string normalizedName, CancellationToken ct);
     /// <summary>Active templates of one space, ordered by (NormalizedName, Id).</summary>
     Task<IReadOnlyList<TemplateRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
+    Task<IReadOnlyList<TemplateRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct);
     Task AddAsync(TemplateRecord template, CancellationToken ct);
     Task<TemplateRecord?> UpdateAsync(TemplateRecord updated, long expectedVersion, CancellationToken ct);
 }

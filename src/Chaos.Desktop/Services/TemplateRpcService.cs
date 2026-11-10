@@ -25,6 +25,12 @@ public sealed class TemplateRpcService(TemplateCommands commands)
         try { return new(true, [.. (await commands.ListAsync(null, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
+    [NeoRpcMethod("listDeleted")]
+    public async ValueTask<TemplateListResponse> ListDeletedAsync(TemplateListRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await commands.ListDeletedAsync(ct)).Select(Map)], null); }
+        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
+    }
 
     [NeoRpcMethod("save")]
     public async ValueTask<TemplateOperationResponse> SaveAsync(TemplateSaveRequest request, CancellationToken ct)

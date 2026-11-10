@@ -13,11 +13,21 @@ public sealed record SubtaskAddRequest(string OperationId, string TaskId, string
 public sealed record SubtaskEditRequest(string OperationId, string SubtaskId, string ExpectedVersion, string Title, string Notes);
 public sealed record SubtaskStatusRequest(string OperationId, string SubtaskId, string ExpectedVersion, string Status);
 public sealed record SubtaskOrderRequest(string OperationId, string SubtaskId, string ExpectedVersion, int InsertionIndex);
+public sealed record SubtaskRestoreRequest(string OperationId, string TaskId, string SubtaskId, string ExpectedVersion);
 public sealed record SubtaskOperationResponse(bool Ok, SubtaskResponse? Subtask, TaskErrorResponse? Error);
 
 [NeoRpcService("subtasks", Version = 1)]
 public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtasks)
 {
+    [NeoRpcMethod("listDeleted")]
+    public async ValueTask<SubtaskListResponse> ListDeletedAsync(SubtaskListRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await subtasks.ListDeletedAsync(request.TaskId, ct)).Select(Map)], null); }
+        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
+    }
+    [NeoRpcMethod("restore")]
+    public async ValueTask<SubtaskOperationResponse> RestoreAsync(SubtaskRestoreRequest request, CancellationToken ct) =>
+        await RunAsync(() => subtasks.RestoreAsync(new(request.OperationId, request.TaskId, request.SubtaskId, Version(request.ExpectedVersion)), ct));
     [NeoRpcMethod("list")]
     public async ValueTask<SubtaskListResponse> ListAsync(SubtaskListRequest request, CancellationToken ct)
     {

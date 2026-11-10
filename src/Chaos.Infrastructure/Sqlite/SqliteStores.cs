@@ -284,6 +284,16 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
 
 public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
 {
+    public async Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Tasks WHERE ContainerId = $container AND DeletedAtUtc IS NOT NULL ORDER BY DeletedAtUtc DESC, Id;";
+        command.Parameters.AddWithValue("$container", containerId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var results = new List<TaskRecord>();
+        while (await reader.ReadAsync(ct)) results.Add(ReadTask(reader));
+        return results;
+    }
     public async Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -661,6 +671,16 @@ public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskSt
 
 public sealed class SqliteTemplateStore(SqliteConnection connection) : ITemplateStore
 {
+    public async Task<IReadOnlyList<TemplateRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskTemplates WHERE SpaceId = $space AND DeletedAtUtc IS NOT NULL ORDER BY DeletedAtUtc DESC, Id;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var results = new List<TemplateRecord>();
+        while (await reader.ReadAsync(ct)) results.Add(ReadTemplate(reader));
+        return results;
+    }
     public async Task<TemplateRecord?> GetIncludingDeletedAsync(string templateId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

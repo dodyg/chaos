@@ -144,6 +144,14 @@ public sealed class TemplateCommands(IApplicationStore store, IIdGenerator ids, 
             return await session.Templates.ListBySpaceAsync(space.Id, token);
         }, ct);
 
+    public async Task<IReadOnlyList<TemplateRecord>> ListDeletedAsync(CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var profile = await session.Profiles.GetPrimaryAsync(token) ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet.");
+            var space = await ResolveSpaceAsync(session, null, profile.Id, token);
+            return await session.Templates.ListDeletedBySpaceAsync(space.Id, token);
+        }, ct);
+
     /// <summary>
     /// Creates a real task from the template (PLAN §6): fresh IDs, open statuses, subtask
     /// structure copied in document order, dates from relative offsets over the instantiation

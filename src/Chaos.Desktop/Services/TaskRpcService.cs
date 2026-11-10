@@ -10,6 +10,7 @@ public sealed record CreateTaskRequest(string OperationId, string Title, string?
 
 public sealed record GetTaskRequest(string TaskId);
 public sealed record ListTasksRequest();
+public sealed record ListDeletedTasksRequest(string? ContainerId);
 public sealed record ListTasksResponse(bool Ok, IReadOnlyList<TaskResponse> Tasks, TaskErrorResponse? Error);
 public sealed record EditTaskRequest(string OperationId, string TaskId, string ExpectedVersion, string Title, string Notes, string? PlannedDate, string? PlannedTime, string? PlannedZoneId, string? DueDate, string? DueTime, string? DueZoneId, string Priority, int? EstimateMinutes, string Category);
 public sealed record ChangeTaskStatusRequest(string OperationId, string TaskId, string ExpectedVersion, string Status, string? SubtaskChoice);
@@ -55,6 +56,12 @@ public sealed record TaskGetResponse(bool Ok, TaskResponse? Task, TaskErrorRespo
 [NeoRpcService("tasks", Version = 1)]
 public sealed class TaskRpcService(TaskCommands commands)
 {
+    [NeoRpcMethod("listDeleted")]
+    public async ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await commands.ListDeletedAsync(request.ContainerId, ct)).Select(ToResponse)], null); }
+        catch (AppException error) { return new(false, [], ToErrorResponse(error)); }
+    }
     [NeoRpcMethod("listInbox")]
     public async ValueTask<ListTasksResponse> ListInboxAsync(ListTasksRequest request, CancellationToken cancellationToken)
     {

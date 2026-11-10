@@ -11,6 +11,7 @@ public sealed record UpdateSubtaskCommand(string OperationId, string SubtaskId, 
 public sealed record SetSubtaskStatusCommand(string OperationId, string SubtaskId, long ExpectedVersion, TaskItemStatus Status);
 
 public sealed record ReorderSubtaskCommand(string OperationId, string SubtaskId, long ExpectedVersion, int InsertionIndex);
+public sealed record RestoreSubtaskCommand(string OperationId, string TaskId, string SubtaskId, long ExpectedVersion);
 
 public sealed record SubtaskMutationResult(SubtaskRecord Subtask, bool Replayed);
 
@@ -21,6 +22,34 @@ public sealed record SubtaskMutationResult(SubtaskRecord Subtask, bool Replayed)
 /// </summary>
 public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
+    public async Task<IReadOnlyList<SubtaskRecord>> ListDeletedAsync(string taskId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            _ = await RequireTaskAsync(session, taskId, token);
+            return (await session.Subtasks.ListByTaskIncludingDeletedAsync(taskId, token)).Where(x => x.DeletedAtUtc is not null).ToList();
+        }, ct);
+
+    public async Task<SubtaskMutationResult> RestoreAsync(RestoreSubtaskCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "subtask.restore", command, now, async inner =>
+            {
+                var task = await RequireTaskAsync(session, command.TaskId, inner);
+                var all = await session.Subtasks.ListByTaskIncludingDeletedAsync(task.Id, inner);
+                var subtask = all.SingleOrDefault(x => x.Id == command.SubtaskId) ?? throw AppException.NotFound("That subtask no longer exists.");
+                RequireCurrentVersion(subtask, command.ExpectedVersion);
+                if (subtask.DeletedAtUtc is null) return new SubtaskMutationResult(subtask, false);
+                var before = new TaskAggregateSnapshot(task, all);
+                var restored = subtask with { DeletedAtUtc = null, Version = subtask.Version + 1, UpdatedAtUtc = now };
+                var applied = await ApplySubtaskUpdateAsync(session, restored, subtask.Version, inner);
+                await WriteHistoryAsync(session, command.OperationId, task.Id, before, "subtask.restored", now, inner);
+                return new SubtaskMutationResult(applied, false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
     public async Task<SubtaskMutationResult> AddAsync(AddSubtaskCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

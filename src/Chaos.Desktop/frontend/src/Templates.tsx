@@ -12,11 +12,14 @@ export function Templates({ containerId, onCreated }: { containerId: string; onC
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [partTitle, setPartTitle] = React.useState("");
-  const [deleted, setDeleted] = React.useState<TemplateResponse | null>(null);
+  const [deleted, setDeleted] = React.useState<TemplateResponse[]>([]);
   async function refresh() {
     const result = await templateRpc.list({});
     if (!result.ok) throw new Error(result.error?.message ?? "Could not load templates.");
+    const removed = await templateRpc.listDeleted({});
+    if (!removed.ok) throw new Error(removed.error?.message ?? "Could not load deleted templates.");
     setItems([...result.templates]);
+    setDeleted([...removed.templates]);
   }
   React.useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, []);
   function change(patch: Partial<TemplatePayloadResponse>) { setPayload(current => ({ ...current, ...patch })); }
@@ -45,7 +48,6 @@ export function Templates({ containerId, onCreated }: { containerId: string; onC
       const request = { operationId: operationId(), templateId: item.id, expectedVersion: item.version };
       const result = restore ? await templateRpc.restore(request) : await templateRpc.delete(request);
       if (!result.ok || !result.template) throw new Error(result.error?.message ?? "Could not update template.");
-      setDeleted(restore ? null : result.template);
       if (!restore && selected?.id === item.id) edit(null);
       await refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not update template."); }
@@ -53,7 +55,7 @@ export function Templates({ containerId, onCreated }: { containerId: string; onC
   }
   return <section aria-labelledby="templates-heading"><h2 id="templates-heading">Templates</h2>
     {error && <p role="alert">{error}</p>}
-    {deleted && <p>Template deleted. <button type="button" disabled={busy} onClick={() => void changeDeletion(deleted, true)}>Restore {deleted.name}</button></p>}
+    {deleted.length > 0 && <details><summary>Deleted templates</summary><ul>{deleted.map(item => <li key={item.id}>{item.name} <button type="button" disabled={busy} onClick={() => void changeDeletion(item, true)}>Restore</button></li>)}</ul></details>}
     <ul>{items.map(item => <li key={item.id}>{item.name} <button type="button" disabled={busy} onClick={() => edit(item)}>Edit</button> <button type="button" disabled={busy} onClick={() => void instantiate(item)}>Create task</button> <button type="button" disabled={busy} onClick={() => void changeDeletion(item, false)}>Delete</button></li>)}</ul>
     <h3>{selected ? "Edit template" : "New template"}</h3><form onSubmit={e => void save(e)}>
       <label>Template name<input required value={name} onChange={e => setName(e.target.value)}/></label>
