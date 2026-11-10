@@ -36,3 +36,17 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
 - **Task Position starts at 0 and grows by gaps of 1024.** The SQLite store computes
   `COALESCE(MAX(Position), -1024) + 1024` (first task in a container gets 0); the
   in-memory test fake mirrors this so Application and Infrastructure tests agree.
+
+## 2026-11-10
+
+- **shadcn/ui is the UI foundation.** The user directed that https://ui.shadcn.com/ be
+  adopted. The frontend uses Tailwind CSS v4 (`@tailwindcss/vite`) with shadcn/ui
+  components copied into `frontend/src/components/ui` (configured by
+  `frontend/components.json`, new-york style, lucide icons). Theme tokens live in
+  `frontend/src/style.css` (stone base, Chaos orange as `--primary`); dark mode follows
+  `prefers-color-scheme`. Form selects use shadcn's `NativeSelect` so pickers stay native,
+  keyboard-accessible and testable in jsdom. App-level building blocks shared across views
+  (field, badges, banners, deleted-items list, page header) live in
+  `frontend/src/components/common.tsx`. Add components with
+  `npx shadcn@latest add <name>` from `frontend/`, then check the `cn` import resolves to
+  `@/lib/utils`.

@@ -44,6 +44,12 @@ development-graph advisories involving the existing Vite, nanoid and source-map-
 versions; `npm audit --omit=dev` reported none. Review and update the locked development
 graph separately, including Vite compatibility, before release.
 
+The shadcn/ui foundation (decision 2026-11-10) adds exact-pinned runtime dependencies
+`tailwindcss` 4.3.5, `@tailwindcss/vite` 4.3.5, `radix-ui` 1.8.1,
+`class-variance-authority` 0.7.1, `clsx` 2.1.1, `tailwind-merge` 3.7.0,
+`lucide-react` 1.70.0 and `tw-animate-css` 1.4.0, plus `@types/node` 26.6.6 as a
+development dependency. Component source is vendored; the `shadcn` CLI is not a dependency.
+
 ## Templates
 
 | Template | Version |
