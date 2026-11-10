@@ -10,6 +10,9 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
+  requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
+  cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
 });
 const { render, screen, waitFor, cleanup, within, fireEvent } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
@@ -67,6 +70,7 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
   const results = await screen.findByRole("list", { name: "Results" });
   assert.ok(within(results).getByText("home/garden"));
   await user.click(within(results).getByRole("button", { name: "Weed the beds" }));
+  await user.click(screen.getByRole("tab", { name: "Details" })); // tags live on the editor's Details tab
   const applied = await screen.findByRole("list", { name: "Tags applied" });
   assert.ok(within(applied).getByText("home/garden"));
   cleanup();

@@ -9,13 +9,13 @@ import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tags";
-import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, Plus, Search, Settings2, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Plus, Search, Settings2, SlidersHorizontal, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
@@ -38,6 +38,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
+  const [editorTab, setEditorTab] = React.useState("notes");
   const [title, setTitle] = React.useState("");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
@@ -325,6 +326,22 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       } catch (err) { setError(String(err)); } finally { setBusy(false); }
     })();
   }
+  /** Checklist-to-subtasks offer under the notes, when the saved notes contain a checklist (PLAN §9). */
+  function checklistPanel() {
+    if (!editing) return null;
+    const checklist = extractChecklist(editing.notes);
+    if (checklist.length === 0) return null;
+    const chosen = checklistChoice ?? new Set(checklist.map(item => item.itemKey));
+    return <details className="grid gap-2 rounded-lg border p-3 text-sm" onToggle={e => { if (!(e.currentTarget as HTMLDetailsElement).open) setChecklistChoice(null); }}>
+      <summary className="flex cursor-pointer items-center gap-2 font-medium"><ListChecks className="size-4 text-muted-foreground"/>Convert checklist to subtasks ({checklist.length})</summary>
+      <p className="pt-2 text-xs text-muted-foreground">Uses the saved notes. Checked items become done subtasks; the notes stay as they are. Items already converted are skipped.</p>
+      <ul className="grid gap-1 pt-1" aria-label="Checklist items">{checklist.map(item => <li key={item.itemKey}><label className="flex items-center gap-2">
+        <input type="checkbox" className="accent-primary" checked={chosen.has(item.itemKey)} onChange={e => { const next = new Set(chosen); if (e.target.checked) next.add(item.itemKey); else next.delete(item.itemKey); setChecklistChoice(next); }}/>
+        <span className={cn(item.done && "text-muted-foreground line-through")}>{item.title}</span>
+      </label></li>)}</ul>
+      <div className="pt-1"><Button type="button" size="sm" variant="outline" disabled={busy || chosen.size === 0} onClick={() => void convertChecklist(checklist.filter(item => chosen.has(item.itemKey)))}>Convert {chosen.size} to subtasks</Button></div>
+    </details>;
+  }
   function taskMeta(task: TaskResponse) {
     const parts: React.ReactNode[] = [];
     if (task.status !== "NotStarted") parts.push(<StatusBadge key="status" status={task.status}/>);
@@ -468,10 +485,24 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
       </div>
-      <div className="grid flex-1 content-start gap-7 overflow-x-hidden overflow-y-auto p-5">
-        <form className="grid gap-4" onSubmit={save}>
-          <Field label="Title"><Input required className="h-10 text-base font-semibold md:text-base" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
-          <MarkdownEditor id="task-notes" label="Notes" rows={4} value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}/>
+      <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
+        <div className="grid gap-3 border-b px-5 pt-4 pb-3">
+          <Field label="Title"><Input required form="task-editor-form" className="h-10 text-base font-semibold md:text-base" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
+          <TabsList className="w-full">
+            <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>
+            <TabsTrigger value="details"><SlidersHorizontal/>Details</TabsTrigger>
+            <TabsTrigger value="subtasks"><ListTodo/>Subtasks{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
+            <TabsTrigger value="diary"><History/>Diary</TabsTrigger>
+          </TabsList>
+        </div>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
+        <form id="task-editor-form" className="hidden" onSubmit={save}/>
+          <TabsContent value="notes" className="grid gap-4">
+            <MarkdownEditor id="task-notes" label="Notes" value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}
+              areaClassName="min-h-[max(16rem,calc(100vh-24rem))]"/>
+            {checklistPanel()}
+          </TabsContent>
+          <TabsContent value="details" className="grid gap-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Status"><NativeSelect value={editing.status} disabled={busy} onChange={e => { const status = e.target.value; const hasOpen = subtasks.some(s => !isFinished(s.status)); const choice = status === "Done" && hasOpen ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null; void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, status, subtaskChoice: choice }), saved => { setEditing(current => current ? { ...current, status: saved.status, version: saved.version } : null); void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
             <Field label="Priority"><NativeSelect value={editing.priority} onChange={e => change({ priority: e.target.value })}>{priorities.map(s => <NativeSelectOption key={s}>{s}</NativeSelectOption>)}</NativeSelect></Field>
@@ -489,28 +520,11 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
             <Field label="Move to list or project"><NativeSelect value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <NativeSelectOption key={c.id} value={c.id}>{c.name}</NativeSelectOption>)}</NativeSelect></Field>
             {editing.containerId === containerId && sections.length > 0 && <Field label="Section"><NativeSelect value={editing.sectionId ?? ""} disabled={busy} onChange={e => { const sectionId = e.target.value || null; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: editing.containerId, sectionId }), saved => setEditing(current => current ? { ...current, sectionId: saved.sectionId, version: saved.version } : null)); }}><NativeSelectOption value="">No section</NativeSelectOption>{sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>}
           </div>
-          <div className="flex gap-2 pt-1"><Button disabled={busy}>Save</Button><Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button></div>
-        </form>
+          <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
+          </TabsContent>
 
-        {(() => {
-          const checklist = extractChecklist(editing.notes);
-          if (checklist.length === 0) return null;
-          const chosen = checklistChoice ?? new Set(checklist.map(item => item.itemKey));
-          return <details className="grid gap-2 rounded-lg border p-3 text-sm" onToggle={e => { if (!(e.currentTarget as HTMLDetailsElement).open) setChecklistChoice(null); }}>
-            <summary className="flex cursor-pointer items-center gap-2 font-medium"><ListChecks className="size-4 text-muted-foreground"/>Convert checklist to subtasks ({checklist.length})</summary>
-            <p className="pt-2 text-xs text-muted-foreground">Uses the saved notes. Checked items become done subtasks; the notes stay as they are. Items already converted are skipped.</p>
-            <ul className="grid gap-1 pt-1" aria-label="Checklist items">{checklist.map(item => <li key={item.itemKey}><label className="flex items-center gap-2">
-              <input type="checkbox" className="accent-primary" checked={chosen.has(item.itemKey)} onChange={e => { const next = new Set(chosen); if (e.target.checked) next.add(item.itemKey); else next.delete(item.itemKey); setChecklistChoice(next); }}/>
-              <span className={cn(item.done && "text-muted-foreground line-through")}>{item.title}</span>
-            </label></li>)}</ul>
-            <div className="pt-1"><Button type="button" size="sm" variant="outline" disabled={busy || chosen.size === 0} onClick={() => void convertChecklist(checklist.filter(item => chosen.has(item.itemKey)))}>Convert {chosen.size} to subtasks</Button></div>
-          </details>;
-        })()}
-
-        <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
-
+        <TabsContent value="subtasks">
         <section className="grid gap-3" aria-labelledby="subtasks-heading">
-          <Separator/>
           <h3 id="subtasks-heading" className="flex items-center font-semibold">Subtasks{subtasks.length > 0 && <Count>{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</Count>}</h3>
           {subtasks.length > 0 && <ol className="grid gap-1" aria-label="Subtasks">{subtasks.map((subtask, index) => <li key={subtask.id} className={rowClass(subtaskEdit?.id === subtask.id, subtask.status, true)}
             {...drag.target(subtasks.map(row => row.id), index, `subtasks|${editing.id}`, busy, (id, insertionIndex) => reorderSubtask(subtasks.find(row => row.id === id)!, insertionIndex))}>
@@ -534,10 +548,18 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
           {subtaskEdit && <TagPicker targetKind="Subtask" targetId={subtaskEdit.id} label={`Tags on “${subtaskEdit.title}”`} tags={tags} api={tagApi} revision={revision} onChanged={changed}/>}
           <DeletedItems noun="subtasks" items={deletedSubtasks} name={subtask => subtask.title} busy={busy} onRestore={subtask => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}/>
         </section>
+        </TabsContent>
 
+        <TabsContent value="diary">
         <TaskJournal task={editing} api={journalApi} revision={revision + subtaskRevision} busy={busy} links={links} searchLinks={searchLinks}
           onError={setError}
           onChanged={saved => { if (saved) { setEditing(saved); void refresh().catch((e: unknown) => setError(String(e))); } changed(); }}/>
+        </TabsContent>
+        </div>
+      </Tabs>
+      <div className="flex gap-2 border-t px-5 py-3">
+        <Button form="task-editor-form" disabled={busy}>Save</Button>
+        <Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
       </div>
     </aside>}
 

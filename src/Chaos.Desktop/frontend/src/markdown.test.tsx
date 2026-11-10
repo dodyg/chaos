@@ -10,6 +10,9 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
+  requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
+  cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
   KeyboardEvent: { value: dom.window.KeyboardEvent, configurable: true },
 });
 const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
@@ -238,5 +241,41 @@ test("the journal shows diary Markdown and history events, opens an earlier vers
   assert.equal(restored[0].entryId, "h1");
   assert.equal(restored[0].expectedVersion, "3");
   assert.equal(saved?.title, "Old title");
+  cleanup();
+});
+
+test("the task editor opens on a roomy Notes tab, keeps fields on Details and saves from any tab", async () => {
+  const edits: { title: string; notes: string }[] = [];
+  const item = task(taskId, "Write report", "Draft");
+  const api = {
+    taskRpc: { ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [item], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      edit: async (request: { title: string; notes: string }) => { edits.push(request); return { ok: true, operationId: "e", task: { ...item, ...request }, error: null, warning: null }; },
+    },
+    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    tagRpc: { ...tagRpc, list: async () => ({ ok: true, tags: [], error: null }), listDeleted: async () => ({ ok: true, tags: [], error: null }), targetTags: async () => ({ ok: true, tagIds: [], error: null }) },
+    queryRpc: { ...queryRpc, counts: async () => ({ ok: true, views: [], tags: [], error: null }) },
+    undoRpc: { ...undoRpc, list: async () => ({ ok: true, entries: [], error: null }) },
+    markdownRpc: { ...markdownRpc, resolveLinks: async () => ({ ok: true, targets: [], error: null }) },
+    diaryRpc: { ...diaryRpc, timeline: async () => ({ ok: true, items: [], error: null }), list: async () => ({ ok: true, entries: [], error: null }) },
+    historyRpc,
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  await user.click(await screen.findByRole("button", { name: "Write report" }));
+  assert.equal(screen.getByRole("tab", { name: "Notes" }).getAttribute("aria-selected"), "true");
+  const notes = dom.window.document.getElementById("task-notes") as HTMLTextAreaElement;
+  assert.match(notes.className, /min-h-\[max\(16rem/);
+  assert.equal(screen.queryByLabelText("Status"), null, "fields are not crowding the notes");
+  await user.type(notes, " v2");
+
+  await user.click(screen.getByRole("tab", { name: "Details" }));
+  assert.ok(screen.getByLabelText("Status"));
+  await user.click(screen.getByRole("tab", { name: /Subtasks/ }));
+  assert.ok(screen.getByRole("heading", { name: "Subtasks" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(edits.length, 1));
+  assert.deepEqual({ title: edits[0].title, notes: edits[0].notes }, { title: "Write report", notes: "Draft v2" });
   cleanup();
 });
