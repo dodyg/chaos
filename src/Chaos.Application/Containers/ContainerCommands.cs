@@ -145,10 +145,12 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                     RequireNotInbox(container, "reordered");
                     var siblings = await session.Containers.ListBySpaceAsync(container.SpaceId, inner);
 
+                    // The Inbox keeps its place at the top: a list or project can never be placed above it.
+                    var inboxIndex = siblings.ToList().FindIndex(row => row.IsInbox);
                     var assignments = RankOrdering.Place(
                         [.. siblings.Select(row => (row.Id, row.Position, row.Version))],
                         container.Id,
-                        command.InsertionIndex);
+                        Math.Max(command.InsertionIndex, inboxIndex + 1));
                     if (assignments.Count == 0)
                     {
                         return new ContainerMutationResult(container, Replayed: false); // already in place
