@@ -25,6 +25,7 @@ public interface IDataSession
     IRecurrenceStore Recurrence { get; }
     IReminderRuleStore ReminderRules { get; }
     IDayPlanStore DayPlans { get; }
+    IWeekPlanStore Weeks { get; }
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
 }
@@ -45,11 +46,48 @@ public interface IDayPlanStore
     Task<DayPlanItemRecord?> FindItemAsync(string dayPlanId, string taskId, CancellationToken ct);
     Task AddItemAsync(DayPlanItemRecord item, CancellationToken ct);
     Task<DayPlanItemRecord?> UpdateItemAsync(DayPlanItemRecord item, long expectedVersion, CancellationToken ct);
+    /// <summary>Records which confirmed week revision this day now follows (seeding and reconciliation).</summary>
+    Task<DayPlanRecord?> UpdateSeedAsync(DayPlanRecord plan, long expectedVersion, CancellationToken ct);
+    /// <summary>Plans of one profile for dates in the inclusive range, ordered by date.</summary>
+    Task<IReadOnlyList<DayPlanRecord>> ListRangeAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct);
     /// <summary>
     /// Open, nondeleted tasks of active containers in the space whose active recurrence
     /// occurrence falls on this local date.
     /// </summary>
     Task<IReadOnlyList<string>> ListRecurrenceTaskIdsDueOnAsync(string spaceId, DateOnly localDate, CancellationToken ct);
+}
+
+/// <summary>
+/// Week plans, their confirmed goals and assignments, revision snapshots and availability
+/// (PLAN §10 My Week), within the caller's transaction. Migration 009 holds the constraints.
+/// </summary>
+public interface IWeekPlanStore
+{
+    Task<WeekPlanRecord?> GetAsync(string weekPlanId, CancellationToken ct);
+    Task<WeekPlanRecord?> FindByStartAsync(string profileId, DateOnly weekStart, CancellationToken ct);
+    /// <summary>Plans that are not superseded and include at least one date of the inclusive range, ordered by start.</summary>
+    Task<IReadOnlyList<WeekPlanRecord>> ListOverlappingAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct);
+    /// <returns>False when a plan with the same profile and start already exists.</returns>
+    Task<bool> TryAddAsync(WeekPlanRecord plan, CancellationToken ct);
+    Task<WeekPlanRecord?> UpdateAsync(WeekPlanRecord plan, long expectedVersion, CancellationToken ct);
+
+    /// <summary>Confirmed goals ordered by (Position, Id), each with its linked task IDs.</summary>
+    Task<IReadOnlyList<WeekGoalRecord>> ListGoalsAsync(string weekPlanId, CancellationToken ct);
+    Task<WeekGoalRecord?> GetGoalAsync(string goalId, CancellationToken ct);
+    Task<WeekGoalRecord?> UpdateGoalOutcomeAsync(WeekGoalRecord goal, long expectedVersion, CancellationToken ct);
+    /// <summary>Confirmed assignments ordered by (day, Position, Id); pool items (no day) last.</summary>
+    Task<IReadOnlyList<WeekAssignmentRecord>> ListAssignmentsAsync(string weekPlanId, CancellationToken ct);
+    /// <summary>Replaces every confirmed goal, goal link and assignment of the plan with the given rows.</summary>
+    Task ReplaceContentAsync(string weekPlanId, IReadOnlyList<WeekGoalRecord> goals, IReadOnlyList<WeekAssignmentRecord> assignments, CancellationToken ct);
+    Task AddRevisionAsync(string weekPlanId, long revision, string snapshot, DateTimeOffset confirmedAtUtc, CancellationToken ct);
+    Task<long> CountRevisionsAsync(string weekPlanId, CancellationToken ct);
+
+    /// <summary>Stored weekday defaults of the profile (missing weekdays use the built-in default).</summary>
+    Task<IReadOnlyList<AvailabilityRecord>> ListRulesAsync(string profileId, CancellationToken ct);
+    Task UpsertRuleAsync(string profileId, DayOfWeek weekday, int totalMinutes, int? workMinutes, DateTimeOffset now, CancellationToken ct);
+    Task<IReadOnlyList<AvailabilityRecord>> ListOverridesAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct);
+    Task UpsertOverrideAsync(string profileId, DateOnly date, int totalMinutes, int? workMinutes, DateTimeOffset now, CancellationToken ct);
+    Task DeleteOverrideAsync(string profileId, DateOnly date, CancellationToken ct);
 }
 
 public interface IReminderRuleStore
@@ -142,6 +180,8 @@ public interface IProfileStore
     Task<ProfileRecord?> GetAsync(string profileId, CancellationToken ct);
     Task<ProfileRecord?> GetPrimaryAsync(CancellationToken ct);
     Task AddAsync(ProfileRecord profile, CancellationToken ct);
+    /// <summary>Optimistic update of the first weekday (PLAN §10 week-start changes).</summary>
+    Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
 }
 
 public interface ISpaceStore

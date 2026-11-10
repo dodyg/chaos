@@ -76,7 +76,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             await store.ExecuteAsync(async (session, token) =>
             {
                 var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
-                return await EnsurePlanAsync(session, context.Profile.Id, existing.Day, clock.GetUtcNow(), token);
+                return await DayPlanning.EnsurePlanAsync(session, ids, context.Profile.Id, existing.Day, clock.GetUtcNow(), token);
             }, ct);
         }
 
@@ -176,22 +176,13 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                 throw AppException.Validation("taskId", "This task is already finished. Reopen it before adding it to My Day.");
             }
 
-            return await PlaceAsync(session, plan, task.Id, DayPlanItemOrigin.Manual, now, token) ? 1 : 0;
+            return await DayPlanning.PlaceAsync(session, ids, plan, task.Id, DayPlanItemOrigin.Manual, now, token) ? 1 : 0;
         }, ct);
 
     /// <summary>Takes a task off a day. The row stays, so reopening the day never puts it back by itself.</summary>
     public Task<DayChangeResult> RemoveAsync(DayItemCommand command, CancellationToken ct = default) =>
         MutateAsync(command.OperationId, "myday.remove", new { date = command.Date, taskId = command.TaskId }, command.Date, async (session, _, plan, now, token) =>
-        {
-            var item = await session.DayPlans.FindItemAsync(plan.Id, command.TaskId, token);
-            if (item is null || item.RemovedAtUtc is not null)
-            {
-                return 0;
-            }
-
-            await UpdateAsync(session, item with { RemovedAtUtc = now, UpdatedAtUtc = now, Version = item.Version + 1 }, item.Version, token);
-            return 1;
-        }, ct);
+            await DayPlanning.RemoveAsync(session, plan, command.TaskId, now, token) ? 1 : 0, ct);
 
     /// <summary>Moves a task to <see cref="DayMoveCommand.Index"/> among the day's open items (keyboard and drag use the same command).</summary>
     public Task<DayChangeResult> MoveAsync(DayMoveCommand command, CancellationToken ct = default) =>
@@ -205,7 +196,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             foreach (var assignment in assignments)
             {
                 var item = byId[assignment.Id];
-                await UpdateAsync(session, item with { Position = assignment.NewPosition, UpdatedAtUtc = now, Version = item.Version + 1 }, assignment.ExpectedVersion, token);
+                await DayPlanning.UpdateItemAsync(session, item with { Position = assignment.NewPosition, UpdatedAtUtc = now, Version = item.Version + 1 }, assignment.ExpectedVersion, token);
             }
 
             return assignments.Count == 0 ? 0 : 1;
@@ -233,7 +224,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                 var carried = 0;
                 foreach (var item in await OpenItemsAsync(session, source.Id, token))
                 {
-                    if ((wanted is null || wanted.Contains(item.TaskId)) && await PlaceAsync(session, target, item.TaskId, DayPlanItemOrigin.CarryOver, now, token))
+                    if ((wanted is null || wanted.Contains(item.TaskId)) && await DayPlanning.PlaceAsync(session, ids, target, item.TaskId, DayPlanItemOrigin.CarryOver, now, token))
                     {
                         carried++;
                     }
@@ -267,7 +258,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                     throw AppException.Validation("date", "Earlier days are kept for review and cannot be changed. Use today's suggestions to pick up unfinished work.");
                 }
 
-                var plan = await EnsurePlanAsync(session, context.Profile.Id, date, now, innerToken);
+                var plan = await DayPlanning.EnsurePlanAsync(session, ids, context.Profile.Id, date, now, innerToken);
                 return await body(session, context, plan, now, innerToken);
             }, token);
         }, ct);
@@ -275,79 +266,6 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
         var summary = await store.QueryAsync(async (session, token) =>
             await SummaryAsync(session, await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token), date, token), ct);
         return new DayChangeResult(summary, changed, replayed);
-    }
-
-    /// <summary>
-    /// Creates the plan for one date once. Package 9 seeds confirmed weekly assignments here,
-    /// in the same transaction, and records the seeding revision.
-    /// </summary>
-    private async Task<DayPlanRecord> EnsurePlanAsync(IDataSession session, string profileId, DateOnly date, DateTimeOffset now, CancellationToken token)
-    {
-        if (await session.DayPlans.FindAsync(profileId, date, token) is { } existing)
-        {
-            return existing;
-        }
-
-        await session.DayPlans.TryAddAsync(new DayPlanRecord
-        {
-            Id = StorageFormats.Id(ids.NewId()),
-            ProfileId = profileId,
-            LocalDate = date,
-            InitializedAtUtc = now,
-            Version = 1,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        }, token);
-        return await session.DayPlans.FindAsync(profileId, date, token)
-            ?? throw new AppException(AppErrorKind.StorageUnavailable, "My Day could not be prepared. Try again.");
-    }
-
-    /// <returns>True when the task was added or brought back; false when it was already on the day.</returns>
-    private async Task<bool> PlaceAsync(IDataSession session, DayPlanRecord plan, string taskId, DayPlanItemOrigin origin, DateTimeOffset now, CancellationToken token)
-    {
-        var existing = await session.DayPlans.FindItemAsync(plan.Id, taskId, token);
-        if (existing is { RemovedAtUtc: null })
-        {
-            return false;
-        }
-
-        var active = await session.DayPlans.ListItemsAsync(plan.Id, includeRemoved: false, token);
-        var position = active.Count == 0 ? 0 : active.Max(item => item.Position) + RankOrdering.Gap;
-        if (existing is not null)
-        {
-            await UpdateAsync(session, existing with
-            {
-                RemovedAtUtc = null,
-                Origin = origin,
-                AddedAtUtc = now,
-                Position = position,
-                UpdatedAtUtc = now,
-                Version = existing.Version + 1,
-            }, existing.Version, token);
-            return true;
-        }
-
-        await session.DayPlans.AddItemAsync(new DayPlanItemRecord
-        {
-            Id = StorageFormats.Id(ids.NewId()),
-            DayPlanId = plan.Id,
-            TaskId = taskId,
-            Position = position,
-            Origin = origin,
-            AddedAtUtc = now,
-            Version = 1,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        }, token);
-        return true;
-    }
-
-    private static async Task UpdateAsync(IDataSession session, DayPlanItemRecord item, long expectedVersion, CancellationToken token)
-    {
-        if (await session.DayPlans.UpdateItemAsync(item, expectedVersion, token) is null)
-        {
-            throw AppException.VersionConflict("My Day changed in the meantime. Refresh and try again.");
-        }
     }
 
     /// <summary>Active items whose task is still open and not deleted, in day order.</summary>

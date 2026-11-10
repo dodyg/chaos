@@ -80,6 +80,39 @@ public sealed class SqliteDayPlanStore(SqliteConnection connection) : IDayPlanSt
         return await command.ExecuteNonQueryAsync(ct) == 1 ? item : null;
     }
 
+    public async Task<DayPlanRecord?> UpdateSeedAsync(DayPlanRecord plan, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE DayPlans SET SeededWeekPlanId = $weekPlan, SeededWeekRevision = $weekRevision, Version = $version, UpdatedAtUtc = $updated
+            WHERE Id = $id AND Version = $expected;
+            """;
+        command.Parameters.AddWithValue("$id", plan.Id);
+        command.Parameters.AddWithValue("$weekPlan", (object?)plan.SeededWeekPlanId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$weekRevision", (object?)plan.SeededWeekRevision ?? DBNull.Value);
+        command.Parameters.AddWithValue("$version", plan.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(plan.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? plan : null;
+    }
+
+    public async Task<IReadOnlyList<DayPlanRecord>> ListRangeAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM DayPlans WHERE ProfileId = $profile AND LocalDate BETWEEN $from AND $to ORDER BY LocalDate;";
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$from", StorageFormats.Date(from));
+        command.Parameters.AddWithValue("$to", StorageFormats.Date(to));
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var plans = new List<DayPlanRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            plans.Add(ReadPlan(reader));
+        }
+
+        return plans;
+    }
+
     public async Task<IReadOnlyList<string>> ListRecurrenceTaskIdsDueOnAsync(string spaceId, DateOnly localDate, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

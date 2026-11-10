@@ -25,6 +25,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
     public IDayPlanStore DayPlans { get; } = new SqliteDayPlanStore(connection);
+    public IWeekPlanStore Weeks { get; } = new SqliteWeekPlanStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }
@@ -76,6 +77,21 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", OptionalInstant(profile.DeletedAtUtc));
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Profiles SET FirstWeekday = $firstWeekday, Version = $version, UpdatedAtUtc = $updated
+            WHERE Id = $id AND Version = $expected AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", profile.Id);
+        command.Parameters.AddWithValue("$firstWeekday", (long)profile.FirstWeekday);
+        command.Parameters.AddWithValue("$version", profile.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
     }
 
     internal static ProfileRecord ReadProfile(SqliteDataReader r) => new()
