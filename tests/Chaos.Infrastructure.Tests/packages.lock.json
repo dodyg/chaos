@@ -169,6 +169,24 @@
           "SQLitePCLRaw.core": "2.1.13"
         }
       }
+    },
+    "net11.0/win-x64": {
+      "Microsoft.Testing.Extensions.CodeCoverage": {
+        "type": "Transitive",
+        "resolved": "18.12.0",
+        "contentHash": "BST/sWYpKk9OXO7Yxktcg6FWORRsHU0EdCbMwZ7d3OqJsMKlrNHIZ30g0Ib4k5T5acJYXRBmg9mNrTU/N6cy1g==",
+        "dependencies": {
+          "Microsoft.DiaSymReader": "2.2.10",
+          "Microsoft.Extensions.DependencyModel": "10.0.10",
+          "Microsoft.Testing.Platform": "2.5.0",
+          "Mono.Cecil": "0.11.6"
+        }
+      },
+      "SQLitePCLRaw.lib.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.13",
+        "contentHash": "D2UAuiGxFYBqeRXjjjGgvJ5UQifzn6wefmSqeKU7XcNGKLbJRP6X7kcPZ6opOBJGdCIlgbSxTvDpBbLvsN594A=="
+      }
     }
   }
 }

@@ -8,11 +8,14 @@ using Chaos.Application.Pad;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
+using Chaos.Application.Settings;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
 using Chaos.Application.Transfer;
 using Chaos.Desktop.Platform;
 using Chaos.Desktop.Services;
+using Chaos.Desktop.Windows.Activation;
+using Chaos.Desktop.Windows.Notifications;
 using Chaos.Infrastructure.Bootstrap;
 using Chaos.Infrastructure.DataProtection;
 using Chaos.Infrastructure.Transfer;
@@ -26,19 +29,31 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // One running Chaos per user and data root (PLAN §5/§13). A second launch (shortcut,
+        // Start menu, notification button) hands its arguments to the running instance and exits
+        // without touching storage.
+        var dataRoot = ResolveDataRoot(args);
+        var instanceKey = SingleInstanceGuard.KeyFor(dataRoot);
+        using var instance = new SingleInstanceGuard(instanceKey);
+        if (!instance.IsPrimaryInstance)
+        {
+            return LaunchRouter.SendAsync(instanceKey, args, TimeSpan.FromSeconds(5)).GetAwaiter().GetResult() ? 0 : 3;
+        }
+
         // Storage starts before the window: lock the data root, back up before upgrades,
         // migrate, seed (PLAN §5). This is the one synchronous storage boundary; every
         // request-time database call runs on NeoAstra's background RPC dispatch threads.
         using var storage = StorageBootstrap
-            .StartAsync(StorageOptions.FromDataRoot(ResolveDataRoot(args)), AppVersion(), new GuidIdGenerator(), TimeProvider.System, CancellationToken.None)
+            .StartAsync(StorageOptions.FromDataRoot(dataRoot), AppVersion(), new GuidIdGenerator(), TimeProvider.System, CancellationToken.None)
             .GetAwaiter().GetResult();
 
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
-        // Reminders are delivered after commit on a background timer (PLAN §11). The engine is
-        // declared after storage, so it stops before storage closes.
-        var notifications = new InAppNotificationAdapter();
+        // Reminders are delivered after commit on a background timer (PLAN §11). The installed
+        // package hands them to Windows (scheduled, with buttons); an unpackaged run shows them
+        // in the app. The engine is declared after storage, so it stops before storage closes.
+        var notifications = (INotificationAdapter?)WindowsToastAdapter.TryCreate(TimeProvider.System) ?? new InAppNotificationAdapter();
         var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
         // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
         var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
@@ -70,12 +85,40 @@ internal static class Program
                 }
             });
 
-        return NeoApp.Run(args, app =>
+        // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
+        var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
+        var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var shell = new DesktopShell(activations, AppVersion(), Path.Combine(dataRoot, "desktop"));
+        var router = LaunchRouter.Listen(instanceKey, launch =>
+        {
+            _ = activations.HandleAsync(LaunchIntents.FromArguments(launch), CancellationToken.None);
+            return true;
+        });
+        var initialIntent = LaunchIntents.FromArguments(args);
+        if (initialIntent.Kind != LaunchIntentKind.Open)
+        {
+            // Queued until the page takes it; a reminder button that started Chaos acts now.
+            _ = activations.HandleAsync(initialIntent, CancellationToken.None);
+        }
+
+        try
+        {
+            return RunWindow();
+        }
+        finally
+        {
+            router.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+
+        int RunWindow() => NeoApp.Run(args, app =>
         {
             app.Title = "Chaos";
+            app.UsePlugins(shell.UsePlugins);
+            app.ConfigureMainWindow((application, window) => shell.ConfigureMainWindow(application, window, initialSettings));
             app.UseRpc(rpc =>
             {
-                rpc.AddGreetingService(new GreetingService());
+                rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks));
                 rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -117,22 +160,19 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
-[NeoRpcService("greeting", Version = 1)]
-public sealed class GreetingService
-{
-    [NeoRpcMethod("hello")]
-    public ValueTask<GreetingResponse> HelloAsync(GreetingRequest request, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new GreetingResponse($"Hello, {request.Name}!"));
-    }
-}
-
-public sealed record GreetingRequest(string Name);
-public sealed record GreetingResponse(string Message);
-
-[JsonSerializable(typeof(GreetingRequest))]
-[JsonSerializable(typeof(GreetingResponse))]
+[JsonSerializable(typeof(ShellActivationDto))]
+[JsonSerializable(typeof(ShellTakeRequest))]
+[JsonSerializable(typeof(ShellTakeResponse))]
+[JsonSerializable(typeof(ShortcutStatusDto))]
+[JsonSerializable(typeof(ShellStatusRequest))]
+[JsonSerializable(typeof(ShellStatusResponse))]
+[JsonSerializable(typeof(ProfileSettingsRequest))]
+[JsonSerializable(typeof(ProfileSettingsResponse))]
+[JsonSerializable(typeof(ProfileSettingsUpdateRequest))]
+[JsonSerializable(typeof(ZoneListRequest))]
+[JsonSerializable(typeof(ZoneListResponse))]
+[JsonSerializable(typeof(QuitRequest))]
+[JsonSerializable(typeof(QuitResponse))]
 [JsonSerializable(typeof(CreateTaskRequest))]
 [JsonSerializable(typeof(GetTaskRequest))]
 [JsonSerializable(typeof(TaskOperationResponse))]

@@ -62,9 +62,11 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         command.CommandText = """
             INSERT INTO Profiles (Id, DisplayName, ZoneId, Locale, DateFormat, FirstWeekday,
                 PlanningTime, SummaryTime, MorningTime, WeeklySummaryDay, DefaultReminderTime, QuietHoursEnabled, QuietStart, QuietEnd,
+                CaptureShortcut, PadShortcut, KeepRunningInTray,
                 Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
             VALUES ($id, $name, $zone, $locale, $dateFormat, $firstWeekday,
                 $planningTime, $summaryTime, $morningTime, $weeklyDay, $defaultReminderTime, $quietEnabled, $quietStart, $quietEnd,
+                $captureShortcut, $padShortcut, $keepRunning,
                 $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", profile.Id);
@@ -81,6 +83,9 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         command.Parameters.AddWithValue("$quietEnabled", profile.QuietHoursEnabled ? 1L : 0L);
         command.Parameters.AddWithValue("$quietStart", Optional(profile.QuietStart));
         command.Parameters.AddWithValue("$quietEnd", Optional(profile.QuietEnd));
+        command.Parameters.AddWithValue("$captureShortcut", OptionalValue(profile.CaptureShortcut));
+        command.Parameters.AddWithValue("$padShortcut", OptionalValue(profile.PadShortcut));
+        command.Parameters.AddWithValue("$keepRunning", profile.KeepRunningInTray ? 1L : 0L);
         command.Parameters.AddWithValue("$version", profile.Version);
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(profile.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
@@ -140,6 +145,28 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
     }
 
+    public async Task<ProfileRecord?> UpdateGeneralSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Profiles SET DisplayName = $name, ZoneId = $zone, DateFormat = $dateFormat,
+                CaptureShortcut = $captureShortcut, PadShortcut = $padShortcut, KeepRunningInTray = $keepRunning,
+                Version = $version, UpdatedAtUtc = $updated
+            WHERE Id = $id AND Version = $expected AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", profile.Id);
+        command.Parameters.AddWithValue("$name", profile.DisplayName);
+        command.Parameters.AddWithValue("$zone", profile.ZoneId);
+        command.Parameters.AddWithValue("$dateFormat", profile.DateFormat);
+        command.Parameters.AddWithValue("$captureShortcut", OptionalValue(profile.CaptureShortcut));
+        command.Parameters.AddWithValue("$padShortcut", OptionalValue(profile.PadShortcut));
+        command.Parameters.AddWithValue("$keepRunning", profile.KeepRunningInTray ? 1L : 0L);
+        command.Parameters.AddWithValue("$version", profile.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
+    }
+
     internal static ProfileRecord ReadProfile(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),
@@ -156,6 +183,9 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         QuietHoursEnabled = r.B("QuietHoursEnabled"),
         QuietStart = r.Tn("QuietStart"),
         QuietEnd = r.Tn("QuietEnd"),
+        CaptureShortcut = r.Sn("CaptureShortcut"),
+        PadShortcut = r.Sn("PadShortcut"),
+        KeepRunningInTray = r.B("KeepRunningInTray"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

@@ -1,5 +1,5 @@
 import React from "react";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
@@ -18,7 +18,8 @@ import { MyWeek } from "./MyWeek";
 import { AlertStack, NotificationCenter, TaskReminders, TaskWaiting } from "./Reminders";
 import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
-import { AlarmClock, Archive, Bell, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { Settings } from "./Settings";
+import { AlarmClock, Archive, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,7 +30,8 @@ import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; journalRpc?: typeof journalRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; journalRpc?: typeof journalRpc; shellRpc?: typeof shellRpc };
+type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data" | "settings";
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -37,7 +39,8 @@ function isTextEditing(target: EventTarget | null) {
   return !!element && (element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
 }
 
-export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api; templates?: React.ReactNode }) {
+/** The main window. A fresh launch opens My Day (PLAN §13); tests may start elsewhere. */
+export function App({ api = { taskRpc, containerRpc }, templates, initialView = "myday" }: { api?: Api; templates?: React.ReactNode; initialView?: View }) {
   const { taskRpc, containerRpc } = api;
   const tagApi = api.tagRpc ?? tagRpc;
   const queryApi = api.queryRpc ?? queryRpc;
@@ -52,6 +55,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const reminderApi = api.reminderRpc ?? reminderRpc;
   const waitingApi = api.waitingRpc ?? waitingRpc;
   const summaryApi = api.journalRpc ?? journalRpc;
+  const shellApi = api.shellRpc ?? shellRpc;
   const dayClock = useDayClock(myDayApi);
   const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
   const drafts = React.useRef(new DraftRegistry()).current;
@@ -82,7 +86,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
-  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data">("tasks");
+  const [view, setView] = React.useState<View>(initialView);
   const [journalOpenId, setJournalOpenId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
@@ -271,6 +275,46 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task.");
     } catch (e) { setError(String(e)); }
   }
+
+  /** What the desktop shell asked for: a global shortcut, the tray, another launch or a notification button (PLAN §13). */
+  function applyActivations(items: readonly ShellActivationDto[]) {
+    for (const item of items) {
+      if (item.kind === "Capture") focusQuickAdd();
+      else if (item.kind === "Pad") openPad({ itemId: null });
+      else if (item.kind === "OpenTask" && item.taskId) { setShowTagSettings(false); void openTaskById(item.taskId); }
+      if (item.message) setNotice(item.message);
+      if (item.kind === "Notice") changed();
+    }
+  }
+  const activationsRef = React.useRef(applyActivations);
+  activationsRef.current = applyActivations;
+  // The shell queues activations; take them when shown, when focused and once a second.
+  // Outside the desktop host (no shell service) taking fails and polling stops.
+  React.useEffect(() => {
+    let stopped = false;
+    let taking = false;
+    async function take() {
+      if (stopped || taking) return;
+      taking = true;
+      try {
+        const result = await shellApi.take({});
+        if (!stopped && result.ok && result.activations.length > 0) activationsRef.current(result.activations);
+      } catch { stop(); }
+      finally { taking = false; }
+    }
+    const timer = window.setInterval(() => void take(), 1000);
+    const wake = () => void take();
+    function stop() {
+      stopped = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    }
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    void take();
+    return stop;
+  }, [shellApi]);
 
   async function openLinkedTask(taskId: string) {
     const result = await taskRpc.get({ taskId });
@@ -548,12 +592,13 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
   return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+    <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-0 flex h-screen flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
       <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><span className="text-xl leading-none text-primary" aria-hidden="true">✷</span>Chaos</h1>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
-        <input id="search" type="search" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
+        <input id="search" type="search" dir="auto" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
       </form>
       <nav aria-label="Views" className="grid gap-px">
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myday" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myday"); }}>
@@ -569,6 +614,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         </Button>)}
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => { setEditing(null); setView("templates"); }}><LayoutTemplate/>Templates</Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "data" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("data"); }}><Database/>Data &amp; backups</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "settings" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("settings"); }}><Cog/>Settings</Button>
       </nav>
       <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Lists &amp; projects</div>
       {userContainers.length > 0
@@ -595,7 +641,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       <DeletedItems className="mt-auto pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
     </aside>
 
-    <div className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16">
+    <div id="main-content" tabIndex={-1} className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none">
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -607,6 +653,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
+      : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>

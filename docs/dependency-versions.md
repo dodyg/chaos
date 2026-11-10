@@ -7,7 +7,7 @@ version changes; PLAN.md §1 pins are the authority.
 
 | Concern | Version | Evidence |
 | --- | --- | --- |
-| .NET SDK | 11.0.100-rc.3.26522.148 | `dotnet --list-sdks`; pinned exactly in `global.json` (`allowPrerelease: true`, `rollForward: disable`) |
+| .NET SDK | 11.0.100 | Pinned exactly in `global.json` (`rollForward: disable`). Was 11.0.100-rc.3.26522.148 until package 13, when that SDK was no longer installed and the user chose the GA SDK (decisions 2026-11-10, package 13). Runtime 11.0.0 |
 | C# language | 15.0 | `<LangVersion>15.0</LangVersion>` in `Directory.Build.props`; project code compiles with it |
 | MSBuild test runner | Microsoft.Testing.Platform | Selected in `global.json` (`test.runner`); `dotnet test` runs in MTP mode (no VSTest) |
 | Node | 26.12.1 | `node --version` on the development machine |
@@ -80,6 +80,18 @@ Template output was retargeted: `net10.0` → `net11.0-windows10.0.19041.0`, `Pu
 - Published self-contained win-x64 output contains the bundled React assets
   (`assets/index.html`, hashed JS/CSS, `neoastra-assets.json`); the published
   `Chaos.Desktop.exe` starts and hosts the NeoAstra app process offline from the publish folder.
+
+## Windows packaging and desktop (package 13)
+
+| Concern | Version | Evidence |
+| --- | --- | --- |
+| Windows SDK packaging tools | 10.0.26100.0 (`makeappx.exe`, `signtool.exe`, x64) | Found by `eng/package-msix.ps1` under `Windows Kits\10\bin` |
+| Windows notification API | `Windows.UI.Notifications` from the `net11.0-windows10.0.19041.0` projection | No extra package; Windows App SDK is **not** used (decisions, package 13) |
+| WebView2 Runtime (development machine) | 157.0.4341.42 | `EdgeUpdate` client registry key; Windows 11 Pro 10.0.26300 |
+| MSIX minimum OS | 10.0.19041.0 | `packaging/AppxManifest.xml` (`desktop6:FileSystemWriteVirtualization` needs 2004+) |
+
+Every project restores the `win-x64` RID (`Directory.Build.props`), so the lock files contain a
+`net11.0…/win-x64` group and `eng/publish-windows.ps1` publishes in locked mode.
 
 ## Sandbox/CI notes
 

@@ -5,6 +5,7 @@
       "chaos.domain": {
         "type": "Project"
       }
-    }
+    },
+    "net11.0/win-x64": {}
   }
 }

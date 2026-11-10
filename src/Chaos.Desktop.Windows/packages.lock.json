@@ -11,6 +11,7 @@
       "chaos.domain": {
         "type": "Project"
       }
-    }
+    },
+    "net11.0-windows10.0.19041/win-x64": {}
   }
 }

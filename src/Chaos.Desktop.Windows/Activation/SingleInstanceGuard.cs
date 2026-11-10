@@ -35,7 +35,11 @@ public sealed class SingleInstanceGuard : IDisposable
         }
     }
 
-    private static string Sanitize(string instanceName)
+    /// <summary>The instance key for a data root: one primary per user and data root.</summary>
+    public static string KeyFor(string dataRoot) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(dataRoot).ToUpperInvariant())))[..32];
+
+    internal static string Sanitize(string instanceName)
     {
         // Mutex names exclude a few characters; fold everything outside letters,
         // digits, dot, dash and underscore to '-' so any data-root path maps stably.

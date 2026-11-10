@@ -31,6 +31,12 @@ public sealed record ProfileRecord : AggregateRecord
     public bool QuietHoursEnabled { get; init; }
     public TimeOnly? QuietStart { get; init; }
     public TimeOnly? QuietEnd { get; init; }
+    /// <summary>Global capture shortcut, a normalized accelerator; null = off (PLAN §13).</summary>
+    public string? CaptureShortcut { get; init; } = "Ctrl+Alt+N";
+    /// <summary>Global Personal-pad shortcut; null = off.</summary>
+    public string? PadShortcut { get; init; } = "Ctrl+Alt+P";
+    /// <summary>Closing the window leaves Chaos running in the notification area.</summary>
+    public bool KeepRunningInTray { get; init; } = true;
 }
 
 public sealed record SpaceRecord : AggregateRecord

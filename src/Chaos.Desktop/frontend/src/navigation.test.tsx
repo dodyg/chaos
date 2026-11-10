@@ -34,7 +34,7 @@ test("deleting an active repeating task offers skip or end and delete", async ()
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
   await screen.findByRole("button", { name: "Repeated" });
   await user.click(screen.getByRole("button", { name: "Delete Repeated" }));
   const dialog = await screen.findByRole("dialog", { name: "Delete repeating task?" });
@@ -61,7 +61,7 @@ test("a delayed previous list cannot replace the selected list", async () => {
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   await screen.findByRole("button", { name: "A" });
   await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "A" }));
   await waitFor(() => assert.equal(requestedA, true));
@@ -85,7 +85,7 @@ test("tasks are grouped under their section and ordered within that group", asyn
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   await screen.findByRole("button", { name: "Project" });
   await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
   const section = await screen.findByRole("list", { name: "Phase tasks" });
@@ -105,7 +105,7 @@ test("dragging a task below a sibling sends the corresponding reorder", async ()
     },
     containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
   };
-  render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   const firstButton = await screen.findByRole("button", { name: "First" });
   const secondButton = screen.getByRole("button", { name: "Second" });
   const source = firstButton.closest("li")!;
@@ -134,7 +134,7 @@ test("dragging onto a different section does not reorder the wrong sibling set",
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   await screen.findByRole("button", { name: "Project" });
   await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
   const outside = (await screen.findByRole("button", { name: "Outside" })).closest("li")!;
@@ -162,7 +162,7 @@ test("dragging a list in the list navigation reorders it and keeps the Inbox fir
       reorder: async (request: Parameters<typeof containerRpc.reorder>[0]) => { calls.push(request); return { ok: true, container: containers[2], error: null }; },
     },
   };
-  render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   const nav = await screen.findByRole("navigation", { name: "Lists and projects" });
   const alpha = within(nav).getByRole("button", { name: "Alpha" }).closest("li")!;
   const beta = within(nav).getByRole("button", { name: "Beta" }).closest("li")!;

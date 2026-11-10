@@ -8,6 +8,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The Windows publish RID is restored up front, so the committed lock files also cover
+         `publish -r win-x64` and the release package builds in locked mode (eng/publish-windows.ps1). -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
   </PropertyGroup>
 
