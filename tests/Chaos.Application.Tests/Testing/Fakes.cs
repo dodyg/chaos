@@ -32,6 +32,9 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<SectionRecord> Sections = [];
     public readonly List<SubtaskRecord> Subtasks = [];
     public readonly List<TemplateRecord> Templates = [];
+    public readonly List<TagRecord> Tags = [];
+    public readonly HashSet<(string TaskId, string TagId)> TaskTags = [];
+    public readonly HashSet<(string SubtaskId, string TagId)> SubtaskTags = [];
     public readonly List<TaskHistoryRecord> History = [];
     public readonly List<OperationReceiptRecord> Receipts = [];
     public readonly List<BackupCatalogRecord> Backups = [];
@@ -50,6 +53,8 @@ public sealed class InMemoryStore : IApplicationStore
         public ISectionStore Sections { get; } = new FakeSectionStore(owner.Sections);
         public ISubtaskStore Subtasks { get; } = new FakeSubtaskStore(owner.Subtasks);
         public ITemplateStore Templates { get; } = new FakeTemplateStore(owner.Templates);
+        public ITagStore Tags { get; } = new FakeTagStore(owner.Tags, owner.TaskTags, owner.SubtaskTags);
+        public ITaskQueryStore Queries { get; } = new UnsupportedQueryStore();
         public ITaskStore Tasks { get; } = new FakeTaskStore(owner.Tasks);
         public ITaskHistoryStore History { get; } = new FakeTaskHistoryStore(owner.History);
         public IOperationReceiptStore Receipts { get; } = new FakeReceiptStore(owner.Receipts);
@@ -178,6 +183,7 @@ public sealed class FakeSectionStore(List<SectionRecord> rows) : ISectionStore
 public sealed class FakeSubtaskStore(List<SubtaskRecord> rows) : ISubtaskStore
 {
     public Task<SubtaskRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
+    public Task<SubtaskRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
     public Task<IReadOnlyList<SubtaskRecord>> ListByTaskAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<SubtaskRecord>>(rows.Where(x => x.TaskId == id && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
     public Task<IReadOnlyList<SubtaskRecord>> ListByTaskIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<SubtaskRecord>>(rows.Where(x => x.TaskId == id).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
     public Task AddAsync(SubtaskRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
@@ -219,4 +225,42 @@ public sealed class FakeBackupCatalogStore(List<BackupCatalogRecord> rows) : IBa
 
     public Task<BackupCatalogRecord?> FindByFileNameAsync(string fileName, CancellationToken ct) =>
         Task.FromResult(rows.FirstOrDefault(row => row.FileName == fileName));
+}
+
+public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, string TagId)> taskLinks, HashSet<(string SubtaskId, string TagId)> subtaskLinks) : ITagStore
+{
+    private IEnumerable<TagRecord> Active => rows.Where(x => x.DeletedAtUtc is null);
+    private static IReadOnlyList<TagRecord> Ordered(IEnumerable<TagRecord> tags) => tags.OrderBy(x => x.Position).ThenBy(x => x.NormalizedName, StringComparer.Ordinal).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
+    private IEnumerable<string> ActiveIds => Active.Select(x => x.Id);
+    public Task<TagRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(Active.FirstOrDefault(x => x.Id == id));
+    public Task<TagRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
+    public Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string owner, CancellationToken ct) => Task.FromResult(Ordered(Active.Where(x => x.OwnerProfileId == owner)));
+    public Task<IReadOnlyList<TagRecord>> ListDeletedByOwnerAsync(string owner, CancellationToken ct) => Task.FromResult<IReadOnlyList<TagRecord>>(rows.Where(x => x.OwnerProfileId == owner && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
+    public Task<TagRecord?> FindChildAsync(string owner, string? parent, string name, CancellationToken ct) => Task.FromResult(Active.FirstOrDefault(x => x.OwnerProfileId == owner && x.ParentTagId == parent && x.NormalizedName == name));
+    public Task<IReadOnlyList<TagRecord>> ListChildrenAsync(string id, CancellationToken ct) => Task.FromResult(Ordered(Active.Where(x => x.ParentTagId == id)));
+    public Task AddAsync(TagRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
+    public Task<TagRecord?> UpdateAsync(TagRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(rows, row, version);
+    public Task<long> GetNextPositionAsync(string owner, string? parent, CancellationToken ct) => Task.FromResult(Active.Where(x => x.OwnerProfileId == owner && x.ParentTagId == parent).Select(x => x.Position + 1024).DefaultIfEmpty(0).Max());
+    public Task<IReadOnlyList<string>> ListTaskTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TaskId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<string>> ListSubtaskTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(subtaskLinks.Where(x => x.SubtaskId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<string>> ListTaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TagId == id).Select(x => x.TaskId).Order(StringComparer.Ordinal).ToList());
+    public Task<IReadOnlyList<string>> ListSubtaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(subtaskLinks.Where(x => x.TagId == id).Select(x => x.SubtaskId).Order(StringComparer.Ordinal).ToList());
+    public Task<bool> AddTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Add((target, tag)));
+    public Task<bool> RemoveTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
+    public Task<bool> AddSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Add((target, tag)));
+    public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
+}
+
+/// <summary>
+/// Built-in views and search are SQL predicates over real SQLite (PLAN §16): they are proven
+/// in Chaos.Infrastructure.Tests, so the in-memory session refuses them rather than
+/// re-implementing the SQL semantics in a second, untested way.
+/// </summary>
+public sealed class UnsupportedQueryStore : ITaskQueryStore
+{
+    private static NotSupportedException Refuse() => new("Task queries run against SQLite; see Chaos.Infrastructure.Tests.");
+    public Task<TaskQueryPage> QueryAsync(TaskQueryCriteria criteria, CancellationToken ct) => throw Refuse();
+    public Task<long> CountAsync(TaskQueryCriteria criteria, CancellationToken ct) => throw Refuse();
+    public Task<IReadOnlyList<string>> ListOpenDueZoneIdsAsync(string spaceId, CancellationToken ct) => throw Refuse();
+    public Task<long> RebuildSearchIndexAsync(DateTimeOffset now, CancellationToken ct) => throw Refuse();
 }

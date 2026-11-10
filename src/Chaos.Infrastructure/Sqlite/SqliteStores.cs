@@ -15,6 +15,8 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public ITaskStore Tasks { get; } = new SqliteTaskStore(connection);
     public ISubtaskStore Subtasks { get; } = new SqliteSubtaskStore(connection);
     public ITemplateStore Templates { get; } = new SqliteTemplateStore(connection);
+    public ITagStore Tags { get; } = new SqliteTagStore(connection);
+    public ITaskQueryStore Queries { get; } = new Chaos.Infrastructure.Search.SqliteTaskQueryStore(connection);
     public ITaskHistoryStore History { get; } = new SqliteTaskHistoryStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
@@ -376,7 +378,12 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(task.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(task.DeletedAtUtc));
         await command.ExecuteNonQueryAsync(ct);
+        await IndexAsync(task, ct);
     }
+
+    /// <summary>Keeps the task's search document in step with the row, in the same transaction (PLAN §5).</summary>
+    private async Task IndexAsync(TaskRecord task, CancellationToken ct) =>
+        await Search.SearchIndexWriter.SyncAsync(connection, Search.SearchTargetKind.Task, task.Id, task.Id, task.Title, task.Notes, task.DeletedAtUtc is null, ct);
 
     public async Task<TaskRecord?> UpdateAsync(TaskRecord updated, long expectedVersion, CancellationToken ct)
     {
@@ -418,7 +425,13 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
 
         var rows = await command.ExecuteNonQueryAsync(ct);
-        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+        if (rows != 1)
+        {
+            return null;
+        }
+
+        await IndexAsync(updated, ct);
+        return await GetIncludingDeletedAsync(updated.Id, ct);
     }
 
     public async Task<long> GetNextPositionAsync(string containerId, CancellationToken ct)
@@ -626,7 +639,12 @@ public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskSt
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(subtask.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(subtask.DeletedAtUtc));
         await command.ExecuteNonQueryAsync(ct);
+        await IndexAsync(subtask, ct);
     }
+
+    /// <summary>Keeps the subtask's search document (linked to its parent task) in step with the row.</summary>
+    private async Task IndexAsync(SubtaskRecord subtask, CancellationToken ct) =>
+        await Search.SearchIndexWriter.SyncAsync(connection, Search.SearchTargetKind.Subtask, subtask.Id, subtask.TaskId, subtask.Title, subtask.Notes, subtask.DeletedAtUtc is null, ct);
 
     public async Task<SubtaskRecord?> UpdateAsync(SubtaskRecord updated, long expectedVersion, CancellationToken ct)
     {
@@ -653,7 +671,13 @@ public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskSt
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
 
         var rows = await command.ExecuteNonQueryAsync(ct);
-        return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
+        if (rows != 1)
+        {
+            return null;
+        }
+
+        await IndexAsync(updated, ct);
+        return await GetIncludingDeletedAsync(updated.Id, ct);
     }
 
     public async Task<long> GetNextPositionAsync(string taskId, CancellationToken ct)
@@ -665,7 +689,7 @@ public sealed class SqliteSubtaskStore(SqliteConnection connection) : ISubtaskSt
         return Convert.ToInt64(value);
     }
 
-    private async Task<SubtaskRecord?> GetIncludingDeletedAsync(string subtaskId, CancellationToken ct)
+    public async Task<SubtaskRecord?> GetIncludingDeletedAsync(string subtaskId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT * FROM Subtasks WHERE Id = $id;";
