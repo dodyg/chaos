@@ -37,7 +37,7 @@ public sealed class SqliteMigrationRunner
 
             if (applied.TryGetValue(migration.Version, out var appliedChecksum))
             {
-                if (!string.Equals(appliedChecksum, migration.Checksum, StringComparison.Ordinal))
+                if (!migration.Matches(appliedChecksum))
                 {
                     throw new AppException(
                         AppErrorKind.StorageUnavailable,
@@ -155,10 +155,7 @@ public sealed class SqliteMigrationRunner
             using var reader = new StreamReader(stream, Encoding.UTF8);
             var sql = reader.ReadToEnd();
 
-            migrations.Add(new EmbeddedMigration(
-                version,
-                sql,
-                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sql))).ToLowerInvariant()));
+            migrations.Add(EmbeddedMigration.From(version, sql));
         }
 
         return migrations.OrderBy(m => m.Version).ToList();
@@ -209,4 +206,22 @@ public sealed class SqliteMigrationRunner
     }
 }
 
-public sealed record EmbeddedMigration(long Version, string Sql, string Checksum);
+/// <summary>
+/// One embedded migration script. <see cref="Checksum"/> identifies its content with line
+/// endings normalized to LF, so a checkout that converts the file to CRLF (git autocrlf on
+/// Windows) is still the same migration. Databases that recorded the raw hash of either the
+/// LF or the CRLF form are accepted too; any other difference is real tampering or drift.
+/// </summary>
+public sealed record EmbeddedMigration(long Version, string Sql, string Checksum, IReadOnlyList<string> AcceptedChecksums)
+{
+    public static EmbeddedMigration From(long version, string sql)
+    {
+        var lf = sql.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var canonical = Hash(lf);
+        return new EmbeddedMigration(version, sql, canonical, [canonical, Hash(lf.Replace("\n", "\r\n", StringComparison.Ordinal))]);
+    }
+
+    public bool Matches(string appliedChecksum) => AcceptedChecksums.Contains(appliedChecksum, StringComparer.Ordinal);
+
+    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+}
