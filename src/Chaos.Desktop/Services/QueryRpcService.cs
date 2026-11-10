@@ -6,7 +6,7 @@ using NeoAstra.Rpc;
 
 namespace Chaos.Desktop.Services;
 
-/// <summary>A built-in view plus temporary filters; dates are yyyy-MM-dd local dates.</summary>
+/// <summary>A built-in view plus temporary filters; dates are yyyy-MM-dd local dates. Day picks My Day's date (null = today).</summary>
 public sealed record TaskQueryRequest(
     string View,
     string? ContainerId,
@@ -24,7 +24,8 @@ public sealed record TaskQueryRequest(
     bool IncludeArchived,
     int? UpcomingDays,
     int? Limit,
-    string? Cursor);
+    string? Cursor,
+    string? Day = null);
 
 public sealed record QueryRowResponse(TaskResponse Task, string ContainerName, bool ContainerArchived, IReadOnlyList<string> TagIds, IReadOnlyList<string> Matches, string? GroupDate);
 public sealed record TaskQueryResponse(bool Ok, IReadOnlyList<QueryRowResponse> Rows, int TotalCount, string? NextCursor, TaskErrorResponse? Error);
@@ -85,6 +86,7 @@ public sealed class QueryRpcService(TaskQueries queries)
         IncludeCompleted = request.IncludeCompleted,
         IncludeArchived = request.IncludeArchived,
         UpcomingDays = request.UpcomingDays ?? 14,
+        Day = Date(request.Day, "day"),
         Limit = request.Limit ?? TaskQueries.MaxLimit,
         Cursor = request.Cursor,
     };

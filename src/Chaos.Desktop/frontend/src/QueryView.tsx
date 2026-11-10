@@ -11,7 +11,7 @@ import { createLatestRequest } from "./latestRequest";
 import { TagChip, taskDragType } from "./tags";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
-export type QueryState = { view: string; tagId?: string; text?: string };
+export type QueryState = { view: string; tagId?: string; text?: string; day?: string };
 
 export const builtInViews = [
   { view: "Today", title: "Today", hint: "Open tasks planned or due today." },
@@ -30,7 +30,7 @@ function request(query: QueryState, filters: Filters, cursor: string | null): Ta
     view: query.view, containerId: null, tagId: query.tagId ?? null, text: query.text?.trim() || null,
     statuses: filters.status ? [filters.status] : [], priorities: filters.priority ? [filters.priority] : [],
     plannedFrom: null, plannedTo: null, dueFrom: filters.dueFrom || null, dueTo: filters.dueTo || null, completedFrom: null, completedTo: null,
-    includeCompleted: filters.includeCompleted, includeArchived: filters.includeArchived, upcomingDays: null, limit: null, cursor,
+    includeCompleted: filters.includeCompleted, includeArchived: filters.includeArchived, upcomingDays: null, limit: null, cursor, day: query.day ?? null,
   };
 }
 

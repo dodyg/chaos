@@ -277,6 +277,15 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                     """);
             }
 
+            if (criteria.DayPlanOn is { } dayPlanOn)
+            {
+                // My Day: the active membership rows of one profile's plan for one local date.
+                var profile = builder.P(criteria.ProfileId);
+                var day = builder.P(StorageFormats.Date(dayPlanOn));
+                join += $" JOIN DayPlans dp ON dp.ProfileId = {profile} AND dp.LocalDate = {day}"
+                    + " JOIN DayPlanItems di ON di.DayPlanId = dp.Id AND di.TaskId = t.Id AND di.RemovedAtUtc IS NULL";
+            }
+
             if (!criteria.IncludeArchived) where.Add("c.ArchivedAtUtc IS NULL");
             if (criteria.ContainerId is not null) where.Add($"t.ContainerId = {builder.P(criteria.ContainerId)}");
 
@@ -338,6 +347,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             IReadOnlyList<SortKey> keys = criteria.View switch
             {
                 TaskView.Container => [new("t.Position", false)],
+                TaskView.MyDay => [new("di.Position", false)],
                 TaskView.Today => [new("t.Priority", true), new("c.Position", false), new("t.Position", false)],
                 TaskView.Upcoming => [new(groupDate, false), new("t.Priority", true)],
                 TaskView.Overdue => [new("COALESCE(t.DueDate, t.PlannedDate)", false), new("COALESCE(t.DueTime, t.PlannedTime, '24:00:00')", false)],

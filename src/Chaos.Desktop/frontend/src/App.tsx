@@ -1,5 +1,5 @@
 import React from "react";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
@@ -13,7 +13,8 @@ import { NewTagForm, TagPicker, TagSettings, TagTree, taskDragType } from "./tag
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
 import { QuickAdd } from "./QuickAdd";
-import { AlarmClock, Archive, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { MyDay, useDayClock } from "./MyDay";
+import { AlarmClock, Archive, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,7 +25,7 @@ import { Banner, Count, DeletedItems, EmptyState, Field, FieldGroup, PageHeader,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc };
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc };
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -42,6 +43,8 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const padApi = api.padRpc ?? padRpc;
   const recurrenceApi = api.recurrenceRpc ?? recurrenceRpc;
   const captureApi = api.captureRpc ?? captureRpc;
+  const myDayApi = api.myDayRpc ?? myDayRpc;
+  const dayClock = useDayClock(myDayApi);
   const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
   const drafts = React.useRef(new DraftRegistry()).current;
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
@@ -71,7 +74,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
-  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad">("tasks");
+  const [view, setView] = React.useState<"tasks" | "templates" | "query" | "pad" | "myday">("tasks");
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
   const [tags, setTags] = React.useState<TagResponse[]>([]);
@@ -125,6 +128,25 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
     setRevision(current => current + 1);
     void refreshMeta().catch((e: unknown) => setError(String(e)));
     void undoApi.list({ limit: 1 }).then(result => { if (result.ok) setLastUndo(result.entries[0] ?? null); }).catch(() => setLastUndo(null));
+  }
+  // A new local date (midnight, resume after sleep, zone change) reloads views and counts without a restart.
+  const shownDate = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!dayClock) return;
+    if (shownDate.current !== null && shownDate.current !== dayClock.today) changed();
+    shownDate.current = dayClock.today;
+  }, [dayClock?.today]);
+  /** Adds the open task to today's My Day; its planned and due dates stay as they are. */
+  async function addToMyDay(task: TaskResponse) {
+    if (busy || !dayClock) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await myDayApi.add({ operationId: operationId(), date: dayClock.today, taskId: task.id });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not add the task to My Day.");
+      setNotice(result.changed === 0 ? `“${task.title}” is already on My Day.` : `Added “${task.title}” to My Day.`);
+      changed();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not add the task to My Day."); }
+    finally { setBusy(false); }
   }
   /** Operation-level undo of the newest change; on a conflict nothing changes and the reason is shown. */
   async function undoLatest() {
@@ -249,7 +271,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
   const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
     if (!text.trim()) return [];
     const [result, notes] = await Promise.all([
-      queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null }),
+      queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null, day: null }),
       padApi.search({ text, limit: 4 }).catch(() => null),
     ]);
     const tasks: LinkCandidate[] = result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
@@ -518,6 +540,9 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
         <input id="search" type="search" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
       </form>
       <nav aria-label="Views" className="grid gap-px">
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "myday" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myday"); }}>
+          <Sun/>My Day{(viewCounts.get("MyDay") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>}
+        </Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
         {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
@@ -557,6 +582,7 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} onOpen={task => setEditing(task)} onChanged={changed}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
@@ -589,7 +615,10 @@ export function App({ api = { taskRpc, containerRpc }, templates }: { api?: Api;
     {editing && view !== "templates" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
       <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
         <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
+        <div className="flex items-center gap-1">
+          {!isFinished(editing.status) && <Button type="button" variant="outline" size="sm" disabled={busy || !dayClock} title="Choose this task for today without changing its dates" onClick={() => void addToMyDay(editing)}><SunMedium/>Add to My Day</Button>}
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
+        </div>
       </div>
       <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">

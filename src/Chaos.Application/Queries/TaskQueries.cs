@@ -14,9 +14,9 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
 {
     public const int MaxLimit = 100;
 
-    /// <summary>Views that have a sidebar count (My Day joins with package 8).</summary>
+    /// <summary>Views that have a sidebar count.</summary>
     public static readonly IReadOnlyList<TaskView> CountedViews =
-        [TaskView.Today, TaskView.Upcoming, TaskView.Overdue, TaskView.AssignedToMe, TaskView.RecentlyCompleted, TaskView.Waiting];
+        [TaskView.MyDay, TaskView.Today, TaskView.Upcoming, TaskView.Overdue, TaskView.AssignedToMe, TaskView.RecentlyCompleted, TaskView.Waiting];
 
     public async Task<TaskQueryPage> RunAsync(TaskQuerySpec spec, CancellationToken ct = default)
     {
@@ -60,20 +60,22 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
     public async Task<long> RebuildSearchIndexAsync(CancellationToken ct = default) =>
         await store.ExecuteAsync((session, token) => session.Queries.RebuildSearchIndexAsync(clock.GetUtcNow(), token), ct);
 
-    private sealed record QueryContext(ProfileRecord Profile, SpaceRecord Space, TimeZoneInfo Zone, DateOnly Today, DateTimeOffset Now);
+    internal sealed record QueryContext(ProfileRecord Profile, SpaceRecord Space, TimeZoneInfo Zone, DateOnly Today, DateTimeOffset Now);
 
-    private async Task<QueryContext> ContextAsync(IDataSession session, CancellationToken token)
+    private Task<QueryContext> ContextAsync(IDataSession session, CancellationToken token) => ContextAsync(session, clock.GetUtcNow(), token);
+
+    /// <summary>The profile, Personal space, zone and local today at <paramref name="now"/> (shared with My Day).</summary>
+    internal static async Task<QueryContext> ContextAsync(IDataSession session, DateTimeOffset now, CancellationToken token)
     {
         var profile = await session.Profiles.GetPrimaryAsync(token)
             ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet. Restart Chaos to complete first-run setup.");
         var space = await session.Spaces.GetPersonalByOwnerAsync(profile.Id, token)
             ?? throw new AppException(AppErrorKind.StorageUnavailable, "No personal space exists yet. Restart Chaos to complete first-run setup.");
         var zone = FindZone(profile.ZoneId) ?? TimeZoneInfo.Utc;
-        var now = clock.GetUtcNow();
         return new QueryContext(profile, space, zone, LocalDate(now, zone), now);
     }
 
-    private static async Task<TaskQueryCriteria> ResolveAsync(IDataSession session, QueryContext context, TaskQuerySpec spec, CancellationToken token)
+    internal static async Task<TaskQueryCriteria> ResolveAsync(IDataSession session, QueryContext context, TaskQuerySpec spec, CancellationToken token)
     {
         if (!Enum.IsDefined(spec.View))
         {
@@ -140,6 +142,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             TaskView.Today or TaskView.Upcoming or TaskView.Overdue or TaskView.Waiting => true,
             _ => !spec.IncludeCompleted,
         };
+        var isMyDay = spec.View == TaskView.MyDay;
 
         return new TaskQueryCriteria
         {
@@ -153,8 +156,8 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             Priorities = [.. spec.Priorities.Distinct()],
             OpenOnly = openOnly,
             DoneOnly = spec.View == TaskView.RecentlyCompleted,
-            // Opening one archived list shows its tasks; elsewhere archives need the explicit filter.
-            IncludeArchived = spec.IncludeArchived || spec.View == TaskView.Container,
+            // Opening one archived list shows its tasks, and a task chosen for My Day stays visible there.
+            IncludeArchived = spec.IncludeArchived || spec.View == TaskView.Container || isMyDay,
             PlannedFrom = spec.Planned?.From,
             PlannedTo = spec.Planned?.To,
             DueFrom = spec.Due?.From,
@@ -166,6 +169,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             UpcomingThrough = spec.View == TaskView.Upcoming ? today.AddDays(spec.UpcomingDays) : null,
             OverdueBefore = spec.View == TaskView.Overdue ? today : null,
             OverdueZoneCutoffs = cutoffs,
+            DayPlanOn = isMyDay ? spec.Day ?? today : null,
             Limit = Math.Clamp(spec.Limit, 1, MaxLimit),
             Cursor = string.IsNullOrWhiteSpace(spec.Cursor) ? null : spec.Cursor,
         };
@@ -179,7 +183,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
         }
     }
 
-    private static TimeZoneInfo? FindZone(string zoneId)
+    internal static TimeZoneInfo? FindZone(string zoneId)
     {
         try
         {
@@ -195,7 +199,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
         }
     }
 
-    private static DateOnly LocalDate(DateTimeOffset instant, TimeZoneInfo zone) =>
+    internal static DateOnly LocalDate(DateTimeOffset instant, TimeZoneInfo zone) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, zone).DateTime);
 
     /// <summary>
