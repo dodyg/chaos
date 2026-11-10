@@ -38,15 +38,20 @@ public sealed record WeekDayLoad(DateOnly Date, DayAvailability Availability, bo
 public sealed record WeekBoard(IReadOnlyList<WeekGoalProgress> Goals, IReadOnlyList<WeekPlacement> Placements, IReadOnlyList<WeekDayLoad> Days, DayLoad Pool);
 
 /// <summary>
-/// Historical facts of one planned week (ritual step 1). Counts come from the plan's
-/// membership and the tasks' current state; package 11 replaces this live view with stored
-/// journal snapshots when they exist.
+/// Historical facts of one planned week (ritual step 1). When the journal holds a complete
+/// weekly summary of that week, its stored facts supply what was completed (with the titles
+/// captured then) and the planned-task counts; otherwise they come live from the plan's
+/// membership and the tasks' current state. Unfinished tasks and goals are always current,
+/// because the leftover decisions and goal outcomes act on them now.
 /// </summary>
+/// <param name="JournalSummaryId">The weekly summary the facts came from, or null for the live view.</param>
+/// <param name="JournalCompleted">Completed tasks as the summary captured them (only from the journal).</param>
 public sealed record WeekLookBack(
     DateOnly WeekStart, DateOnly WeekEnd, bool HadPlan,
     IReadOnlyList<string> CompletedTaskIds, long CompletedCount,
     int AssignedCount, int AssignedDone, int AssignedCancelled,
-    IReadOnlyList<string> UnfinishedTaskIds, IReadOnlyList<WeekGoalProgress> Goals);
+    IReadOnlyList<string> UnfinishedTaskIds, IReadOnlyList<WeekGoalProgress> Goals,
+    string? JournalSummaryId = null, IReadOnlyList<SummaryTaskFact>? JournalCompleted = null);
 
 public sealed record WeekCandidate(string TaskId, WeekCandidateReason Reason);
 public sealed record WeekGoalSuggestion(string Title, string? ProjectId, IReadOnlyList<string> TaskIds, WeekGoalSuggestionReason Reason);
@@ -586,6 +591,51 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
     {
         public WeekDraft AsDraft() => new(Goals, Assignments, [], Overrides, 4);
     }
+
+    /// <summary>
+    /// Adds open tasks to the unassigned pool of a week's draft (journal carry-over, PLAN §12),
+    /// starting the draft from the confirmed plan when there is none. A task already in the
+    /// week's plan is left as it is. The confirmed plan changes only when the person confirms.
+    /// </summary>
+    /// <returns>How many tasks were added.</returns>
+    internal async Task<int> CarryIntoDraftAsync(IDataSession session, TaskQueries.QueryContext context, DateOnly weekStart, IReadOnlyList<string> taskIds, DateTimeOffset now, CancellationToken token)
+    {
+        var plan = await EnsureWeekAsync(session, context, weekStart, now, token);
+        var draft = ReadDraft(plan);
+        if (draft is null)
+        {
+            var content = await ContentOfAsync(session, plan, token);
+            draft = new WeekDraft(content.Goals, content.Assignments, [], content.Overrides, plan.State == WeekPlanState.Confirmed ? 3 : 1);
+        }
+
+        var present = draft.Assignments.Select(item => item.TaskId).ToHashSet(StringComparer.Ordinal);
+        var added = taskIds.Where(present.Add).Select(id => new WeekDraftAssignment(id, null)).ToList();
+        if (added.Count == 0)
+        {
+            return 0;
+        }
+
+        if (draft.Assignments.Count + added.Count > MaxAssignments)
+        {
+            throw AppException.Validation("taskIds", $"A week holds at most {MaxAssignments} tasks.");
+        }
+
+        await UpdatePlanAsync(session, plan with
+        {
+            DraftPayload = StoredJsonFormats.Snapshot(draft with { Assignments = [.. draft.Assignments, .. added] }),
+            DraftRevision = plan.DraftRevision + 1,
+            DraftBaseRevision = plan.DraftBaseRevision ?? plan.ConfirmedRevision,
+            Version = plan.Version + 1,
+            UpdatedAtUtc = now,
+        }, plan.Version, token);
+        return added.Count;
+    }
+
+    /// <summary>Tasks in the week's latest intent (its draft, else its confirmed rows); empty when no plan exists yet.</summary>
+    internal static async Task<HashSet<string>> PlannedTaskIdsAsync(IDataSession session, string profileId, DateOnly weekStart, CancellationToken token) =>
+        await session.Weeks.FindByStartAsync(profileId, weekStart, token) is { State: not WeekPlanState.Superseded } plan
+            ? (await ContentOfAsync(session, plan, token)).Assignments.Select(item => item.TaskId).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>The plan's latest intent: its draft when there is one, otherwise its confirmed rows.</summary>
     private static async Task<WeekContent> ContentOfAsync(IDataSession session, WeekPlanRecord plan, CancellationToken token)
@@ -1169,7 +1219,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
         var completedCount = await session.Queries.CountAsync(criteria, token);
         if (previous is null)
         {
-            return new WeekLookBack(start, end, false, [.. completed.Rows.Select(row => row.Task.Id)], completedCount, 0, 0, 0, [], []);
+            return await FromJournalAsync(session, context, new WeekLookBack(start, end, false, [.. completed.Rows.Select(row => row.Task.Id)], completedCount, 0, 0, 0, [], []), token);
         }
 
         int assigned = 0, done = 0, cancelled = 0;
@@ -1193,8 +1243,31 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
         var goals = await session.Weeks.ListGoalsAsync(previous.Id, token);
         var board = await BoardAsync(session, cache, previous.WeekStartDate, [], [],
             [.. goals.Select(goal => (goal.Id, goal.Title, goal.ProjectId, goal.TaskIds, goal.Outcome, goal.Version))], [], token);
-        return new WeekLookBack(previous.WeekStartDate, WeekCalendar.EndOf(previous.WeekStartDate), true,
-            [.. completed.Rows.Select(row => row.Task.Id)], completedCount, assigned, done, cancelled, unfinished, board.Goals);
+        return await FromJournalAsync(session, context, new WeekLookBack(previous.WeekStartDate, WeekCalendar.EndOf(previous.WeekStartDate), true,
+            [.. completed.Rows.Select(row => row.Task.Id)], completedCount, assigned, done, cancelled, unfinished, board.Goals), token);
+    }
+
+    /// <summary>Replaces the live completion facts with the stored weekly summary of that week, when a complete one exists.</summary>
+    private static async Task<WeekLookBack> FromJournalAsync(IDataSession session, TaskQueries.QueryContext context, WeekLookBack live, CancellationToken token)
+    {
+        if (await session.Summaries.FindLatestAsync(context.Profile.Id, Chaos.Domain.Summaries.SummaryKind.Weekly, live.WeekStart, token) is not { IsPartial: false } summary
+            || StoredJsonFormats.ReadSnapshot<SummaryFacts>(summary.FactsJson) is not { } facts)
+        {
+            return live;
+        }
+
+        var completed = facts.Completions.Where(item => item.StillDone)
+            .GroupBy(item => item.Task.TaskId, StringComparer.Ordinal).Select(group => group.Last().Task).ToList();
+        return live with
+        {
+            CompletedTaskIds = [.. completed.Select(task => task.TaskId)],
+            CompletedCount = completed.Count,
+            AssignedCount = facts.Week?.AssignedCount ?? live.AssignedCount,
+            AssignedDone = facts.Week?.DoneCount ?? live.AssignedDone,
+            AssignedCancelled = facts.Week?.CancelledCount ?? live.AssignedCancelled,
+            JournalSummaryId = summary.Id,
+            JournalCompleted = completed,
+        };
     }
 
     /// <summary>Open tasks worth planning this week that it does not hold yet: overdue, due or planned in the week, chosen for today.</summary>

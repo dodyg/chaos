@@ -28,6 +28,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public INotificationJobStore Notifications { get; } = new SqliteNotificationJobStore(connection);
     public IDayPlanStore DayPlans { get; } = new SqliteDayPlanStore(connection);
     public IWeekPlanStore Weeks { get; } = new SqliteWeekPlanStore(connection);
+    public ISummaryStore Summaries { get; } = new SqliteSummaryStore(connection);
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
 }
@@ -56,10 +57,10 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO Profiles (Id, DisplayName, ZoneId, Locale, DateFormat, FirstWeekday,
-                PlanningTime, SummaryTime, DefaultReminderTime, QuietHoursEnabled, QuietStart, QuietEnd,
+                PlanningTime, SummaryTime, MorningTime, WeeklySummaryDay, DefaultReminderTime, QuietHoursEnabled, QuietStart, QuietEnd,
                 Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
             VALUES ($id, $name, $zone, $locale, $dateFormat, $firstWeekday,
-                $planningTime, $summaryTime, $defaultReminderTime, $quietEnabled, $quietStart, $quietEnd,
+                $planningTime, $summaryTime, $morningTime, $weeklyDay, $defaultReminderTime, $quietEnabled, $quietStart, $quietEnd,
                 $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", profile.Id);
@@ -70,6 +71,8 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         command.Parameters.AddWithValue("$firstWeekday", (long)profile.FirstWeekday);
         command.Parameters.AddWithValue("$planningTime", Optional(profile.PlanningTime));
         command.Parameters.AddWithValue("$summaryTime", Optional(profile.SummaryTime));
+        command.Parameters.AddWithValue("$morningTime", Optional(profile.MorningTime));
+        command.Parameters.AddWithValue("$weeklyDay", profile.WeeklySummaryDay is { } weeklyDay ? (long)weeklyDay : DBNull.Value);
         command.Parameters.AddWithValue("$defaultReminderTime", StorageFormats.Time(profile.DefaultReminderTime));
         command.Parameters.AddWithValue("$quietEnabled", profile.QuietHoursEnabled ? 1L : 0L);
         command.Parameters.AddWithValue("$quietStart", Optional(profile.QuietStart));
@@ -115,6 +118,24 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
     }
 
+    public async Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Profiles SET MorningTime = $morningTime, SummaryTime = $summaryTime, WeeklySummaryDay = $weeklyDay,
+                Version = $version, UpdatedAtUtc = $updated
+            WHERE Id = $id AND Version = $expected AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", profile.Id);
+        command.Parameters.AddWithValue("$morningTime", Optional(profile.MorningTime));
+        command.Parameters.AddWithValue("$summaryTime", Optional(profile.SummaryTime));
+        command.Parameters.AddWithValue("$weeklyDay", profile.WeeklySummaryDay is { } weeklyDay ? (long)weeklyDay : DBNull.Value);
+        command.Parameters.AddWithValue("$version", profile.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
+    }
+
     internal static ProfileRecord ReadProfile(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),
@@ -125,6 +146,8 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         FirstWeekday = (DayOfWeek)(int)r.L("FirstWeekday"),
         PlanningTime = r.Tn("PlanningTime"),
         SummaryTime = r.Tn("SummaryTime"),
+        MorningTime = r.Tn("MorningTime"),
+        WeeklySummaryDay = r.Ln("WeeklySummaryDay") is { } weeklyDay ? (DayOfWeek)(int)weeklyDay : null,
         DefaultReminderTime = StorageFormats.ParseTime(r.S("DefaultReminderTime"))!.Value,
         QuietHoursEnabled = r.B("QuietHoursEnabled"),
         QuietStart = r.Tn("QuietStart"),

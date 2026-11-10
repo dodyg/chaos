@@ -845,6 +845,35 @@ Package remains unchecked until the exit is shown in a native window and install
 
 **Tests:** period boundaries/DST, reopened/deleted/renamed tasks, stable captured labels, duplicate generation, missed periods, project movement and carry-over dedupe. **Exit:** a week of deterministic fixture activity produces an understandable journal and next-week review without AI/network.
 
+Progress note (2026-11-10): implemented and verified headlessly. Not yet accepted in a native window.
+
+- **Storage.** Migration 011 adds `Summaries`, and the schema ceiling is now 11. Each row is one revision of one period: kind (Morning, Daily, Weekly), local dates and half-open UTC boundaries, captured-through instant, trigger (Scheduled, CatchUp, Manual), versioned facts JSON, resource version and prompt times. Profiles gain `MorningTime` and `WeeklySummaryDay`; existing and new profiles get 08:00, 18:00 and the week's last day. New indexes read history and diary entries by instant.
+- **Domain.** `SummarySchedule` is pure: the weekly due date for a chosen weekday, local-time instants with the reminder DST rules, and which evening summaries are due or missed (at most seven earlier dates).
+- **Facts.** `SummaryFactsBuilder` reconstructs period state from append-only task history:
+  - completion events grouped by list, with a "reopened later" annotation and a separate still-done count
+  - project progress at both ends of the period, including tasks moved out
+  - planned but unfinished: My Day items (minus removed ones), confirmed week assignments and tasks planned in the period
+  - waiting on someone, next period's deadlines, diary updates with excerpts, a suggested start for the next day or week, and week-plan progress with goals
+  - morning: the day's selected and week-planned tasks, due today, overdue count and follow-ups due
+- **Application.** `SummaryCommands` covers scheduled generation (safe on every tick), explicit regeneration as a new revision, the journal with cursor paging, prompts (the newest per kind, after quiet hours), dismissal, carry-over preview and apply, and the schedule settings. Carry-over puts chosen tasks on the next My Day or in next week's draft pool, once each, and never edits task dates. My Week's look-back reads the stored weekly summary when a complete one exists.
+- **Desktop.** New `journal` RPC service (`list`, `get`, `find`, `generate`, `prompts`, `dismiss`, `previewCarryOver`, `carryOver`, `settings`, `updateSettings`). The background engine also generates due summaries on its 30-second tick.
+- **Frontend.** `Journal.tsx` adds a Journal page: past summaries, one summary in detail (sections per kind, "through HH:mm", versions, Make it again), previewed carry-over with checkboxes, "make summary now" for any past date and the schedule settings. A "summary ready" banner opens or dismisses prompts. My Week's look-back shows the journal's captured titles.
+
+Not done, deliberately:
+- **OS notifications for summaries.** Prompts are shown in the app. A Windows notification needs the installed-package adapter that reminders are also waiting for (package 0 spike).
+- **Prompts outside NotificationJobs.** That table requires a task; summary prompts are stored on the summary row with the same quiet-hour rule. See `docs/decisions.md`.
+- **Translated summary text.** Summaries render in the UI resource language (English), as decided in §1.
+
+Results: Release build has 0 warnings. 405 TUnit tests pass, 26 more than before:
+- Domain 159 (10 new)
+- Application 22
+- Infrastructure 194 (15 new journal tests on real SQLite with a fake clock, including a week of fixture activity feeding the next review)
+- Desktop 30 (1 new)
+
+Frontend: type check and `vite build` pass, and 61 tests pass (3 new). Slopwatch is clean. The Release exe starts offline on a fresh data folder with migration 011 applied.
+
+Package remains unchecked until the exit is shown in a native window: a week of activity produces a readable journal and the next week's look-back.
+
 ### [ ] 12 — Data protection and transfer
 
 **Depends on:** 1–11. Implement scheduled/manual validated backups/retention, restore recovery, lossless JSON, Markdown/Org export, JSON/Org-subset/CSV import preview/mapping/rollback and permanent deletion/reset. Test every persisted feature, not tasks alone.

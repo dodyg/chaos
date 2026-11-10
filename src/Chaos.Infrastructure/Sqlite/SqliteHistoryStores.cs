@@ -118,24 +118,26 @@ public sealed class SqliteDiaryStore(SqliteConnection connection) : IDiaryStore
         var rows = new List<DiaryEntryRecord>();
         while (await reader.ReadAsync(ct))
         {
-            rows.Add(new DiaryEntryRecord
-            {
-                Id = reader.S("Id"),
-                TaskId = reader.S("TaskId"),
-                AuthorProfileId = reader.S("AuthorProfileId"),
-                EntryAtUtc = reader.I("EntryAtUtc"),
-                RawMarkdown = reader.S("RawMarkdown"),
-                Revision = reader.L("Revision"),
-                EditedAtUtc = reader.In("EditedAtUtc"),
-                Version = reader.L("Version"),
-                CreatedAtUtc = reader.I("CreatedAtUtc"),
-                UpdatedAtUtc = reader.I("UpdatedAtUtc"),
-                DeletedAtUtc = reader.In("DeletedAtUtc"),
-            });
+            rows.Add(ReadDiaryEntry(reader));
         }
 
         return rows;
     }
+
+    internal static DiaryEntryRecord ReadDiaryEntry(SqliteDataReader reader) => new()
+    {
+        Id = reader.S("Id"),
+        TaskId = reader.S("TaskId"),
+        AuthorProfileId = reader.S("AuthorProfileId"),
+        EntryAtUtc = reader.I("EntryAtUtc"),
+        RawMarkdown = reader.S("RawMarkdown"),
+        Revision = reader.L("Revision"),
+        EditedAtUtc = reader.In("EditedAtUtc"),
+        Version = reader.L("Version"),
+        CreatedAtUtc = reader.I("CreatedAtUtc"),
+        UpdatedAtUtc = reader.I("UpdatedAtUtc"),
+        DeletedAtUtc = reader.In("DeletedAtUtc"),
+    };
 }
 
 public sealed class SqliteUndoStore(SqliteConnection connection) : IUndoStore

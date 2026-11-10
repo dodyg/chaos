@@ -8,6 +8,7 @@ using Chaos.Application.Pad;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
+using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
 using Chaos.Desktop.Platform;
 using Chaos.Desktop.Services;
@@ -36,7 +37,9 @@ internal static class Program
         // declared after storage, so it stops before storage closes.
         var notifications = new InAppNotificationAdapter();
         var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
-        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System);
+        // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
+        var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries);
         reminderEngine.Start();
 
         return NeoApp.Run(args, app =>
@@ -62,6 +65,7 @@ internal static class Program
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddJournalRpcService(new JournalRpcService(summaries));
             });
         });
     }
@@ -333,5 +337,38 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(FollowUpDueRequest))]
 [JsonSerializable(typeof(FollowUpItemResponse))]
 [JsonSerializable(typeof(FollowUpDueResponse))]
+[JsonSerializable(typeof(SummaryTaskDto))]
+[JsonSerializable(typeof(CompletionDto))]
+[JsonSerializable(typeof(ProjectProgressDto))]
+[JsonSerializable(typeof(UnfinishedDto))]
+[JsonSerializable(typeof(WaitingFactDto))]
+[JsonSerializable(typeof(DiaryFactDto))]
+[JsonSerializable(typeof(SuggestionDto))]
+[JsonSerializable(typeof(GoalFactDto))]
+[JsonSerializable(typeof(WeekProgressDto))]
+[JsonSerializable(typeof(FollowUpFactDto))]
+[JsonSerializable(typeof(SummaryFactsDto))]
+[JsonSerializable(typeof(SummaryCountsDto))]
+[JsonSerializable(typeof(SummaryHeaderDto))]
+[JsonSerializable(typeof(SummaryRevisionDto))]
+[JsonSerializable(typeof(SummaryDetailDto))]
+[JsonSerializable(typeof(JournalListRequest))]
+[JsonSerializable(typeof(JournalListResponse))]
+[JsonSerializable(typeof(JournalGetRequest))]
+[JsonSerializable(typeof(JournalFindRequest))]
+[JsonSerializable(typeof(JournalDetailResponse))]
+[JsonSerializable(typeof(JournalGenerateRequest))]
+[JsonSerializable(typeof(JournalPromptsRequest))]
+[JsonSerializable(typeof(JournalPromptsResponse))]
+[JsonSerializable(typeof(JournalDismissRequest))]
+[JsonSerializable(typeof(JournalDismissResponse))]
+[JsonSerializable(typeof(CarryOverPreviewRequest))]
+[JsonSerializable(typeof(CarryOverCandidateDto))]
+[JsonSerializable(typeof(CarryOverPreviewResponse))]
+[JsonSerializable(typeof(CarryOverRequest))]
+[JsonSerializable(typeof(CarryOverResponse))]
+[JsonSerializable(typeof(SummarySettingsRequest))]
+[JsonSerializable(typeof(SummarySettingsResponse))]
+[JsonSerializable(typeof(SummarySettingsUpdateRequest))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

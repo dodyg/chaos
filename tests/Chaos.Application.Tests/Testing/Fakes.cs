@@ -80,6 +80,7 @@ public sealed class InMemoryStore : IApplicationStore
         public INotificationJobStore Notifications { get; } = new FakeNotificationJobStore(owner.Jobs);
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
         public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
+        public ISummaryStore Summaries => throw new NotSupportedException("This test store does not implement summaries; the journal is tested against SQLite.");
     }
 }
 
@@ -227,6 +228,9 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
     }
 
     public Task<ProfileRecord?> UpdateReminderSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
+        UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
+
+    public Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
         UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
 
     public Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
