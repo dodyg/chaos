@@ -155,8 +155,49 @@ public sealed class SqliteMigrationRunnerTests
         await Assert.That(migrations[0].Version).IsEqualTo(1L);
         await Assert.That(migrations[0].Checksum.Length).IsEqualTo(64);
         await Assert.That(migrations.Select(migration => migration.Version).SequenceEqual(migrations.Select(migration => migration.Version).OrderBy(version => version))).IsTrue();
-        // The recorded checksum is UTF-8 SHA-256 lowercase hex of the embedded SQL.
-        var expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(migrations[0].Sql))).ToLowerInvariant();
-        await Assert.That(migrations[0].Checksum).IsEqualTo(expected);
+        // The recorded checksum is UTF-8 SHA-256 lowercase hex of the embedded SQL with LF line endings.
+        await Assert.That(migrations[0].Checksum).IsEqualTo(Sha256(migrations[0].Sql.Replace(Crlf, Lf)));
+    }
+
+    private const string Lf = "\n";
+    private const string Crlf = "\r\n";
+
+    private static string Sha256(string text) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+
+    /// <summary>
+    /// Regression: git autocrlf rewrote an unchanged migration with CRLF endings, so a database
+    /// created by an LF build was refused as "differs". Line endings alone never make a
+    /// migration different, in either direction.
+    /// </summary>
+    [Test]
+    public async Task MigrateAsync_AppliedChecksumOfEitherLineEnding_IsTheSameMigration()
+    {
+        using var connection = NewConnection(TestPaths.NewDataRoot());
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        var migration = SqliteMigrationRunner.LoadEmbeddedMigrations().Single(m => m.Version == 4);
+        var lf = migration.Sql.Replace(Crlf, Lf);
+
+        foreach (var recorded in new[] { Sha256(lf), Sha256(lf.Replace(Lf, Crlf)) })
+        {
+            using (var set = connection.CreateCommand())
+            {
+                set.CommandText = "UPDATE SchemaMigrations SET Checksum = $c WHERE Version = 4;";
+                set.Parameters.AddWithValue("$c", recorded);
+                await set.ExecuteNonQueryAsync();
+            }
+
+            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(5L);
+        }
+
+        // A real content change is still refused.
+        using (var tamper = connection.CreateCommand())
+        {
+            tamper.CommandText = "UPDATE SchemaMigrations SET Checksum = $c WHERE Version = 4;";
+            tamper.Parameters.AddWithValue("$c", Sha256(lf + "-- edited" + Lf));
+            await tamper.ExecuteNonQueryAsync();
+        }
+
+        await Assert.That(async () => await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).Throws<Chaos.Application.Abstractions.AppException>();
     }
 }
