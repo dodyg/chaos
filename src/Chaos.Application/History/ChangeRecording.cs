@@ -20,6 +20,8 @@ public enum ChangeKind
     RecurrenceSeries = 9,
     RecurrenceOccurrence = 10,
     ReminderRule = 11,
+    Waiting = 12,
+    FollowUp = 13,
 }
 
 internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
@@ -63,14 +65,58 @@ internal sealed class RecordingReminderRuleStore(RecordingDataSession recorder, 
     public Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct) => inner.ListByTaskAsync(taskId, ct);
     public async Task AddAsync(ReminderRuleRecord row, CancellationToken ct)
     {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
         await inner.AddAsync(row, ct);
         recorder.RecordEntity<ReminderRuleRecord>(ChangeKind.ReminderRule, row.Id, null, row.Version);
     }
     public async Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long expectedVersion, CancellationToken ct)
     {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
         var before = recorder.IsRecorded(ChangeKind.ReminderRule, row.Id) ? null : await inner.GetAsync(row.Id, ct);
         var applied = await inner.UpdateAsync(row, expectedVersion, ct);
         if (applied is not null) recorder.RecordEntity(ChangeKind.ReminderRule, row.Id, before, row.Version);
+        return applied;
+    }
+}
+
+internal sealed class RecordingWaitingStore(RecordingDataSession recorder, IWaitingStore inner) : IWaitingStore
+{
+    public Task<WaitingDetailRecord?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+    public Task<WaitingDetailRecord?> FindActiveAsync(string taskId, CancellationToken ct) => inner.FindActiveAsync(taskId, ct);
+    public Task<FollowUpRecord?> GetFollowUpAsync(string id, CancellationToken ct) => inner.GetFollowUpAsync(id, ct);
+    public Task<FollowUpRecord?> FindActiveFollowUpAsync(string taskId, CancellationToken ct) => inner.FindActiveFollowUpAsync(taskId, ct);
+    public Task SetFollowUpDueAsync(string followUpId, DateTimeOffset? dueAtUtc, CancellationToken ct) => inner.SetFollowUpDueAsync(followUpId, dueAtUtc, ct);
+    public Task<IReadOnlyList<FollowUpRecord>> ListActiveFollowUpsAsync(string profileId, CancellationToken ct) => inner.ListActiveFollowUpsAsync(profileId, ct);
+
+    public async Task AddAsync(WaitingDetailRecord row, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        await inner.AddAsync(row, ct);
+        recorder.RecordEntity<WaitingDetailRecord>(ChangeKind.Waiting, row.Id, null, row.Version);
+    }
+
+    public async Task<WaitingDetailRecord?> UpdateAsync(WaitingDetailRecord row, long expectedVersion, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        var before = recorder.IsRecorded(ChangeKind.Waiting, row.Id) ? null : await inner.GetAsync(row.Id, ct);
+        var applied = await inner.UpdateAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.Waiting, row.Id, before, row.Version);
+        return applied;
+    }
+
+    public async Task AddFollowUpAsync(FollowUpRecord row, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        await inner.AddFollowUpAsync(row, ct);
+        recorder.RecordEntity<FollowUpRecord>(ChangeKind.FollowUp, row.Id, null, row.Version);
+    }
+
+    public async Task<FollowUpRecord?> UpdateFollowUpAsync(FollowUpRecord row, long expectedVersion, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        var before = recorder.IsRecorded(ChangeKind.FollowUp, row.Id) ? null : await inner.GetFollowUpAsync(row.Id, ct);
+        var applied = await inner.UpdateFollowUpAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.FollowUp, row.Id, before, row.Version);
         return applied;
     }
 }
@@ -131,6 +177,7 @@ public sealed class RecordingDataSession : IDataSession
         Tags = new RecordingTagStore(this, inner.Tags);
         Diary = new RecordingDiaryStore(this, inner.Diary);
         Pad = new RecordingPadStore(this, inner.Pad);
+        Waiting = new RecordingWaitingStore(this, inner.Waiting);
     }
 
     public IProfileStore Profiles => _inner.Profiles;
@@ -149,6 +196,8 @@ public sealed class RecordingDataSession : IDataSession
     public IPadStore Pad { get; }
     public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
     public IReminderRuleStore ReminderRules => new RecordingReminderRuleStore(this, _inner.ReminderRules);
+    public IWaitingStore Waiting { get; }
+    public INotificationJobStore Notifications => _inner.Notifications;
     public IDayPlanStore DayPlans => _inner.DayPlans;
     public IWeekPlanStore Weeks => _inner.Weeks;
     public IOperationReceiptStore Receipts => _inner.Receipts;
@@ -169,6 +218,9 @@ public sealed class RecordingDataSession : IDataSession
         [.. _entityOrder.Select(key => new EntityChange(key.Kind, key.Id, _entities[key].Before, _entities[key].AfterVersion))],
         [.. _linkOrder.Where(key => _links[key].PresentBefore != _links[key].PresentAfter)
             .Select(key => new LinkChange(key.Kind, key.TargetId, key.TagId, _links[key].PresentAfter))]);
+
+    /// <summary>Every task this operation reached, in first-touch order.</summary>
+    public IReadOnlyList<string> TouchedTaskIds => _taskOrder;
 
     internal void Begin(string operationId, string commandKind)
     {
@@ -257,7 +309,9 @@ public sealed class RecordingDataSession : IDataSession
         }
 
         return new TaskAggregateSnapshot(task, subtasks, await session.Tags.ListTaskTagIdsAsync(taskId, ct), subtaskTags,
-            await session.ReminderRules.ListByTaskAsync(taskId, ct));
+            await session.ReminderRules.ListByTaskAsync(taskId, ct),
+            await session.Waiting.FindActiveAsync(taskId, ct),
+            await session.Waiting.FindActiveFollowUpAsync(taskId, ct));
     }
 
     /// <summary>
@@ -400,6 +454,21 @@ public sealed class RecordingDataSession : IDataSession
             {
                 fields.Add("Tags");
             }
+
+            if (Json(before.ReminderRules ?? []) != Json(after.ReminderRules ?? []))
+            {
+                fields.Add("Reminders");
+            }
+
+            if (Json(before.Waiting) != Json(after.Waiting))
+            {
+                fields.Add("Waiting");
+            }
+
+            if (Json(before.FollowUp) != Json(after.FollowUp))
+            {
+                fields.Add("FollowUp");
+            }
         }
 
         if (diaryChanged)
@@ -434,6 +503,8 @@ public sealed class RecordingDataSession : IDataSession
         if (TaskMutationSupport.ChangedTaskFields(was, now).Count > 0) return "task.updated";
         if (Json(before.TagIds ?? []) != Json(after.TagIds ?? [])) return "task.tags-changed";
         if (diaryChanged) return "diary.changed";
+        if (Json(before.Waiting) != Json(after.Waiting) || Json(before.FollowUp) != Json(after.FollowUp)) return "waiting.changed";
+        if (Json(before.ReminderRules ?? []) != Json(after.ReminderRules ?? [])) return "reminder.changed";
         return "subtask.changed";
     }
 
@@ -500,6 +571,13 @@ internal static class UndoLabels
         ["pad.reorder"] = "Reorder pad note",
         ["pad.review"] = "Archive pad notes in review",
         ["pad.make-task"] = "Make task",
+        ["reminder.add"] = "Add reminder to",
+        ["reminder.update"] = "Change reminder of",
+        ["reminder.delete"] = "Delete reminder of",
+        ["waiting.set"] = "Set waiting on",
+        ["waiting.clear"] = "Stop waiting on",
+        ["waiting.log"] = "Log follow-up on",
+        ["followup.snooze"] = "Snooze follow-up of",
     };
 
     public static string For(string commandKind, string? subject)

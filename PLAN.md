@@ -794,6 +794,51 @@ Package remains unchecked until the exit is shown in a native window: finish the
 
 **Tests:** fake clock/delivery/action race matrix plus real packaged Windows delivery after exit, permission denied, stale callback, duplicate action, changed anchors and restart reconciliation. **Exit:** an offline reminder can open, complete or snooze the intended task exactly once; a follow-up appears privately and sends nothing.
 
+Progress note (2026-11-10): implemented and verified headlessly with an in-app presenter. Not yet accepted in a native window, and the installed-package Windows notification adapter is still blocked on the package 0 spike.
+
+- **Storage.** Migration 010 adds three tables, and the schema ceiling is now 10:
+  - `WaitingDetails`: free-text person and start instant, with one active row per task.
+  - `FollowUps`: Fixed, AfterWaiting, BeforeDue or AfterInactivity, plus snooze and resolved instants, with one unresolved rule per task. The due instant is a derived, unversioned column.
+  - `NotificationJobs`: one row per desired or delivered notification, merging the plan's ReminderDeliveries and NotificationJobs. Each row has a source, generation and sequence, the original target, the delivery instant after quiet hours and snoozes, its state, how it was presented, and its OS schedule state with retries. A partial unique index allows only one pending delivery per source.
+- **Domain.** `ReminderTiming` is pure and covers:
+  - anchor instants: a date-only anchor uses the default reminder time in the profile zone, never midnight UTC
+  - DST: a time in the gap moves forward, an ambiguous time takes the earlier instant
+  - quiet hours that cross midnight
+  - day and week arithmetic that keeps the wall time
+  - follow-up deadlines and snooze presets
+- **Sync in the same transaction.** Every recorded operation goes through the existing recorder, so no command needed its own reminder code. Before history is written, a task that left Waiting on someone ends its waiting details and resolves its follow-up; this is recorded, so history and undo include it. After history, the desired notifications of every touched task are recomputed: an unchanged target is left alone, and a changed target or delivery instant cancels the pending row and adds a new generation. Undo, recurrence successors, capture and templates are therefore covered too. Inactivity counts from the latest task history that changed a real field. Reminder, waiting and follow-up bookkeeping do not count, and viewing, reminders firing and My Day membership write no task history at all.
+- **Delivery and actions.** `ReminderCommands` does the following:
+  - **Delivery.** It resyncs each due task before marking anything delivered, so a stale job never fires.
+  - **Missed repeats.** A source shows only its newest delivery. An insistent rule schedules only its next repeat, a rolling horizon with a 5-minute minimum.
+  - **Actions.** Open, Done, Snooze (10 minutes, 1 hour, tomorrow at the default time, or a chosen time) and Dismiss. Each action checks the job's generation (stale callbacks are refused) and its state (a second click is AlreadyHandled). It runs under its own OperationId. Done goes through the standard `SetStatus` command with a derived idempotency key and asks for the open-subtask choice first. Snoozing never edits due dates.
+  - **OS reconciliation.** Runs outside transactions: it schedules future rows, cancels replaced or acknowledged ones, and records failures for retry.
+  - **Settings.** Changing the default time or quiet hours reschedules every pending row.
+- **Waiting.** `WaitingCommands` offers set (person plus follow-up), clear, log, snooze, and the follow-ups due on a date. Logging writes a private diary update: it restarts an inactivity follow-up and resolves a one-off one. Nothing is sent and nothing is looked up. Quick add now creates real waiting and follow-up records; a follow-up date with no named person becomes an absolute reminder. The Waiting view groups by person (unnamed last) with the next follow-up, and search also matches the person's name.
+- **Desktop.** New `reminders` RPC service (`list`, `add`, `update`, `delete`, `settings`, `updateSettings`, `alerts`, `center`, `act`) and `waiting` RPC service (`get`, `set`, `clear`, `log`, `snooze`, `due`). The background `ReminderEngine` resyncs at startup, then delivers due notifications and reconciles every 30 s and whenever alerts are requested; ticks never overlap. `InAppNotificationAdapter` is the development presenter allowed by §11, and it reports that it cannot schedule after exit.
+- **Frontend.** `Reminders.tsx` adds:
+  - the in-app alert stack, with Open, Done (asking about open subtasks), 10 minutes, 1 hour, Tomorrow and Dismiss, and a "missed while closed" note
+  - a Notifications page: default reminder time, quiet hours, what this build can deliver, and the delivery history including missed and suppressed items
+  - a Remind tab in the task editor: rules with their next delivery or why they are paused, insistent repeats, and waiting on someone with a follow-up rule, Log and Stop waiting
+  - a Follow-ups section in My Day with Open, Log, Snooze and Stop waiting
+  - person headings and follow-up badges in the Waiting view
+
+Not done, deliberately:
+- **Windows notification adapter.** Scheduled Windows notifications after exit, activation from toast buttons, tray and Quit need an installed MSIX and the package 0 spike on a real desktop. They plug into `INotificationAdapter` without changing the engine.
+- **Planning and summary prompts.** The planning-day, midweek and summary prompts are packages 11 and 13; they will reuse `NotificationJobs` with a new source kind.
+- **Follow-ups as stored My Day rows.** Follow-ups appear as a computed section rather than as `DayPlanItems` of kind 1. That avoids rebuilding a table, and they are removed by resolving or snoozing them.
+
+Results: Release build has 0 warnings. 379 TUnit tests pass, 42 more than before:
+- Domain 149 (12 new)
+- Application 22
+- Infrastructure 179 (23 new reminder/follow-up tests on real SQLite with a fake clock and presenter)
+- Desktop 29 (2 new)
+
+Frontend: type check and `vite build` pass, and 58 tests pass (6 new). Slopwatch is clean. The Release exe starts offline on a fresh data folder with migration 010 applied.
+
+The new search test caught a real bug, now fixed: person matching was case-sensitive.
+
+Package remains unchecked until the exit is shown in a native window and installed package: a reminder opens, completes or snoozes its task exactly once, also after Chaos was closed, and a follow-up appears in My Day without anything being sent.
+
 ### [ ] 11 — Daily/weekly plain summaries
 
 **Depends on:** 4, 8–10. Implement structured historical facts, generation/idempotence/revisions, journal screens, morning/evening/weekly schedules and explicit carry-over. Connect weekly look-back to stored facts.

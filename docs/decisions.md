@@ -142,3 +142,39 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
 - **Pad Make task reuses quick add.** The selection's first line becomes the quick-add
   text; the confirmed draft travels in `pad.makeTask` and is created by the same
   `CaptureCommands.CreateInSessionAsync` as quick add, next to the backlink.
+
+## 2026-11-10 (package 10)
+
+- **Notifications are derived rows, synced by the recorder.** Rules, waiting details and
+  follow-ups are versioned and undoable. `NotificationJobs` are a projection that is not
+  part of undo. After every recorded operation, the jobs of each touched task are
+  recomputed in the same transaction, and delivery resyncs a task again before showing
+  anything. No command needs its own reminder code, and undo restores the right future
+  deliveries simply by restoring the rules and dates they depend on.
+- **One table for jobs and deliveries.** The plan's `ReminderDeliveries` and
+  `NotificationJobs` map 1:1, so one row holds the desired schedule, the delivery history
+  and the OS schedule state. `Generation` changes whenever a source's target or delivery
+  instant changes, which is how stale OS callbacks are recognized. `Sequence` counts snoozes
+  and insistent repeats of the same target.
+- **Offsets are signed.** `ReminderRules.OffsetMinutes` keeps the convention quick add
+  already stored: negative is before the anchor (-60 = one hour before).
+- **Waiting ends with the Waiting status.** When a task leaves Waiting on someone
+  (another status, done, cancelled), its waiting details end and its follow-up is resolved
+  inside the same recorded operation, so history keeps both and undo restores them.
+  Deletion leaves them as they are; a deleted task simply has no deliveries.
+- **Inactivity is computed from task history.** The latest history entry that changed a
+  field other than position, reminders, waiting or follow-up counts as activity. Viewing,
+  reminders firing and My Day membership never write task history, so they never reset it.
+  A logged follow-up is a diary update, which does.
+- **Logging a follow-up resolves a one-off rule.** Fixed, after-waiting and before-due
+  follow-ups are done once logged. An inactivity follow-up stays and restarts from the log.
+- **A follow-up date without a person is a reminder.** Quick add's "follow up Friday"
+  with no "waiting on" creates an absolute reminder at the default time rather than an
+  anonymous waiting record.
+- **Follow-ups in My Day are computed.** They appear as their own section for the day,
+  removed by resolving or snoozing, instead of `DayPlanItems` of kind 1, which would need a
+  table rebuild for the existing CHECK and unique task index.
+- **In-app presenter until the installed package.** `InAppNotificationAdapter` shows due
+  notifications inside the running app and reports that it cannot schedule after exit. The
+  Windows adapter (MSIX, scheduled toasts, activation) implements the same port once the
+  package 0 spike passes on a real desktop. The engine never claims OS delivery it did not get.

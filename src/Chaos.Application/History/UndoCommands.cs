@@ -134,6 +134,8 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.RecurrenceSeries => await session.Recurrence.GetSeriesAsync(change.Id, ct) is { } row ? (row.Version, "recurrence series") : (null, null),
         ChangeKind.RecurrenceOccurrence => await session.Recurrence.GetOccurrenceAsync(change.Id, ct) is { } row ? (row.Version, "recurrence occurrence") : (null, null),
         ChangeKind.ReminderRule => await session.ReminderRules.GetAsync(change.Id, ct) is { } row ? (row.Version, "reminder rule") : (null, null),
+        ChangeKind.Waiting => await session.Waiting.GetAsync(change.Id, ct) is { } row ? (row.Version, "waiting details") : (null, null),
+        ChangeKind.FollowUp => await session.Waiting.GetFollowUpAsync(change.Id, ct) is { } row ? (row.Version, "follow-up") : (null, null),
         _ => (null, null),
     };
 
@@ -166,6 +168,16 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                     id => session.ReminderRules.GetAsync(id, ct),
                     (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
                     (row, expected) => session.ReminderRules.UpdateAsync(row, expected, ct));
+            case ChangeKind.Waiting:
+                return await RevertAsync(change, label, _ => "waiting details",
+                    id => session.Waiting.GetAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Waiting.UpdateAsync(row, expected, ct));
+            case ChangeKind.FollowUp:
+                return await RevertAsync(change, label, _ => "follow-up",
+                    id => session.Waiting.GetFollowUpAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Waiting.UpdateFollowUpAsync(row, expected, ct));
             case ChangeKind.RecurrenceSeries:
                 return await RevertAsync(change, label, _ => "recurrence series",
                     id => session.Recurrence.GetSeriesAsync(id, ct),

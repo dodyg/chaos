@@ -24,6 +24,8 @@ public interface IDataSession
     IPadStore Pad { get; }
     IRecurrenceStore Recurrence { get; }
     IReminderRuleStore ReminderRules { get; }
+    IWaitingStore Waiting { get; }
+    INotificationJobStore Notifications { get; }
     IDayPlanStore DayPlans { get; }
     IWeekPlanStore Weeks { get; }
     IOperationReceiptStore Receipts { get; }
@@ -88,6 +90,55 @@ public interface IWeekPlanStore
     Task<IReadOnlyList<AvailabilityRecord>> ListOverridesAsync(string profileId, DateOnly from, DateOnly to, CancellationToken ct);
     Task UpsertOverrideAsync(string profileId, DateOnly date, int totalMinutes, int? workMinutes, DateTimeOffset now, CancellationToken ct);
     Task DeleteOverrideAsync(string profileId, DateOnly date, CancellationToken ct);
+}
+
+/// <summary>
+/// Waiting details and follow-up rules (PLAN §11), within the caller's transaction. Versioned
+/// writes are recorded for history and undo; the derived follow-up due instant is not.
+/// </summary>
+public interface IWaitingStore
+{
+    /// <summary>The row even when tombstoned (undo and history need it).</summary>
+    Task<WaitingDetailRecord?> GetAsync(string id, CancellationToken ct);
+    Task<WaitingDetailRecord?> FindActiveAsync(string taskId, CancellationToken ct);
+    Task AddAsync(WaitingDetailRecord row, CancellationToken ct);
+    Task<WaitingDetailRecord?> UpdateAsync(WaitingDetailRecord row, long expectedVersion, CancellationToken ct);
+
+    /// <summary>The rule even when resolved or tombstoned.</summary>
+    Task<FollowUpRecord?> GetFollowUpAsync(string id, CancellationToken ct);
+    /// <summary>The task's unresolved, nondeleted follow-up rule, if any.</summary>
+    Task<FollowUpRecord?> FindActiveFollowUpAsync(string taskId, CancellationToken ct);
+    Task AddFollowUpAsync(FollowUpRecord row, CancellationToken ct);
+    Task<FollowUpRecord?> UpdateFollowUpAsync(FollowUpRecord row, long expectedVersion, CancellationToken ct);
+    /// <summary>Stores the derived due instant (null = suspended) without changing the rule's version.</summary>
+    Task SetFollowUpDueAsync(string followUpId, DateTimeOffset? dueAtUtc, CancellationToken ct);
+    /// <summary>Unresolved, nondeleted follow-up rules of one profile, earliest due first (suspended last).</summary>
+    Task<IReadOnlyList<FollowUpRecord>> ListActiveFollowUpsAsync(string profileId, CancellationToken ct);
+}
+
+/// <summary>
+/// Desired and delivered notifications (PLAN §11 NotificationJobs/ReminderDeliveries). Rows are
+/// derived from rules and follow-ups, so they are not part of undo; state changes are guarded
+/// by the state the caller read, inside the serialized write transaction.
+/// </summary>
+public interface INotificationJobStore
+{
+    Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct);
+    /// <summary>The newest row of a source: highest generation, then highest sequence.</summary>
+    Task<NotificationJobRecord?> FindLatestAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct);
+    Task<IReadOnlyList<NotificationJobRecord>> ListBySourceAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct);
+    Task<IReadOnlyList<NotificationJobRecord>> ListPendingByTaskAsync(string taskId, CancellationToken ct);
+    Task AddAsync(NotificationJobRecord row, CancellationToken ct);
+    /// <returns>False when the row is no longer in <paramref name="expectedState"/> (a concurrent action won).</returns>
+    Task<bool> UpdateAsync(NotificationJobRecord row, NotificationJobState expectedState, CancellationToken ct);
+    /// <summary>Pending rows of the profile whose delivery instant has come, oldest first.</summary>
+    Task<IReadOnlyList<NotificationJobRecord>> ListDueAsync(string profileId, DateTimeOffset now, int limit, CancellationToken ct);
+    /// <summary>Rows the OS reconciler must act on: pending rows not scheduled yet or failed, and cancelled or delivered rows still scheduled.</summary>
+    Task<IReadOnlyList<NotificationJobRecord>> ListOsWorkAsync(string profileId, int limit, CancellationToken ct);
+    /// <summary>Delivered rows (any later state), newest delivery first: the notification center.</summary>
+    Task<IReadOnlyList<NotificationJobRecord>> ListDeliveredAsync(string profileId, int limit, CancellationToken ct);
+    /// <summary>Tasks of the profile that have an active reminder rule, an active follow-up or a pending notification.</summary>
+    Task<IReadOnlyList<string>> ListTasksWithSourcesAsync(string profileId, CancellationToken ct);
 }
 
 public interface IReminderRuleStore
@@ -182,6 +233,8 @@ public interface IProfileStore
     Task AddAsync(ProfileRecord profile, CancellationToken ct);
     /// <summary>Optimistic update of the first weekday (PLAN §10 week-start changes).</summary>
     Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
+    /// <summary>Optimistic update of the default reminder time and quiet hours (PLAN §11).</summary>
+    Task<ProfileRecord?> UpdateReminderSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
 }
 
 public interface ISpaceStore

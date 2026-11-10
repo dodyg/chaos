@@ -4,8 +4,8 @@ namespace Chaos.Application.Contracts;
 
 /// <summary>
 /// Built-in task views (PLAN §10). My Day lists one local date's day-plan items in their
-/// manual order; Waiting groups by outside
-/// person once package 10 stores waiting details, and until then lists Waiting-on-someone tasks.
+/// manual order; Waiting lists Waiting-on-someone tasks grouped by outside person (tasks
+/// without a named person last), earliest follow-up first within a person.
 /// </summary>
 public enum TaskView
 {
@@ -102,6 +102,8 @@ public enum SearchMatchKind
     Task = 1,
     Subtask = 2,
     Diary = 3,
+    /// <summary>The name of the outside person the task waits on.</summary>
+    WaitingPerson = 5,
 }
 
 /// <summary>One result row: a top-level task with the context a list needs to show it.</summary>
@@ -111,7 +113,9 @@ public sealed record TaskQueryRow(
     bool ContainerArchived,
     IReadOnlyList<string> TagIds,
     IReadOnlyList<SearchMatchKind> Matches,
-    DateOnly? GroupDate);
+    DateOnly? GroupDate,
+    string? WaitingPerson = null,
+    DateTimeOffset? NextFollowUpAtUtc = null);
 
 /// <summary>A page of rows, the total row count for the same criteria, and the next cursor (null at the end).</summary>
 public sealed record TaskQueryPage(IReadOnlyList<TaskQueryRow> Rows, long TotalCount, string? NextCursor);

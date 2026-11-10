@@ -27,7 +27,8 @@ public sealed record TaskQueryRequest(
     string? Cursor,
     string? Day = null);
 
-public sealed record QueryRowResponse(TaskResponse Task, string ContainerName, bool ContainerArchived, IReadOnlyList<string> TagIds, IReadOnlyList<string> Matches, string? GroupDate);
+public sealed record QueryRowResponse(TaskResponse Task, string ContainerName, bool ContainerArchived, IReadOnlyList<string> TagIds, IReadOnlyList<string> Matches, string? GroupDate,
+    string? WaitingPerson, string? NextFollowUpAtUtc);
 public sealed record TaskQueryResponse(bool Ok, IReadOnlyList<QueryRowResponse> Rows, int TotalCount, string? NextCursor, TaskErrorResponse? Error);
 public sealed record ViewCountsRequest();
 public sealed record ViewCountResponse(string View, int Count);
@@ -97,7 +98,9 @@ public sealed class QueryRpcService(TaskQueries queries)
         row.ContainerArchived,
         row.TagIds,
         [.. row.Matches.Select(match => match.ToString())],
-        row.GroupDate is { } date ? StorageFormats.Date(date) : null);
+        row.GroupDate is { } date ? StorageFormats.Date(date) : null,
+        row.WaitingPerson,
+        row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null);
 
     private static LocalDateRange? Range(string? from, string? to, string field)
     {
