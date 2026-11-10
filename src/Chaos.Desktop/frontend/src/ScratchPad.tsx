@@ -1,11 +1,12 @@
 import React from "react";
-import { padRpc, tagRpc, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
+import { padRpc, tagRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
+import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
 import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Copy, ListPlus, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Banner, DeletedItems, EmptyState, Field, PageHeader } from "@/components/common";
+import { Banner, DeletedItems, EmptyState, PageHeader } from "@/components/common";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { MarkdownPreview, type MarkdownLinks } from "./markdown";
 import { TagPicker } from "./tags";
@@ -32,7 +33,7 @@ export function padExcerpt(markdown: string): string {
   return "Empty note";
 }
 
-/** Quick-add title from a selection: its first line without list or heading markers (until package 7's parser). */
+/** The quick-add text for a selection: its first line without list or heading markers. */
 export function titleFromSelection(text: string): string {
   const line = padExcerpt(text);
   return line === "Empty note" ? "" : line.replace(/…$/, "");
@@ -65,6 +66,8 @@ function useSnapshot(saver: DraftSaver | null): DraftSnapshot | null {
 type Props = {
   api?: PadApi;
   tagApi?: typeof tagRpc;
+  /** Quick-add preview used by Make task. */
+  captureApi?: CapturePreviewApi;
   registry: DraftRegistry;
   containers: ContainerResponse[];
   tags: TagResponse[];
@@ -83,7 +86,7 @@ type Props = {
  * type, ordered by hand, tagged and archived; "Make task" on a selection with a backlink;
  * and a weekly review that suggests archiving old notes.
  */
-export function ScratchPad({ api = padRpc, tagApi = tagRpc, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError }: Props) {
+export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError }: Props) {
   const [archived, setArchived] = React.useState(false);
   const [tagFilter, setTagFilter] = React.useState("");
   const [items, setItems] = React.useState<PadItemResponse[]>([]);
@@ -95,7 +98,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, registry, containers
   const [missingQuote, setMissingQuote] = React.useState<string | null>(null);
   const [selectRange, setSelectRange] = React.useState<{ start: number; end: number; key: number } | null>(null);
   const [selection, setSelection] = React.useState<{ start: number; end: number }>({ start: 0, end: 0 });
-  const [makeTask, setMakeTask] = React.useState<{ start: number; end: number; title: string; notes: string; containerId: string; plannedDate: string; dueDate: string } | null>(null);
+  const [makeTask, setMakeTask] = React.useState<{ start: number; end: number; text: string } | null>(null);
   const [review, setReview] = React.useState<{ due: boolean; suggestions: PadItemResponse[] } | null>(null);
   const [reviewChoice, setReviewChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [newKey, setNewKey] = React.useState(0);
@@ -218,20 +221,27 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, registry, containers
   function startMakeTask() {
     if (!snapshot || selection.end <= selection.start) return;
     const text = snapshot.text.slice(selection.start, selection.end);
-    setMakeTask({ start: selection.start, end: selection.end, title: titleFromSelection(text), notes: "", containerId: "", plannedDate: "", dueDate: "" });
+    setMakeTask({ start: selection.start, end: selection.end, text: titleFromSelection(text) });
   }
 
-  async function submitMakeTask(event: React.FormEvent) {
-    event.preventDefault();
-    if (!makeTask || !saver || !open) return;
-    if (!(await saver.flush())) { onError("The note could not be saved, so the task was not made. Retry saving first."); return; }
+  /** Quick add reads the selection (PLAN §9); the task and its backlink are written in one transaction. */
+  async function submitMakeTask(drafts: CaptureDraftDto[], operation: string): Promise<string | null> {
+    const draft = drafts[0];
+    if (!makeTask || !saver || !open || !draft) return "Select text in the note first.";
+    if (!(await saver.flush())) return "The note could not be saved, so the task was not made. Retry saving first.";
     const current = saver.snapshot;
     const form = makeTask;
-    await run(() => api.makeTask({
-      operationId: operationId(), padItemId: open.id, sourceRevision: String(current.revision), start: form.start, end: form.end,
-      quote: current.text.slice(form.start, form.end), title: form.title, notes: form.notes || null, containerId: form.containerId || null,
-      plannedDate: form.plannedDate || null, dueDate: form.dueDate || null, tagIds: [],
-    }), "Could not make the task.", result => { setMakeTask(null); setNotice(`Made task “${result.task?.title ?? form.title}”. It links back to this note.`); });
+    const result = await api.makeTask({
+      operationId: operation, padItemId: open.id, sourceRevision: String(current.revision), start: form.start, end: form.end,
+      quote: current.text.slice(form.start, form.end), title: draft.title, notes: null, containerId: draft.containerId,
+      plannedDate: draft.plannedDate, dueDate: draft.dueDate, tagIds: [], draft,
+    });
+    if (!result.ok) return result.error?.fields.map(field => field.message).join("; ") || result.error?.message || "Could not make the task.";
+    setMakeTask(null);
+    setNotice(`Made task “${result.task?.title ?? draft.title}”. It links back to this note.`);
+    await load();
+    onChanged();
+    return null;
   }
 
   async function finishReview(chosen: ReadonlySet<string>) {
@@ -330,20 +340,12 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, registry, containers
             <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select text in the note first" onClick={startMakeTask}><ListPlus/>Make task</Button>
             {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task from them.</span>}
           </div>
-          {makeTask && <form className="grid gap-3 rounded-lg border p-3" aria-label="Make task from selection" onSubmit={e => void submitMakeTask(e)}>
+          {makeTask && <div className="grid gap-2 rounded-lg border p-3">
             <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{(snapshot?.text ?? "").slice(makeTask.start, makeTask.end)}</blockquote>
-            <Field label="Title"><Input required value={makeTask.title} onChange={e => setMakeTask({ ...makeTask, title: e.target.value })} autoFocus/></Field>
-            <Field label="Notes"><Input value={makeTask.notes} onChange={e => setMakeTask({ ...makeTask, notes: e.target.value })} placeholder="Optional"/></Field>
-            <div className="grid grid-cols-3 gap-3">
-              <Field label="List"><NativeSelect value={makeTask.containerId} onChange={e => setMakeTask({ ...makeTask, containerId: e.target.value })}>
-                {containers.map(container => <NativeSelectOption key={container.id} value={container.kind === "Inbox" ? "" : container.id}>{container.name}</NativeSelectOption>)}
-              </NativeSelect></Field>
-              <Field label="Planned"><Input type="date" value={makeTask.plannedDate} onChange={e => setMakeTask({ ...makeTask, plannedDate: e.target.value })}/></Field>
-              <Field label="Due"><Input type="date" value={makeTask.dueDate} onChange={e => setMakeTask({ ...makeTask, dueDate: e.target.value })}/></Field>
-            </div>
-            <p className="text-xs text-muted-foreground">The note stays as it is; the task links back to this spot.</p>
-            <div className="flex gap-2"><Button disabled={busy || !makeTask.title.trim()}>Create task</Button><Button type="button" variant="outline" onClick={() => setMakeTask(null)}>Cancel</Button></div>
-          </form>}
+            <QuickAdd key={`${makeTask.start}-${makeTask.end}`} api={captureApi} containers={containers} defaultContainerId="" label="Make task from selection" initialText={makeTask.text}
+              allowBatch={false} submitLabel="Create task" autoFocus onSubmit={submitMakeTask} onCancel={() => setMakeTask(null)}/>
+            <p className="text-xs text-muted-foreground">Edit the text to change what quick add reads. The note stays as it is; the task links back to this spot.</p>
+          </div>}
           <TagPicker targetKind="Pad" targetId={item.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={onChanged}/>
         </div>}
       </li>;

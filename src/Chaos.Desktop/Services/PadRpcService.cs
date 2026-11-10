@@ -21,7 +21,7 @@ public sealed record PadItemRequest(string OperationId, string ItemId, string Ex
 public sealed record PadReorderRequest(string OperationId, string ItemId, string ExpectedVersion, int InsertionIndex);
 public sealed record PadOperationResponse(bool Ok, IReadOnlyList<PadItemResponse> Items, TaskErrorResponse? Error);
 public sealed record PadMakeTaskRequest(string OperationId, string PadItemId, string SourceRevision, int Start, int End, string Quote,
-    string Title, string? Notes, string? ContainerId, string? PlannedDate, string? DueDate, IReadOnlyList<string> TagIds);
+    string Title, string? Notes, string? ContainerId, string? PlannedDate, string? DueDate, IReadOnlyList<string> TagIds, CaptureDraftDto? Draft = null);
 public sealed record PadMakeTaskResponse(bool Ok, TaskResponse? Task, TaskErrorResponse? Error);
 public sealed record PadLocateRequest(string TaskId);
 public sealed record PadAnchorResponse(string PadItemId, string State, int? Start, int? End, string Quote, bool Archived, bool Deleted);
@@ -106,7 +106,8 @@ public sealed class PadRpcService(PadCommands pad)
                 ? parsed
                 : throw AppException.Validation("sourceRevision", "Invalid note revision. Select the text again.");
             var result = await pad.MakeTaskAsync(new(request.OperationId, request.PadItemId, revision, request.Start, request.End, request.Quote,
-                request.Title, request.Notes, Blank(request.ContainerId), Date(request.PlannedDate, "plannedDate"), Date(request.DueDate, "dueDate"), request.TagIds), ct);
+                request.Title, request.Notes, Blank(request.ContainerId), Date(request.PlannedDate, "plannedDate"), Date(request.DueDate, "dueDate"), request.TagIds,
+                request.Draft is { } draft ? CaptureRpcService.ToDraft(draft, "draft") : null), ct);
             return new(true, TaskRpcService.ToResponse(result.Task), null);
         }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }

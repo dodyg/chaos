@@ -698,6 +698,32 @@ Verification: `eng/verify.ps1` passed locked restore, Release build, 184 TUnit t
 
 **Depends on:** 2–3, 5–6. Implement pure parser/token span mapping, English fixtures then the remaining language packs, metadata chips/overrides, batch indentation preview, parser reuse by pad conversion and global capture.
 
+Progress note (2026-11-10): implemented end to end, but not yet accepted in a native window. No migration was needed.
+
+- **Parser (Domain/Capture).** `QuickAddParser.Parse(text, context)` is pure: the context carries the captured instant, profile zone, date order, first weekday, default reminder time, known lists and tag paths, and excluded spans. Six table-driven `LanguagePack`s (English, French, Italian, Spanish, Indonesian, Arabic) are matched together over a folded comparison string whose characters map back to original UTF-16 ranges. It covers every grammar family in §8: relative, weekday (bare and next), absolute and numeric dates, due markers, 12/24-hour and word times, repeats (weekday sets, weekdays, intervals, every other, month day, after done), relative and absolute reminders, estimates, `#tag/nested`, `!priority` aliases, `/list` (quoted or a known name with spaces), `@Personal`, `+member` and waiting/follow-up. A time in a DST gap moves forward; an ambiguous one takes the earlier instant.
+- **Results.** Tokens are Applied (fill a field) or Kept (stay in the title with a warning: conflicts, unknown or ambiguous lists, shared spaces, delegation, reminders without a date). Plain "May", abbreviated weekdays without a marker and dates inside `15/12` never become sigils. Metadata-only input asks for a title.
+- **Batch.** `BatchCapture.Split` turns pasted lines into tasks with one level of subtasks, strips one bullet/number and checkbox (checked → Done), counts a tab as four spaces and rejects mixed indentation, a second level and more than 500 lines with line-specific messages.
+- **Application.** `CaptureCommands.PreviewAsync` reads settings, lists and tags once and writes nothing. `CreateAsync` saves the confirmed drafts, never reparsing, in one transaction with one receipt and one undo entry: subtasks, tag paths (selected or created), reminder rules, a recurrence series and history. Any invalid draft rolls back the whole paste, with `drafts[i].field` error paths. Pad Make task now sends the parsed draft and uses the same creation code beside its backlink.
+- **Desktop.** A new `capture` RPC service (`preview`, `create`); `pad.makeTask` accepts the draft.
+- **Frontend.** `QuickAdd.tsx` replaces the plain capture form:
+  - a 150 ms debounced preview with stale responses dropped
+  - recognized parts as chips; clicking one keeps that text plain, and it can be turned back on
+  - an editable field preview (title, list with candidate picker, planned/due date and time, priority, estimate, repeat, reminders, tags, waiting, follow-up)
+  - the batch preview with subtasks and line errors
+  - Enter saves one task, Ctrl+Enter saves a pasted list, and Ctrl+N focuses quick add from anywhere in the app
+  - the OperationId is kept across a retry of the same drafts
+  The pad's Make task form is the same component over the selection.
+
+Results: Release build has 0 warnings. 304 TUnit tests pass (Domain 124, Application 22, Infrastructure 133, Desktop 25), 120 more than before. Frontend: the `tsrs` type check and `vite build` pass, and 43 tests pass (6 new). Slopwatch is clean.
+
+Not done, deliberately:
+- The system-wide capture shortcut and clipboard capture: package 13, with the other global shortcuts. Ctrl+N works inside the app.
+- Dedicated waiting/follow-up records: package 10. Until then "waiting on" sets the Waiting status and the person and follow-up date go into the notes, as the preview says.
+- In-place highlighting inside the text box. Recognized parts are shown as chips under it.
+- Absolute "remind me at …" reminders are stored as rules; delivery is package 10.
+
+Package remains unchecked until the exit is shown in a native window: type a task in each language offline, click a highlight to keep a word as text, paste an indented list, and see the tasks after a restart.
+
 **Tests:** all spec examples and every grammar family/language, Arabic digits/RTL/UTF-16, ambiguity, excluded token, stale preview, midnight context and all-or-nothing batch failure. **Exit:** create real persisted tasks using each language offline and correct recognition without losing source text.
 
 ### [ ] 8 — My Day and date rollover

@@ -110,3 +110,35 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   `<item text>#<n>` (the nth item with that text in the document) and the host stores a
   SHA-256 of task ID plus key. Editing an item's text makes it a new item. A marker whose
   subtask was deleted (or undone) is replaced on the next conversion.
+
+## 2026-11-10 (package 7)
+
+- **One pure parser, six table-driven packs.** `QuickAddParser` (Domain) matches every
+  pack at once over a folded comparison string (lower case, diacritics and Arabic harakat
+  removed, tatweel dropped, Arabic letter variants unified, Arabic-Indic/Persian digits
+  folded). Each folded character keeps the UTF-16 range it came from, so tokens report
+  offsets into the original text, including after emoji and combining marks. Vocabulary is
+  written naturally in `LanguagePack` and folded at startup. Mixed-language input works
+  because tokens are matched independently and the leftmost, longest match wins; pack order
+  (en, fr, it, es, id, ar) only breaks exact ties, such as `!alta` (Italian and Spanish).
+- **Phrase precedence.** Recurrence, reminders, follow-up and waiting, due phrases,
+  estimates, planned date/time, then sigils. Estimates run before planned times so
+  Indonesian "selama 2 jam 15 menit" is never read as 15:00.
+- **Conservative recognition.** Month names need a day number (plain "May" stays text).
+  Abbreviated weekdays (Tue, mar, dom) need a marker such as next, on, by or every, so
+  "sun cream" stays text. Indonesian "minggu" means week; Sunday is "hari Minggu" or
+  "Ahad". An hour without am/pm or a marker is not a time; with a marker but no am/pm it is
+  read literally on the 24-hour clock and shown in the preview.
+- **Nothing recognized is dropped silently.** A token is Applied (fills a field, leaves
+  the title) or Kept (stays in the title with a warning): conflicts, unknown lists,
+  shared spaces, `+member` delegation, reminders without an anchor.
+- **The confirmed draft is saved, not the text.** `capture.create` takes explicit fields
+  and never reparses, so a preview made before midnight saves the dates it showed. All
+  drafts of a paste commit in one transaction with one receipt and one undo entry; field
+  errors carry `drafts[i].field` paths.
+- **Waiting and follow-up until package 10.** "waiting on Sam" sets the Waiting status and
+  the person and follow-up date are written into the task notes, with a preview note
+  saying so. Package 10 adds the `WaitingDetails`/`FollowUps` records.
+- **Pad Make task reuses quick add.** The selection's first line becomes the quick-add
+  text; the confirmed draft travels in `pad.makeTask` and is created by the same
+  `CaptureCommands.CreateInSessionAsync` as quick add, next to the backlink.

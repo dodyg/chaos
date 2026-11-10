@@ -1,4 +1,5 @@
 using Chaos.Application.Abstractions;
+using Chaos.Application.Capture;
 using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Tasks;
@@ -26,7 +27,8 @@ public sealed record ReorderPadItemCommand(string OperationId, string ItemId, lo
 /// <summary>
 /// "Make task" on a selection of a pad item (PLAN §9). Start/End are UTF-16 offsets into the
 /// item's text at <see cref="SourceRevision"/> and <see cref="Quote"/> is the selected text.
-/// The task fields are explicit until the quick-add grammar arrives (package 7).
+/// The renderer parses the selection with quick add and sends the confirmed <see cref="Draft"/>;
+/// without one, the explicit title/notes/list/date/tag fields describe the task.
 /// </summary>
 public sealed record MakeTaskFromPadCommand(
     string OperationId,
@@ -40,7 +42,8 @@ public sealed record MakeTaskFromPadCommand(
     string? ContainerId,
     DateOnly? PlannedDate,
     DateOnly? DueDate,
-    IReadOnlyList<string> TagIds);
+    IReadOnlyList<string> TagIds,
+    CaptureTaskDraft? Draft = null);
 
 /// <summary>Finishes the weekly pad review, archiving the items the user chose (possibly none).</summary>
 public sealed record CompletePadReviewCommand(string OperationId, IReadOnlyList<PadItemChange> Archive);
@@ -279,12 +282,22 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
     public async Task<MakeTaskFromPadResult> MakeTaskAsync(MakeTaskFromPadCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        var draft = CaptureCommands.Normalize(command.Draft ?? new CaptureTaskDraft
+        {
+            Title = command.Title,
+            Notes = command.Notes,
+            ContainerId = command.ContainerId,
+            PlannedDate = command.PlannedDate,
+            DueDate = command.DueDate,
+            TagIds = command.TagIds,
+        }, command.Draft is null ? "task" : "draft");
         var normalized = command with
         {
-            Title = TaskFieldValidation.Title(command.Title, "title"),
-            Notes = TaskFieldValidation.Notes(command.Notes, "notes"),
-            ContainerId = string.IsNullOrWhiteSpace(command.ContainerId) ? null : command.ContainerId,
-            TagIds = [.. command.TagIds.Distinct(StringComparer.Ordinal)],
+            Title = draft.Title,
+            Notes = draft.Notes,
+            ContainerId = draft.ContainerId,
+            TagIds = draft.TagIds,
+            Draft = draft,
         };
         if (string.IsNullOrWhiteSpace(normalized.Quote))
         {
@@ -297,41 +310,12 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
             {
                 var item = await session.Pad.GetAsync(normalized.PadItemId, inner) ?? throw NotFound();
                 var (start, end) = AnchorForNewTask(item, normalized);
-                var container = await ResolveContainerAsync(session, profile, normalized.ContainerId, inner);
-                var task = new TaskRecord
-                {
-                    Id = ids.NewId().ToString(),
-                    SpaceId = container.SpaceId,
-                    ContainerId = container.Id,
-                    Title = normalized.Title,
-                    Notes = normalized.Notes ?? string.Empty,
-                    Status = TaskItemStatus.NotStarted,
-                    Priority = TaskPriority.Normal,
-                    PlannedDate = normalized.PlannedDate,
-                    DueDate = normalized.DueDate,
-                    Position = await session.Tasks.GetNextPositionAsync(container.Id, inner),
-                    Version = 1,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now,
-                };
-                await session.Tasks.AddAsync(task, inner);
-                foreach (var tagId in normalized.TagIds)
-                {
-                    var tag = await session.Tags.GetAsync(tagId, inner);
-                    if (tag is null || tag.OwnerProfileId != profile.Id)
-                    {
-                        throw AppException.NotFound("A chosen tag no longer exists. Refresh and try again.");
-                    }
-
-                    await session.Tags.AddTaskLinkAsync(task.Id, tag.Id, inner);
-                }
+                var task = await CaptureCommands.CreateInSessionAsync(session, ids, profile, draft, normalized.OperationId, now, ["ScratchPad"], inner);
 
                 var text = item.RawMarkdown;
                 var link = new ScratchTaskLinkRecord(item.Id, task.Id, item.DraftVersion, start, end, text[start..end], now,
                     ContextBefore: text[Math.Max(0, start - ContextLength)..start], ContextAfter: text[end..Math.Min(text.Length, end + ContextLength)]);
                 await session.Pad.AddTaskLinkAsync(link, inner);
-                await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, normalized.OperationId, null, new TaskAggregateSnapshot(task, []),
-                    "task.created", ["Title", "Notes", "ContainerId", "ScratchPad"], now, inner);
                 return new MakeTaskFromPadResult(task, link, Replayed: false);
             }, token);
             return replayed ? result with { Replayed = true } : result;
@@ -566,20 +550,6 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
         var space = await session.Spaces.GetPersonalByOwnerAsync(profile.Id, token)
             ?? throw new AppException(AppErrorKind.StorageUnavailable, "No personal space exists yet. Restart Chaos to complete first-run setup.");
         return (profile, space);
-    }
-
-    private static async Task<ContainerRecord> ResolveContainerAsync(IDataSession session, ProfileRecord profile, string? containerId, CancellationToken token)
-    {
-        if (containerId is null)
-        {
-            var space = await session.Spaces.GetPersonalByOwnerAsync(profile.Id, token)
-                ?? throw new AppException(AppErrorKind.StorageUnavailable, "No personal space exists yet. Restart Chaos to complete first-run setup.");
-            return await session.Containers.GetInboxAsync(space.Id, token)
-                ?? throw new AppException(AppErrorKind.StorageUnavailable, "No Inbox exists yet. Restart Chaos to complete first-run setup.");
-        }
-
-        return await session.Containers.GetAsync(containerId, token)
-            ?? throw AppException.NotFound("That list or project no longer exists. Refresh and try again.");
     }
 
     private static void RequireVersion(PadItemRecord item, long expectedVersion)
