@@ -37,10 +37,10 @@ test("a delayed previous list cannot replace the selected list", async () => {
   };
   const user = userEvent.setup({ document: dom.window.document });
   render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
-  await screen.findByRole("option", { name: "A" });
-  await user.selectOptions(screen.getByLabelText("List or project"), "a");
+  await screen.findByRole("button", { name: "A" });
+  await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "A" }));
   await waitFor(() => assert.equal(requestedA, true));
-  await user.selectOptions(screen.getByLabelText("List or project"), "b");
+  await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "B" }));
   await screen.findByRole("button", { name: "Task B" });
   await act(async () => { finishA({ ok: true, tasks: [row("a", "Task A")], error: null }); await slowA; });
   await waitFor(() => assert.equal(finishedA, true));
@@ -61,8 +61,8 @@ test("tasks are grouped under their section and ordered within that group", asyn
   };
   const user = userEvent.setup({ document: dom.window.document });
   render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
-  await screen.findByRole("option", { name: "Project" });
-  await user.selectOptions(screen.getByLabelText("List or project"), "project");
+  await screen.findByRole("button", { name: "Project" });
+  await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
   const section = await screen.findByRole("list", { name: "Phase tasks" });
   await waitFor(() => assert.ok(within(section).getByRole("button", { name: "Section task" })));
   assert.ok(within(screen.getByRole("list", { name: "Unsectioned tasks" })).getByRole("button", { name: "Unsectioned" }));
@@ -110,8 +110,8 @@ test("dragging onto a different section does not reorder the wrong sibling set",
   };
   const user = userEvent.setup({ document: dom.window.document });
   render(<App api={api} templates={<></>} />, { container: dom.window.document.body });
-  await screen.findByRole("option", { name: "Project" });
-  await user.selectOptions(screen.getByLabelText("List or project"), "project");
+  await screen.findByRole("button", { name: "Project" });
+  await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
   const outside = (await screen.findByRole("button", { name: "Outside" })).closest("li")!;
   const inside = (await screen.findByRole("button", { name: "Inside" })).closest("li")!;
   const dataTransfer = { setData() {}, effectAllowed: "", dropEffect: "" };

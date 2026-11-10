@@ -22,7 +22,7 @@ export function useDragReorder() {
   function handle(id: string, group: string, disabled: boolean) {
     return <span className="drag-handle" draggable={!disabled} aria-hidden="true" title="Drag to reorder"
       onDragStart={event => { dragged.current = { id, group }; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
-      onDragEnd={() => { dragged.current = null; }}>⋮⋮</span>;
+      onDragEnd={() => { dragged.current = null; }}><svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" focusable="false"><circle cx="2" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="13" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg></span>;
   }
 
   /** Props for a row; `order` is the sibling IDs in display order and `index` the row's position in it. */
