@@ -74,6 +74,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
+        public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
     }
 }
 
@@ -170,6 +171,18 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
     {
         rows.Add(profile);
         return Task.CompletedTask;
+    }
+
+    public Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
+    {
+        var index = rows.FindIndex(row => row.Id == profile.Id && row.Version == expectedVersion);
+        if (index < 0)
+        {
+            return Task.FromResult<ProfileRecord?>(null);
+        }
+
+        rows[index] = profile;
+        return Task.FromResult<ProfileRecord?>(profile);
     }
 }
 

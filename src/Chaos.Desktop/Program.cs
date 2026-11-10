@@ -50,6 +50,7 @@ internal static class Program
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
             });
         });
     }
@@ -261,5 +262,38 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(DayMoveRequest))]
 [JsonSerializable(typeof(DayCarryOverRequest))]
 [JsonSerializable(typeof(DayChangeResponse))]
+[JsonSerializable(typeof(WeekTaskDto))]
+[JsonSerializable(typeof(WeekPlacementDto))]
+[JsonSerializable(typeof(WeekGoalDto))]
+[JsonSerializable(typeof(WeekDayDto))]
+[JsonSerializable(typeof(WeekLoadDto))]
+[JsonSerializable(typeof(WeekBoardDto))]
+[JsonSerializable(typeof(WeekDraftGoalDto))]
+[JsonSerializable(typeof(WeekDraftAssignmentDto))]
+[JsonSerializable(typeof(WeekDraftLeftoverDto))]
+[JsonSerializable(typeof(WeekDraftOverrideDto))]
+[JsonSerializable(typeof(WeekDraftDto))]
+[JsonSerializable(typeof(WeekLookBackDto))]
+[JsonSerializable(typeof(WeekCandidateDto))]
+[JsonSerializable(typeof(WeekGoalSuggestionDto))]
+[JsonSerializable(typeof(DayReconciliationDto))]
+[JsonSerializable(typeof(WeekSlipDto))]
+[JsonSerializable(typeof(WeekCheckInDto))]
+[JsonSerializable(typeof(WeekOverviewDto))]
+[JsonSerializable(typeof(WeekOpenRequest))]
+[JsonSerializable(typeof(WeekOpenResponse))]
+[JsonSerializable(typeof(WeekStartDraftRequest))]
+[JsonSerializable(typeof(WeekSaveDraftRequest))]
+[JsonSerializable(typeof(WeekRevisionRequest))]
+[JsonSerializable(typeof(WeekReconcileRequest))]
+[JsonSerializable(typeof(WeekGoalOutcomeRequest))]
+[JsonSerializable(typeof(AvailabilityDayDto))]
+[JsonSerializable(typeof(WeekAvailabilityRequest))]
+[JsonSerializable(typeof(WeekChangeResponse))]
+[JsonSerializable(typeof(WeekStartPreviewRequest))]
+[JsonSerializable(typeof(WeekStartConflictDto))]
+[JsonSerializable(typeof(WeekStartPreviewResponse))]
+[JsonSerializable(typeof(WeekStartChangeRequest))]
+[JsonSerializable(typeof(WeekStartChangeResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

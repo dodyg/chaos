@@ -150,6 +150,7 @@ public sealed class RecordingDataSession : IDataSession
     public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
     public IReminderRuleStore ReminderRules => new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IDayPlanStore DayPlans => _inner.DayPlans;
+    public IWeekPlanStore Weeks => _inner.Weeks;
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
 

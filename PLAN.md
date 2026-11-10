@@ -750,6 +750,44 @@ Results: Release build 0 warnings; 316 TUnit tests pass (Infrastructure 144 with
 
 **Tests:** cancel draft has no effects, atomic confirm, week-start changes, same task in multiple goals counted once, unknown estimates, zero capacity, carried items and seed revision reconciliation. **Exit:** finish the five-step ritual and see the intended tasks in My Day while original due/planned dates remain correct.
 
+Progress note (2026-11-10): implemented and verified headlessly; not yet accepted in a native window.
+
+- **Storage.** Migration 009 adds:
+  - `WeekPlans`: unique profile + week-start date. State is Draft, Confirmed or Superseded. The confirmed revision is kept, and the draft is a versioned JSON payload stored apart from the confirmed rows.
+  - `WeekPlanRevisions`: a snapshot of every confirmed revision.
+  - `WeekGoals` (outcome Pending/Achieved/LetGo) and `WeekGoalTasks`.
+  - `WeekAssignments`: one place per task per week, either a day or the unassigned pool. Triggers keep the day inside its own seven dates.
+  - `AvailabilityRules` (weekday defaults) and `WeekAvailabilityOverrides` (one-date overrides). Work time can never exceed total time.
+  - The schema ceiling is now 9.
+- **Domain.** `WeekCalendar` handles seven local dates from the configured first weekday. `Capacity` sums remaining open estimates and work time. Missing estimates are counted separately. It warns on over-total (including zero availability) and over-work, and never reschedules. The default is 8 h on weekdays and 0 at weekends.
+- **Application.** `MyWeekCommands` covers the ritual:
+  - **Open.** Returns the week with look-back, candidates, goal ideas, pending day comparisons and check-in.
+  - **Drafts.** Start a draft (from the confirmed plan when there is one), save it (validated, version-checked) or discard it. Discarding leaves the confirmed week untouched.
+  - **Confirm.** One transaction does everything: applies the leftover decisions, replaces goals, assignments and the week's overrides, records the revision and marks already-opened days that match. A task deleted in the meantime refuses the whole confirmation.
+  - **Leftover decisions.** Carry, later (an optional explicit planned date, the only path that edits a task), remove (task untouched) or cancel (with history).
+  - **Other commands.** Goal outcome, weekday availability, first-weekday preview/change, and reconciliation.
+  - Earlier days cannot receive new work. Goal progress is Done over noncancelled linked tasks; capacity counts each task once however many goals link it.
+- **My Day integration.** `DayPlanning` (shared with My Day) seeds a newly created day from the confirmed week once and records the revision. Reconfirming a week that changes an already-opened day leaves an explicit add/remove comparison. Manual items are never offered for removal, and a task the person removed is never offered again.
+- **Week-start changes.** Existing plans keep their dates. A current or future plan that crosses the new boundary needs an explicit remap. It is then superseded (its rows and revisions stay) and its remaining work moves by date into drafts to confirm again. Past days stay where they were.
+- **Look-back facts.** The reusable historical-facts query: tasks completed during the seven local dates, plus the previous plan's assignments (done/cancelled/unfinished) and goals.
+- **Desktop.** New `myWeek` RPC service (`open`, `startDraft`, `saveDraft`, `discardDraft`, `confirm`, `reconcile`, `setGoalOutcome`, `setAvailability`, `previewWeekStart`, `changeWeekStart`).
+- **Frontend.** `MyWeek.tsx`:
+  - the confirmed week: goals with progress and outcome, seven day columns with capacity and warnings, the pool, and the midweek check-in
+  - the day comparison, a first-use availability editor and week settings (first weekday with preview/remap)
+  - the five-step ritual: look back, leftovers, goals (with a gentle 2–3 hint and ideas), plan days (drag between columns or a per-task day menu, per-day time overrides, candidates) and confirm
+  - the draft is saved at each step; Cancel discards it
+  - a sidebar entry
+
+Not done, deliberately:
+- Scheduled planning-day and midweek prompts. They need NotificationJobs (package 10); the check-in is shown on demand.
+- Look-back from stored journal snapshots: package 11.
+- Undo of confirm, reconciliation or goal outcomes. Plans are profile-owned records with their own revision history; cancelled or replanned tasks keep task history and can be reopened.
+- Adding an arbitrary task to the week from search. The week offers overdue, due-this-week, planned-this-week and today's My Day tasks, plus carried leftovers.
+
+Results: Release build has 0 warnings. 337 TUnit tests pass (Domain 133 with 9 new, Application 22, Infrastructure 155 with 11 new My Week tests, Desktop 27 with 1 new). Frontend: type check, `vite build` and 52 tests (4 new) pass. Slopwatch is clean. The Release exe starts offline on a fresh data folder with migration 009 applied.
+
+Package remains unchecked until the exit is shown in a native window: finish the five steps, see the tasks in My Day, and check that their planned and due dates are unchanged.
+
 ### [ ] 10 — Reminder engine and external-person follow-up
 
 **Depends on:** 6, 8–9 and Windows spike from 0. Implement persisted rule/job/delivery services, adapter scheduling/cancel/activation, notification center, snooze/quiet/insistent behavior, waiting names and fixed/relative/inactivity follow-ups. Route notification completion through normal commands.
