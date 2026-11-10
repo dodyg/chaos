@@ -2,12 +2,14 @@ import React from "react";
 import { containerRpc, type ContainerResponse, type SectionResponse, type ProgressResponse } from "#neoastra";
 
 const id = () => crypto.randomUUID();
-export function ContainerManagement({ container, containers, sections, taskRevision, onChanged }: { container: ContainerResponse; containers: ContainerResponse[]; sections: SectionResponse[]; taskRevision: string; onChanged: () => Promise<void> }) {
+export function ContainerManagement({ container, containers, sections, taskRevision, onChanged, onDeleted }: { container: ContainerResponse; containers: ContainerResponse[]; sections: SectionResponse[]; taskRevision: string; onChanged: () => Promise<void>; onDeleted: () => Promise<void> }) {
   const [name, setName] = React.useState(container.name);
   const [deadline, setDeadline] = React.useState(container.deadlineDate ?? "");
   const [progress, setProgress] = React.useState<ProgressResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [deletedSections, setDeletedSections] = React.useState<SectionResponse[]>([]);
+  const [contentsChoice, setContentsChoice] = React.useState("MoveToInbox");
   React.useEffect(() => { setName(container.name); setDeadline(container.deadlineDate ?? ""); }, [container]);
   React.useEffect(() => {
     let active = true;
@@ -15,6 +17,12 @@ export function ContainerManagement({ container, containers, sections, taskRevis
     else setProgress(null);
     return () => { active = false; };
   }, [container, sections, taskRevision]);
+  async function loadDeletedSections() {
+    const result = await containerRpc.deletedSections({ containerId: container.id });
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not load deleted sections.");
+    setDeletedSections([...result.sections]);
+  }
+  React.useEffect(() => { void loadDeletedSections().catch((e: unknown) => setError(String(e))); }, [container.id, sections]);
   async function run(action: () => Promise<{ ok: boolean; error: { message: string } | null }>) {
     setBusy(true); setError(null);
     try { const result = await action(); if (!result.ok) throw new Error(result.error?.message ?? "Could not update this list."); await onChanged(); }
@@ -28,6 +36,8 @@ export function ContainerManagement({ container, containers, sections, taskRevis
     <div className="row"><button disabled={busy || index <= 1} onClick={() => void run(() => containerRpc.reorder({ operationId: id(), containerId: container.id, expectedVersion: container.version, insertionIndex: index - 1 }))}>Move list up</button><button disabled={busy || index === containers.length - 1} onClick={() => void run(() => containerRpc.reorder({ operationId: id(), containerId: container.id, expectedVersion: container.version, insertionIndex: index + 1 }))}>Move list down</button></div>
     {container.kind === "Project" && <><form onSubmit={e => { e.preventDefault(); void run(() => containerRpc.setDeadline({ operationId: id(), containerId: container.id, expectedVersion: container.version, deadlineDate: deadline || null })); }}><label>Project deadline<input type="date" value={deadline} onChange={e => setDeadline(e.target.value)}/></label><button disabled={busy}>Save deadline</button></form>{progress?.ok && <p>Progress: {progress.doneCount} of {progress.totalCount} tasks; {progress.doneSubtaskCount} of {progress.totalSubtaskCount} subtasks done.</p>}</>}
     <h3>Sections</h3><ol>{sections.map((section, index) => <SectionRow key={section.id} section={section} index={index} count={sections.length} busy={busy} run={run}/>)}</ol>
+    {deletedSections.length > 0 && <details><summary>Deleted sections</summary><ul>{deletedSections.map(section => <li key={section.id}>{section.title} <button type="button" disabled={busy} onClick={() => void run(() => containerRpc.restoreSection({ operationId: id(), sectionId: section.id, expectedVersion: section.version, title: section.title, insertionIndex: 0 }))}>Restore</button></li>)}</ul></details>}
+    <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); setError(null); try { const result = await containerRpc.delete({ operationId: id(), containerId: container.id, expectedVersion: container.version, contentsChoice }); if (!result.ok) throw new Error(result.error?.message ?? "Could not delete list."); await onDeleted(); } catch (err) { setError(err instanceof Error ? err.message : "Could not delete list."); } finally { setBusy(false); } })(); }}><label>When deleting this list<select value={contentsChoice} onChange={e => setContentsChoice(e.target.value)}><option value="MoveToInbox">Move its tasks to Inbox</option><option value="DeleteContents">Delete its tasks too</option></select></label><button disabled={busy}>Delete list or project</button></form>
   </section>;
 }
 
@@ -35,5 +45,5 @@ function SectionRow({ section, index, count, busy, run }: { section: SectionResp
   const [title, setTitle] = React.useState(section.title);
   React.useEffect(() => setTitle(section.title), [section.title]);
   const request = (insertionIndex: number) => ({ operationId: id(), sectionId: section.id, expectedVersion: section.version, title, insertionIndex });
-  return <li><form onSubmit={e => { e.preventDefault(); void run(() => containerRpc.renameSection(request(index))); }}><label>Section name<input value={title} required onChange={e => setTitle(e.target.value)}/></label><div className="row"><button disabled={busy}>Rename section</button><button type="button" disabled={busy || index === 0} onClick={() => void run(() => containerRpc.reorderSection(request(index - 1)))}>Move section up</button><button type="button" disabled={busy || index === count - 1} onClick={() => void run(() => containerRpc.reorderSection(request(index + 1)))}>Move section down</button></div></form></li>;
+  return <li><form onSubmit={e => { e.preventDefault(); void run(() => containerRpc.renameSection(request(index))); }}><label>Section name<input value={title} required onChange={e => setTitle(e.target.value)}/></label><div className="row"><button disabled={busy}>Rename section</button><button type="button" disabled={busy || index === 0} onClick={() => void run(() => containerRpc.reorderSection(request(index - 1)))}>Move section up</button><button type="button" disabled={busy || index === count - 1} onClick={() => void run(() => containerRpc.reorderSection(request(index + 1)))}>Move section down</button><button type="button" disabled={busy} onClick={() => void run(() => containerRpc.deleteSection(request(index)))}>Delete section</button></div></form></li>;
 }

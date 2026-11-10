@@ -37,6 +37,8 @@ public interface ISpaceStore
 public interface IContainerStore
 {
     Task<ContainerRecord?> GetAsync(string containerId, CancellationToken ct);
+    Task<ContainerRecord?> GetIncludingDeletedAsync(string containerId, CancellationToken ct);
+    Task<IReadOnlyList<ContainerRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct);
     Task<ContainerRecord?> GetInboxAsync(string spaceId, CancellationToken ct);
     Task<IReadOnlyList<ContainerRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
     Task AddAsync(ContainerRecord container, CancellationToken ct);
@@ -49,6 +51,8 @@ public interface IContainerStore
 public interface ISectionStore
 {
     Task<SectionRecord?> GetAsync(string sectionId, CancellationToken ct);
+    Task<SectionRecord?> GetIncludingDeletedAsync(string sectionId, CancellationToken ct);
+    Task<IReadOnlyList<SectionRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct);
     /// <summary>Active sections of one container, ordered by (Position, Id).</summary>
     Task<IReadOnlyList<SectionRecord>> ListByContainerAsync(string containerId, CancellationToken ct);
     Task AddAsync(SectionRecord section, CancellationToken ct);
@@ -110,6 +114,7 @@ public interface ITaskHistoryStore
 public interface IOperationReceiptStore
 {
     Task<OperationReceiptRecord?> FindAsync(string profileId, string operationId, CancellationToken ct);
+    Task<IReadOnlyList<OperationReceiptRecord>> ListByKindAsync(string profileId, string commandKind, CancellationToken ct);
     Task AddAsync(OperationReceiptRecord receipt, CancellationToken ct);
 }
 

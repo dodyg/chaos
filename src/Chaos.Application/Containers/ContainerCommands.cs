@@ -16,6 +16,7 @@ public sealed record SetProjectDeadlineCommand(string OperationId, string Contai
 public sealed record ArchiveContainerCommand(string OperationId, string ContainerId, long ExpectedVersion);
 
 public sealed record DeleteContainerCommand(string OperationId, string ContainerId, long ExpectedVersion, ContainerContentsChoice ContentsChoice);
+public sealed record RestoreContainerCommand(string OperationId, string ContainerId, long ExpectedVersion);
 
 /// <summary>
 /// What happens to a container's contents when the container is deleted (PLAN §6): move the
@@ -35,10 +36,15 @@ public sealed record RenameSectionCommand(string OperationId, string SectionId, 
 public sealed record ReorderSectionCommand(string OperationId, string SectionId, long ExpectedVersion, int InsertionIndex);
 
 public sealed record DeleteSectionCommand(string OperationId, string SectionId, long ExpectedVersion);
+public sealed record RestoreSectionCommand(string OperationId, string SectionId, long ExpectedVersion);
 
-public sealed record ContainerMutationResult(ContainerRecord Container, bool Replayed);
+public sealed record TaskRecovery(TaskRecord Before, TaskRecord After, IReadOnlyList<SubtaskRecord> ChildrenBefore, IReadOnlyList<SubtaskRecord> ChildrenAfter);
+public sealed record SectionRecovery(SectionRecord Before, SectionRecord After);
+public sealed record ContainerDeletionRecovery(IReadOnlyList<TaskRecovery> Tasks, IReadOnlyList<SectionRecovery> Sections);
+public sealed record SectionDeletionRecovery(IReadOnlyList<TaskRecovery> Tasks);
+public sealed record ContainerMutationResult(ContainerRecord Container, bool Replayed, ContainerDeletionRecovery? Recovery = null);
 
-public sealed record SectionMutationResult(SectionRecord Section, bool Replayed);
+public sealed record SectionMutationResult(SectionRecord Section, bool Replayed, SectionDeletionRecovery? Recovery = null);
 
 /// <summary>
 /// Project progress (PLAN §6): Done top-level tasks over all nontombstoned, non-Cancelled
@@ -246,6 +252,8 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                     RequireNotInbox(container, "deleted");
 
                     var tasks = await session.Tasks.ListByContainerAsync(container.Id, inner);
+                    var taskRecovery = new List<TaskRecovery>();
+                    var sectionRecovery = new List<SectionRecovery>();
                     if (command.ContentsChoice == ContainerContentsChoice.MoveToInbox)
                     {
                         var inbox = await session.Containers.GetInboxAsync(container.SpaceId, inner)
@@ -266,6 +274,7 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                             };
                             position += RankOrdering.Gap;
                             var applied = await TaskUpdateAsync(session, moved, task.Version, token);
+                            taskRecovery.Add(new TaskRecovery(task, applied, [], []));
 
                             await WriteTaskHistoryAsync(session, command.OperationId, task, applied, "task.moved", now, inner);
                         }
@@ -284,6 +293,7 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
 
                             var deleted = task with { DeletedAtUtc = now, Version = task.Version + 1, UpdatedAtUtc = now };
                             var applied = await TaskUpdateAsync(session, deleted, task.Version, token);
+                            taskRecovery.Add(new TaskRecovery(task, applied, subtasks, tombstoned));
 
                             await WriteTaskHistorySnapshotAsync(
                                 session, command.OperationId,
@@ -296,17 +306,49 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                     foreach (var section in await session.Sections.ListByContainerAsync(container.Id, inner))
                     {
                         var updated = section with { DeletedAtUtc = now, Version = section.Version + 1, UpdatedAtUtc = now };
-                        _ = await session.Sections.UpdateAsync(updated, section.Version, token)
+                        var appliedSection = await session.Sections.UpdateAsync(updated, section.Version, token)
                             ?? throw AppException.VersionConflict("This list changed elsewhere while you were working. Refresh and try again.");
+                        sectionRecovery.Add(new SectionRecovery(section, appliedSection));
                     }
 
                     var containerDeleted = container with { DeletedAtUtc = now, Version = container.Version + 1, UpdatedAtUtc = now };
                     var deletedContainer = await ApplyUpdateAsync(session, containerDeleted, container.Version, token);
 
-                    return new ContainerMutationResult(deletedContainer, Replayed: false);
+                    return new ContainerMutationResult(deletedContainer, Replayed: false, new ContainerDeletionRecovery(taskRecovery, sectionRecovery));
                 }, token);
 
             return replayed ? envelope with { Replayed = true } : envelope;
+        }, ct);
+    }
+
+    public async Task<ContainerMutationResult> RestoreAsync(RestoreContainerCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "container.restore", command, now, async inner =>
+            {
+                var container = await session.Containers.GetIncludingDeletedAsync(command.ContainerId, inner) ?? throw AppException.NotFound("That list or project no longer exists.");
+                RequireCurrentVersion(container, command.ExpectedVersion);
+                if (container.DeletedAtUtc is null) return new ContainerMutationResult(container, false);
+                var receipts = await session.Receipts.ListByKindAsync(profile.Id, "container.delete", inner);
+                var deletion = receipts.Select(r => StoredJsonFormats.ReadSnapshot<StoredResultEnvelope<ContainerMutationResult>>(r.ResultJson)?.Result)
+                    .FirstOrDefault(r => r?.Container.Id == container.Id && r.Container.Version == container.Version);
+                var recovery = deletion?.Recovery ?? throw AppException.Validation("containerId", "This deletion has no recovery record. Restore a backup to recover its contents.");
+                await RequireFreeNameAsync(session, container.SpaceId, container.Name, container.Id, inner);
+                foreach (var section in recovery.Sections)
+                {
+                    var current = await session.Sections.GetIncludingDeletedAsync(section.After.Id, inner) ?? throw AppException.VersionConflict("A section changed after deletion. Refresh before restoring.");
+                    RequireCurrentVersion(current, section.After.Version);
+                }
+                await ValidateRecoveryTasksAsync(session, recovery.Tasks, inner);
+                var restored = await ApplyUpdateAsync(session, container with { DeletedAtUtc = null, Version = container.Version + 1, UpdatedAtUtc = now }, container.Version, inner);
+                foreach (var section in recovery.Sections)
+                    await ApplySectionUpdateAsync(session, section.Before with { Version = section.After.Version + 1, UpdatedAtUtc = now }, section.After.Version, inner);
+                await RestoreRecoveryTasksAsync(session, recovery.Tasks, command.OperationId, now, inner);
+                return new ContainerMutationResult(restored, false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
         }, ct);
     }
 
@@ -422,10 +464,12 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                     RequireCurrentVersion(section, command.ExpectedVersion);
 
                     var tasks = await session.Tasks.ListByContainerAsync(section.ContainerId, inner);
+                    var recovery = new List<TaskRecovery>();
                     foreach (var task in tasks.Where(task => task.SectionId == section.Id))
                     {
                         var updated = task with { SectionId = null, Version = task.Version + 1, UpdatedAtUtc = now };
                         var applied = await TaskUpdateAsync(session, updated, task.Version, token);
+                        recovery.Add(new TaskRecovery(task, applied, [], []));
 
                         await WriteTaskHistoryAsync(session, command.OperationId, task, applied, "task.section-cleared", now, inner);
                     }
@@ -433,11 +477,67 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                     var deleted = section with { DeletedAtUtc = now, Version = section.Version + 1, UpdatedAtUtc = now };
                     var appliedSection = await ApplySectionUpdateAsync(session, deleted, section.Version, token);
 
-                    return new SectionMutationResult(appliedSection, Replayed: false);
+                    return new SectionMutationResult(appliedSection, Replayed: false, new SectionDeletionRecovery(recovery));
                 }, token);
 
             return replayed ? envelope with { Replayed = true } : envelope;
         }, ct);
+    }
+
+    public async Task<SectionMutationResult> RestoreAsync(RestoreSectionCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "section.restore", command, now, async inner =>
+            {
+                var section = await session.Sections.GetIncludingDeletedAsync(command.SectionId, inner) ?? throw AppException.NotFound("That section no longer exists.");
+                RequireCurrentVersion(section, command.ExpectedVersion);
+                if (section.DeletedAtUtc is null) return new SectionMutationResult(section, false);
+                _ = await RequireContainerAsync(session, section.ContainerId, inner);
+                var receipts = await session.Receipts.ListByKindAsync(profile.Id, "section.delete", inner);
+                var deletion = receipts.Select(r => StoredJsonFormats.ReadSnapshot<StoredResultEnvelope<SectionMutationResult>>(r.ResultJson)?.Result)
+                    .FirstOrDefault(r => r?.Section.Id == section.Id && r.Section.Version == section.Version);
+                var recovery = deletion?.Recovery ?? throw AppException.Validation("sectionId", "This deletion has no recovery record. Restore a backup to recover its contents.");
+                await ValidateRecoveryTasksAsync(session, recovery.Tasks, inner);
+                var restored = await ApplySectionUpdateAsync(session, section with { DeletedAtUtc = null, Version = section.Version + 1, UpdatedAtUtc = now }, section.Version, inner);
+                await RestoreRecoveryTasksAsync(session, recovery.Tasks, command.OperationId, now, inner);
+                return new SectionMutationResult(restored, false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
+
+    private static async Task ValidateRecoveryTasksAsync(IDataSession session, IReadOnlyList<TaskRecovery> tasks, CancellationToken token)
+    {
+        foreach (var item in tasks)
+        {
+            var current = await session.Tasks.GetIncludingDeletedAsync(item.After.Id, token) ?? throw AppException.VersionConflict("A task changed after deletion. Refresh before restoring.");
+            RequireCurrentVersion(current, item.After.Version);
+            if (item.ChildrenAfter.Count == 0) continue;
+            var children = await session.Subtasks.ListByTaskIncludingDeletedAsync(item.After.Id, token);
+            foreach (var child in item.ChildrenAfter)
+            {
+                var currentChild = children.SingleOrDefault(x => x.Id == child.Id) ?? throw AppException.VersionConflict("A subtask changed after deletion. Refresh before restoring.");
+                RequireCurrentVersion(currentChild, child.Version);
+            }
+        }
+    }
+
+    private async Task RestoreRecoveryTasksAsync(IDataSession session, IReadOnlyList<TaskRecovery> tasks, string operationId, DateTimeOffset now, CancellationToken token)
+    {
+        foreach (var item in tasks)
+        {
+            var beforeChildren = await session.Subtasks.ListByTaskIncludingDeletedAsync(item.After.Id, token);
+            foreach (var child in item.ChildrenBefore)
+            {
+                var after = item.ChildrenAfter.Single(x => x.Id == child.Id);
+                await SubtaskUpdateAsync(session, child with { Version = after.Version + 1, UpdatedAtUtc = now }, after.Version, token);
+            }
+            var restored = await TaskUpdateAsync(session, item.Before with { Version = item.After.Version + 1, UpdatedAtUtc = now }, item.After.Version, token);
+            var afterChildren = await session.Subtasks.ListByTaskIncludingDeletedAsync(item.After.Id, token);
+            await WriteTaskHistorySnapshotAsync(session, operationId, new TaskAggregateSnapshot(item.After, beforeChildren), new TaskAggregateSnapshot(restored, afterChildren), "task.restored", now, token);
+        }
     }
 
     public async Task<ProjectProgress> GetProjectProgressAsync(string containerId, CancellationToken ct = default) =>
@@ -493,8 +593,19 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
             return await session.Containers.ListBySpaceAsync(space.Id, token);
         }, ct);
 
+    public async Task<IReadOnlyList<ContainerRecord>> ListDeletedPersonalAsync(CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var profile = await session.Profiles.GetPrimaryAsync(token) ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet.");
+            var space = await ResolveSpaceAsync(session, null, profile.Id, token);
+            return await session.Containers.ListDeletedBySpaceAsync(space.Id, token);
+        }, ct);
+
     public async Task<IReadOnlyList<SectionRecord>> ListSectionsAsync(string containerId, CancellationToken ct = default) =>
         await store.QueryAsync((session, token) => session.Sections.ListByContainerAsync(containerId, token), ct);
+
+    public async Task<IReadOnlyList<SectionRecord>> ListDeletedSectionsAsync(string containerId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) => { _ = await RequireContainerAsync(session, containerId, token); return await session.Sections.ListDeletedByContainerAsync(containerId, token); }, ct);
 
     private async Task<T> InWriteAsync<T>(
         Func<IDataSession, ProfileRecord, DateTimeOffset, CancellationToken, Task<T>> body,

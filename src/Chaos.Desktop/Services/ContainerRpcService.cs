@@ -23,6 +23,7 @@ public sealed record ContainerOrderRequest(string OperationId, string ContainerI
 public sealed record SectionChangeRequest(string OperationId, string SectionId, string ExpectedVersion, string Title, int InsertionIndex);
 public sealed record DeadlineRequest(string OperationId, string ContainerId, string ExpectedVersion, string? DeadlineDate);
 public sealed record ProgressResponse(bool Ok, int DoneCount, int TotalCount, int DoneSubtaskCount, int TotalSubtaskCount, TaskErrorResponse? Error);
+public sealed record ContainerDeleteRequest(string OperationId, string ContainerId, string ExpectedVersion, string ContentsChoice);
 
 [NeoRpcService("containers", Version = 1)]
 public sealed class ContainerRpcService(ContainerCommands containers, TaskCommands tasks)
@@ -33,6 +34,18 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         try { return new(true, [.. (await containers.ListPersonalAsync(ct)).Select(Map)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
+    [NeoRpcMethod("listDeleted")]
+    public async ValueTask<ContainerListResponse> ListDeletedAsync(ContainerListRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await containers.ListDeletedPersonalAsync(ct)).Select(Map)], null); }
+        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
+    }
+    [NeoRpcMethod("delete")]
+    public async ValueTask<ContainerOperationResponse> DeleteAsync(ContainerDeleteRequest request, CancellationToken ct) =>
+        await RunAsync(() => containers.DeleteAsync(new DeleteContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Choice(request.ContentsChoice)), ct));
+    [NeoRpcMethod("restore")]
+    public async ValueTask<ContainerOperationResponse> RestoreAsync(ContainerChangeRequest request, CancellationToken ct) =>
+        await RunAsync(() => containers.RestoreAsync(new RestoreContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
     [NeoRpcMethod("tasks")]
     public async ValueTask<ListTasksResponse> TasksAsync(ContainerTasksRequest request, CancellationToken ct)
     {
@@ -69,6 +82,12 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         try { return new(true, [.. (await containers.ListSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
+    [NeoRpcMethod("deletedSections")]
+    public async ValueTask<SectionListResponse> DeletedSectionsAsync(ContainerTasksRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await containers.ListDeletedSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
+        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
+    }
     [NeoRpcMethod("createSection")]
     public async ValueTask<SectionOperationResponse> CreateSectionAsync(SectionCreateRequest request, CancellationToken ct)
     {
@@ -84,6 +103,9 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     [NeoRpcMethod("deleteSection")]
     public async ValueTask<SectionOperationResponse> DeleteSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
         await RunSectionAsync(() => containers.DeleteAsync(new DeleteSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
+    [NeoRpcMethod("restoreSection")]
+    public async ValueTask<SectionOperationResponse> RestoreSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
+        await RunSectionAsync(() => containers.RestoreAsync(new RestoreSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
     [NeoRpcMethod("moveTask")]
     public async ValueTask<TaskOperationResponse> MoveTaskAsync(MoveTaskRequest request, CancellationToken ct)
     {
@@ -103,6 +125,7 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     private static DateOnly? Date(string? value) => string.IsNullOrEmpty(value) ? null : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result) ? result : throw AppException.Validation("deadlineDate", "Enter a valid date.");
     private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
     private static ContainerKind Kind(string value) => Enum.TryParse<ContainerKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("kind", "Choose a list or project.");
+    private static ContainerContentsChoice Choice(string value) => Enum.TryParse<ContainerContentsChoice>(value, out var choice) && Enum.IsDefined(choice) ? choice : throw AppException.Validation("contentsChoice", "Choose what to do with the tasks.");
     private static ContainerResponse Map(ContainerRecord row) => new(row.Id, row.Name, row.Kind.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), row.ArchivedAtUtc is not null, row.DeadlineDate?.ToString("yyyy-MM-dd"));
     private static SectionResponse MapSection(SectionRecord row) => new(row.Id, row.Title, row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }

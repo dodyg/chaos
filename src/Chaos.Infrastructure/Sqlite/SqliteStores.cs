@@ -229,13 +229,24 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         return rows == 1 ? await GetIncludingDeletedAsync(updated.Id, ct) : null;
     }
 
-    private async Task<ContainerRecord?> GetIncludingDeletedAsync(string containerId, CancellationToken ct)
+    public async Task<ContainerRecord?> GetIncludingDeletedAsync(string containerId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT * FROM Containers WHERE Id = $id;";
         command.Parameters.AddWithValue("$id", containerId);
         using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadContainer(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<ContainerRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Containers WHERE SpaceId = $space AND DeletedAtUtc IS NOT NULL ORDER BY DeletedAtUtc DESC, Id;";
+        command.Parameters.AddWithValue("$space", spaceId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<ContainerRecord>();
+        while (await reader.ReadAsync(ct)) rows.Add(ReadContainer(reader));
+        return rows;
     }
 
     public async Task AddAsync(ContainerRecord container, CancellationToken ct)
@@ -522,13 +533,24 @@ public sealed class SqliteSectionStore(SqliteConnection connection) : ISectionSt
         return Convert.ToInt64(value);
     }
 
-    private async Task<SectionRecord?> GetIncludingDeletedAsync(string sectionId, CancellationToken ct)
+    public async Task<SectionRecord?> GetIncludingDeletedAsync(string sectionId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT * FROM Sections WHERE Id = $id;";
         command.Parameters.AddWithValue("$id", sectionId);
         using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadSection(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<SectionRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Sections WHERE ContainerId = $container AND DeletedAtUtc IS NOT NULL ORDER BY DeletedAtUtc DESC, Id;";
+        command.Parameters.AddWithValue("$container", containerId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<SectionRecord>();
+        while (await reader.ReadAsync(ct)) rows.Add(ReadSection(reader));
+        return rows;
     }
 
     internal static SectionRecord ReadSection(SqliteDataReader r) => new()
@@ -836,6 +858,17 @@ public sealed class SqliteTaskHistoryStore(SqliteConnection connection) : ITaskH
 
 public sealed class SqliteOperationReceiptStore(SqliteConnection connection) : IOperationReceiptStore
 {
+    public async Task<IReadOnlyList<OperationReceiptRecord>> ListByKindAsync(string profileId, string commandKind, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM OperationReceipts WHERE ProfileId = $profile AND CommandKind = $kind ORDER BY rowid DESC;";
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$kind", commandKind);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<OperationReceiptRecord>();
+        while (await reader.ReadAsync(ct)) rows.Add(ReadReceipt(reader));
+        return rows;
+    }
     public async Task<OperationReceiptRecord?> FindAsync(string profileId, string operationId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

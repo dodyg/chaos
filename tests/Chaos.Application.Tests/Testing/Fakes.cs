@@ -89,6 +89,8 @@ public sealed class FakeSpaceStore(List<SpaceRecord> rows) : ISpaceStore
 
 public sealed class FakeContainerStore(List<ContainerRecord> rows, List<TaskRecord> tasks) : IContainerStore
 {
+    public Task<ContainerRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
+    public Task<IReadOnlyList<ContainerRecord>> ListDeletedBySpaceAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<ContainerRecord>>(rows.Where(x => x.SpaceId == id && x.DeletedAtUtc is not null).ToList());
     public Task<IReadOnlyList<ContainerRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct) => Task.FromResult<IReadOnlyList<ContainerRecord>>(rows.Where(x => x.SpaceId == spaceId && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
     public Task<long> GetNextPositionAsync(string spaceId, CancellationToken ct) => Task.FromResult(rows.Where(x => x.SpaceId == spaceId && x.DeletedAtUtc is null).Select(x => x.Position + 1024).DefaultIfEmpty(0).Max());
     public Task<long> CountActiveTasksAsync(string containerId, CancellationToken ct) => Task.FromResult((long)tasks.Count(x => x.ContainerId == containerId && x.DeletedAtUtc is null));
@@ -164,6 +166,8 @@ internal static class FakeUpdate
 
 public sealed class FakeSectionStore(List<SectionRecord> rows) : ISectionStore
 {
+    public Task<SectionRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
+    public Task<IReadOnlyList<SectionRecord>> ListDeletedByContainerAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<SectionRecord>>(rows.Where(x => x.ContainerId == id && x.DeletedAtUtc is not null).ToList());
     public Task<SectionRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id && x.DeletedAtUtc is null));
     public Task<IReadOnlyList<SectionRecord>> ListByContainerAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<SectionRecord>>(rows.Where(x => x.ContainerId == id && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
     public Task AddAsync(SectionRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
@@ -194,6 +198,7 @@ public sealed class FakeTemplateStore(List<TemplateRecord> rows) : ITemplateStor
 
 public sealed class FakeReceiptStore(List<OperationReceiptRecord> rows) : IOperationReceiptStore
 {
+    public Task<IReadOnlyList<OperationReceiptRecord>> ListByKindAsync(string profileId, string kind, CancellationToken ct) => Task.FromResult<IReadOnlyList<OperationReceiptRecord>>(rows.Where(x => x.ProfileId == profileId && x.CommandKind == kind).Reverse().ToList());
     public Task<OperationReceiptRecord?> FindAsync(string profileId, string operationId, CancellationToken ct) =>
         Task.FromResult(rows.FirstOrDefault(row => row.ProfileId == profileId && row.OperationId == operationId));
 

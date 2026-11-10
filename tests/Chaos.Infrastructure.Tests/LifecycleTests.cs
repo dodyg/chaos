@@ -10,6 +10,81 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class LifecycleTests
 {
     [Test]
+    [Arguments(ContainerContentsChoice.MoveToInbox)]
+    [Arguments(ContainerContentsChoice.DeleteContents)]
+    public async Task RestoreContainer_AfterRestart_RestoresOnlyItsDeletion(ContainerContentsChoice choice)
+    {
+        var root = TestPaths.NewDataRoot();
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        string containerId; string sectionId; string taskId; long version;
+        using (var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None))
+        {
+            var containers = new ContainerCommands(storage.Store, ids, clock);
+            var tasks = new TaskCommands(storage.Store, ids, clock);
+            var children = new SubtaskCommands(storage.Store, ids, clock);
+            var project = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+            containerId = project.Id;
+            var section = (await containers.CreateSectionAsync(new(Guid.NewGuid().ToString(), project.Id, "Section"))).Section;
+            sectionId = section.Id;
+            var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Task", null))).Task;
+            taskId = task.Id;
+            await tasks.MoveAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, project.Id, section.Id));
+            await children.AddAsync(new(Guid.NewGuid().ToString(), task.Id, "Child", null));
+            version = (await containers.DeleteAsync(new DeleteContainerCommand(Guid.NewGuid().ToString(), project.Id, project.Version, choice))).Container.Version;
+        }
+        using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None);
+        var restoredContainers = new ContainerCommands(reopened.Store, ids, clock);
+        var restoredTasks = new TaskCommands(reopened.Store, ids, clock);
+        await Assert.That((await restoredContainers.ListDeletedPersonalAsync()).Single().Id).IsEqualTo(containerId);
+        await restoredContainers.RestoreAsync(new RestoreContainerCommand(Guid.NewGuid().ToString(), containerId, version));
+        var detail = await restoredTasks.GetDetailAsync(taskId);
+        await Assert.That(detail.Task!.ContainerId).IsEqualTo(containerId);
+        await Assert.That(detail.Task.SectionId).IsEqualTo(sectionId);
+        await Assert.That(detail.Subtasks.Single().Title).IsEqualTo("Child");
+        await Assert.That((await restoredContainers.ListSectionsAsync(containerId)).Single().Id).IsEqualTo(sectionId);
+    }
+
+    [Test]
+    public async Task RestoreContainer_MovedTaskEdited_RejectsAtomically()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var containers = new ContainerCommands(storage.Store, ids, clock);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var project = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Task", null))).Task;
+        var deleted = (await containers.DeleteAsync(new DeleteContainerCommand(Guid.NewGuid().ToString(), project.Id, project.Version, ContainerContentsChoice.MoveToInbox))).Container;
+        var moved = (await tasks.GetAsync(task.Id))!;
+        await tasks.UpdateDetailsAsync(new(Guid.NewGuid().ToString(), moved.Id, moved.Version, "Edited", "", null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        Chaos.Application.Abstractions.AppException? error = null;
+        try { await containers.RestoreAsync(new RestoreContainerCommand(Guid.NewGuid().ToString(), project.Id, deleted.Version)); }
+        catch (Chaos.Application.Abstractions.AppException caught) { error = caught; }
+        await Assert.That(error!.Kind).IsEqualTo(Chaos.Application.Abstractions.AppErrorKind.VersionConflict);
+        await Assert.That((await containers.ListDeletedPersonalAsync()).Single().Id).IsEqualTo(project.Id);
+        await Assert.That((await tasks.GetAsync(task.Id))!.Title).IsEqualTo("Edited");
+    }
+
+    [Test]
+    public async Task RestoreSection_WithoutLaterEdits_RestoresTaskMembership()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var containers = new ContainerCommands(storage.Store, ids, clock);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var project = (await containers.CreateAsync(new(Guid.NewGuid().ToString(), "Project", ContainerKind.Project, null))).Container;
+        var section = (await containers.CreateSectionAsync(new(Guid.NewGuid().ToString(), project.Id, "Section"))).Section;
+        var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), project.Id, "Task", null))).Task;
+        await tasks.MoveAsync(new(Guid.NewGuid().ToString(), task.Id, task.Version, project.Id, section.Id));
+        var deleted = (await containers.DeleteAsync(new DeleteSectionCommand(Guid.NewGuid().ToString(), section.Id, section.Version))).Section;
+        await Assert.That((await tasks.GetAsync(task.Id))!.SectionId).IsNull();
+        await containers.RestoreAsync(new RestoreSectionCommand(Guid.NewGuid().ToString(), section.Id, deleted.Version));
+        await Assert.That((await tasks.GetAsync(task.Id))!.SectionId).IsEqualTo(section.Id);
+    }
+
+    [Test]
     public async Task RestoreTask_ChildDeletedSeparatelyAtSameInstant_StaysDeletedAfterRestart()
     {
         var root = TestPaths.NewDataRoot();

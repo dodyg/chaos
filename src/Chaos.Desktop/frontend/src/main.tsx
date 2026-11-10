@@ -21,6 +21,7 @@ function App() {
   const [subtaskTitle, setSubtaskTitle] = React.useState("");
   const [subtaskEdit, setSubtaskEdit] = React.useState<SubtaskResponse | null>(null);
   const [containers, setContainers] = React.useState<ContainerResponse[]>([]);
+  const [deletedContainers, setDeletedContainers] = React.useState<ContainerResponse[]>([]);
   const [containerId, setContainerId] = React.useState("");
   const [containerName, setContainerName] = React.useState("");
   const [containerKind, setContainerKind] = React.useState("List");
@@ -39,7 +40,10 @@ function App() {
   async function refreshContainers() {
     const response = await containerRpc.list({});
     if (!response.ok) throw new Error(response.error?.message ?? "Could not load lists.");
+    const removed = await containerRpc.listDeleted({});
+    if (!removed.ok) throw new Error(removed.error?.message ?? "Could not load deleted lists.");
     setContainers([...response.containers]);
+    setDeletedContainers([...removed.containers]);
   }
   React.useEffect(() => { void refreshContainers().catch((e: unknown) => setError(String(e))); }, []);
   React.useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [containerId]);
@@ -112,11 +116,12 @@ function App() {
     {error && <p role="alert">{error}</p>}
     {warning && <p role="status">{warning}</p>}
     {deleted.length > 0 && <details><summary>Deleted tasks</summary><ul>{deleted.map(task => <li key={task.id}>{task.title} <button disabled={busy} onClick={() => void run(() => taskRpc.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}>Restore</button></li>)}</ul></details>}
+    {deletedContainers.length > 0 && <details><summary>Deleted lists and projects</summary><ul>{deletedContainers.map(item => <li key={item.id}>{item.name} <button type="button" disabled={busy} onClick={() => void (async () => { setBusy(true); setError(null); try { const result = await containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }); if (!result.ok) throw new Error(result.error?.message ?? "Could not restore list."); await refreshContainers(); } catch (e) { setError(e instanceof Error ? e.message : "Could not restore list."); } finally { setBusy(false); } })()}>Restore</button></li>)}</ul></details>}
     <label>List or project<select value={containerId} onChange={e => { setContainerId(e.target.value); setEditing(null); }}><option value="">Inbox</option>{containers.filter(c => c.kind !== "Inbox").map(c => <option key={c.id} value={c.id}>{c.name}{c.archived ? " (archived)" : ""}</option>)}</select></label>
     {containerId && containers.find(c => c.id === containerId) && <button type="button" disabled={busy} onClick={() => { const selected = containers.find(c => c.id === containerId)!; void (async () => { setBusy(true); setError(null); try { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; const result = selected.archived ? await containerRpc.unarchive(request) : await containerRpc.archive(request); if (!result.ok) throw new Error(result.error?.message ?? "Could not update archive state."); await refreshContainers(); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}>{containers.find(c => c.id === containerId)?.archived ? "Unarchive" : "Archive"}</button>}
     <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); setError(null); try { const result = await containerRpc.create({ operationId: operationId(), name: containerName, kind: containerKind }); if (!result.ok || !result.container) throw new Error(result.error?.message ?? "Could not create list."); await refreshContainers(); setContainerId(result.container.id); setContainerName(""); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}><div className="row"><label>New list or project<input value={containerName} onChange={e => setContainerName(e.target.value)}/></label><label>Type<select value={containerKind} onChange={e => setContainerKind(e.target.value)}><option>List</option><option>Project</option></select></label><button disabled={busy || !containerName.trim()}>Create</button></div></form>
     {containerId && <form onSubmit={e => { e.preventDefault(); void (async () => { setBusy(true); try { const result = await containerRpc.createSection({ operationId: operationId(), containerId, title: sectionTitle }); if (!result.ok) throw new Error(result.error?.message ?? "Could not create section."); const list = await containerRpc.sections({ containerId }); if (!list.ok) throw new Error(list.error?.message ?? "Could not load sections."); setSections([...list.sections]); setSectionTitle(""); } catch (err) { setError(String(err)); } finally { setBusy(false); } })(); }}><div className="row"><label>New section<input value={sectionTitle} onChange={e => setSectionTitle(e.target.value)}/></label><button disabled={busy || !sectionTitle.trim()}>Add section</button></div></form>}
-    {containerId && containers.find(c => c.id === containerId) && <ContainerManagement container={containers.find(c => c.id === containerId)!} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/>}
+    {containerId && containers.find(c => c.id === containerId) && <ContainerManagement container={containers.find(c => c.id === containerId)!} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={async () => { setContainerId(""); setEditing(null); await refreshContainers(); }} onChanged={async () => { await refreshContainers(); const result = await containerRpc.sections({ containerId }); if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/>}
     <h2>{containers.find(c => c.id === containerId)?.name ?? "Inbox"}</h2>
     {tasks.length === 0 ? <p>No tasks in this list.</p> : <ol className="tasks">{tasks.map((task, index) => <li key={task.id}>
       <div><button className="task-title" onClick={() => setEditing(task)}>{task.title}</button> <span>{label(task.status)}</span></div>

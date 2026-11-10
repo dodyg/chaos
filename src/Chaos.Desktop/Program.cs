@@ -110,6 +110,7 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(SectionChangeRequest))]
 [JsonSerializable(typeof(DeadlineRequest))]
 [JsonSerializable(typeof(ProgressResponse))]
+[JsonSerializable(typeof(ContainerDeleteRequest))]
 [JsonSerializable(typeof(TemplateListRequest))]
 [JsonSerializable(typeof(TemplateListResponse))]
 [JsonSerializable(typeof(TemplateResponse))]
