@@ -190,6 +190,18 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                     };
                     var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
 
+                    if (applied.RecurrenceOccurrenceKey is not null)
+                    {
+                        var occurrence = await session.Recurrence.FindByTaskAsync(applied.Id, inner)
+                            ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence occurrence could not be found.");
+                        var snapshot = await Chaos.Application.History.RecordingDataSession.BuildAggregateAsync(session, applied.Id, inner)
+                            ?? throw AppException.NotFound("That task no longer exists.");
+                        var edit = occurrence with { EditSnapshotJson = StoredJsonFormats.Snapshot(snapshot),
+                            Version = occurrence.Version + 1, UpdatedAtUtc = now };
+                        if (await session.Recurrence.UpdateOccurrenceAsync(edit, occurrence.Version, inner) is null)
+                            throw AppException.VersionConflict("The recurrence changed elsewhere.");
+                    }
+
                     await TaskMutationSupport.WriteTaskHistoryAsync(
                         session, ids, normalized.OperationId, before,
                         new TaskAggregateSnapshot(applied, subtasks),
@@ -221,6 +233,9 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                         return new TaskMutationResult(task, Replayed: false, Warning: null); // nothing to change
                     }
 
+                    if (task.RecurrenceOccurrenceKey is not null && (task.IsTerminal || normalized.Status == TaskItemStatus.Cancelled))
+                        throw AppException.Validation("status", "Use the recurrence controls to reconcile or end this series.");
+
                     var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, subtasks);
 
@@ -244,6 +259,9 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                         UpdatedAtUtc = now,
                     };
                     var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
+
+                    if (applied.RecurrenceOccurrenceKey is not null && targetStatus == TaskItemStatus.Done)
+                        await RecurrenceCommands.AdvanceAsync(session, ids, applied, now, inner);
 
                     await TaskMutationSupport.WriteTaskHistoryAsync(
                         session, ids, normalized.OperationId, before,
@@ -386,6 +404,15 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var task = await RequireTaskAsync(session, command.TaskId, inner);
                     RequireCurrentVersion(task, command.ExpectedVersion);
+                    if (task.RecurrenceOccurrenceKey is not null)
+                    {
+                        var occurrence = await session.Recurrence.FindByTaskAsync(task.Id, inner)
+                            ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence occurrence could not be found.");
+                        var series = await session.Recurrence.GetSeriesAsync(occurrence.SeriesId, inner)
+                            ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence series could not be found.");
+                        if (series.EndedAtUtc is null)
+                            throw AppException.Validation("taskId", "Choose whether to skip this occurrence or end the series.");
+                    }
                     var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, subtasks);
 
@@ -461,6 +488,12 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
 
                     var restored = task with { DeletedAtUtc = null, Version = task.Version + 1, UpdatedAtUtc = now };
                     var applied = await ApplyTaskUpdateAsync(session, restored, task.Version, token);
+                    if (task.RecurrenceOccurrenceKey is { } occurrenceId && await session.Recurrence.GetOccurrenceAsync(occurrenceId, inner) is { DeletedAtUtc: not null } occurrence)
+                    {
+                        var restoredOccurrence = occurrence with { DeletedAtUtc = null, Version = occurrence.Version + 1, UpdatedAtUtc = now };
+                        if (await session.Recurrence.UpdateOccurrenceAsync(restoredOccurrence, occurrence.Version, inner) is null)
+                            throw AppException.VersionConflict("The recurrence changed elsewhere.");
+                    }
 
                     await TaskMutationSupport.WriteTaskHistoryAsync(
                         session, ids, command.OperationId, before,

@@ -35,6 +35,7 @@ internal static class Program
             {
                 rpc.AddGreetingService(new GreetingService());
                 rpc.AddTaskRpcService(new TaskRpcService(tasks));
+                rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -90,6 +91,18 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(TaskResponse))]
 [JsonSerializable(typeof(TaskErrorResponse))]
 [JsonSerializable(typeof(TaskErrorFieldResponse))]
+[JsonSerializable(typeof(RecurrenceRuleDto))]
+[JsonSerializable(typeof(RecurrenceGetRequest))]
+[JsonSerializable(typeof(RecurrenceOccurrenceDto))]
+[JsonSerializable(typeof(RecurrenceGetResponse))]
+[JsonSerializable(typeof(RecurrenceRuleRequest))]
+[JsonSerializable(typeof(RecurrenceActionRequest))]
+[JsonSerializable(typeof(RecurrenceMoveRequest))]
+[JsonSerializable(typeof(RecurrencePreviewRequest))]
+[JsonSerializable(typeof(RecurrencePreviewResponse))]
+[JsonSerializable(typeof(UpcomingRecurrenceRequest))]
+[JsonSerializable(typeof(UpcomingRecurrenceDto))]
+[JsonSerializable(typeof(UpcomingRecurrenceResponse))]
 [JsonSerializable(typeof(ListTasksRequest))]
 [JsonSerializable(typeof(ListDeletedTasksRequest))]
 [JsonSerializable(typeof(ListTasksResponse))]
@@ -127,6 +140,7 @@ public sealed record GreetingResponse(string Message);
 [JsonSerializable(typeof(TemplateListResponse))]
 [JsonSerializable(typeof(TemplateResponse))]
 [JsonSerializable(typeof(TemplatePayloadResponse))]
+[JsonSerializable(typeof(TemplateReminderOffsetDto))]
 [JsonSerializable(typeof(TemplatePartResponse))]
 [JsonSerializable(typeof(TemplateSaveRequest))]
 [JsonSerializable(typeof(TemplateDeleteRequest))]

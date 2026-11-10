@@ -17,6 +17,62 @@ public enum ChangeKind
     Tag = 6,
     Diary = 7,
     Pad = 8,
+    RecurrenceSeries = 9,
+    RecurrenceOccurrence = 10,
+    ReminderRule = 11,
+}
+
+internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
+{
+    public Task<RecurrenceSeriesRecord?> GetSeriesAsync(string id, CancellationToken ct) => inner.GetSeriesAsync(id, ct);
+    public Task<long> NextRevisionAsync(string seriesId, CancellationToken ct) => inner.NextRevisionAsync(seriesId, ct);
+    public Task<RecurrenceOccurrenceRecord?> GetOccurrenceAsync(string id, CancellationToken ct) => inner.GetOccurrenceAsync(id, ct);
+    public Task<RecurrenceOccurrenceRecord?> FindByKeyAsync(string seriesId, string nominalKey, CancellationToken ct) => inner.FindByKeyAsync(seriesId, nominalKey, ct);
+    public Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListActiveBySpaceAsync(string spaceId, CancellationToken ct) => inner.ListActiveBySpaceAsync(spaceId, ct);
+    public Task<RecurrenceOccurrenceRecord?> FindByTaskAsync(string taskId, CancellationToken ct) => inner.FindByTaskAsync(taskId, ct);
+    public Task<IReadOnlyList<RecurrenceOccurrenceRecord>> ListOccurrencesAsync(string seriesId, CancellationToken ct) => inner.ListOccurrencesAsync(seriesId, ct);
+    public async Task AddSeriesAsync(RecurrenceSeriesRecord row, CancellationToken ct)
+    {
+        await inner.AddSeriesAsync(row, ct);
+        recorder.RecordEntity<RecurrenceSeriesRecord>(ChangeKind.RecurrenceSeries, row.Id, null, row.Version);
+    }
+    public async Task<RecurrenceSeriesRecord?> UpdateSeriesAsync(RecurrenceSeriesRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.RecurrenceSeries, row.Id) ? null : await inner.GetSeriesAsync(row.Id, ct);
+        var applied = await inner.UpdateSeriesAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.RecurrenceSeries, row.Id, before, row.Version);
+        return applied;
+    }
+    public async Task AddOccurrenceAsync(RecurrenceOccurrenceRecord row, CancellationToken ct)
+    {
+        await inner.AddOccurrenceAsync(row, ct);
+        recorder.RecordEntity<RecurrenceOccurrenceRecord>(ChangeKind.RecurrenceOccurrence, row.Id, null, row.Version);
+    }
+    public async Task<RecurrenceOccurrenceRecord?> UpdateOccurrenceAsync(RecurrenceOccurrenceRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.RecurrenceOccurrence, row.Id) ? null : await inner.GetOccurrenceAsync(row.Id, ct);
+        var applied = await inner.UpdateOccurrenceAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.RecurrenceOccurrence, row.Id, before, row.Version);
+        return applied;
+    }
+}
+
+internal sealed class RecordingReminderRuleStore(RecordingDataSession recorder, IReminderRuleStore inner) : IReminderRuleStore
+{
+    public Task<ReminderRuleRecord?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+    public Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct) => inner.ListByTaskAsync(taskId, ct);
+    public async Task AddAsync(ReminderRuleRecord row, CancellationToken ct)
+    {
+        await inner.AddAsync(row, ct);
+        recorder.RecordEntity<ReminderRuleRecord>(ChangeKind.ReminderRule, row.Id, null, row.Version);
+    }
+    public async Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.ReminderRule, row.Id) ? null : await inner.GetAsync(row.Id, ct);
+        var applied = await inner.UpdateAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.ReminderRule, row.Id, before, row.Version);
+        return applied;
+    }
 }
 
 public enum LinkKind
@@ -91,6 +147,8 @@ public sealed class RecordingDataSession : IDataSession
     public IUndoStore Undo => _inner.Undo;
     public IChecklistConversionStore ChecklistConversions => _inner.ChecklistConversions;
     public IPadStore Pad { get; }
+    public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
+    public IReminderRuleStore ReminderRules => new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
 
@@ -196,7 +254,8 @@ public sealed class RecordingDataSession : IDataSession
             }
         }
 
-        return new TaskAggregateSnapshot(task, subtasks, await session.Tags.ListTaskTagIdsAsync(taskId, ct), subtaskTags);
+        return new TaskAggregateSnapshot(task, subtasks, await session.Tags.ListTaskTagIdsAsync(taskId, ct), subtaskTags,
+            await session.ReminderRules.ListByTaskAsync(taskId, ct));
     }
 
     /// <summary>
@@ -227,6 +286,18 @@ public sealed class RecordingDataSession : IDataSession
             if (beforeJson == afterJson && !diaryChanged)
             {
                 continue; // e.g. a link to a tag that is itself deleted: no visible change
+            }
+
+            // A one-occurrence subtask or tag edit belongs to that occurrence, not the
+            // series template. Record the complete aggregate with the same undo operation.
+            if (before is not null && beforeJson != afterJson && after.Task.RecurrenceOccurrenceKey is not null &&
+                (CommandKind?.StartsWith("subtask.", StringComparison.Ordinal) == true || CommandKind?.StartsWith("tag.", StringComparison.Ordinal) == true))
+            {
+                var occurrence = await Recurrence.FindByTaskAsync(taskId, ct)
+                    ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence occurrence could not be found.");
+                var updated = occurrence with { EditSnapshotJson = afterJson, Version = occurrence.Version + 1, UpdatedAtUtc = now };
+                if (await Recurrence.UpdateOccurrenceAsync(updated, occurrence.Version, ct) is null)
+                    throw AppException.VersionConflict("The recurrence changed elsewhere.");
             }
 
             var derived = DerivedFields(before, after, diaryChanged);

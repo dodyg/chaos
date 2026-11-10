@@ -1,5 +1,5 @@
 import React from "react";
-import { queryRpc, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import { queryRpc, recurrenceRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,7 @@ export type QueryState = { view: string; tagId?: string; text?: string };
 export const builtInViews = [
   { view: "Today", title: "Today", hint: "Open tasks planned or due today." },
   { view: "Upcoming", title: "Upcoming", hint: "Planned or due in the next 14 days, by the earliest date." },
-  { view: "Overdue", title: "Overdue", hint: "Due dates that have passed. A planned date in the past alone is not overdue." },
+  { view: "Overdue", title: "Overdue", hint: "Due dates and recurring schedules that have passed. An ordinary planned date alone is not overdue." },
   { view: "Waiting", title: "Waiting", hint: "Tasks waiting on someone outside the app." },
   { view: "RecentlyCompleted", title: "Recently completed", hint: "Done in the last 30 days, newest first." },
   { view: "AssignedToMe", title: "Assigned to me", hint: "Every open task in Personal is yours; shared spaces arrive later." },
@@ -39,9 +39,9 @@ function request(query: QueryState, filters: Filters, cursor: string | null): Ta
  * (nothing is saved). Pages are fetched with the server's cursor; the total comes from the
  * same query, so it matches the sidebar count for the unfiltered view.
  */
-export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, onOpen, header }: {
+export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, onOpen, header }: {
   query: QueryState; tags: TagResponse[]; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof queryRpc; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
+  api?: typeof queryRpc; recurrenceApi?: typeof recurrenceRpc; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
 }) {
   const [filters, setFilters] = React.useState<Filters>(noFilters);
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
@@ -49,10 +49,22 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   const [cursor, setCursor] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [projected, setProjected] = React.useState<readonly UpcomingRecurrenceDto[]>([]);
   const requests = React.useRef(createLatestRequest());
   const key = `${query.view}|${query.tagId ?? ""}|${query.text ?? ""}`;
 
   React.useEffect(() => { setFilters(noFilters); }, [key]);
+  React.useEffect(() => {
+    let current = true;
+    setProjected([]);
+    if (query.view === "Upcoming" && JSON.stringify(filters) === JSON.stringify(noFilters)) {
+      void recurrenceApi.upcoming({ days: 14, limit: 100 }).then(result => {
+        if (!current) return;
+        if (result.ok) setProjected(result.items); else setError(result.error?.message ?? "Could not load projected repetitions.");
+      }).catch((error: unknown) => { if (current) setError(String(error)); });
+    }
+    return () => { current = false; };
+  }, [key, filters, revision, recurrenceApi]);
   React.useEffect(() => {
     const isCurrent = requests.current.begin();
     setLoading(true); setError(null);
@@ -101,9 +113,10 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
 
     {error && <InlineError>{error}</InlineError>}
     <p className="text-sm text-muted-foreground" role="status" aria-live="polite">{loading && rows.length === 0 ? "Loading…" : `${total} ${total === 1 ? "task" : "tasks"}`}</p>
-    {!loading && !error && rows.length === 0 && <EmptyState title={query.view === "Search" ? "No matching tasks." : "Nothing here."}>
+    {!loading && !error && rows.length === 0 && projected.length === 0 && <EmptyState title={query.view === "Search" ? "No matching tasks." : "Nothing here."}>
       {query.view === "Search" ? <span className="inline-flex items-center gap-1"><SearchX className="size-4"/>Try fewer words, or include completed tasks and archived lists.</span> : "Tasks appear here as soon as they match."}
     </EmptyState>}
+    {projected.length > 0 && <section className="grid gap-2" aria-label="Projected repetitions"><h3 className="font-semibold">Projected repetitions</h3><p className="text-xs text-muted-foreground">These are read-only estimates. A task becomes available after its current occurrence is finished.</p><ol className="grid gap-1">{projected.map(item => <li key={`${item.sourceTaskId}|${item.nominalLocal}`} className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">{item.title} · {item.nominalLocal.replace("T", " ")} <Badge variant="outline">Projected</Badge></li>)}</ol></section>}
     {rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{rows.map((row, index) => {
       const heading = grouped && row.groupDate && row.groupDate !== rows[index - 1]?.groupDate;
       const task = row.task;
@@ -117,6 +130,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
               <span className="inline-flex items-center gap-1"><FolderKanban className="size-3.5"/>{row.containerName}{row.containerArchived && " · archived"}</span>
               {task.dueDate && <span>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime.slice(0, 5)}` : ""}</span>}
               {task.plannedDate && <span>Planned {task.plannedDate}</span>}
+              {query.view === "Overdue" && !task.dueDate && <Badge variant="outline">Missed recurrence</Badge>}
               <StatusBadge status={task.status}/>
               <PriorityBadge priority={task.priority}/>
               {row.matches.filter(match => match !== "Task").map(match => <Badge key={match} variant="outline">Matched in {match === "Subtask" ? "a subtask" : "the diary"}</Badge>)}

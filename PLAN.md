@@ -684,9 +684,13 @@ Package remains unchecked until the exit is shown in a native window: type rapid
 
 **Tests:** debounce/flush with fake time, overlapping saves, navigation with failed save, source revision mismatch, Unicode selections/backlink after edit, archive undo. **Exit:** rapidly type, switch views, close/restart and recover the latest acknowledged text.
 
-### [ ] 6 — Recurrence engine and occurrence persistence
+### [x] 6 — Recurrence engine and occurrence persistence
 
 **Depends on:** 2, 4. Implement typed rule validation/calculation first, then transactional series/occurrences/exceptions, advanced editor and preview, complete/skip/move/edit future/end/history. Integrate task templates/reminder-rule placeholders without delivery.
+
+Results (2026-11-10): the user authorized proceeding without Roslynk. The bounded calculator covers fixed and completion-relative rules; migrations 006–007 persist series, revisions, occurrence identities, exceptions and reminder-rule placeholders. Transactional commands handle start, completion, skip, move, future revision, end, replay and successor-aware undo. The task editor provides rule editing, preview and history, and recurring deletion offers skip or end-and-delete. Upcoming shows read-only projections; Overdue labels missed recurrence schedules. Templates can create a series and carry relative reminder rules; notification delivery remains package 10. Task, subtask and tag edits are stored as occurrence exceptions.
+
+Verification: `eng/verify.ps1` passed locked restore, Release build, 184 TUnit tests and Slopwatch; frontend build and 37 tests passed. File-backed tests prove late completion creates one successor and the original diary remains on its occurrence after restart, as well as retry, constraint, move, revision, count, reminder-copy and undo-conflict cases. In an isolated native Windows window, a daily rule was previewed and started and a diary entry was saved. The native status-menu completion step could not be finished because focus moved to another active application; the completion/restart exit was verified through real SQLite and RPC tests rather than visually. Installed-release acceptance remains in package 13.
 
 **Tests:** the recurrence matrix in section 16, constrained single active occurrence, transaction retry, end conditions, exception identity, no pile-up and successor-aware undo. **Exit:** late completion never produces a backlog of copies, and past diaries stay attached to the correct occurrence.
 
