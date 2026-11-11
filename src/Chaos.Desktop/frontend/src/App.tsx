@@ -15,6 +15,7 @@ import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
 import { QuickAdd } from "./QuickAdd";
 import { MyDay, useDayClock } from "./MyDay";
+import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
 import { AlertStack, NotificationCenter, TaskReminders, TaskWaiting } from "./Reminders";
 import { Journal, SummaryPrompts } from "./Journal";
@@ -58,6 +59,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const waitingApi = api.waitingRpc ?? waitingRpc;
   const summaryApi = api.journalRpc ?? journalRpc;
   const shellApi = api.shellRpc ?? shellRpc;
+  const dayBackground = useDayBackground();
   const dayClock = useDayClock(myDayApi);
   const timeZones = useTimeZones(shellApi, dayClock?.zoneId);
   const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
@@ -703,7 +705,12 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </nav>
     </aside>
 
-    <div id="main-content" tabIndex={-1} className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none">
+    <div className="min-w-0" style={view === "myday" && dayBackground.background.kind !== "default" ? {
+      backgroundColor: dayBackground.background.kind === "color" ? dayBackground.background.value : undefined,
+      backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
+      backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
+    } : undefined}>
+    <div id="main-content" tabIndex={-1} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-screen bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -712,7 +719,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => setEditing(task)} onChanged={changed}/>
-      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed} onSetStatus={setTaskStatus}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onNavigate={next => { setEditing(null); setView(next); }}/>
@@ -744,6 +751,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
         <DeletedItems noun="tasks" items={deleted} name={task => task.title} busy={busy} onRestore={task => void run(() => taskRpc.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}/>
       </>}
+    </div>
     </div>
 
     {editing && view !== "templates" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">

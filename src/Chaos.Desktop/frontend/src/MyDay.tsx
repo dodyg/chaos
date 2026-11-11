@@ -9,6 +9,7 @@ import { Count, EmptyState, InlineError, PageHeader, PriorityBadge, StatusBadge,
 import { createLatestRequest } from "./latestRequest";
 import { taskDragType } from "./tags";
 import { FollowUps } from "./Reminders";
+import { DayBackgroundSettings, type DayBackground } from "./MyDayBackground";
 
 const operationId = () => crypto.randomUUID();
 
@@ -86,9 +87,9 @@ function minutes(total: number) {
  * to the next day. Earlier days are read-only and stay reviewable. Choosing a task here never
  * changes its planned or due date.
  */
-export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged, onSetStatus }: {
+export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged, onSetStatus, background, onBackgroundChange }: {
   clock: DayClockResponse | null; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void;
+  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void; background?: DayBackground; onBackgroundChange?: (background: DayBackground) => boolean;
 }) {
   const today = clock?.today ?? null;
   const [day, setDay] = React.useState<string | null>(today);
@@ -162,6 +163,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
         <Button type="button" variant={day === today ? "secondary" : "outline"} size="sm" disabled={working || day === today} onClick={() => setDay(today)}>Today</Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Next day" disabled={working} onClick={() => setDay(addDays(day, 1))}><ChevronRight/></Button>
       </nav>}/>
+
+    {background && onBackgroundChange && <DayBackgroundSettings background={background} onSave={onBackgroundChange}/>}
 
     {error && <InlineError>{error}</InlineError>}
     {summary && <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground" role="status" aria-live="polite">
