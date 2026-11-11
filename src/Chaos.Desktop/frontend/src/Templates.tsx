@@ -7,12 +7,13 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { Banner, DeletedItems, EmptyState, Field, FieldGroup, PageHeader, priorities } from "@/components/common";
+import { deviceTimeZones, ZoneSelect, type TimeZones } from "./ZoneSelect";
 import { templateRpc, type TemplateResponse, type TemplatePayloadResponse } from "#neoastra";
 
 const emptyPayload = (): TemplatePayloadResponse => ({ title: "", notes: "", priority: "Normal", estimateMinutes: null, category: "Personal", plannedDayOffset: null, plannedTime: null, plannedZoneId: null, dueDayOffset: null, dueTime: null, dueZoneId: null, subtasks: [], recurrenceDefault: null, reminderOffsets: [] });
 const operationId = () => crypto.randomUUID();
 
-export function Templates({ containerId, containerName = "Inbox", onCreated }: { containerId: string; containerName?: string; onCreated: () => Promise<void> }) {
+export function Templates({ containerId, containerName = "Inbox", onCreated, timeZones = deviceTimeZones() }: { containerId: string; containerName?: string; onCreated: () => Promise<void>; timeZones?: TimeZones }) {
   const [items, setItems] = React.useState<TemplateResponse[]>([]);
   const [selected, setSelected] = React.useState<TemplateResponse | null>(null);
   const [name, setName] = React.useState("");
@@ -88,17 +89,17 @@ export function Templates({ containerId, containerName = "Inbox", onCreated }: {
         {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={kind === "planned" ? "Planned" : "Due"}>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(8rem,1fr))] gap-3">
             <Field label="Days after creation"><Input type="number" min="0" value={payload[`${kind}DayOffset`] ?? ""} onChange={e => change({ [`${kind}DayOffset`]: e.target.value === "" ? null : Number(e.target.value) })}/></Field>
-            <Field label="Time"><Input type="time" value={payload[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null })}/></Field>
-            <Field label="Time zone"><Input value={payload[`${kind}ZoneId`] ?? ""} onChange={e => change({ [`${kind}ZoneId`]: e.target.value || null })} placeholder="e.g. Africa/Cairo"/></Field>
+            <Field label="Time"><Input type="time" value={payload[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null, [`${kind}ZoneId`]: e.target.value ? (payload[`${kind}ZoneId`] ?? timeZones.preferred) : null })}/></Field>
+            <Field label="Time zone"><ZoneSelect value={payload[`${kind}ZoneId`]} preferred={timeZones.preferred} zones={timeZones.zones} disabled={!payload[`${kind}Time`]} onChange={zone => change({ [`${kind}ZoneId`]: zone })}/></Field>
           </div>
         </FieldGroup>)}
         <FieldGroup legend="Repeat by default">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={payload.recurrenceDefault !== null} onChange={e => change({ recurrenceDefault: e.target.checked ? { mode: "FixedSchedule", frequency: "Day", interval: 1, anchorDate: "2000-01-01", anchorTime: null, zoneId: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null } : null })}/>Create a repeating task</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={payload.recurrenceDefault !== null} onChange={e => change({ recurrenceDefault: e.target.checked ? { mode: "FixedSchedule", frequency: "Day", interval: 1, anchorDate: "2000-01-01", anchorTime: null, zoneId: timeZones.preferred, weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null } : null })}/>Create a repeating task</label>
           {payload.recurrenceDefault && <div className="grid grid-cols-2 gap-3 pt-2">
             <Field label="Repeat mode"><NativeSelect value={payload.recurrenceDefault.mode} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, mode: e.target.value, weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null } })}><NativeSelectOption value="FixedSchedule">Fixed schedule</NativeSelectOption><NativeSelectOption value="AfterCompletion">Completion</NativeSelectOption></NativeSelect></Field>
             <Field label="Repeat frequency"><NativeSelect value={payload.recurrenceDefault.frequency} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, frequency: e.target.value, weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null } })}>{["Day", "Week", "Month", "Year"].map(value => <NativeSelectOption key={value}>{value}</NativeSelectOption>)}</NativeSelect></Field>
             <Field label="Repeat every"><Input type="number" min="1" max="999" value={payload.recurrenceDefault.interval} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, interval: Number(e.target.value) } })}/></Field>
-            <Field label="Repeat time zone"><Input value={payload.recurrenceDefault.zoneId} onChange={e => change({ recurrenceDefault: { ...payload.recurrenceDefault!, zoneId: e.target.value } })}/></Field>
+            <Field label="Repeat time zone"><ZoneSelect value={payload.recurrenceDefault.zoneId} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zoneId => change({ recurrenceDefault: { ...payload.recurrenceDefault!, zoneId } })}/></Field>
           </div>}
           <p className="text-xs text-muted-foreground">The new series starts on the task's planned date, due date, or creation date. Further rule options are available on the task.</p>
         </FieldGroup>

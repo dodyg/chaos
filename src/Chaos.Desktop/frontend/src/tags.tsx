@@ -137,11 +137,11 @@ export function TagTree({ tags, counts, activeTagId, busy, onOpen, onTagTask }: 
   </li>)}</ol></nav>;
 }
 
-export function NewTagForm({ busy, onCreate }: { busy: boolean; onCreate: (path: string) => Promise<boolean> }) {
+export function NewTagForm({ busy, onCreate, autoFocus = false }: { busy: boolean; onCreate: (path: string) => Promise<boolean>; autoFocus?: boolean }) {
   const [path, setPath] = React.useState("");
   return <form className="mt-2 flex gap-2" onSubmit={event => { event.preventDefault(); void onCreate(path).then(created => { if (created) setPath(""); }); }}>
     <label className="sr-only" htmlFor="new-tag">New tag</label>
-    <Input id="new-tag" className="bg-background" value={path} onChange={e => setPath(e.target.value)} placeholder="New tag, e.g. home/garden" autoComplete="off"/>
+    <Input id="new-tag" autoFocus={autoFocus} className="bg-background" value={path} onChange={e => setPath(e.target.value)} placeholder="New tag, e.g. home/garden" autoComplete="off"/>
     <Button variant="outline" size="icon" disabled={busy || !path.trim()} aria-label="Create tag"><Hash/></Button>
   </form>;
 }
