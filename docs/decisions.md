@@ -363,3 +363,16 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   key or client secret ships in the desktop client. G0 remains open for live auth, permissions,
   API and installed-MSIX evidence; credential-independent G1 work may proceed alongside it.
   See [the evaluation](github-auth-evaluation.md).
+
+## 2026-11-11 (existing GitHub CLI credentials)
+
+- **Use the existing GitHub CLI login, without registering a GitHub App.** The user explicitly
+  declined app registration and authorized Chaos to obtain an account-specific token from `gh`
+  and use it in memory. This supersedes the GitHub App decision above and the prior prohibition
+  on token handling and `gh auth token`. GitHub CLI retains persistent credential ownership;
+  Chaos never persists tokens or places them in logs, process arguments, environment, SQLite,
+  backups, exports, RPC or the renderer. For each operation, bind one token snapshot to a
+  successful `/user` numeric-ID check and use that same snapshot for the API request. Fail
+  closed on mismatches and credential errors; an active-account switch cannot affect the
+  snapshot. The two-account live race, stale credentials, network boundary, and installed-MSIX
+  tests are still required in G0. See `GITHUB.md` for the revised transport and gate.

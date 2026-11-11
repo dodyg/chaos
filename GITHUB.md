@@ -1,5 +1,32 @@
 # GitHub Issues connection — implementation plan
 
+> **Authentication decision — latest, 2026-11-11.** The user does not want a GitHub App
+> registration and explicitly authorized Chaos to obtain an account-specific token from the
+> existing GitHub CLI login and use it in memory. This paragraph supersedes the GitHub App
+> revision immediately below and the earlier ban on `gh auth token` and tokens in Chaos.
+> GitHub CLI owns persistent credentials; Chaos must never store tokens in Credential Manager,
+> SQLite, backups, exports, logs, exceptions, RPC, renderer, command lines, URLs or environment.
+> Invoke trusted `gh auth token --hostname github.com --user <login>` directly without a shell,
+> capture bounded stdout privately, and discard all diagnostic output after sanitization. Clear
+> inherited token/debug/host overrides; never pass credentials to another process. Resolve one
+> token snapshot for a request, verify `/user` with that exact token against the connected numeric
+> account ID, and use that same snapshot for the API call. Fail closed on any mismatch, ambiguous
+> credential, expired/revoked token, lookup error or failed identity check. Never retry a mutation
+> blindly. Allow credential rotation only by resolving and verifying a fresh snapshot. GitHub CLI
+> account switching cannot change an already captured snapshot; a stale or incorrect credential
+> can only fail the identity check. Do not log the token, captured stdout, response body, headers,
+> issue text or raw process errors. Apply the guard to reads and writes. Discourage retaining
+> tokens longer than necessary. Disconnect leaves GitHub CLI signed in.
+>
+> **Revised G0:** verify the account-specific CLI lookup and active-account switch race with two
+> throwaway accounts, invalid/expired and environment-overridden credentials, Windows process
+> output bounds and timeout cleanup, REST/GraphQL, conditional requests, limits, redirects,
+> proxy and installed-MSIX access. Confirm numeric identity checks and no credential leakage.
+> The G3 adapter uses `HttpClient` with redirect handling disabled and destination validation;
+> `gh` is used for credential retrieval only. G4 detects the CLI and helps users sign in outside
+> Chaos. GitHub App installation and registration are not required. G1 remains independently
+> implementable but G0 must close before G2 or later packages.
+
 > **Authentication revision — 2026-11-11.** The user chose a GitHub App acting on the
 > user's behalf and authorized Chaos to manage its user credentials through Windows Credential
 > Manager. This revision supersedes every GitHub CLI, no-token-in-Chaos, and CLI-disconnect
