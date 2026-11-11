@@ -32,6 +32,7 @@ public interface IDataSession
     IOperationReceiptStore Receipts { get; }
     IBackupCatalogStore Backups { get; }
     IImportStore Imports { get; }
+    IGitHubStore GitHub { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>

@@ -859,7 +859,7 @@ prototype in `spikes/github-account-guard`. Eight loopback tests pass, covering 
 between identity check and write, mismatches, failed identity checks, revocation, redirect refusal,
 and destination validation. This exercises the proposed snapshot invariant only; it does not test
 `gh`, real authentication, TLS/proxy behavior, GitHub, or installed MSIX. G0 remains incomplete. `eng/verify.ps1` failed in the Release build because a running Chaos.Desktop process locked output DLLs; `npm test` reported a summary test failure and was stopped after it stopped producing output.
-### [ ] G1 — Pure domain: body, mapping and merge
+### [x] G1 — Pure domain: body, mapping and merge
 
 **Depends on:** no network for implementation; G0 (limits) for exit. **Files:** `src/Chaos.Domain/GitHub/*`,
 `tests/Chaos.Domain.Tests/GitHub/*`. Read `Domain/Tags/TagName.cs`,
@@ -898,7 +898,7 @@ G2 has not started. Moving the outstanding live G0 checks to release gates is aw
 user's decision; no gate has been waived.
 **Gate decision (2026-11-11):** User approved moving outstanding live G0 checks to release gates. Offline-tested implementation may proceed through G2 and later packages. No live check is marked passed by this decision.
 
-### [ ] G2 — Storage and data protection
+### [x] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
 `Abstractions/DataStores.cs`, `Contracts/GitHubRecords.cs`, `History/ChangeRecording.cs`
@@ -923,6 +923,17 @@ archive resets, text exports and linked-task purge. `eng/verify.ps1` passed: cle
 237 passed. `npm test` stalled again at the reminders file and was stopped; no frontend pass is
 claimed for this batch. G2 is not complete: typed store/session wiring, merge-import rules,
 additional constraints/trigger and pre-migration-backup coverage remain. No connection UI exists.
+**Progress (2026-11-11, G2 completion):** Added typed records and transaction-scoped SQLite
+stores for every GitHub table, session wiring and recorder pass-through, optimistic updates,
+bounded dirty/retry/task-link queries, mapping upserts and 200-run retention. JSON merge keeps
+links only under a matching existing local connection/repository without identity collisions;
+otherwise it warns and preserves origin in the diary. Checklist/comment mappings travel with
+kept links, retaining comment diary IDs for crash-safe posting. Added real-file store/merge
+round trips, concurrency/retention tests and a schema-13 upgrade test that verifies the safety
+backup predates migration 014. Final `eng/verify.ps1`: 544 passed, clean Release build, Slopwatch
+0 findings. Frontend: all 79 passed with sequential file execution; a reminder test now waits
+for the post-log action to become enabled. G1/G2 offline implementation gates are complete;
+G0 live API limits, credential/account-switch and installed-MSIX checks remain release gates.
 ### [ ] G3 — GitHub CLI client
 
 **Depends on:** G0. Can run in parallel with G1–G2 (different files). **Files:**

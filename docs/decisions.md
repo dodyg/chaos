@@ -390,3 +390,16 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   deleting subtasks/diary and clears the task reference without losing the issue identity.
   Container/section rows still referenced by subscriptions or milestone mappings are retained.
   The typed store and merge-import handling remain outstanding G2 work.
+
+## 2026-11-11 (GitHub G2 typed persistence and merge)
+
+- **GitHub metadata uses typed, transaction-scoped stores.** Connections, subscriptions and
+  issue links use optimistic versions; checklist/comment and label/milestone mappings are
+  bookkeeping upserts. The recorder passes the store through unchanged. Dirty/retry and task
+  batching queries are bounded at 200; sync diagnostics retain the newest 200 per connection.
+- **A merge never creates a GitHub connection.** A link is kept only under an existing local
+  connection/subscription belonging to this profile and space, without a conflicting issue or
+  link ID. Otherwise the task is ordinary, with an origin diary note and preview warning.
+  Comment diary IDs are preserved when links are kept so pending-post markers remain stable;
+  a colliding comment diary ID also detaches the imported task. Imported links are dirty for
+  reconciliation, and device retry/ETag state is cleared. Full restore is still device-gated.

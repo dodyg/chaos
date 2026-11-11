@@ -409,6 +409,7 @@ public sealed class TransferTests
             public IOperationReceiptStore Receipts => inner.Receipts;
             public IBackupCatalogStore Backups => inner.Backups;
             public IImportStore Imports => inner.Imports;
+            public IGitHubStore GitHub => inner.GitHub;
         }
 
         private sealed class FailingTasks(ITaskStore inner) : ITaskStore

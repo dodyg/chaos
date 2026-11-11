@@ -71,6 +71,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IOperationReceiptStore Receipts { get; } = new FakeReceiptStore(owner.Receipts);
         public IBackupCatalogStore Backups { get; } = new FakeBackupCatalogStore(owner.Backups);
         public IImportStore Imports => throw new NotSupportedException("This test store does not implement imports.");
+        public IGitHubStore GitHub => throw new NotSupportedException("This test store does not implement GitHub persistence.");
         public IDiaryStore Diary { get; } = new FakeDiaryStore(owner.Diary, owner.DiaryRevisions);
         public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);

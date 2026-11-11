@@ -2,6 +2,7 @@ using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Transfer;
 using Chaos.Domain.Tasks;
+using Chaos.Application.Contracts;
 
 namespace Chaos.Infrastructure.Transfer;
 
@@ -15,6 +16,20 @@ public static class ArchiveMerge
     public static ImportDraft ToDraft(ArchiveContent archive, string sourceName, string fileFingerprint)
     {
         var warnings = new List<ImportIssue>();
+        var links = Rows(archive, "GitHubIssueLinks").Where(row => row.Text("TaskId") is not null)
+            .ToDictionary(row => row.Text("TaskId")!, ReadIssueLink, StringComparer.Ordinal);
+        var checklist = Rows(archive, "GitHubChecklistItems").ToDictionary(row => row.Text("SubtaskId")!, row => new GitHubChecklistItemRecord
+        {
+            SubtaskId = row.Text("SubtaskId")!, IssueLinkId = row.Text("IssueLinkId")!, BaseOrdinal = row.Long("BaseOrdinal"),
+            BaseText = row.Text("BaseText")!, BaseChecked = row.Long("BaseChecked") == 1,
+        }, StringComparer.Ordinal);
+        var comments = Rows(archive, "GitHubCommentLinks").ToDictionary(row => row.Text("DiaryEntryId")!, row => new GitHubCommentLinkRecord
+        {
+            DiaryEntryId = row.Text("DiaryEntryId")!, IssueLinkId = row.Text("IssueLinkId")!,
+            CommentId = row.Text("CommentId") is null ? null : row.Long("CommentId"), AuthorLogin = row.Text("AuthorLogin"),
+            HtmlUrl = row.Text("HtmlUrl"), Origin = (int)row.Long("Origin"), State = (int)row.Long("State"),
+            BaseBody = row.Text("BaseBody"), BaseRemoteUpdatedUtc = StorageFormats.ParseInstant(row.Text("BaseRemoteUpdatedUtc")),
+        }, StringComparer.Ordinal);
         var containers = Rows(archive, "Containers").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);
         var tagRows = Rows(archive, "Tags").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);
         var tagPaths = tagRows.Keys.ToDictionary(id => id, id => TagPath(tagRows, id), StringComparer.Ordinal);
@@ -22,10 +37,10 @@ public static class ArchiveMerge
             .ToLookup(row => row.Text("TaskId")!, row => tagPaths[row.Text("TagId")!]);
         var subtasks = Rows(archive, "Subtasks").Where(row => row.Text("DeletedAtUtc") is null)
             .OrderBy(row => row.Long("Position")).ThenBy(row => row.Text("Id"), StringComparer.Ordinal)
-            .ToLookup(row => row.Text("TaskId")!, row => new ImportSubtask(row.Text("Title")!, row.Text("Notes") ?? "", (TaskItemStatus)row.Long("Status"), row.Text("Id")));
+            .ToLookup(row => row.Text("TaskId")!, row => new ImportSubtask(row.Text("Title")!, row.Text("Notes") ?? "", (TaskItemStatus)row.Long("Status"), row.Text("Id"), checklist.GetValueOrDefault(row.Text("Id")!)));
         var diary = Rows(archive, "DiaryEntries").Where(row => row.Text("DeletedAtUtc") is null)
             .OrderBy(row => row.Text("EntryAtUtc"), StringComparer.Ordinal)
-            .ToLookup(row => row.Text("TaskId")!, row => new ImportDiaryEntry(StorageFormats.ParseInstant(row.Text("EntryAtUtc"))!.Value, row.Text("RawMarkdown") ?? ""));
+            .ToLookup(row => row.Text("TaskId")!, row => new ImportDiaryEntry(StorageFormats.ParseInstant(row.Text("EntryAtUtc"))!.Value, row.Text("RawMarkdown") ?? "", comments.GetValueOrDefault(row.Text("Id")!)));
 
         var tasks = new List<ImportTask>();
         var line = 0;
@@ -60,6 +75,7 @@ public static class ArchiveMerge
                 TagPaths = [.. taskTags[id].Distinct(StringComparer.Ordinal)],
                 Subtasks = [.. subtasks[id]],
                 Diary = [.. diary[id]],
+                GitHubLink = links.GetValueOrDefault(id),
             });
         }
 
@@ -70,6 +86,20 @@ public static class ArchiveMerge
 
         return new ImportDraft(ImportSourceKind.ChaosJson, sourceName, fileFingerprint, tasks, [], warnings);
     }
+
+    private static GitHubIssueLinkRecord ReadIssueLink(ArchiveRow row) => new()
+    {
+        Id = row.Text("Id")!, RepositorySubscriptionId = row.Text("RepositorySubscriptionId")!, ConnectionId = row.Text("ConnectionId")!,
+        TaskId = row.Text("TaskId"), IssueId = row.Long("IssueId"), IssueNodeId = row.Text("IssueNodeId")!, IssueNumber = row.Long("IssueNumber"),
+        HtmlUrl = row.Text("HtmlUrl")!, State = (int)row.Long("State"), BaseJson = row.Text("BaseJson")!,
+        BaseRemoteUpdatedUtc = StorageFormats.ParseInstant(row.Text("BaseRemoteUpdatedUtc"))!.Value,
+        PlacementManaged = row.Long("PlacementManaged") == 1, LocalDirty = row.Long("LocalDirty") == 1,
+        LocalDirtySinceUtc = StorageFormats.ParseInstant(row.Text("LocalDirtySinceUtc")),
+        LocalAssigneeIntent = row.Text("LocalAssigneeIntent") is null ? null : (int)row.Long("LocalAssigneeIntent"),
+        ConflictNoticeUtc = StorageFormats.ParseInstant(row.Text("ConflictNoticeUtc")),
+        CreatedAtUtc = StorageFormats.ParseInstant(row.Text("CreatedAtUtc"))!.Value,
+        UpdatedAtUtc = StorageFormats.ParseInstant(row.Text("UpdatedAtUtc"))!.Value,
+    };
 
     private static ImportDate? Date(ArchiveRow row, string prefix)
     {

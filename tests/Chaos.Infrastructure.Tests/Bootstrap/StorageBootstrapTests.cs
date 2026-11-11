@@ -16,6 +16,30 @@ namespace Chaos.Infrastructure.Tests.Bootstrap;
 /// </summary>
 public sealed class StorageBootstrapTests
 {
+    [Test]
+    public async Task StartAsync_SchemaThirteen_BacksUpBeforeGitHubUpgrade()
+    {
+        var root = TestPaths.NewDataRoot();
+        var options = StorageOptions.FromDataRoot(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(options.DatabasePath)!);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = options.DatabasePath, Pooling = false }.ToString()))
+        {
+            await connection.OpenAsync();
+            await Chaos.Infrastructure.Migrations.SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 13);
+        }
+        using var handle = await StartAsync(root);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(14L);
+        var manifest = new BackupManager(handle.Store.Source, options.BackupsDirectory, "0.1.0", new FixedTimeProvider(Now)).Latest();
+        await Assert.That(manifest).IsNotNull();
+        await Assert.That(manifest!.Reason).IsEqualTo(BackupReason.PreMigration);
+        await Assert.That(manifest.SchemaVersion).IsEqualTo(13L);
+        using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(options.BackupsDirectory, manifest.FileName), Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        await backup.OpenAsync();
+        using var probe = backup.CreateCommand();
+        probe.CommandText = "SELECT count(*) FROM sqlite_master WHERE name='GitHubConnections';";
+        await Assert.That(Convert.ToInt64(await probe.ExecuteScalarAsync())).IsEqualTo(0L);
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 11, 9, 9, 0, 0, TimeSpan.Zero);
 
     private static async Task<ChaosStorageHandle> StartAsync(string dataRoot)

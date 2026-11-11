@@ -1,4 +1,5 @@
 using Chaos.Domain.Tasks;
+using Chaos.Application.Contracts;
 
 namespace Chaos.Application.Transfer;
 
@@ -13,9 +14,9 @@ public enum ImportSourceKind
 /// <summary>A local date with an optional time and zone, as read from a source.</summary>
 public sealed record ImportDate(DateOnly Date, TimeOnly? Time, string? ZoneId);
 
-public sealed record ImportSubtask(string Title, string Notes, TaskItemStatus Status, string? PreservedId = null);
+public sealed record ImportSubtask(string Title, string Notes, TaskItemStatus Status, string? PreservedId = null, GitHubChecklistItemRecord? GitHubChecklist = null);
 
-public sealed record ImportDiaryEntry(DateTimeOffset EntryAtUtc, string Markdown);
+public sealed record ImportDiaryEntry(DateTimeOffset EntryAtUtc, string Markdown, GitHubCommentLinkRecord? GitHubComment = null);
 
 /// <summary>
 /// One top-level task read from a source, before anything is written. <see cref="SourceKey"/>
@@ -44,6 +45,7 @@ public sealed record ImportTask
     public IReadOnlyList<string> TagPaths { get; init; } = [];
     public IReadOnlyList<ImportSubtask> Subtasks { get; init; } = [];
     public IReadOnlyList<ImportDiaryEntry> Diary { get; init; } = [];
+    public GitHubIssueLinkRecord? GitHubLink { get; init; }
 }
 
 /// <summary>A problem found while reading or validating a source. Line 0 means the whole file.</summary>

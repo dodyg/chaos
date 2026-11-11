@@ -35,6 +35,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IOperationReceiptStore Receipts { get; } = new SqliteOperationReceiptStore(connection);
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
     public IImportStore Imports { get; } = new SqliteImportStore(connection);
+    public IGitHubStore GitHub { get; } = new SqliteGitHubStore(connection);
 }
 
 public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileStore

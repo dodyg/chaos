@@ -101,10 +101,17 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             var items = new List<ImportPreviewItem>();
+            var warnings = draft.Warnings.ToList();
             int created = 0, duplicates = 0, conflicts = 0, subtasks = 0, diary = 0;
             foreach (var task in draft.Tasks)
             {
                 var (outcome, detail) = await ClassifyAsync(session, draft.Kind, task, seen, token);
+                if (outcome == ImportItemOutcome.New && task.GitHubLink is not null && !await CanKeepGitHubLinkAsync(session, profile, space.Id, task, token))
+                {
+                    detail = "Imported as an ordinary task because its GitHub connection is missing or its link collides with local data. Its origin is kept in the diary.";
+                    warnings.Add(new ImportIssue(task.Line, "github", detail));
+                    diary++;
+                }
                 switch (outcome)
                 {
                     case ImportItemOutcome.New:
@@ -132,7 +139,7 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
                 })
                 .ToList();
 
-            return new ImportPreview(draft.Kind, draft.SourceName, draft.FileFingerprint, created, duplicates, conflicts, subtasks, diary, lists, items, errors, draft.Warnings);
+            return new ImportPreview(draft.Kind, draft.SourceName, draft.FileFingerprint, created, duplicates, conflicts, subtasks, diary, lists, items, errors, warnings);
         }, ct);
     }
 
@@ -329,6 +336,15 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
             UpdatedAtUtc = now,
         };
         await session.Tasks.AddAsync(task, token);
+        var keepGitHub = item.GitHubLink is not null && await CanKeepGitHubLinkAsync(session, profile, container.SpaceId, item, token);
+        if (keepGitHub)
+        {
+            await session.GitHub.AddIssueLinkAsync(item.GitHubLink! with
+            {
+                TaskId = task.Id, Version = 1, UpdatedAtUtc = now, IssueEtag = null, NextAttemptUtc = null,
+                ErrorAttempts = 0, LastErrorKind = null, LastErrorMessage = null, LocalDirty = true,
+            }, token);
+        }
 
         var subtasks = new List<SubtaskRecord>(item.Subtasks.Count);
         for (var index = 0; index < item.Subtasks.Count; index++)
@@ -349,6 +365,8 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
                 UpdatedAtUtc = now,
             };
             await session.Subtasks.AddAsync(subtask, token);
+            if (keepGitHub && source.GitHubChecklist is { } checklist)
+                await session.GitHub.UpsertChecklistItemAsync(checklist with { SubtaskId = subtask.Id }, token);
             subtasks.Add(subtask);
         }
 
@@ -364,9 +382,10 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
 
         foreach (var entry in item.Diary)
         {
+            var diaryId = keepGitHub && entry.GitHubComment is { } comment ? comment.DiaryEntryId : ids.NewId().ToString();
             await session.Diary.AddAsync(new DiaryEntryRecord
             {
-                Id = ids.NewId().ToString(),
+                Id = diaryId,
                 TaskId = task.Id,
                 AuthorProfileId = profile.Id,
                 EntryAtUtc = entry.EntryAtUtc,
@@ -376,12 +395,37 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
             }, token);
+            if (keepGitHub && entry.GitHubComment is { } mapping)
+                await session.GitHub.UpsertCommentLinkAsync(mapping with { DiaryEntryId = diaryId, ErrorAttempts = 0, NextAttemptUtc = null, LastErrorKind = null, LastErrorMessage = null }, token);
         }
+
+        if (!keepGitHub && item.GitHubLink is { } origin)
+            await session.Diary.AddAsync(new DiaryEntryRecord
+            {
+                Id = ids.NewId().ToString(), TaskId = task.Id, AuthorProfileId = profile.Id, EntryAtUtc = now,
+                RawMarkdown = "Came from " + origin.HtmlUrl, Revision = 1, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
+            }, token);
 
         await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, batchId, before: null,
             after: new TaskAggregateSnapshot(task, subtasks, tagIds), eventKind: "task.imported",
             changedFields: ["Title", "Notes", "ContainerId", "Imported"], now, token);
         return task;
+    }
+
+    private static async Task<bool> CanKeepGitHubLinkAsync(IDataSession session, ProfileRecord profile, string spaceId, ImportTask task, CancellationToken ct)
+    {
+        if (task.GitHubLink is not { } link) return false;
+        var connection = await session.GitHub.GetConnectionAsync(link.ConnectionId, ct);
+        var repository = await session.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, ct);
+        if (connection is null || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != spaceId ||
+            repository is null || repository.DeletedAtUtc is not null || repository.ConnectionId != connection.Id ||
+            await session.GitHub.GetIssueLinkAsync(link.Id, ct) is not null ||
+            await session.GitHub.FindLinkByIssueAsync(connection.Id, link.IssueId, ct) is not null) return false;
+        foreach (var subtask in task.Subtasks)
+            if (subtask.GitHubChecklist is { } checklist && checklist.IssueLinkId != link.Id) return false;
+        foreach (var entry in task.Diary)
+            if (entry.GitHubComment is { } comment && (comment.IssueLinkId != link.Id || await session.Diary.GetIncludingDeletedAsync(comment.DiaryEntryId, ct) is not null)) return false;
+        return true;
     }
 
     private static async Task<ProfileRecord> RequireProfileAsync(IDataSession session, CancellationToken token) =>

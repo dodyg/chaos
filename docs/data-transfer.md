@@ -221,3 +221,11 @@ of either format. JSON exports omit sync-run diagnostics and reset ETags, increm
 rate-limit/reset times, retry times and attempt counts. Markdown and Org task exports retain
 the issue's source URL. Permanently purging a linked task removes checklist/comment mappings
 and keeps an ignored issue identity so synchronization cannot import that issue again.
+
+GitHub links in a JSON merge are retained only when the same connection and repository
+subscription exist locally and no local issue/link identity collides. Otherwise the preview
+warns that the task will be ordinary, and an origin note is added to its diary. Retained
+checklist mappings follow the imported subtask IDs; retained comment mappings keep their diary
+IDs so a pending comment keeps the same deduplication marker. Missing connections are never
+created or authorized by a merge. A complete restore retains the connection metadata but still
+requires this device's CLI account verification before any synchronization.

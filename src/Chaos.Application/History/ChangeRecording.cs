@@ -204,6 +204,7 @@ public sealed class RecordingDataSession : IDataSession
     public IOperationReceiptStore Receipts => _inner.Receipts;
     public IBackupCatalogStore Backups => _inner.Backups;
     public IImportStore Imports => _inner.Imports;
+    public IGitHubStore GitHub => _inner.GitHub;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
     public string? OperationId { get; private set; }
