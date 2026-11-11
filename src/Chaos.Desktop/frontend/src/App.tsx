@@ -66,6 +66,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
   const [padMatches, setPadMatches] = React.useState<PadItemResponse[]>([]);
   const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
+  React.useEffect(() => {
+    if (!lastUndo) return;
+    const timer = window.setTimeout(() => setLastUndo(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [lastUndo]);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [editorTab, setEditorTab] = React.useState("notes");
@@ -76,6 +81,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [deleted, setDeleted] = React.useState<TaskResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [warning, setWarning] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [busy, setBusy] = React.useState(false);
   const [subtasks, setSubtasks] = React.useState<SubtaskResponse[]>([]);
   const [deletedSubtasks, setDeletedSubtasks] = React.useState<SubtaskResponse[]>([]);
@@ -287,7 +297,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       if (item.kind === "Capture") focusQuickAdd();
       else if (item.kind === "Pad") openPad({ itemId: null });
       else if (item.kind === "OpenTask" && item.taskId) { setShowTagSettings(false); void openTaskById(item.taskId); }
-      if (item.message) setNotice(item.message);
+      if (item.message) setWarning(item.message);
       if (item.kind === "Notice") changed();
     }
   }
