@@ -19,7 +19,8 @@ import { AlertStack, NotificationCenter, TaskReminders, TaskWaiting } from "./Re
 import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
-import { AlarmClock, Archive, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { useTimeZones, ZoneSelect } from "./ZoneSelect";
+import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -57,6 +58,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const summaryApi = api.journalRpc ?? journalRpc;
   const shellApi = api.shellRpc ?? shellRpc;
   const dayClock = useDayClock(myDayApi);
+  const timeZones = useTimeZones(shellApi, dayClock?.zoneId);
   const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
   const drafts = React.useRef(new DraftRegistry()).current;
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
@@ -83,6 +85,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [containerId, setContainerId] = React.useState("");
   const [containerName, setContainerName] = React.useState("");
   const [containerKind, setContainerKind] = React.useState("List");
+  const [addingContainer, setAddingContainer] = React.useState(false);
+  const [addingTag, setAddingTag] = React.useState(false);
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
@@ -492,7 +496,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       try {
         const result = await containerRpc.create({ operationId: operationId(), name: containerName, kind: containerKind });
         if (!result.ok || !result.container) throw new Error(result.error?.message ?? "Could not create list.");
-        await refreshContainers(); setView("tasks"); selectContainer(result.container.id); setContainerName("");
+        await refreshContainers(); setView("tasks"); selectContainer(result.container.id); setContainerName(""); setAddingContainer(false);
       } catch (err) { setError(String(err)); } finally { setBusy(false); }
     })();
   }
@@ -606,39 +610,52 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         </Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myweek" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myweek"); }}><CalendarDays/>My Week</Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "journal" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("journal"); }}><BookOpen/>Journal</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "notifications" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("notifications"); }}><Bell/>Notifications</Button>
-        {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
-          {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
-        </Button>)}
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "templates" ? "page" : undefined} onClick={() => { setEditing(null); setView("templates"); }}><LayoutTemplate/>Templates</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "data" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("data"); }}><Database/>Data &amp; backups</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "settings" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("settings"); }}><Cog/>Settings</Button>
+        <SidebarSection id="views" title="Views">
+          {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
+            {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
+          </Button>)}
+        </SidebarSection>
+        <SidebarSection id="notes" title="Notes">
+          <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
+          <Button type="button" variant="ghost" className={navItem} aria-current={view === "journal" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("journal"); }}><BookOpen/>Journal</Button>
+        </SidebarSection>
       </nav>
-      <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Lists &amp; projects</div>
-      {userContainers.length > 0
-        ? <nav aria-label="Lists and projects"><ol className="grid gap-px">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className="group/row flex items-center rounded-md"
-            {...drag.target(containers.map(row => row.id), index, "containers", busy, (id, insertionIndex) => { const moving = containers.find(row => row.id === id)!; void runContainer(() => containerRpc.reorder({ operationId: operationId(), containerId: moving.id, expectedVersion: moving.version, insertionIndex }), "Could not reorder lists."); })}>
-            {drag.handle(c.id, "containers", busy, "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5")}
-            <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span></Button>
-            {c.archived && <span className="pr-2 text-[0.7rem] text-muted-foreground">archived</span>}
-          </li>)}</ol></nav>
-        : <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>}
-      <form className="mt-2 grid gap-2 rounded-lg border border-dashed border-input p-2" onSubmit={createContainer}>
-        <label className="sr-only" htmlFor="new-container">New list or project</label>
-        <Input id="new-container" placeholder="New list or project" className="bg-background" value={containerName} onChange={e => setContainerName(e.target.value)} autoComplete="off"/>
-        <div className="flex gap-2">
-          <label className="sr-only" htmlFor="new-container-kind">Type</label>
-          <div className="flex-1 [&_[data-slot=native-select-wrapper]]:w-full"><NativeSelect id="new-container-kind" className="bg-background" value={containerKind} onChange={e => setContainerKind(e.target.value)}><NativeSelectOption>List</NativeSelectOption><NativeSelectOption>Project</NativeSelectOption></NativeSelect></div>
-          <Button disabled={busy || !containerName.trim()}>Create</Button>
-        </div>
-      </form>
-      <div className="mx-2 mt-4 mb-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">Tags</div>
-      <TagTree tags={tags} counts={tagCounts} activeTagId={activeTag?.id ?? null} busy={busy} onOpen={tag => openQuery({ view: "Tag", tagId: tag.id })} onTagTask={(taskId, tag) => void tagTask(taskId, tag)}/>
-      <NewTagForm busy={busy} onCreate={createTag}/>
-      <DeletedItems className="pt-2" noun="tags" items={deletedTags} name={tag => tag.name} busy={busy} onRestore={tag => void restoreTag(tag)}/>
-      <DeletedItems className="mt-auto pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
+      <SidebarSection id="lists" title="Lists & projects" addLabel="New list or project" adding={addingContainer || userContainers.length === 0} onAdd={() => setAddingContainer(v => !v)}
+        form={<form className="mt-1 grid gap-2 rounded-lg border border-dashed border-input p-2" onSubmit={createContainer}>
+          <label className="sr-only" htmlFor="new-container">New list or project</label>
+          <Input id="new-container" autoFocus={addingContainer} placeholder="New list or project" className="bg-background" value={containerName} onChange={e => setContainerName(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setAddingContainer(false); }} autoComplete="off"/>
+          <div className="flex gap-2">
+            <label className="sr-only" htmlFor="new-container-kind">Type</label>
+            <div className="flex-1 [&_[data-slot=native-select-wrapper]]:w-full"><NativeSelect id="new-container-kind" className="bg-background" value={containerKind} onChange={e => setContainerKind(e.target.value)}><NativeSelectOption>List</NativeSelectOption><NativeSelectOption>Project</NativeSelectOption></NativeSelect></div>
+            <Button disabled={busy || !containerName.trim()}>Create</Button>
+          </div>
+        </form>}>
+        {userContainers.length > 0
+          ? <nav aria-label="Lists and projects"><ol className="grid gap-px">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className="group/row flex items-center rounded-md"
+              {...drag.target(containers.map(row => row.id), index, "containers", busy, (id, insertionIndex) => { const moving = containers.find(row => row.id === id)!; void runContainer(() => containerRpc.reorder({ operationId: operationId(), containerId: moving.id, expectedVersion: moving.version, insertionIndex }), "Could not reorder lists."); })}>
+              {drag.handle(c.id, "containers", busy, "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5")}
+              <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span></Button>
+              {c.archived && <span className="pr-2 text-[0.7rem] text-muted-foreground">archived</span>}
+            </li>)}</ol></nav>
+          : <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>}
+      </SidebarSection>
+      <SidebarSection id="tags" title="Tags" addLabel="New tag" adding={addingTag} onAdd={() => setAddingTag(v => !v)}
+        form={<NewTagForm busy={busy} autoFocus onCreate={async path => { const created = await createTag(path); if (created) setAddingTag(false); return created; }}/>}>
+        <TagTree tags={tags} counts={tagCounts} activeTagId={activeTag?.id ?? null} busy={busy} onOpen={tag => openQuery({ view: "Tag", tagId: tag.id })} onTagTask={(taskId, tag) => void tagTask(taskId, tag)}/>
+        <DeletedItems className="pt-2" noun="tags" items={deletedTags} name={tag => tag.name} busy={busy} onRestore={tag => void restoreTag(tag)}/>
+      </SidebarSection>
+      <DeletedItems className="pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
+      <nav aria-label="App" className="sticky -bottom-4 mt-auto -mx-3 -mb-4 flex items-center justify-between gap-1 border-t border-sidebar-border bg-sidebar px-3 py-2">
+        {([
+          ["notifications", "Notifications", <Bell/>],
+          ["templates", "Templates", <LayoutTemplate/>],
+          ["data", "Data & backups", <Database/>],
+          ["settings", "Settings", <Cog/>],
+        ] as const).map(([target, name, icon]) => <Button key={target} type="button" variant="ghost" size="icon-sm" aria-label={name} title={name}
+          className="text-muted-foreground hover:bg-sidebar-accent aria-[current=page]:bg-brand-soft aria-[current=page]:text-primary"
+          aria-current={view === target ? "page" : undefined}
+          onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); setView(target); }}>{icon}</Button>)}
+      </nav>
     </aside>
 
     <div id="main-content" tabIndex={-1} className="grid w-full max-w-4xl min-w-0 content-start gap-5 justify-self-center px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none">
@@ -656,7 +673,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
-      : view === "templates" ? (templates ?? <Templates containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
+      : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
           subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
           actions={selected && <>
@@ -725,8 +742,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change({ [`${kind}Date`]: e.target.value || null })}/></Field>
-              <Field label="Time"><Input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null })}/></Field>
-              <Field label="Time zone" className="col-span-2"><Input value={editing[`${kind}ZoneId`] ?? ""} onChange={e => change({ [`${kind}ZoneId`]: e.target.value || null })} placeholder="e.g. Africa/Cairo"/></Field>
+              <Field label="Time"><Input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null, ...(e.target.value && !editing[`${kind}ZoneId`] ? { [`${kind}ZoneId`]: timeZones.preferred } : {}) })}/></Field>
+              <Field label="Time zone" className="col-span-2"><ZoneSelect value={editing[`${kind}ZoneId`]} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zone => change({ [`${kind}ZoneId`]: zone })}/></Field>
             </div>
           </FieldGroup>)}
           <div className="grid grid-cols-2 gap-3">
@@ -773,7 +790,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           <TaskWaiting task={editing} revision={revision} busy={busy} api={waitingApi}
             onChanged={saved => { if (saved) setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); changed(); }}/>
         </TabsContent>
-        <TabsContent value="recurrence"><RecurrenceEditor task={editing} revision={revision} busy={busy} onError={setError} taskApi={taskRpc} api={recurrenceApi}
+        <TabsContent value="recurrence"><RecurrenceEditor task={editing} timeZones={timeZones} revision={revision} busy={busy} onError={setError} taskApi={taskRpc} api={recurrenceApi}
           onChanged={saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version, plannedDate: saved.plannedDate, plannedTime: saved.plannedTime, plannedZoneId: saved.plannedZoneId, dueDate: saved.dueDate, dueTime: saved.dueTime, dueZoneId: saved.dueZoneId } : current); void refresh().catch((e: unknown) => setError(String(e))); changed(); }}/></TabsContent>
         </div>
       </Tabs>
@@ -792,4 +809,33 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss undo" onClick={() => setLastUndo(null)}><X/></Button>
     </div>}
   </div>;
+}
+
+/**
+ * A titled sidebar group that folds away (remembered per viewer) with an optional add button
+ * revealing a create form, so the sidebar shows only what is in use.
+ */
+function SidebarSection({ id, title, children, addLabel, adding = false, onAdd, form }: {
+  id: string; title: string; children: React.ReactNode; addLabel?: string; adding?: boolean; onAdd?: () => void; form?: React.ReactNode;
+}) {
+  const key = `chaos.sidebar.${id}.collapsed`;
+  const [collapsed, setCollapsed] = React.useState(() => { try { return localStorage.getItem(key) === "1"; } catch { return false; } });
+  function toggle() {
+    setCollapsed(current => { const next = !current; try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* storage unavailable */ } return next; });
+  }
+  const bodyId = `sidebar-section-${id}`;
+  return <section aria-label={title} className="mt-3 grid gap-px">
+    <div className="flex items-center">
+      <button type="button" className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase hover:text-sidebar-foreground"
+        aria-expanded={!collapsed} aria-controls={bodyId} onClick={toggle}>
+        <ChevronRight className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")} aria-hidden="true"/>{title}
+      </button>
+      {onAdd && <Button type="button" variant="ghost" size="icon-xs" className="text-muted-foreground hover:bg-sidebar-accent" aria-label={addLabel} title={addLabel} aria-expanded={adding}
+        onClick={() => { if (collapsed) toggle(); onAdd(); }}><Plus/></Button>}
+    </div>
+    <div id={bodyId} hidden={collapsed} className="grid gap-px">
+      {children}
+      {adding && form}
+    </div>
+  </section>;
 }

@@ -4,7 +4,9 @@
     <!-- Windows host: first supported desktop deliverable (plan §1/§4). NativeAOT off for Phase 1 (plan §3). -->
     <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe: a windowed app with no console, so WebView2 child processes have nowhere to print
+         their own Chromium shutdown logs (e.g. "Failed to unregister class Chrome_WidgetWin_0"). -->
+    <OutputType>WinExe</OutputType>
     <PublishAot>false</PublishAot>
     <IsAotCompatible>false</IsAotCompatible>
     <RootNamespace>Chaos.Desktop</RootNamespace>

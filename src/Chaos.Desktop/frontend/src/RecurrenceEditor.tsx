@@ -4,18 +4,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Field, FieldGroup } from "@/components/common";
+import { deviceTimeZones, ZoneSelect, type TimeZones } from "./ZoneSelect";
 
-type Props = { task: TaskResponse; revision: number; busy: boolean; onChanged: (task: TaskResponse) => void; onError: (message: string) => void; api?: typeof recurrenceRpc; taskApi?: typeof taskRpc };
+type Props = { task: TaskResponse; timeZones?: TimeZones; revision: number; busy: boolean; onChanged: (task: TaskResponse) => void; onError: (message: string) => void; api?: typeof recurrenceRpc; taskApi?: typeof taskRpc };
 const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const initial = (task: TaskResponse): RecurrenceRuleDto => ({ mode: "FixedSchedule", frequency: "Day", interval: 1,
+const initial = (task: TaskResponse, preferred: string): RecurrenceRuleDto => ({ mode: "FixedSchedule", frequency: "Day", interval: 1,
   anchorDate: task.plannedDate ?? task.dueDate ?? localDate(), anchorTime: task.plannedTime ?? task.dueTime,
-  zoneId: task.plannedZoneId ?? task.dueZoneId ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC", weekdays: [],
+  zoneId: task.plannedZoneId ?? task.dueZoneId ?? preferred, weekdays: [],
   monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null });
 
-export function RecurrenceEditor({ task, revision, busy, onChanged, onError, api = recurrenceRpc, taskApi = taskRpc }: Props) {
+export function RecurrenceEditor({ task, timeZones: zoneList, revision, busy, onChanged, onError, api = recurrenceRpc, taskApi = taskRpc }: Props) {
+  const timeZones = zoneList ?? deviceTimeZones();
   const [detail, setDetail] = React.useState<RecurrenceGetResponse | null>(null);
-  const [rule, setRule] = React.useState<RecurrenceRuleDto>(() => initial(task));
+  const [rule, setRule] = React.useState<RecurrenceRuleDto>(() => initial(task, timeZones.preferred));
+  const edited = React.useRef(false);
+  // The Settings zone can arrive after the editor opened; a new rule follows it until the user edits.
+  React.useEffect(() => {
+    if (detail && !detail.rule && !edited.current && !task.plannedZoneId && !task.dueZoneId) setRule(current => ({ ...current, zoneId: timeZones.preferred }));
+  }, [timeZones.preferred, detail]);
   const [preview, setPreview] = React.useState<readonly string[]>([]);
   const [pending, setPending] = React.useState(false);
   const [moveDate, setMoveDate] = React.useState("");
@@ -23,7 +30,7 @@ export function RecurrenceEditor({ task, revision, busy, onChanged, onError, api
   const generation = React.useRef(0);
   React.useEffect(() => {
     const current = ++generation.current;
-    setDetail(null); setPreview([]); setRule(initial(task));
+    setDetail(null); setPreview([]); setRule(initial(task, timeZones.preferred)); edited.current = false;
     api.get({ taskId: task.id }).then(result => {
       if (generation.current !== current) return;
       if (!result.ok) { onError(result.error?.message ?? "Could not load recurrence."); return; }
@@ -31,7 +38,7 @@ export function RecurrenceEditor({ task, revision, busy, onChanged, onError, api
     }).catch((error: unknown) => { if (generation.current === current) onError(String(error)); });
     return () => { generation.current++; };
   }, [task.id, revision, api]);
-  function change(patch: Partial<RecurrenceRuleDto>) { setRule(current => ({ ...current, ...patch })); setPreview([]); }
+  function change(patch: Partial<RecurrenceRuleDto>) { edited.current = true; setRule(current => ({ ...current, ...patch })); setPreview([]); }
   async function execute(action: () => Promise<TaskOperationResponse>) {
     setPending(true);
     try {
@@ -68,7 +75,7 @@ export function RecurrenceEditor({ task, revision, busy, onChanged, onError, api
         <Field label="Every"><Input type="number" min="1" max="999" value={rule.interval} onChange={e => change({ interval: Number(e.target.value) })}/></Field>
         <Field label="Start date"><Input type="date" value={rule.anchorDate} onChange={e => change({ anchorDate: e.target.value })}/></Field>
         <Field label="Time (optional)"><Input type="time" value={rule.anchorTime ?? ""} onChange={e => change({ anchorTime: e.target.value || null })}/></Field>
-        <Field label="Time zone"><Input value={rule.zoneId} onChange={e => change({ zoneId: e.target.value })}/></Field>
+        <Field label="Time zone"><ZoneSelect value={rule.zoneId} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zoneId => change({ zoneId })}/></Field>
       </div>
       {rule.mode === "FixedSchedule" && rule.frequency === "Week" && <FieldGroup legend="Weekdays"><div className="flex flex-wrap gap-2">{names.map((name, day) => <label key={name} className="flex gap-1 text-sm"><input type="checkbox" checked={rule.weekdays.includes(day)} onChange={e => change({ weekdays: e.target.checked ? [...rule.weekdays, day].sort() : rule.weekdays.filter(value => value !== day) })}/>{name}</label>)}</div><p className="text-xs text-muted-foreground">Leave empty to use the start date’s weekday.</p></FieldGroup>}
       {rule.mode === "FixedSchedule" && ["Month", "Year"].includes(rule.frequency) && <FieldGroup legend="Calendar pattern"><div className="grid grid-cols-2 gap-3">
