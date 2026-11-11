@@ -336,3 +336,18 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   [gh api](https://cli.github.com/manual/gh_api),
   [gh auth switch](https://cli.github.com/manual/gh_auth_switch), and
   [CLI multiple-account design](https://github.com/cli/cli/blob/trunk/docs/multiple-accounts.md).
+
+## 2026-11-11 (GitHub G0 guarded CLI candidate)
+
+- **Investigate an account-bound GitHub CLI fork.** A separately installed, pinned fork could
+  resolve its credential once inside the CLI, verify the numeric `/user` identity and issue the
+  API request using the same credential snapshot. Chaos would never receive credentials. The
+  fork must fail closed on refresh, identity or keyring ambiguity and enforce destination and
+  redirect restrictions. This is a candidate only: no implementation, two-account race test,
+  network-boundary test or installed-MSIX test has established it yet. Isolating `GH_CONFIG_DIR`
+  alone is insufficient because the CLI has an unkeyed keyring fallback. G0 remains blocked
+  until the candidate and the other prerequisites are proven. The setup and maintenance cost
+  of a separate CLI fork must be documented; stock `gh` is not a safe fallback. See
+  [gh api](https://cli.github.com/manual/gh_api),
+  [account switching](https://cli.github.com/manual/gh_auth_switch), and
+  [keyring fallback analysis](https://github.com/cli/cli/issues/14370).
