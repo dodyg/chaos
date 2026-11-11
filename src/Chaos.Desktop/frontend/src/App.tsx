@@ -75,6 +75,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [editorTab, setEditorTab] = React.useState("notes");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
+  const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
   const [recurrenceDelete, setRecurrenceDelete] = React.useState<TaskResponse | null>(null);
   const [recurrenceConflict, setRecurrenceConflict] = React.useState<{ taskId: string; message: string } | null>(null);
@@ -445,6 +446,27 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   function reorderTask(task: TaskResponse, insertionIndex: number) {
     void run(() => taskRpc.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex }));
   }
+  function sectionDropTarget(sectionId: string | null) {
+    const key = sectionId ?? "";
+    return {
+      onDragOver: (event: React.DragEvent<HTMLElement>) => {
+        if (busy || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
+        event.preventDefault(); event.dataTransfer.dropEffect = "move"; setSectionDrop(key);
+      },
+      onDragLeave: (event: React.DragEvent<HTMLElement>) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSectionDrop(null);
+      },
+      onDragEnd: () => setSectionDrop(null),
+      onDrop: (event: React.DragEvent<HTMLElement>) => {
+        setSectionDrop(null);
+        if (event.defaultPrevented || busy || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
+        const task = tasks.find(item => item.id === event.dataTransfer.getData(taskDragType));
+        if (!task || task.containerId !== containerId || task.sectionId === sectionId) return;
+        event.preventDefault();
+        void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, containerId, sectionId }), saved => setEditing(current => current?.id === saved.id ? { ...current, sectionId: saved.sectionId, version: saved.version } : current));
+      },
+    };
+  }
   function reorderSubtask(subtask: SubtaskResponse, insertionIndex: number) {
     void runSubtask(() => subtaskRpc.reorder({ operationId: operationId(), subtaskId: subtask.id, expectedVersion: subtask.version, insertionIndex }));
   }
@@ -710,8 +732,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home`} onSubmit={saveCaptured}/>
 
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
-        {unsectioned.length > 0 && <section className="grid gap-1.5" aria-label="Unsectioned tasks">{sections.length > 0 && groupHeading("Unsectioned")}{taskList(unsectioned, "Unsectioned tasks")}</section>}
-        {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className="grid gap-1.5" aria-label={`${section.title} tasks`}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
+        {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
+        {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
         {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(tasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
 
         {containerId && <form className="flex gap-2" onSubmit={createSection}>

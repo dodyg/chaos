@@ -109,7 +109,7 @@ test("dragging a task below a sibling sends the corresponding reorder", async ()
   const firstButton = await screen.findByRole("button", { name: "First" });
   const secondButton = screen.getByRole("button", { name: "Second" });
   const source = firstButton.closest("li")!;
-  const target = secondButton.closest("li")!;
+  const target = secondButton.closest("li")!.firstElementChild!;
   const dataTransfer = { setData() {}, effectAllowed: "", dropEffect: "" };
   fireEvent.dragStart(within(source).getByTitle("Drag to reorder"), { dataTransfer });
   fireEvent.dragOver(target, { dataTransfer, clientY: 100 });
@@ -143,6 +143,41 @@ test("dragging onto a different section does not reorder the wrong sibling set",
   fireEvent.dragStart(within(outside).getByTitle("Drag to reorder"), { dataTransfer });
   fireEvent.drop(inside, { dataTransfer });
   assert.equal(reordered, false);
+  cleanup();
+});
+
+test("dragging moves a task into an empty section and back to unsectioned", async () => {
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null };
+  let current = { ...row("one", "Outside"), containerId: "project" };
+  const moves: Parameters<typeof containerRpc.moveTask>[0][] = [];
+  const api = {
+    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
+    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
+      tasks: async () => ({ ok: true, tasks: [current], error: null }),
+      sections: async () => ({ ok: true, sections: [{ id: "section", title: "Phase", version: "1" }], error: null }),
+      moveTask: async (request: Parameters<typeof containerRpc.moveTask>[0]) => { moves.push(request); current = { ...current, sectionId: request.sectionId, version: String(Number(current.version) + 1) }; return { ok: true, operationId: request.operationId, task: current, error: null, warning: null }; },
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  await user.click(within(await screen.findByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
+  await screen.findByRole("button", { name: "Outside" });
+  const data = new Map<string, string>();
+  const dataTransfer = { setData: (type: string, value: string) => { data.set(type, value); }, getData: (type: string) => data.get(type) ?? "", get types() { return [...data.keys()]; }, effectAllowed: "", dropEffect: "" };
+  function dragTo(target: HTMLElement) {
+    const source = screen.getByRole("button", { name: "Outside" }).closest("li")!;
+    fireEvent.dragStart(within(source).getByTitle("Drag to reorder"), { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+  }
+  dragTo(await screen.findByRole("region", { name: "Phase tasks" }));
+  await waitFor(() => assert.equal(moves.length, 1));
+  await waitFor(() => assert.ok(within(screen.getByRole("region", { name: "Phase tasks" })).getByRole("button", { name: "Outside" })));
+  assert.equal(moves[0].sectionId, "section");
+  dragTo(screen.getByRole("region", { name: "Unsectioned tasks" }));
+  await waitFor(() => assert.equal(moves.length, 2));
+  assert.equal(moves[1].sectionId, null);
+  assert.equal(moves[1].expectedVersion, "2");
   cleanup();
 });
 
