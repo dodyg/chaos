@@ -14,7 +14,7 @@ Three promises define the product:
 
 - **Start in seconds.** Open the app and add a task. No sign-up, no server, no waiting.
 - **One plan for your day and week.** My Week and My Day pull together what matters this week and today from every part of your life, without mixing up who owns what.
-- **Fits the tools you already use.** Tasks from systems like GitHub Issues appear alongside your own, and stay in step with them.
+- **Fits the tools you already use.** Tasks from systems like GitHub Issues appear alongside your own and stay in step with them, and meetings from Google Calendar show the time you really have.
 
 ## Who it is for
 
@@ -58,6 +58,8 @@ The first release covers capturing, organising and completing tasks well; sharin
 - Repeat tasks on a schedule, such as every Monday or the first of each month (see Repeating tasks).
 - Use templates to create a task with its usual subtasks in one step, such as a monthly book club meeting.
 - Mark tasks done, undo it, and find completed tasks later.
+
+Tasks, subtasks, states and templates are part of phase 1. A space's own states arrive with sharing in phase 3.
 
 ### Notes, Markdown and attachments
 
@@ -155,11 +157,15 @@ Typed notes on the personal scratch pad are part of phase 1. Drawing, photos and
 - See the full story of a task in time order: who changed what, and every update.
 - In shared spaces, everyone with access sees the updates, so nobody has to ask what happened.
 
+Updates and the diary are part of phase 1. Seeing other members' updates arrives with sharing in phase 3.
+
 ### Projects and lists
 
 - Group tasks into projects with an optional deadline and a progress view.
 - Keep open-ended lists for things that never finish.
 - Reorder tasks by dragging, and group them into sections such as To do, Doing and Done.
+
+Projects and lists are part of phase 1.
 
 ### My Day
 
@@ -167,6 +173,8 @@ Typed notes on the personal scratch pad are part of phase 1. Drawing, photos and
 - Get suggestions: tasks planned for today, tasks due soon or overdue, and tasks you planned but did not finish yesterday.
 - Add tasks from any space, including work and connected systems, into one plan.
 - My Day is private. Adding a shared task to it does not notify or affect anyone else.
+
+My Day is part of phase 1.
 
 ### My Week
 
@@ -238,8 +246,8 @@ The calendar shows everything you have to do laid out over days, weeks and month
 - **Spot overload:** each day shows the total estimated time of its tasks and warns when it is more than the hours you have set as available.
 - **Filter:** show all spaces together, or only some, and filter by tag, list, project or person.
 - **Shared calendars:** every shared space has its own calendar, such as book club meetings or a team's release deadlines. Members see the same dates; each person's own plans stay private.
-- **Your other calendars:** with a calendar connection, meetings from Outlook or Google Calendar appear alongside tasks, read-only, so you plan around them.
-- **Subscribe from elsewhere:** a private link lets you see your tasks inside Outlook, Google Calendar or Apple Calendar.
+- **Your other calendars:** with a calendar connection, meetings from Google Calendar (see Google Calendar), and later Outlook and Apple Calendar, appear alongside tasks, read-only, so you plan around them.
+- **Subscribe from elsewhere:** a private link lets you see your tasks inside Outlook, Google Calendar or Apple Calendar. The link is served by the online service, so it needs an account. You can turn the link off or replace it at any time.
 - **Works offline:** the calendar uses the data on the device, like the rest of the app.
 
 The calendar arrives in phase 2, together with showing other calendars and subscribing from them.
@@ -256,6 +264,8 @@ The board shows a list or project as cards in columns, so you can see at a glanc
 - **Shared boards:** in shared spaces everyone sees cards move live. Moving a connected task updates the GitHub issue.
 - **Any list, any time:** the board is another way to view the same tasks. Switching between list, board, calendar and timeline changes nothing about the tasks.
 
+The Kanban board arrives in phase 2. Shared boards arrive with sharing in phase 3.
+
 ### Timeline (Gantt chart)
 
 The timeline shows a project's tasks as bars across time, so you can see how long work takes, what depends on what, and whether the project will finish on time.
@@ -268,13 +278,15 @@ The timeline shows a project's tasks as bars across time, so you can see how lon
 - **Progress:** each bar fills as its subtasks are completed.
 - **Share and export:** shared projects show the same timeline to all members, and it can be exported as an image or PDF for a meeting.
 
-The Kanban board arrives in phase 2. The timeline, with dependencies, arrives in phase 4.
+The timeline, with dependencies, arrives in phase 4.
 
 ### Finding things
 
 - Search across all spaces by words, tags, people and dates.
 - Built-in views: Today, Upcoming, Overdue, Assigned to me and Recently completed.
 - Save any search or filter as a custom view, such as all high-priority work tasks due this week.
+
+Search and the built-in views are part of phase 1. Saving a search as a custom view arrives in phase 2 (see Custom views).
 
 ### Custom views
 
@@ -307,6 +319,8 @@ Phase 1 has the built-in views, such as Today, Upcoming and Overdue. Custom view
 - Undo recent changes, including accidental deletion.
 - See how a task looked at an earlier date.
 
+Undo is part of phase 1. Seeing a task at an earlier date arrives in phase 2, together with sync, which keeps the history of merged changes.
+
 ### Reminders and notifications
 
 - **Flexible timing:** set one or more reminders per task, at a fixed time or relative to its planned or due date, such as 1 day before and 1 hour before.
@@ -320,11 +334,15 @@ Phase 1 has the built-in views, such as Today, Upcoming and Overdue. Custom view
 - **Shared-space notifications:** choose which events notify you: assigned to me, mentioned, due soon, or nothing.
 - **Quiet hours,** so work notifications stay out of your evenings.
 
+Reminders on the device, insistent reminders and quiet hours are part of phase 1. Place reminders and clearing a reminder on every device arrive with sync in phase 2. Shared-space notifications and default reminders set by an owner arrive with sharing in phase 3.
+
 ### Time tracking
 
 - Start and stop a timer on any task, or log time afterwards.
 - See time spent per task, project and week.
 - Off by default. In work spaces, the organisation decides whether it is available.
+
+Time tracking arrives in phase 4. Until then, the daily summary and the Org files connection leave time tracked out.
 
 ## How it works
 
@@ -355,6 +373,8 @@ The app keeps all your data on your own device first, and only uses the online s
 - Export everything at any time to standard formats, including Org and Markdown plain text, and import from common to-do apps.
 - Deleting your account deletes your data from the online service.
 
+Using the app without an account, local backups and export are part of phase 1. Accounts and syncing devices arrive in phase 2, and importing from other to-do apps arrives with their connections.
+
 ## Sharing and collaboration
 
 You share a whole space, project or list with people, and each person gets a role that decides what they can do.
@@ -371,6 +391,8 @@ You share a whole space, project or list with people, and each person gets a rol
 - **Comments and mentions.** Discuss a task in its updates and mention people to notify them.
 - **Live changes.** When someone else edits a shared list, you see the change appear without refreshing.
 - **Leaving.** Members can leave a space at any time. Their past updates stay so the history makes sense, under their name.
+
+Sharing arrives in phase 3.
 
 ### Delegating tasks and following up
 
@@ -500,6 +522,8 @@ Connections show items from outside systems, starting with GitHub Issues, as tas
 - **Works offline.** Changes to connected tasks made offline are sent to GitHub when the device reconnects.
 - **Clear status.** A connected task shows when it was last in step, and explains plainly if something failed, such as an expired sign-in.
 
+The GitHub Issues connection arrives in phase 3.
+
 ### Org mode files
 
 A connection to a folder of Org files lets Emacs users keep their plain-text files as the source of truth, while using the app on mobile and for sharing.
@@ -518,13 +542,43 @@ A connection to a folder of Org files lets Emacs users keep their plain-text fil
 - The folder can be anywhere the device can read, such as a git repository or a synced folder.
 - This connection needs no account or server, so it works in the offline-only app.
 
+The Org files connection arrives in phase 3, with the other connections.
+
+### Google Calendar
+
+A connection to Google Calendar puts your meetings next to your tasks, so My Week and My Day plan around the time you actually have. Unlike GitHub, it is a personal connection: it belongs to you, not to a space, and nobody else sees your calendar through it.
+
+1. Choose Connect Google Calendar in settings and sign in with Google. You can connect several Google accounts, such as a personal Gmail and a work Google Workspace account.
+2. Pick which calendars to show, including calendars shared with you such as a family calendar, and give each a colour.
+3. Choose which calendars count as busy time when the app works out the hours you have each day.
+
+| In Google Calendar | In the app | Direction |
+| --- | --- | --- |
+| Event title, time, location and video link | Meeting in the calendar, My Day and My Week, read-only | Google to app |
+| Busy or free | Taken off, or not, from the day's available hours | Google to app |
+| All-day event | Shown at the top of the day; reduces available hours only if marked busy | Google to app |
+| Repeating event | Every occurrence | Google to app |
+| Declined event | Hidden | Google to app |
+| Task with a planned time and estimate | Time block event in the app's own calendar (optional) | Both ways |
+
+- **Planning around meetings:** My Week takes busy time off each day's hours. My Day lists today's meetings in order alongside tasks, and warns when the planned tasks don't fit the free time between them.
+- **Tasks from events:** turn an event into a task, such as prepare slides for Thursday's review, planned before the event and linked back to it.
+- **Time blocking (optional):** send tasks with a planned time and estimate to a separate calendar the app creates, so others see you as busy. Moving the event in Google moves the task's planned time. You choose whether the event shows the task title or only Busy. The app never writes to any other calendar.
+- **Private to you:** events never appear in shared space calendars, outside dashboards or other people's summaries. Your own daily summary includes meetings only if you allow it, and event details go to an AI service under the same choices as your tasks.
+- **No account needed:** the device talks to Google directly, so the connection works in the offline-only app. The coming weeks of events are kept on the device, so the calendar still shows them offline. With an account, the connection follows you to your other devices.
+- **Kept fresh:** changes in Google appear within a few minutes while online. The app shows when the calendar was last updated, and explains plainly if something failed, such as an expired sign-in.
+- **Least access:** the app asks only to read events, plus to manage its own calendar when time blocking is on. Disconnecting removes stored events from all your devices and offers to delete the app's calendar.
+- **Work accounts:** organisations can allow or block calendar connections for work spaces, and a Google Workspace admin's rules for outside apps still apply.
+
+Showing Google Calendar meetings arrives in phase 2, with the calendar view and meetings in My Week. Time blocking arrives in phase 3, with the other two-way connections.
+
 ### Other systems planned
 
 The same connection model extends to other tools. Likely next candidates, in order of expected demand:
 
 - Work trackers: Jira, Azure DevOps, Linear, GitLab Issues.
 - Personal to-do apps: Microsoft To Do, Google Tasks, Todoist, mainly for moving in.
-- Calendars: Outlook, Google Calendar and Apple Calendar, to show meetings alongside tasks in the calendar view.
+- Calendars: Outlook and Apple Calendar, working the same way as Google Calendar.
 
 An open connection kit lets other developers add connections for tools the team doesn't build.
 
@@ -553,6 +607,8 @@ Your personal data is yours, your employer's data is your employer's, and the ap
 - An activity log of who changed what in work spaces.
 - Choice of the region where the organisation's data is stored, where needed.
 
+Organisation features arrive in phase 4.
+
 ### Choices for users
 
 - Use the app without an account and without sending anything to the online service.
@@ -563,29 +619,36 @@ Your personal data is yours, your employer's data is your employer's, and the ap
 
 The app ships in four phases, each usable on its own, so real use shapes the next phase.
 
-&#91;embedded content: release roadmap · 4 phases, 3 gates\]
+| Phase | Focus | What it includes |
+| --- | --- | --- |
+| 1 | One person's day and week, on one device | Tasks, subtasks, templates and repeating tasks; Markdown notes; tags; quick add; typed notes on the personal scratch pad; projects and lists; My Day and My Week; the plain daily summary; search and built-in views; reminders on the device; waiting on outside people with follow-ups; undo; local backups and export; no account needed |
+| 2 | Sync, richer views and AI help | Accounts and sync; attachments; drawing, photos and voice notes on the pad; the calendar, subscription link and Google Calendar meetings; the Kanban board; custom views and alerts; AI summaries and drafted week plans with your own key; place reminders; a task's earlier versions |
+| 3 | Other people and other systems | Sharing, roles and comments; shared tags, pads and boards; rotating repeating tasks; delegating to members; space and project summaries; GitHub Issues, including GitHub fields and shared custom views; Org files; Google Calendar time blocking; AI agents |
+| 4 | Organisations and their clients | The timeline with dependencies; time tracking; shared dashboards for outside people; organisation sign-in, admin and activity log; data region; organisation-managed AI keys; organisation controls for agents; handwriting search |
 
-Phase 1 follows the guiding principle: it holds exactly what one person needs to plan and finish their day and week, so it reaches real use quickly. Phase 2 adds sync, richer views, attachments and AI help for when tasks pile up. Phase 3 brings everything that involves other people or other systems: sharing, delegation, GitHub Issues and AI agents. Phase 4 holds features mainly wanted by organisations and their clients, such as the timeline, time tracking and outside dashboards. Dates will be set once phase 1 scope is confirmed.
+Each phase must prove itself in real use before the next one starts; the exact gate for each move is still to be agreed (see Open questions).
+
+Phase 1 follows the guiding principle: it holds exactly what one person needs to plan and finish their day and week, so it reaches real use quickly. Phase 2 adds sync, richer views, attachments and AI help for when tasks pile up, plus Google Calendar meetings so My Week can plan around them. Phase 3 brings everything else that involves other people or other systems: sharing, delegation, GitHub Issues and AI agents. Phase 4 holds features mainly wanted by organisations and their clients, such as the timeline, time tracking and outside dashboards. Dates will be set once phase 1 scope is confirmed.
 
 ## Open questions
 
 - [ ] Product name and brand.
 - [ ] Which devices come first: Windows, macOS, Linux, iOS, Android, or the web?
 - [ ] Business model: free personal use with paid sync and sharing, a paid work tier, or both?
+- [ ] What must each phase show in real use before the next one starts?
 - [ ] Should shared social spaces support end-to-end encryption, given that it limits search and smart notifications?
-- [ ] Decided: GitHub connects per space (see Connecting to other systems).
-- [ ] Which outside system comes second after GitHub Issues?
+- [ ] Which work tracker comes after GitHub Issues?
 - [ ] Does My Day suggest tasks automatically, or only on request?
-
-* [ ] Which Org features must survive a round trip without loss: properties, drawers, links, tables?
-
+- [ ] Which Org features must survive a round trip without loss: properties, drawers, links, tables?
 - [ ] In what order should the quick add languages ship after English?
-
-* [ ] Can agents hand tasks to other agents, and how long can such a chain run before a person must review it?
-* [ ] Which AI assistants should be tested first with the agent features?
-
+- [ ] Can agents hand tasks to other agents, and how long can such a chain run before a person must review it?
+- [ ] Which AI assistants should be tested first with the agent features?
 - [ ] What size limits apply to attachments, and how much storage does each plan include?
-
-* [ ] Should dashboard visitors be able to leave comments or subscribe to email updates?
-
+- [ ] Should dashboard visitors be able to leave comments or subscribe to email updates?
+- [ ] Google reviews apps before the public can grant them calendar access, which can take weeks. When does that review start so phase 2 is not held up?
 - [ ] Should the app also offer a built-in AI option, for example in a paid plan, for people who don't have their own key?
+
+### Decided
+
+- [x] GitHub connects per space (see Connecting to other systems).
+- [x] Google Calendar connects per person, not per space (see Google Calendar).
