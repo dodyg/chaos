@@ -1,4 +1,5 @@
 import React from "react";
+import { AppearanceSettings } from "./AppearanceSettings";
 import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto } from "#neoastra";
 import { Keyboard, LogOut, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -132,6 +133,8 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
         <Button type="button" variant="ghost" className="ml-auto" onClick={() => void api.quit({})}><LogOut/>Quit Chaos</Button>
       </div>
     </form>}
+
+    <AppearanceSettings/>
 
     <nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("notifications")}>Reminder time and quiet hours</Button>
