@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Chaos app icon: a looping scribble that resolves into a checkmark. Mirrors eng/make-assets.ps1. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#075985"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56.32" fill="url(#tile)"/>
+  <!-- Mark drawn in a 100-unit box, scaled to 74% of the tile. -->
+  <g transform="translate(33.28 40.86) scale(1.8944)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="14.9">
+    <path transform="translate(0 3.4)" stroke="#082F49" stroke-opacity="0.35"
+          d="M10 64 C26 60 46 52 55 36 C62 22 54 8 40 12 C26 17 26 44 40 78 C52 60 68 38 90 16"/>
+    <path stroke="#FFFFFF" d="M10 64 C26 60 46 52 55 36 C62 22 54 8 40 12 C26 17 26 44 40 78 C52 60 68 38 90 16"/>
+    <g fill="#BAE6FD" fill-opacity="0.92" stroke="none">
+      <circle cx="78" cy="78" r="4.5"/>
+      <circle cx="64" cy="90" r="3"/>
+      <circle cx="91" cy="62" r="2.5"/>
+    </g>
+  </g>
+</svg>
