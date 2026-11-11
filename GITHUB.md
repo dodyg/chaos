@@ -907,6 +907,12 @@ scalar/set three-way merge. `dotnet test --project tests/Chaos.Domain.Tests/Chao
 -c Release --output Minimal` passed 171 tests; Slopwatch reported 0 issues. This is a partial
 stage: checklist scanning/rewrite, label rules, projection, required fuzz coverage and the full
 package gate remain outstanding. G0 limits remain unverified.
+**Progress (2026-11-11, domain continuation):** Added checklist scanning, byte-preserving
+rewrites, reconciliation, label paths and an issue projection. Domain suite: 182 passed;
+`eng/verify.ps1`: Release build clean, 509 tests passed, Slopwatch 0 findings. `npm test` was stopped after the reminders test process stopped producing output; no complete frontend result. G1 remains open
+pending the remaining edge-case review and G0 verification of limits. A live account-specific
+credential lookup was rejected by automatic approval review (reason: blocked by policy); it was
+not executed. Two-account race and installed-MSIX checks are still outstanding.
 ### [ ] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,

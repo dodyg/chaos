@@ -1,5 +1,8 @@
 # GitHub App authentication evaluation
 
+> Historical evaluation: the user declined GitHub App registration. The latest CLI-based
+> authentication decision in GITHUB.md and docs/decisions.md supersedes this proposal.
+
 Decision 2026-11-11: use a GitHub App acting on behalf of the connected user. The user
 explicitly authorized Chaos to handle credentials and store them in Windows Credential Manager.
 This replaces the CLI and guarded-fork proposals. The App must be installed on the relevant
