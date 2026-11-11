@@ -214,3 +214,10 @@ Text files must be UTF-8. The largest file one import accepts is 100 MB.
   Windows keeps notifications that were already shown in its own notification history until
   you clear them there. The window's embedded browser keeps a cache managed by WebView2
   outside the Chaos data folder. It holds no task data and is not removed.
+
+GitHub connection data (schema 14) is included in complete JSON archives and database backups,
+including issue and comment text from private repositories. GitHub credentials are never part
+of either format. JSON exports omit sync-run diagnostics and reset ETags, incremental cursors,
+rate-limit/reset times, retry times and attempt counts. Markdown and Org task exports retain
+the issue's source URL. Permanently purging a linked task removes checklist/comment mappings
+and keeps an ignored issue identity so synchronization cannot import that issue again.

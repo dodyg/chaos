@@ -913,6 +913,16 @@ archive exclusions and machine-column resets; merge-import collision; purge; exp
 existing migration tests updated for the new ceiling. **Exit:** `eng/verify.ps1` green; a Phase 1
 database upgrades with a pre-migration backup.
 
+**Progress (2026-11-11, G2 schema stage):** Added migration 014 with eight GitHub tables,
+composite/partial uniqueness and dirty triggers; raised the schema ceiling to 14. JSON archives
+exclude sync diagnostics and reset device fields; purge removes dependent mappings and retains
+ignored issue identities; referenced destinations are retained. Markdown/Org exports include
+issue URLs. File-backed tests cover migration from 13, constraints, dirty state, engine clearing,
+archive resets, text exports and linked-task purge. `eng/verify.ps1` passed: clean Release build,
+536 tests, Slopwatch 0 findings. Final infrastructure rerun after the purge-preview adjustment:
+237 passed. `npm test` stalled again at the reminders file and was stopped; no frontend pass is
+claimed for this batch. G2 is not complete: typed store/session wiring, merge-import rules,
+additional constraints/trigger and pre-migration-backup coverage remain. No connection UI exists.
 ### [ ] G3 — GitHub CLI client
 
 **Depends on:** G0. Can run in parallel with G1–G2 (different files). **Files:**

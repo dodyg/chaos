@@ -64,6 +64,7 @@ public static class JsonArchive
         ["OperationReceipts"] = "retry bookkeeping",
         ["SearchDocuments"] = "search index, rebuilt",
         ["SearchIndexState"] = "search index, rebuilt",
+        ["GitHubSyncRuns"] = "device synchronization diagnostics",
     };
 
     /// <summary>Columns reset on export because they describe this machine, not the data.</summary>
@@ -99,7 +100,11 @@ public static class JsonArchive
                 var row = new object?[columns.Count];
                 for (var index = 0; index < columns.Count; index++)
                 {
-                    row[index] = MachineColumns.TryGetValue((name, columns[index]), out var reset) ? reset : reader.IsDBNull(index) ? null : reader.GetValue(index);
+                    row[index] = MachineColumns.TryGetValue((name, columns[index]), out var reset) ? reset :
+                        name.StartsWith("GitHub", StringComparison.Ordinal) && columns[index] == "ErrorAttempts" ? 0L :
+                        name.StartsWith("GitHub", StringComparison.Ordinal) &&
+                        (columns[index].EndsWith("Etag", StringComparison.Ordinal) || columns[index] is "IssuesCursorUtc" or "CommentsCursorUtc" or "RateLimitResetUtc" or "NextAttemptUtc") ? null :
+                        reader.IsDBNull(index) ? null : reader.GetValue(index);
                 }
 
                 rows.Add(row);

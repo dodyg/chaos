@@ -19,6 +19,37 @@ namespace Chaos.Infrastructure.Tests.DataProtection;
 /// </summary>
 public sealed class TransferTests
 {
+    [Test]
+    public async Task Purge_LinkedTask_KeepsIgnoredIssueAndRemovesDependentMappings()
+    {
+        using var host = await DataHost.StartAsync();
+        var seed = await host.SeedAsync();
+        await host.Store.ExecuteAsync(async (session, ct) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc)
+                SELECT 'g',SpaceId,(SELECT OwnerProfileId FROM Spaces WHERE Id=SpaceId),'https://github.com','https://api.github.com',1,'person',CreatedAtUtc,UpdatedAtUtc FROM Tasks WHERE Id=$task;
+                INSERT INTO GitHubRepositories(Id,ConnectionId,RepositoryId,Owner,Name,FullName,HtmlUrl,IsPrivate,TargetContainerId,FilterJson,CreatedAtUtc,UpdatedAtUtc)
+                SELECT 'r','g',1,'person','repo','person/repo','url',1,ContainerId,'{}',CreatedAtUtc,UpdatedAtUtc FROM Tasks WHERE Id=$task;
+                INSERT INTO GitHubIssueLinks(Id,RepositorySubscriptionId,ConnectionId,TaskId,IssueId,IssueNodeId,IssueNumber,HtmlUrl,BaseJson,BaseRemoteUpdatedUtc,CreatedAtUtc,UpdatedAtUtc)
+                SELECT 'l','r','g',Id,1,'node',1,'url','{}',UpdatedAtUtc,CreatedAtUtc,UpdatedAtUtc FROM Tasks WHERE Id=$task;
+                INSERT INTO GitHubChecklistItems SELECT Id,'l',Position,Title,0 FROM Subtasks WHERE TaskId=$task;
+                INSERT INTO GitHubCommentLinks(DiaryEntryId,IssueLinkId,Origin,State) SELECT Id,'l',1,0 FROM DiaryEntries WHERE TaskId=$task;
+                """;
+            command.Parameters.AddWithValue("$task", seed.PaintTaskId);
+            await command.ExecuteNonQueryAsync(ct);
+            return true;
+        });
+        var task = (await host.Tasks.GetAsync(seed.PaintTaskId))!;
+        await host.Tasks.DeleteAsync(new Application.Tasks.DeleteTaskCommand(DataHost.Op(), task.Id, task.Version));
+        await host.Purge.PurgeAsync(task.Id, CancellationToken.None);
+        await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubIssueLinks WHERE TaskId IS NULL AND State=3 AND LocalDirty=0;")).IsEqualTo(1L);
+        await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubChecklistItems;")).IsEqualTo(0L);
+        await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubCommentLinks;")).IsEqualTo(0L);
+        await Assert.That(await host.CountAsync("SELECT count(*) FROM pragma_foreign_key_check;")).IsEqualTo(0L);
+    }
+
     private static ImportSource Read(ImportSourceKind kind, string name, string text, IReadOnlyDictionary<string, int>? mapping = null) =>
         DataTransfer.Read(kind, name, Encoding.UTF8.GetBytes(text), mapping);
 

@@ -75,6 +75,7 @@ public static class PlainTextExport
         Front(text, "created", task.CreatedAtUtc);
         Front(text, "updated", task.UpdatedAtUtc);
         text.Append("---\n\n# ").Append(OneLine(task.Title)).Append("\n\n");
+        if (task.GitHubUrl is { } source) text.Append("Source: ").Append(OneLine(source)).Append("\n\n");
         if (task.Notes.Length > 0)
         {
             text.Append(task.Notes.TrimEnd()).Append("\n\n");
@@ -240,6 +241,7 @@ public static class PlainTextExport
         Property(text, "CHAOS_PLANNED_ZONE", task.PlannedZoneId);
         Property(text, "CHAOS_DUE_ZONE", task.DueZoneId);
         Property(text, "CHAOS_RECURRENCE", task.RecurrenceRuleJson);
+        Property(text, "GITHUB_URL", task.GitHubUrl);
         Property(text, "CHAOS_CREATED", task.CreatedAtUtc);
         text.Append(":END:\n");
 

@@ -123,8 +123,8 @@ public sealed class DataPurge(SqliteApplicationStore store)
         Scalar(connection, "SELECT count(*) FROM temp.PurgeSubtasks;"),
         Scalar(connection, "SELECT count(*) FROM temp.PurgeDiary;"),
         Scalar(connection, "SELECT count(*) FROM temp.PurgePad;"),
-        !all ? 0 : Scalar(connection, "SELECT count(*) FROM Containers WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.ContainerId = Containers.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks));"),
-        !all ? 0 : Scalar(connection, "SELECT count(*) FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks));"),
+        !all ? 0 : Scalar(connection, "SELECT count(*) FROM Containers WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.ContainerId = Containers.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks)) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetContainerId = Containers.Id) AND NOT EXISTS (SELECT 1 FROM GitHubMilestoneProjects m WHERE m.ContainerId = Containers.Id);"),
+        !all ? 0 : Scalar(connection, "SELECT count(*) FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks)) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetSectionId = Sections.Id);"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Tags WHERE DeletedAtUtc IS NOT NULL;"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM TaskTemplates WHERE DeletedAtUtc IS NOT NULL;"));
 
@@ -153,6 +153,9 @@ public sealed class DataPurge(SqliteApplicationStore store)
                    OR (TargetKind = 3 AND TargetId IN (SELECT Id FROM temp.PurgeDiary))
                    OR (TargetKind = 4 AND TargetId IN (SELECT Id FROM temp.PurgePad));
             DELETE FROM SubtaskTags WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
+            DELETE FROM GitHubChecklistItems WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
+            DELETE FROM GitHubCommentLinks WHERE DiaryEntryId IN (SELECT Id FROM temp.PurgeDiary);
+            UPDATE GitHubIssueLinks SET TaskId = NULL, State = 3, LocalDirty = 0, LocalDirtySinceUtc = NULL WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ChecklistConversions WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM Subtasks WHERE Id IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM DiaryRevisions WHERE EntryId IN (SELECT Id FROM temp.PurgeDiary);
@@ -179,18 +182,22 @@ public sealed class DataPurge(SqliteApplicationStore store)
     {
         Execute(connection, """
             DELETE FROM TaskTemplates WHERE DeletedAtUtc IS NOT NULL;
-            DELETE FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id);
+            DELETE FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetSectionId = Sections.Id);
             DELETE FROM RecurrenceExceptions WHERE SeriesId IN (SELECT Id FROM RecurrenceSeries s WHERE s.DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM RecurrenceOccurrences o WHERE o.SeriesId = s.Id AND o.TaskId IS NOT NULL));
             DELETE FROM RecurrenceSeriesRevisions WHERE SeriesId IN (SELECT Id FROM RecurrenceSeries s WHERE s.DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM RecurrenceOccurrences o WHERE o.SeriesId = s.Id AND o.TaskId IS NOT NULL));
             DELETE FROM RecurrenceOccurrences WHERE TaskId IS NULL AND SeriesId IN (SELECT Id FROM RecurrenceSeries s WHERE s.DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM RecurrenceOccurrences o WHERE o.SeriesId = s.Id AND o.TaskId IS NOT NULL));
             DELETE FROM RecurrenceSeries WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM RecurrenceOccurrences o WHERE o.SeriesId = RecurrenceSeries.Id);
             DELETE FROM Sections WHERE ContainerId IN (SELECT Id FROM Containers c WHERE c.DeletedAtUtc IS NOT NULL)
-                AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id);
+                AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id)
+                AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetSectionId = Sections.Id);
             DELETE FROM Containers WHERE DeletedAtUtc IS NOT NULL
                 AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.ContainerId = Containers.Id)
                 AND NOT EXISTS (SELECT 1 FROM Sections s WHERE s.ContainerId = Containers.Id)
                 AND NOT EXISTS (SELECT 1 FROM RecurrenceSeries r WHERE r.ContainerId = Containers.Id)
-                AND NOT EXISTS (SELECT 1 FROM WeekGoals g WHERE g.ProjectId = Containers.Id);
+                AND NOT EXISTS (SELECT 1 FROM WeekGoals g WHERE g.ProjectId = Containers.Id)
+                AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetContainerId = Containers.Id)
+                AND NOT EXISTS (SELECT 1 FROM GitHubMilestoneProjects m WHERE m.ContainerId = Containers.Id);
+            DELETE FROM GitHubLabelTags WHERE TagId IN (SELECT Id FROM Tags WHERE DeletedAtUtc IS NOT NULL);
             """);
 
         // Tags: leaves first, repeatedly, so a deleted subtree goes once its children have.

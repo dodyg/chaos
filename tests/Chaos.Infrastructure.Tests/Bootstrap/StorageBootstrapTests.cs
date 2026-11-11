@@ -74,7 +74,7 @@ public sealed class StorageBootstrapTests
     {
         using var handle = await StartAsync(TestPaths.NewDataRoot());
 
-        await Assert.That(handle.SchemaVersion).IsEqualTo(13L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(14L);
         await Assert.That(handle.PrimaryProfileId).IsNotEmpty();
         await Assert.That(CountRows(handle.DatabasePath, "Profiles")).IsEqualTo(1L);
         await Assert.That(CountRows(handle.DatabasePath, "Spaces")).IsEqualTo(1L);

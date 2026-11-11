@@ -33,6 +33,7 @@ public sealed record ExportTask
     public required string CreatedAtUtc { get; init; }
     public required string UpdatedAtUtc { get; init; }
     public string? RecurrenceRuleJson { get; init; }
+    public string? GitHubUrl { get; init; }
     public required IReadOnlyList<string> Tags { get; init; }
     public required IReadOnlyList<ExportSubtask> Subtasks { get; init; }
     public required IReadOnlyList<ExportDiaryEntry> Diary { get; init; }
@@ -50,6 +51,10 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
         using var snapshot = connection.BeginTransaction(deferred: true);
 
         var tagPaths = await TagPathsAsync(connection, ct);
+        var githubUrls = (await ListAsync(connection,
+            "SELECT TaskId, HtmlUrl FROM GitHubIssueLinks WHERE TaskId IS NOT NULL;",
+            r => (TaskId: r.GetString(0), Url: r.GetString(1)), ct))
+            .ToDictionary(row => row.TaskId, row => row.Url, StringComparer.Ordinal);
         var containers = await ListAsync(connection, """
             SELECT Id, Name, Kind, ArchivedAtUtc, DeadlineDate FROM Containers
             WHERE DeletedAtUtc IS NULL ORDER BY IsInbox DESC, Position, Id;
@@ -117,6 +122,7 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
                     CreatedAtUtc = r.GetString(17),
                     UpdatedAtUtc = r.GetString(18),
                     RecurrenceRuleJson = rules.GetValueOrDefault(id),
+                    GitHubUrl = githubUrls.GetValueOrDefault(id),
                     Tags = taskTags.GetValueOrDefault(id) ?? [],
                     Subtasks = [.. subtasks[id]],
                     Diary = [.. diary[id]],

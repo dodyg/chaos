@@ -57,10 +57,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(version).IsEqualTo(13L);
+        await Assert.That(version).IsEqualTo(14L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(13L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(14L);
         using var checksum = connection.CreateCommand();
         checksum.CommandText = "SELECT Checksum FROM SchemaMigrations WHERE Version = 1;";
         var storedChecksum = await checksum.ExecuteScalarAsync() as string;
@@ -83,10 +83,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var second = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(second).IsEqualTo(13L);
+        await Assert.That(second).IsEqualTo(14L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(13L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(14L);
     }
 
     [Test]
@@ -214,7 +214,7 @@ public sealed class SqliteMigrationRunnerTests
                 await set.ExecuteNonQueryAsync();
             }
 
-            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(13L);
+            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(14L);
         }
 
         // A real content change is still refused.

@@ -376,3 +376,17 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   closed on mismatches and credential errors; an active-account switch cannot affect the
   snapshot. The two-account live race, stale credentials, network boundary, and installed-MSIX
   tests are still required in G0. See `GITHUB.md` for the revised transport and gate.
+
+## 2026-11-11 (GitHub G2 schema stage)
+
+- **Live prerequisites are release gates.** The user authorized offline-tested storage, API
+  and UI implementation while the G0 live credential and installed-MSIX checks remain open.
+- **Migration 014 stores connection metadata and sync bookkeeping only.** The database never
+  stores credentials. A composite foreign key binds each issue link to its subscription's
+  connection, preventing inconsistent denormalized connection IDs. Partial indexes enforce
+  active connection/repository uniqueness; purged issues retain their stable identity.
+- **Archives reset GitHub machine state; purge retains an ignored issue tombstone.** Sync-run
+  diagnostics are excluded from JSON archives. Task purge removes dependent mappings before
+  deleting subtasks/diary and clears the task reference without losing the issue identity.
+  Container/section rows still referenced by subscriptions or milestone mappings are retained.
+  The typed store and merge-import handling remain outstanding G2 work.
