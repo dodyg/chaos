@@ -24,7 +24,8 @@
 > The G3 adapter uses `HttpClient` with redirect handling disabled and destination validation;
 > `gh` is used for credential retrieval only. G4 detects the CLI and helps users sign in outside
 > Chaos. GitHub App installation and registration are not required. G1 remains independently
-> implementable but G0 must close before G2 or later packages.
+> implementable. Per user approval, outstanding live G0 checks are release gates; offline-tested
+> G2 and later work may proceed. Keep live evidence incomplete until actually verified.
 
 Prepared 11 November 2026 from `SPEC.md` (Connecting to other systems → GitHub Issues), `PLAN.md`
 and the Phase 1 code as it stands at commit `2ddc3fe`. This is a handoff for implementing agents,
@@ -895,6 +896,8 @@ conflict history. Added independent-edit, concurrent-set, empty-body and state-c
 passed all 79 tests. Domain suite now has 189 tests. G1 remains open for G0 limit verification;
 G2 has not started. Moving the outstanding live G0 checks to release gates is awaiting the
 user's decision; no gate has been waived.
+**Gate decision (2026-11-11):** User approved moving outstanding live G0 checks to release gates. Offline-tested implementation may proceed through G2 and later packages. No live check is marked passed by this decision.
+
 ### [ ] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
