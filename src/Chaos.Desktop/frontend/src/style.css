@@ -114,6 +114,7 @@
 }
 
 @layer base {
+  .window-titlebar { app-region: drag; -webkit-app-region: drag; }
   * { @apply border-border outline-ring/50; }
   body { @apply min-w-80 bg-background font-sans text-sm text-foreground antialiased; }
   #app { @apply min-h-screen outline-none; }

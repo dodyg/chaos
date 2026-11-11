@@ -641,9 +641,10 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}</>
       : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
-  return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+  return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+    <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
-    <aside className="sticky top-0 flex h-screen flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
+    <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
       <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><span className="text-xl leading-none text-primary" aria-hidden="true">✷</span>Chaos</h1>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
@@ -710,7 +711,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-screen bg-background/90")}>
+    <div id="main-content" tabIndex={-1} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -754,7 +755,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     </div>
     </div>
 
-    {editing && view !== "templates" && <aside className="sticky top-0 flex h-screen min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
+    {editing && view !== "templates" && <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
       <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
         <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
         <div className="flex items-center gap-1">

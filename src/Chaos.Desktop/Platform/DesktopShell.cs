@@ -85,6 +85,12 @@ public sealed class DesktopShell(ShellActivations activations, string applicatio
 
     public void ConfigureMainWindow(NeoApplication application, NeoWindow window, ProfileSettings settings)
     {
+        window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay)
+        {
+            Height = 40,
+            SymbolColor = new NeoColor(255, 255, 255, 255),
+            BackgroundColor = NeoColor.Transparent,
+        };
         lock (_gate)
         {
             _application = application;
