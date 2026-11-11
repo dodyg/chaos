@@ -351,3 +351,15 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   [gh api](https://cli.github.com/manual/gh_api),
   [account switching](https://cli.github.com/manual/gh_auth_switch), and
   [keyring fallback analysis](https://github.com/cli/cli/issues/14370).
+
+## 2026-11-11 (GitHub App user authorization)
+
+- **Use a GitHub App acting for the user, with credentials in Windows Credential Manager.**
+  The user explicitly authorized Chaos to handle these credentials, superseding the earlier
+  no-token-in-Chaos and GitHub CLI decisions. Credentials remain outside SQLite, backups,
+  exports, RPC, renderer, logs, exception text, command lines and URLs. Per-request immutable
+  credential snapshots are tied to a verified numeric user ID; serialized refresh and failure
+  recovery must be proven. App installation and user authorization are separate. No app private
+  key or client secret ships in the desktop client. G0 remains open for live auth, permissions,
+  API and installed-MSIX evidence; credential-independent G1 work may proceed alongside it.
+  See [the evaluation](github-auth-evaluation.md).
