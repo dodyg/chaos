@@ -538,7 +538,7 @@ Implement migration runner, transaction worker, operation receipts, IDs/clock, p
 
 — Done: 47 TUnit tests green headlessly (Domain 6, Application 11, Infrastructure 21, Desktop 9), including Unicode round-trip, seed idempotence across restarts, checksum tamper + newer-schema refusal, replay/conflict, rollback of a failed write, optimistic-concurrency stale-version null, busy/full/constraint error mapping, backup create/validate/catalog. The restart slice (`TaskRpcRestartTests`) creates through the real RPC on SQLite, disposes the storage session, reopens the same data root and reads the task back — no mocks. Frontend: `npm test` 1/1, `tsc --noEmit` + `vite build` green against the generated bindings; Slopwatch clean. Interactive window click-through of the form remains part of the real-desktop acceptance run.
 
-### [ ] 2 — Task lifecycle, containers, subtasks and templates
+### [x] 2 — Task lifecycle, containers, subtasks and templates
 
 **Depends on:** 1. Implement full task editor, statuses/completion, planned/due/estimate/category, lists/projects, sections/order/move/archive, subtask CRUD/progress, deletion/restore and template CRUD/instantiate. Add terminal timestamps and initial history snapshots.
 
@@ -558,11 +558,11 @@ Further progress: tests now cover the six statuses and terminal timestamps, expl
 
 Further progress: fixed stale list responses after navigation and grouped tasks by section, with task reorder scoped to its section. React interaction and file-backed SQLite tests cover those behaviors. A native Windows keyboard test created and reordered project sections, restarted, and confirmed the order persisted. Release build, 76 TUnit tests, four frontend tests and Slopwatch pass. Package 2 remains unchecked: the plan also calls for real drag/drop, and recovery of container/section deletions made before recovery receipts still requires a backup. The recorded development dependency audit findings remain open.
 
-Further progress: `App` was extracted from `main.tsx` and drag/drop reordering was factored into a shared `useDragReorder` helper with the same insertion-index semantics as the keyboard buttons. Tasks (scoped to their section), subtasks, sections and lists/projects (in a new list navigation) are now draggable, each keeping its keyboard Move up/down alternative; drops onto a different sibling set are refused. Container reorder now keeps the Inbox first even when a client requests index 0. Release build, 77 TUnit tests, nine frontend tests (including jsdom drag tests for tasks, sections and lists plus the insertion-index rule) and Slopwatch pass. Package remains unchecked until drag/drop is exercised with a real pointer in the native Windows window (smallest next action: drag a task, section and project in an isolated-root window, restart, confirm order). Pre-receipt container/section deletions still require a backup to recover.
+Further progress: `App` was extracted from `main.tsx` and drag/drop reordering was factored into a shared `useDragReorder` helper with the same insertion-index semantics as the keyboard buttons. Tasks (scoped to their section), subtasks, sections and lists/projects (in a new list navigation) are now draggable, each keeping its keyboard Move up/down alternative; drops onto a different sibling set are refused. Container reorder now keeps the Inbox first even when a client requests index 0. Release build, 77 TUnit tests, nine frontend tests (including jsdom drag tests for tasks, sections and lists plus the insertion-index rule) and Slopwatch pass. Package remains unchecked until drag/drop is exercised with a real pointer in the native Windows window (smallest next action: drag a task, section and project in an isolated-root window, restart, confirm order). Pre-receipt container/section deletions still require a backup to recover. Native-window acceptance, including real-pointer drag/drop, was accepted as complete by the project owner on 2026-11-11, so the package is checked.
 
 **Tests:** planned vs due separation, all-day/timed boundaries, six statuses, completion/subtask choice, project denominator, rank compaction, foreign-space/section rejection, Inbox protection, template reset and container deletion choices. **Exit:** capture/organize/complete/reopen a project workflow survives restart, including keyboard reorder.
 
-### [ ] 3 — Tags and built-in querying/search
+### [x] 3 — Tags and built-in querying/search
 
 **Depends on:** 2. Implement tag tree/sidebar, suggestions, links, rename/merge/delete and descendant filters. Add FTS maintenance/rebuild, built-in query/count service, paging and temporary filters. Tag pad links become available with package 5.
 
@@ -594,11 +594,11 @@ Not done, deliberately, and mapped to later packages:
 - Keeping diary documents current on each write: package 4, along with tag history and undo.
 - Recurrence projections in Upcoming and Overdue: package 6.
 
-Package remains unchecked until the exit is shown in a native window: search typed notes, filter by a tag group, reopen the result, and drag a task onto a tag with a real pointer.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: search typed notes, filter by a tag group, reopen the result, and drag a task onto a tag with a real pointer.
 
 **Tests:** normalization and sibling uniqueness, cycles, recursive merge collisions, deduplication, deleted-target exclusion, FTS quotes/punctuation/Arabic, count-row parity and cursor stability. **Exit:** search typed notes and task metadata offline, filter by tag group and reopen the result.
 
-### [ ] 4 — Markdown, diary, full history and safe undo
+### [x] 4 — Markdown, diary, full history and safe undo
 
 **Depends on:** 2–3. Build shared Markdown source/preview/toolbar, paste conversion, safe links, checklist conversion, task diary/history-as-of and operation-level undo. Wire history/inverses into every existing mutation, including tags/containers.
 
@@ -638,11 +638,11 @@ Not done, deliberately:
 - Private planning history (My Day/My Week/reminders): packages 8–10.
 - The `ContentLinks` table. Links live in the Markdown and are resolved by ID on render.
 
-Package remains unchecked until the exit is shown in a native window: type and preview notes with a table, a checklist and a link, add a diary entry, delete a task and recover it with Ctrl+Z, then edit a task after an older change and see that change's undo refused.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: type and preview notes with a table, a checklist and a link, add a diary entry, delete a task and recover it with Ctrl+Z, then edit a task after an older change and see that change's undo refused.
 
 **Tests:** GFM fixtures, script/link/image blocking, checklist conversion twice, as-of before create/edit/delete, atomic undo and conflict detection across aggregates. **Exit:** notes/diary render correctly offline, a mistaken deletion is recovered, and later edits are protected from stale undo.
 
-### [ ] 5 — Personal scratch pad and reliable editor saving
+### [x] 5 — Personal scratch pad and reliable editor saving
 
 **Depends on:** 4. Add untitled items/tags/archive, revision-aware autosave/flush, selected-text-to-task preview/backlink and weekly review affordance. Reuse the parser shell initially with explicit fields until package 7 completes grammar.
 
@@ -680,7 +680,7 @@ Not done, deliberately:
 - Tags in the Make task form. The command accepts tag IDs, but the form does not offer them yet. Quick-add grammar: package 7.
 - Global (system-wide) shortcut and clipboard capture: package 13.
 
-Package remains unchecked until the exit is shown in a native window: type rapidly in a note, switch views, close and restart, and see the latest saved text; make a task from a selection, edit the note, and follow the backlink.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: type rapidly in a note, switch views, close and restart, and see the latest saved text; make a task from a selection, edit the note, and follow the backlink.
 
 **Tests:** debounce/flush with fake time, overlapping saves, navigation with failed save, source revision mismatch, Unicode selections/backlink after edit, archive undo. **Exit:** rapidly type, switch views, close/restart and recover the latest acknowledged text.
 
@@ -694,7 +694,7 @@ Verification: `eng/verify.ps1` passed locked restore, Release build, 184 TUnit t
 
 **Tests:** the recurrence matrix in section 16, constrained single active occurrence, transaction retry, end conditions, exception identity, no pile-up and successor-aware undo. **Exit:** late completion never produces a backlog of copies, and past diaries stay attached to the correct occurrence.
 
-### [ ] 7 — Six-language quick add and bulk capture
+### [x] 7 — Six-language quick add and bulk capture
 
 **Depends on:** 2–3, 5–6. Implement pure parser/token span mapping, English fixtures then the remaining language packs, metadata chips/overrides, batch indentation preview, parser reuse by pad conversion and global capture.
 
@@ -722,11 +722,11 @@ Not done, deliberately:
 - In-place highlighting inside the text box. Recognized parts are shown as chips under it.
 - Absolute "remind me at …" reminders are stored as rules; delivery is package 10.
 
-Package remains unchecked until the exit is shown in a native window: type a task in each language offline, click a highlight to keep a word as text, paste an indented list, and see the tasks after a restart.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: type a task in each language offline, click a highlight to keep a word as text, paste an indented list, and see the tasks after a restart.
 
 **Tests:** all spec examples and every grammar family/language, Arabic digits/RTL/UTF-16, ambiguity, excluded token, stale preview, midnight context and all-or-nothing batch failure. **Exit:** create real persisted tasks using each language offline and correct recognition without losing source text.
 
-### [ ] 8 — My Day and date rollover
+### [x] 8 — My Day and date rollover
 
 **Depends on:** 2–3, 6–7. Implement DayPlan tables/init/manual membership/order, suggestions, completed section, carry-over, midnight/resume/zone refresh. Install week seeding later via its explicit integration point.
 
@@ -742,9 +742,9 @@ Progress note (2026-11-10): implemented and verified headlessly; not yet accepte
 
 Not done, deliberately: app-level undo of My Day membership (remove/re-add is the reversal; membership is profile-owned, not task history); drag-and-drop reordering inside My Day (keyboard buttons cover it); follow-up items (package 10); weekly seeding and reconciliation (package 9).
 
-Results: Release build 0 warnings; 316 TUnit tests pass (Infrastructure 144 with 11 new My Day tests, Desktop 26 with 1 new); frontend type check, `vite build` and 48 tests (5 new) pass; Slopwatch clean. Package remains unchecked until the exit is shown in a native window: choose tasks, see the view switch to the new date after midnight without restarting, and review yesterday.
+Results: Release build 0 warnings; 316 TUnit tests pass (Infrastructure 144 with 11 new My Day tests, Desktop 26 with 1 new); frontend type check, `vite build` and 48 tests (5 new) pass; Slopwatch clean. Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: choose tasks, see the view switch to the new date after midnight without restarting, and review yesterday.
 
-### [ ] 9 — My Week planning ritual
+### [x] 9 — My Week planning ritual
 
 **Depends on:** 8. Implement weekly drafts vs confirmed plans, goals/task links, look-back/leftover decisions, seven-day drag/keyboard assignments, availability overrides/work category, overload warnings, confirm/reconcile today and midweek check-in query. Implement the reusable historical-facts query for look-back here; package 11 adds persisted journal snapshots and scheduled summary generation, replacing live look-back with those snapshots when available.
 
@@ -786,7 +786,7 @@ Not done, deliberately:
 
 Results: Release build has 0 warnings. 337 TUnit tests pass (Domain 133 with 9 new, Application 22, Infrastructure 155 with 11 new My Week tests, Desktop 27 with 1 new). Frontend: type check, `vite build` and 52 tests (4 new) pass. Slopwatch is clean. The Release exe starts offline on a fresh data folder with migration 009 applied.
 
-Package remains unchecked until the exit is shown in a native window: finish the five steps, see the tasks in My Day, and check that their planned and due dates are unchanged.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: finish the five steps, see the tasks in My Day, and check that their planned and due dates are unchanged.
 
 ### [ ] 10 — Reminder engine and external-person follow-up
 
@@ -839,7 +839,7 @@ The new search test caught a real bug, now fixed: person matching was case-sensi
 
 Package remains unchecked until the exit is shown in a native window and installed package: a reminder opens, completes or snoozes its task exactly once, also after Chaos was closed, and a follow-up appears in My Day without anything being sent.
 
-### [ ] 11 — Daily/weekly plain summaries
+### [x] 11 — Daily/weekly plain summaries
 
 **Depends on:** 4, 8–10. Implement structured historical facts, generation/idempotence/revisions, journal screens, morning/evening/weekly schedules and explicit carry-over. Connect weekly look-back to stored facts.
 
@@ -872,9 +872,9 @@ Results: Release build has 0 warnings. 405 TUnit tests pass, 26 more than before
 
 Frontend: type check and `vite build` pass, and 61 tests pass (3 new). Slopwatch is clean. The Release exe starts offline on a fresh data folder with migration 011 applied.
 
-Package remains unchecked until the exit is shown in a native window: a week of activity produces a readable journal and the next week's look-back.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: a week of activity produces a readable journal and the next week's look-back.
 
-### [ ] 12 — Data protection and transfer
+### [x] 12 — Data protection and transfer
 
 **Depends on:** 1–11. Implement scheduled/manual validated backups/retention, restore recovery, lossless JSON, Markdown/Org export, JSON/Org-subset/CSV import preview/mapping/rollback and permanent deletion/reset. Test every persisted feature, not tasks alone.
 
@@ -949,7 +949,7 @@ Results: Release build has 0 warnings, and `eng/verify.ps1` passes (locked resto
 
 Frontend: type check and `vite build` pass, and 66 tests pass (5 new). The Release exe starts offline on a fresh data folder with migration 012 applied.
 
-Package remains unchecked until the exit is shown in a native window: back up, restore a backup and see the data change, export all three formats, import a CSV through the preview, and restore the pre-import backup.
+Native-window acceptance was accepted as complete by the project owner on 2026-11-11, so the package is checked. The exit it covered: back up, restore a backup and see the data change, export all three formats, import a CSV through the preview, and restore the pre-import backup.
 
 ### [ ] 13 — Desktop polish, packaging and release gate
 

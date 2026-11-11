@@ -37,13 +37,13 @@ Everything in the app is organised as spaces, which hold projects and lists, whi
 | Space | A separate area of your life with its own members and rules. Every user has a private Personal space. | Personal; Book Club; Acme Corp |
 | Project | A goal with a start and an end, grouping related tasks. | Renovate kitchen; Q1 release |
 | List | An ongoing collection with no end date. | Groceries; Reading list |
-| Task | One thing to do, with an optional planned date, due date, status, priority, tags, notes and assignee. | Book the plumber |
+| Task | One thing to do, with an optional planned date, due date, estimate, status, priority, tags, notes and assignee. | Book the plumber |
 | Subtask | A smaller step inside a task. A task can show progress such as 2 of 5 done. | Get three quotes |
 | Update (diary) | A dated note on a task recording what happened, kept as a running log. | Called plumber, visit on Thursday |
 | My Day | Your personal plan for today, picked from any space. Only you see it. | 5 tasks from three spaces |
 | Connection | A link to an outside system whose items appear as tasks. | GitHub repository acme/web |
 
-Two rules keep this clear. A task always belongs to exactly one space. Personal choices, such as adding a task to My Day, snoozing it or setting your own reminder, belong to you and never change the task for anyone else.
+Two rules keep this clear. A task always belongs to exactly one space, and inside it to one list or one project, never both. Personal choices, such as adding a task to My Day, snoozing it or setting your own reminder, belong to you and never change the task for anyone else.
 
 ## Features
 
@@ -52,7 +52,7 @@ The first release covers capturing, organising and completing tasks well; sharin
 ### Tasks and subtasks
 
 - Add a task in one step from anywhere in the app, or with a keyboard shortcut on desktop.
-- Give tasks a planned date (when you intend to work on it) and a due date (when it must be done), plus a reminder, priority, tags, notes and attachments.
+- Give tasks a planned date (when you intend to work on it) and a due date (when it must be done), plus an estimate of how long it will take, a reminder, priority, tags, notes and, from phase 2, attachments. My Week and the calendar use estimates to show how full each day is.
 - Move tasks through states: Not started, In progress, Waiting on someone, Needs review, Done or Cancelled. A space can add its own states, such as In review.
 - Break tasks into subtasks, and see progress on the parent task.
 - Repeat tasks on a schedule, such as every Monday or the first of each month (see Repeating tasks).
@@ -134,6 +134,8 @@ Type a task the way you would say it, and the app fills in the dates, times and 
 
 **Languages.** Quick add understands English, French, Italian, Arabic, Indonesian and Spanish, including each language's date and time words, such as demain, domani, غدًا, besok and mañana. Users can type in any of these languages whatever language the app is set to. Arabic input works right to left and accepts both Arabic-Indic and Western digits.
 
+Quick add, in all six languages, is part of phase 1. On the desktop it works in the app, from a global keyboard shortcut and from the clipboard; the system share menu arrives with the phone apps. Choosing a space with @ and assigning people with +name arrive with sharing in phase 3.
+
 ### Scratch pad
 
 The scratch pad is a free space to drop thoughts, sketches and bits of information without turning them into tasks first.
@@ -169,8 +171,8 @@ Projects and lists are part of phase 1.
 
 ### My Day
 
-- Each morning, start with an empty My Day and pick what to work on.
-- Get suggestions: tasks planned for today, tasks due soon or overdue, and tasks you planned but did not finish yesterday.
+- Each morning, My Day starts with only the tasks your week plan put on today, or empty if you didn't plan the week. You pick what else to work on.
+- Get suggestions: tasks planned for today, tasks due soon or overdue, and tasks you planned but did not finish yesterday. Suggestions are shown beside your plan and are never added without you choosing them.
 - Add tasks from any space, including work and connected systems, into one plan.
 - My Day is private. Adding a shared task to it does not notify or affect anyone else.
 
@@ -198,7 +200,7 @@ My Week is part of phase 1. Meetings from connected calendars and AI-drafted pla
 
 ### Daily summary
 
-At the end of each day, the app writes a short summary of how your day went, both for you and for the spaces and projects you belong to, using an AI service you connect with your own key.
+At the end of each day, the app writes a short summary of how your day went, both for you and for the spaces and projects you belong to. The summary is built from your tasks on the device; if you connect an AI service with your own key, it can also be written as a short narrative.
 
 **Your day**
 
@@ -216,6 +218,7 @@ At the end of each day, the app writes a short summary of how your day went, bot
 **How you get it**
 
 - A notification at a time you choose, opening a summary page. Past summaries are kept as a journal you can scroll back through.
+- A morning summary of what is planned and due today, at a time you choose.
 - A weekly summary on a day you choose.
 - In a work or social space, you can post your summary as a standup update. You review and edit it first; nothing is posted automatically.
 - Summaries are written in your language.
@@ -233,7 +236,7 @@ At the end of each day, the app writes a short summary of how your day went, bot
 - In work spaces, the organisation decides which AI services are allowed, and can supply its own key. If it blocks personal keys, work tasks are left out of AI summaries written with them.
 - With a model on your own device, nothing leaves the device.
 
-The plain summary is part of phase 1. AI-written summaries with your own key arrive with phase 2, space and project summaries with phase 3, and organisation-managed keys with phase 4.
+The plain morning, evening and weekly summaries are part of phase 1. AI-written summaries with your own key arrive with phase 2, space and project summaries with phase 3, and organisation-managed keys with phase 4.
 
 ### Calendar
 
@@ -283,7 +286,7 @@ The timeline, with dependencies, arrives in phase 4.
 ### Finding things
 
 - Search across all spaces by words, tags, people and dates.
-- Built-in views: Today, Upcoming, Overdue, Assigned to me and Recently completed.
+- Built-in views: Today, Upcoming, Overdue, Assigned to me and Recently completed. Until sharing arrives, every open task in your Personal space counts as assigned to you.
 - Save any search or filter as a custom view, such as all high-priority work tasks due this week.
 
 Search and the built-in views are part of phase 1. Saving a search as a custom view arrives in phase 2 (see Custom views).
@@ -319,7 +322,7 @@ Phase 1 has the built-in views, such as Today, Upcoming and Overdue. Custom view
 - Undo recent changes, including accidental deletion.
 - See how a task looked at an earlier date.
 
-Undo is part of phase 1. Seeing a task at an earlier date arrives in phase 2, together with sync, which keeps the history of merged changes.
+Undo and seeing how a task looked at an earlier date are part of phase 1. From phase 2, the history also keeps the values replaced when sync merges changes.
 
 ### Reminders and notifications
 
@@ -373,7 +376,7 @@ The app keeps all your data on your own device first, and only uses the online s
 - Export everything at any time to standard formats, including Org and Markdown plain text, and import from common to-do apps.
 - Deleting your account deletes your data from the online service.
 
-Using the app without an account, local backups and export are part of phase 1. Accounts and syncing devices arrive in phase 2, and importing from other to-do apps arrives with their connections.
+Using the app without an account, local backups and restore, export, and importing from CSV, Org files and the app's own archives are part of phase 1. Accounts and syncing devices arrive in phase 2, and importing directly from other to-do apps arrives with their connections.
 
 ## Sharing and collaboration
 
@@ -600,6 +603,8 @@ Your personal data is yours, your employer's data is your employer's, and the ap
 - Every shared space checks permissions on the server, not only in the app.
 - Sign-ins to outside systems such as GitHub are stored securely and can be revoked by the user at any time.
 
+In phase 1, data stays on the device under the device's own security. The optional app lock arrives in phase 2, when accounts and sync make the app reachable from more than one device.
+
 ### For organisations
 
 - Sign in with the company's existing identity system, such as Microsoft Entra ID or Google Workspace.
@@ -621,26 +626,24 @@ The app ships in four phases, each usable on its own, so real use shapes the nex
 
 | Phase | Focus | What it includes |
 | --- | --- | --- |
-| 1 | One person's day and week, on one device | Tasks, subtasks, templates and repeating tasks; Markdown notes; tags; quick add; typed notes on the personal scratch pad; projects and lists; My Day and My Week; the plain daily summary; search and built-in views; reminders on the device; waiting on outside people with follow-ups; undo; local backups and export; no account needed |
-| 2 | Sync, richer views and AI help | Accounts and sync; attachments; drawing, photos and voice notes on the pad; the calendar, subscription link and Google Calendar meetings; the Kanban board; custom views and alerts; AI summaries and drafted week plans with your own key; place reminders; a task's earlier versions |
+| 1 | One person's day and week, on the Windows desktop | Tasks, subtasks, estimates, templates and repeating tasks; Markdown notes; tags; quick add in six languages; typed notes on the personal scratch pad; projects and lists; My Day and My Week; plain morning, evening and weekly summaries; search and built-in views; reminders on the device; waiting on outside people with follow-ups; undo and task history; local backups, export and import from CSV and Org files; no account needed |
+| 2 | Sync, richer views and AI help | Accounts and sync; attachments; drawing, photos and voice notes on the pad; the calendar, subscription link and Google Calendar meetings; the Kanban board; custom views and alerts; AI summaries and drafted week plans with your own key; place reminders; app lock |
 | 3 | Other people and other systems | Sharing, roles and comments; shared tags, pads and boards; rotating repeating tasks; delegating to members; space and project summaries; GitHub Issues, including GitHub fields and shared custom views; Org files; Google Calendar time blocking; AI agents |
 | 4 | Organisations and their clients | The timeline with dependencies; time tracking; shared dashboards for outside people; organisation sign-in, admin and activity log; data region; organisation-managed AI keys; organisation controls for agents; handwriting search |
 
 Each phase must prove itself in real use before the next one starts; the exact gate for each move is still to be agreed (see Open questions).
 
-Phase 1 follows the guiding principle: it holds exactly what one person needs to plan and finish their day and week, so it reaches real use quickly. Phase 2 adds sync, richer views, attachments and AI help for when tasks pile up, plus Google Calendar meetings so My Week can plan around them. Phase 3 brings everything else that involves other people or other systems: sharing, delegation, GitHub Issues and AI agents. Phase 4 holds features mainly wanted by organisations and their clients, such as the timeline, time tracking and outside dashboards. Dates will be set once phase 1 scope is confirmed.
+Phase 1 follows the guiding principle: it holds exactly what one person needs to plan and finish their day and week, so it reaches real use quickly. It ships on the Windows desktop first. Capture on the move, which people like Sara rely on, needs a phone app and sync, so it cannot arrive before phase 2. Phase 2 adds sync, richer views, attachments and AI help for when tasks pile up, plus Google Calendar meetings so My Week can plan around them. Phase 3 brings everything else that involves other people or other systems: sharing, delegation, GitHub Issues and AI agents. Phase 4 holds features mainly wanted by organisations and their clients, such as the timeline, time tracking and outside dashboards. Dates will be set once phase 1 scope is confirmed.
 
 ## Open questions
 
 - [ ] Product name and brand.
-- [ ] Which devices come first: Windows, macOS, Linux, iOS, Android, or the web?
+- [ ] Which devices follow the Windows desktop, and in which phase does the first phone app arrive?
 - [ ] Business model: free personal use with paid sync and sharing, a paid work tier, or both?
 - [ ] What must each phase show in real use before the next one starts?
 - [ ] Should shared social spaces support end-to-end encryption, given that it limits search and smart notifications?
 - [ ] Which work tracker comes after GitHub Issues?
-- [ ] Does My Day suggest tasks automatically, or only on request?
 - [ ] Which Org features must survive a round trip without loss: properties, drawers, links, tables?
-- [ ] In what order should the quick add languages ship after English?
 - [ ] Can agents hand tasks to other agents, and how long can such a chain run before a person must review it?
 - [ ] Which AI assistants should be tested first with the agent features?
 - [ ] What size limits apply to attachments, and how much storage does each plan include?
@@ -652,3 +655,6 @@ Phase 1 follows the guiding principle: it holds exactly what one person needs to
 
 - [x] GitHub connects per space (see Connecting to other systems).
 - [x] Google Calendar connects per person, not per space (see Google Calendar).
+- [x] Phase 1 ships on the Windows desktop (see Release plan).
+- [x] All six quick add languages ship together in phase 1 (see Quick add in plain language).
+- [x] My Day starts from the week plan and always shows suggestions beside it, but never adds them on its own (see My Day).
