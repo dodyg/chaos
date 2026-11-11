@@ -17,7 +17,7 @@ public static class IssueBody
     public static IReadOnlyList<ChecklistItem> ScanChecklist(string body)
     {
         var items = new List<ChecklistItem>();
-        var listIndents = new Stack<int>();
+        var listContentColumns = new Stack<int>();
         char fence = '\0';
         var fenceLength = 0;
         for (var start = 0; start < body.Length;)
@@ -37,6 +37,14 @@ public static class IssueBody
             }
             if (fenceMatch.Success)
             {
+                // A backtick fence's info string cannot contain backticks.
+                if (fenceMatch.Groups[1].Value[0] == '`' && fenceMatch.Groups[2].Value.Contains('`'))
+                {
+                    listContentColumns.Clear();
+                    start = end;
+                    continue;
+                }
+                listContentColumns.Clear();
                 fence = fenceMatch.Groups[1].Value[0];
                 fenceLength = fenceMatch.Groups[1].Length;
                 start = end;
@@ -46,9 +54,9 @@ public static class IssueBody
             if (listMatch.Success)
             {
                 var indent = listMatch.Groups[1].Length;
-                while (listIndents.Count > 0 && listIndents.Peek() >= indent) listIndents.Pop();
-                var nested = listIndents.Count > 0;
-                listIndents.Push(indent);
+                while (listContentColumns.Count > 0 && listContentColumns.Peek() > indent) listContentColumns.Pop();
+                var nested = listContentColumns.Count > 0;
+                listContentColumns.Push(listMatch.Length);
                 var task = Task.Match(line);
                 if (!nested && task.Success)
                 {
@@ -57,7 +65,7 @@ public static class IssueBody
                     items.Add(new(items.Count, text.Value, check.Value != " ", start, end, start + check.Index, start + text.Index));
                 }
             }
-            else if (line.Length > 0 && !char.IsWhiteSpace(line[0])) listIndents.Clear();
+            else if (line.Length > 0 && !char.IsWhiteSpace(line[0])) listContentColumns.Clear();
             start = end;
         }
         return items;

@@ -7,6 +7,28 @@ namespace Chaos.Domain.Tests.GitHub;
 public sealed class IssueBodyTests
 {
     [Test]
+    public async Task ScanChecklist_IndentedSiblingAndActualChild_UsesContentIndentation()
+    {
+        var items = IssueBody.ScanChecklist("- parent\n - [ ] sibling\n   - [ ] child\n");
+        await Assert.That(items.Count).IsEqualTo(1);
+        await Assert.That(items[0].Text).IsEqualTo("sibling");
+    }
+
+    [Test]
+    public async Task ScanChecklist_BacktickInInfoString_DoesNotOpenFence()
+    {
+        var items = IssueBody.ScanChecklist("```invalid`info\n- [ ] visible\n");
+        await Assert.That(items.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ScanChecklist_FenceSeparatesLists_ResetsListIndentation()
+    {
+        var items = IssueBody.ScanChecklist("- parent\n```\ncode\n```\n  - [ ] independent\n");
+        await Assert.That(items.Count).IsEqualTo(1);
+        await Assert.That(items[0].Text).IsEqualTo("independent");
+    }
+    [Test]
     public async Task ScanChecklist_NestedAndFencedItems_AreIgnored()
     {
         const string body = "- [ ] parent\r\n  - [x] child\r\n\r\n~~~csharp\r\n- [x] code\r\n~~~\r\n1. [X] آخِر 😀";

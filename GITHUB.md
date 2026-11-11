@@ -2,8 +2,7 @@
 
 > **Authentication decision — latest, 2026-11-11.** The user does not want a GitHub App
 > registration and explicitly authorized Chaos to obtain an account-specific token from the
-> existing GitHub CLI login and use it in memory. This paragraph supersedes the GitHub App
-> revision immediately below and the earlier ban on `gh auth token` and tokens in Chaos.
+> existing GitHub CLI login and use it in memory. This decision supersedes the GitHub App proposal and the earlier ban on `gh auth token` and tokens in Chaos.
 > GitHub CLI owns persistent credentials; Chaos must never store tokens in Credential Manager,
 > SQLite, backups, exports, logs, exceptions, RPC, renderer, command lines, URLs or environment.
 > Invoke trusted `gh auth token --hostname github.com --user <login>` directly without a shell,
@@ -26,38 +25,6 @@
 > `gh` is used for credential retrieval only. G4 detects the CLI and helps users sign in outside
 > Chaos. GitHub App installation and registration are not required. G1 remains independently
 > implementable but G0 must close before G2 or later packages.
-
-> **Authentication revision — 2026-11-11.** The user chose a GitHub App acting on the
-> user's behalf and authorized Chaos to manage its user credentials through Windows Credential
-> Manager. This revision supersedes every GitHub CLI, no-token-in-Chaos, and CLI-disconnect
-> instruction below, including the guarded CLI candidate. Credentials must never enter SQLite,
-> backups, exports, RPC, the renderer, logs, exceptions, command lines, or URLs. See
-> `docs/github-auth-evaluation.md` for the binding, storage and outstanding proof requirements.
-> G0 remains open. G1's pure, credential-independent work may proceed alongside G0; G1's exit
-> still requires its complete tests and verified limits. G2 and later remain gated by G0 and G1.
->
-> **Revised G0:** register/configure a GitHub App (user authorization; minimum required
-> permissions; selected repositories; no embedded private key or client secret), verify the
-> chosen public-client authorization flow and refresh requirements against GitHub, test user
-> identity, account changes, token rotation/revocation, installation access, REST/GraphQL,
-> headers, pagination, limits, redirects, proxy and installed MSIX access. Prove Credential
-> Manager read/write/delete under package identity, concurrent refresh serialization and recovery
-> from interrupted rotation. Confirm app registration ownership, publishing and permissions.
-> G0 closes only when the evidence is recorded. Restore on a different device must enter
-> needs-authorization without network until the user authorizes; disconnect/reset remove this
-> app's local credentials and leave GitHub authorization revocation to the user.
->
-> **Revised adapter and UI:** G3 uses `HttpClient` and an account-bound credential provider,
-> not `gh` or a shell. Capture an immutable user-token snapshot per request, associate it with
-> the verified numeric user ID, serialize refresh, verify the identity of newly authorized or
-> refreshed credentials before use, and never silently fall back to another account. Disable
-> automatic redirects and validate destinations before forwarding credentials or issue content.
-> Permit documented GitHub authorization endpoints only during explicit setup or refresh for an
-> existing connection. G4 setup uses the browser authorization flow; show app installation and
-> user authorization as separate steps. Discover repositories from accessible app installations,
-> not `/user/repos` alone. Replace all CLI-specific diagnostics and acceptance steps accordingly.
-> App credentials are nonportable device state and never get exported. No GitHub App private key
-> or client secret may be shipped with the desktop application.
 
 Prepared 11 November 2026 from `SPEC.md` (Connecting to other systems → GitHub Issues), `PLAN.md`
 and the Phase 1 code as it stands at commit `2ddc3fe`. This is a handoff for implementing agents,
@@ -913,6 +880,14 @@ rewrites, reconciliation, label paths and an issue projection. Domain suite: 182
 pending the remaining edge-case review and G0 verification of limits. A live account-specific
 credential lookup was rejected by automatic approval review (reason: blocked by policy); it was
 not executed. Two-account race and installed-MSIX checks are still outstanding.
+**Progress (2026-11-11, G1 review):** Fixed checklist sibling indentation and fence boundaries,
+rejected backticks in backtick-fence info strings, and implemented projection equality/hash codes
+using set contents. Added four regression tests; all 186 domain tests pass. Slopwatch: 0 findings.
+A clean domain-test Release rebuild passed with 0 warnings/errors. The full `eng/verify.ps1`
+gate failed because running Chaos.Desktop PID 3388 locked output DLLs. Full frontend runs in
+parallel and sequential modes stalled in Reminders.test.tsx and were stopped; the isolated file
+passed 6 tests. G0/G1 remain open; no later package has been marked complete. Removed the
+superseded GitHub App revision from the plan header; the current CLI/direct-API decision stands.
 ### [ ] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
