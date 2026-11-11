@@ -875,6 +875,11 @@ Implement `IssueBody` (scan, rewrite from subtask deltas, re-derive), `IssueStat
 domain list in section 11. **Exit:** all domain tests pass; a fuzz-style test over generated
 bodies proves "no subtask change → identical bytes".
 
+**Progress (2026-11-11):** Began the credential-independent domain work with status mapping and
+scalar/set three-way merge. `dotnet test --project tests/Chaos.Domain.Tests/Chaos.Domain.Tests.csproj
+-c Release --output Minimal` passed 171 tests; Slopwatch reported 0 issues. This is a partial
+stage: checklist scanning/rewrite, label rules, projection, required fuzz coverage and the full
+package gate remain outstanding. G0 limits remain unverified.
 ### [ ] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
