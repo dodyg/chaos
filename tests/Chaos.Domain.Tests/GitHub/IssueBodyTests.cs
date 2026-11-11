@@ -7,6 +7,14 @@ namespace Chaos.Domain.Tests.GitHub;
 public sealed class IssueBodyTests
 {
     [Test]
+    public async Task ScanChecklist_FenceInsideParentList_KeepsFollowingChildNested()
+    {
+        var items = IssueBody.ScanChecklist("- parent\n  ```\n  code\n  ```\n  - [ ] child\n- [ ] sibling\n");
+        await Assert.That(items.Count).IsEqualTo(1);
+        await Assert.That(items[0].Text).IsEqualTo("sibling");
+    }
+
+    [Test]
     public async Task ScanChecklist_IndentedSiblingAndActualChild_UsesContentIndentation()
     {
         var items = IssueBody.ScanChecklist("- parent\n - [ ] sibling\n   - [ ] child\n");

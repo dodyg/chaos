@@ -40,11 +40,12 @@ public static class IssueBody
                 // A backtick fence's info string cannot contain backticks.
                 if (fenceMatch.Groups[1].Value[0] == '`' && fenceMatch.Groups[2].Value.Contains('`'))
                 {
-                    listContentColumns.Clear();
+                    if (!char.IsWhiteSpace(line[0])) listContentColumns.Clear();
                     start = end;
                     continue;
                 }
-                listContentColumns.Clear();
+                var fenceIndent = fenceMatch.Groups[1].Index;
+                while (listContentColumns.Count > 0 && listContentColumns.Peek() > fenceIndent) listContentColumns.Pop();
                 fence = fenceMatch.Groups[1].Value[0];
                 fenceLength = fenceMatch.Groups[1].Length;
                 start = end;

@@ -898,6 +898,9 @@ G2 has not started. Moving the outstanding live G0 checks to release gates is aw
 user's decision; no gate has been waived.
 **Gate decision (2026-11-11):** User approved moving outstanding live G0 checks to release gates. Offline-tested implementation may proceed through G2 and later packages. No live check is marked passed by this decision.
 
+**Progress (2026-11-11, nested-fence regression):** Preserved list context across fenced code
+nested under a parent list, so subsequent nested checkboxes remain notes rather than becoming
+top-level subtasks. All 190 domain tests pass; Slopwatch reports 0 issues.
 ### [x] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
