@@ -11,6 +11,8 @@ Object.defineProperties(globalThis, {
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
+  requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
+  cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
 });
 const { render, screen, waitFor, cleanup, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
@@ -145,6 +147,7 @@ test("a confirmed week shows capacity warnings and lets the person choose a day 
   assert.ok(within(tuesday).getByText("Due report"));
   assert.ok(screen.getByText("More than this day holds"));
 
+  await user.click(screen.getByRole("tab", { name: /Updates/ }));
   const comparison = screen.getByRole("region", { name: "Update Tue 10" });
   await user.click(within(comparison).getByRole("checkbox", { name: "Remove Left over" }));
   await user.click(within(comparison).getByRole("button", { name: "Update Tue 10" }));
@@ -152,4 +155,18 @@ test("a confirmed week shows capacity warnings and lets the person choose a day 
   assert.deepEqual(calls.at(-1)!.request.addTaskIds, ["due"]);
   assert.deepEqual(calls.at(-1)!.request.removeTaskIds, ["left"]);
   cleanup();
+});
+
+test("week tabs separate the plan, updates and availability", async () => {
+  const { api } = fakes(overview({ availabilityConfigured: false }));
+  const user = userEvent.setup({ document: dom.window.document });
+  show(api);
+  await screen.findByRole("button", { name: "Plan this week" });
+  assert.equal(screen.queryByRole("heading", { name: "How much time do you usually have?" }), null);
+  await user.click(screen.getByRole("button", { name: "Set availability" }));
+  assert.ok(screen.getByRole("heading", { name: "How much time do you usually have?" }));
+  await user.click(screen.getByRole("tab", { name: /Updates/ }));
+  assert.ok(screen.getByText("No updates for this week."));
+  await user.click(screen.getByRole("tab", { name: "Plan" }));
+  assert.ok(screen.getByRole("button", { name: "Plan this week" }));
 });

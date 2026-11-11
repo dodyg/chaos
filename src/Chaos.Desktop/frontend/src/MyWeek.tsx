@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Count, EmptyState, Field, InlineError, PageHeader, PriorityBadge, StatusBadge, isFinished, label } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
 import { addDays } from "./MyDay";
@@ -72,6 +73,7 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
   const [draft, setDraft] = React.useState<WeekDraftDto | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [working, setWorking] = React.useState(false);
+  const [tab, setTab] = React.useState("plan");
   const [local, setLocal] = React.useState(0);
   const requests = React.useRef(createLatestRequest());
   const today = clock?.today ?? null;
@@ -130,11 +132,10 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
   return <>
     {header}
     {error && <InlineError>{error}</InlineError>}
-    {!week.availabilityConfigured && week.editable && <AvailabilityEditor disabled={disabled}
-      onSave={days => void run(() => api.setAvailability({ operationId: operationId(), days }), "Could not save your availability.")}/>}
-    {week.pendingReconciliation.map(item => <Reconciliation key={item.date} item={item} tasks={tasks} disabled={disabled}
-      onApply={(add, remove) => void run(() => api.reconcile({ operationId: operationId(), date: item.date, weekPlanId: item.weekPlanId, revision: item.revision, addTaskIds: add, removeTaskIds: remove }), "Could not update the day.", true)}/>)}
-    {week.checkIn?.midweek && <CheckIn week={week} tasks={tasks} onOpen={onOpen}/>}
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
+    <TabsList className="w-fit max-w-full"><TabsTrigger value="plan">Plan</TabsTrigger><TabsTrigger value="updates">Updates{week.pendingReconciliation.length > 0 && <span className="text-xs tabular-nums">{week.pendingReconciliation.length}</span>}</TabsTrigger><TabsTrigger value="settings">Settings{!week.availabilityConfigured && week.editable && <span className="text-xs">•</span>}</TabsTrigger></TabsList>
+    <TabsContent value="plan" className="grid gap-5">
+    {!week.availabilityConfigured && week.editable && <p className="text-sm text-muted-foreground">Set your available hours to see capacity warnings. <button type="button" className="text-primary underline" onClick={() => setTab("settings")}>Set availability</button></p>}
     {week.editable && <div className="flex flex-wrap gap-2">
       <Button type="button" disabled={disabled} onClick={() => void run(() => api.startDraft({ operationId: operationId(), weekStart: week.weekStart }), "Could not start planning.")}>
         <CalendarDays/>{week.state === "Confirmed" ? "Review this week's plan" : "Plan this week"}</Button>
@@ -148,7 +149,18 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
       : <EmptyState title={week.editable ? "No plan for this week yet." : "No plan was made for this week."}>
           {week.editable ? "Plan the week to choose goals and spread tasks across the days." : "Earlier weeks are kept for review."}
         </EmptyState>}
-    <WeekSettings week={week} api={api} disabled={disabled} onChanged={() => { setLocal(value => value + 1); onChanged(); }}/>
+    </TabsContent>
+    <TabsContent value="updates" className="grid gap-5">
+      {week.pendingReconciliation.map(item => <Reconciliation key={item.date} item={item} tasks={tasks} disabled={disabled}
+        onApply={(add, remove) => void run(() => api.reconcile({ operationId: operationId(), date: item.date, weekPlanId: item.weekPlanId, revision: item.revision, addTaskIds: add, removeTaskIds: remove }), "Could not update the day.", true)}/>)}
+      {week.checkIn?.midweek && <CheckIn week={week} tasks={tasks} onOpen={onOpen}/>}
+      {week.pendingReconciliation.length === 0 && !week.checkIn?.midweek && <EmptyState title="No updates for this week.">Changes to your daily plans and your midweek check-in will appear here.</EmptyState>}
+    </TabsContent>
+    <TabsContent value="settings" className="grid gap-5">
+      {!week.availabilityConfigured && week.editable && <AvailabilityEditor disabled={disabled} onSave={days => void run(() => api.setAvailability({ operationId: operationId(), days }), "Could not save your availability.")}/>}
+      <WeekSettings week={week} api={api} disabled={disabled} onChanged={() => { setLocal(value => value + 1); onChanged(); }}/>
+    </TabsContent>
+    </Tabs>
   </>;
 }
 
