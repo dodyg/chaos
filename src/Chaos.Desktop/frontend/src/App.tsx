@@ -1,4 +1,5 @@
 import React from "react";
+import { ContextMenu } from "radix-ui";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
@@ -554,16 +555,24 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   function taskList(rows: TaskResponse[], name: string) {
     const order = rows.map(row => row.id);
     const byId = (id: string) => rows.find(row => row.id === id)!;
-    return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id} className={rowClass(editing?.id === task.id, task.status)}
+    return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div className={rowClass(editing?.id === task.id, task.status)}
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => reorderTask(byId(id), insertionIndex))}>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
+      <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => { const status = e.target.checked ? "Done" : "NotStarted"; void run(async () => {
+        const open = status === "Done" && (await refreshSubtasks(task.id)).some(subtask => !isFinished(subtask.status));
+        const choice = open ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null;
+        return taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: choice });
+      }, saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); if (editing?.id === saved.id) void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
       {rowActions(task.title, index, rows.length, to => reorderTask(task, to), () => void requestTaskDeletion(task))}
-    </li>)}</ol>;
+    </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
+      <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
+      {(isFinished(task.status) ? ["NotStarted"] : statuses.filter(status => status !== "Done")).map(status => <ContextMenu.Item key={status} disabled={busy || status === task.status} className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50" onSelect={() => void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: null }), saved => setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current))}>{isFinished(task.status) ? "Reopen (previous status)" : label(status)}</ContextMenu.Item>)}
+    </ContextMenu.Content></ContextMenu.Portal></ContextMenu.Root></li>)}</ol>;
   }
   function groupHeading(text: string, count?: number) {
     return <h3 className="flex items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{text}{count !== undefined && <Count>{count}</Count>}</h3>;
@@ -712,7 +721,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </div>
       <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
-          <Field label="Title"><Input required form="task-editor-form" className="h-10 text-base font-semibold md:text-base" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
+          <Field label="Title"><Input required form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
           <TabsList className="w-full">
             <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>
             <TabsTrigger value="details"><SlidersHorizontal/>Details</TabsTrigger>

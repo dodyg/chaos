@@ -10,6 +10,11 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  Element: { value: dom.window.Element, configurable: true },
+  Node: { value: dom.window.Node, configurable: true },
+  DOMRect: { value: dom.window.DOMRect, configurable: true },
+  CustomEvent: { value: dom.window.CustomEvent, configurable: true },
+  MutationObserver: { value: dom.window.MutationObserver, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
   requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
   cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
@@ -30,6 +35,26 @@ function resultRow(item: TaskResponse, tagIds: string[] = [], matches: string[] 
 }
 
 const tags = [tag("home", "home"), tag("garden", "home/garden", "home"), tag("work", "work")];
+
+test("a task context menu changes its status without offering Done", async () => {
+  const item = task("t1", "Plan the meeting");
+  const requests: Parameters<typeof taskRpc.setStatus>[0][] = [];
+  const base = api({ inbox: [item] });
+  const appApi = { ...base, taskRpc: { ...base.taskRpc, setStatus: async (request: Parameters<typeof taskRpc.setStatus>[0]) => {
+    requests.push(request);
+    return { ok: true, task: { ...item, status: request.status, version: "2" }, operationId: request.operationId, warning: null, error: null, replayed: false };
+  } } };
+  render(<App initialView="tasks" templates={<></>} api={appApi}/>, { container: dom.window.document.body });
+  fireEvent.contextMenu(await screen.findByRole("button", { name: item.title }));
+  const menu = await screen.findByRole("menu", { name: `Status for ${item.title}` });
+  assert.equal(within(menu).queryByRole("menuitem", { name: "Done" }), null);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "In Progress" }));
+  await waitFor(() => assert.equal(requests.length, 1));
+  assert.equal(requests[0].taskId, item.id);
+  assert.equal(requests[0].expectedVersion, item.version);
+  assert.equal(requests[0].status, "InProgress");
+  cleanup();
+});
 
 /** A quiet API: empty inbox, known tags and counts; individual tests override what they observe. */
 function api(overrides: { tagRpc?: Partial<typeof tagRpc>; queryRpc?: Partial<typeof queryRpc>; inbox?: TaskResponse[] } = {}) {
