@@ -645,7 +645,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
-      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><span className="text-xl leading-none text-primary" aria-hidden="true">✷</span>Chaos</h1>
+      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt="" className="size-5"/>Chaos</h1>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
