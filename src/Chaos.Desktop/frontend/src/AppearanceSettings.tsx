@@ -1,9 +1,21 @@
 import React from "react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Field } from "@/components/common";
 import { applyTheme, defaultTheme, loadActiveTheme, loadThemes, parseTheme, saveActiveTheme, saveThemes, type Theme } from "./appearance";
+
+const accentColors = [
+  { name: "Orange", value: "#c45a20" }, { name: "Coral", value: "#d04a4a" },
+  { name: "Rose", value: "#be3567" }, { name: "Berry", value: "#a33b80" },
+  { name: "Purple", value: "#8052b5" }, { name: "Violet", value: "#6657c7" },
+  { name: "Indigo", value: "#495bc1" }, { name: "Blue", value: "#2674c7" },
+  { name: "Sky", value: "#0086b5" }, { name: "Teal", value: "#00877f" },
+  { name: "Emerald", value: "#16865b" }, { name: "Green", value: "#50852d" },
+  { name: "Olive", value: "#78821f" }, { name: "Gold", value: "#a97708" },
+  { name: "Copper", value: "#a75d30" }, { name: "Slate", value: "#607487" },
+];
 
 export function AppearanceSettings() {
   const [theme, setTheme] = React.useState(loadActiveTheme);
@@ -47,7 +59,21 @@ export function AppearanceSettings() {
         <NativeSelectOption value="system">System</NativeSelectOption><NativeSelectOption value="sans">Arial</NativeSelectOption><NativeSelectOption value="serif">Georgia</NativeSelectOption><NativeSelectOption value="mono">Consolas</NativeSelectOption>
       </NativeSelect></Field>
       <Field label="Font size"><NativeSelect value={String(theme.size)} onChange={e => update({ ...theme, size: Number(e.target.value) })}>{Array.from({ length: 11 }, (_, i) => i + 12).map(size => <NativeSelectOption key={size} value={String(size)}>{size} px</NativeSelectOption>)}</NativeSelect></Field>
-      <Field label="Accent color"><Input type="color" className="h-10 w-20 p-1" value={theme.accent} onChange={e => update({ ...theme, accent: e.target.value })}/></Field>
+      <fieldset className="grid content-start gap-2">
+        <legend className="text-sm font-medium">Accent color</legend>
+        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Accent color">
+          {accentColors.map(color => {
+            const checked = theme.accent.toLowerCase() === color.value;
+            return <label key={color.value} className="relative cursor-pointer" title={color.name}>
+              <input type="radio" name="accent-color" value={color.value} checked={checked} onChange={() => update({ ...theme, accent: color.value })} className="peer sr-only" aria-label={color.name}/>
+              <span className="flex size-9 items-center justify-center rounded-full border border-foreground/30 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring" style={{ backgroundColor: color.value }}>
+                {checked && <Check aria-hidden="true" className="size-5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"/>}
+              </span>
+            </label>;
+          })}
+        </div>
+        {!accentColors.some(color => color.value === theme.accent.toLowerCase()) && <p className="text-xs text-muted-foreground">Current theme uses a custom accent. Choose a swatch to change it.</p>}
+      </fieldset>
       <Field label="Theme name"><Input value={theme.name} maxLength={80} onChange={e => update({ ...theme, name: e.target.value })}/></Field>
     </div>
     <div className="flex flex-wrap gap-2"><Button type="button" onClick={saveNamed}>Save named theme</Button><Button type="button" variant="outline" onClick={exportTheme}>Export theme</Button><Button type="button" variant="outline" onClick={() => update(defaultTheme)}>Reset appearance</Button></div>
