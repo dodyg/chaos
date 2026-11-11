@@ -47,6 +47,7 @@ test("settings show a shortcut conflict and save the changed shortcut with the l
   const user = userEvent.setup({ document: dom.window.document });
   render(<Settings api={api} onSaved={changed => { savedZoneChange = changed; }} onNavigate={() => {}}/>, { container: dom.window.document.body });
 
+  await user.click(await screen.findByRole("tab", { name: "Shortcuts" }));
   assert.match((await screen.findByRole("alert")).textContent ?? "", /already used by another app/);
   const save = screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
   assert.equal(save.disabled, true);
@@ -54,8 +55,9 @@ test("settings show a shortcut conflict and save the changed shortcut with the l
   const capture = screen.getByLabelText("Quick add");
   await user.clear(capture);
   await user.type(capture, "Ctrl+Alt+K");
+  await user.click(screen.getByRole("tab", { name: "General" }));
   await user.selectOptions(screen.getByLabelText("Time zone"), "Asia/Jakarta");
-  await user.click(save);
+  await user.click(screen.getByRole("button", { name: "Save settings" }));
 
   await waitFor(() => assert.equal(updates.length, 1));
   assert.equal(updates[0].expectedVersion, "3");
@@ -78,6 +80,7 @@ test("a refused shortcut shows its message next to the field and an empty shortc
   const user = userEvent.setup({ document: dom.window.document });
   render(<Settings api={api} onSaved={() => {}} onNavigate={() => {}}/>, { container: dom.window.document.body });
 
+  await user.click(await screen.findByRole("tab", { name: "Shortcuts" }));
   await screen.findByRole("alert");
   await user.clear(screen.getByLabelText("New pad note"));
   await user.clear(screen.getByLabelText("Quick add"));
@@ -97,6 +100,7 @@ test("quit asks the host to end Chaos", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   render(<Settings api={api} onSaved={() => {}} onNavigate={() => {}}/>, { container: dom.window.document.body });
 
+  await user.click(await screen.findByRole("tab", { name: "This computer" }));
   await user.click(await screen.findByRole("button", { name: /Quit Chaos/ }));
 
   assert.equal(quits, 1);

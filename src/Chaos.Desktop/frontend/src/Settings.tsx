@@ -4,6 +4,7 @@ import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type 
 import { Keyboard, LogOut, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Banner, Field, PageHeader } from "@/components/common";
 
@@ -50,6 +51,7 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [tab, setTab] = React.useState("general");
 
   async function load() {
     const [settings, zoneList, shell] = await Promise.all([api.settings({}), api.zones({}), api.status({})]);
@@ -70,7 +72,10 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
         keepRunningInTray: draft.keepRunningInTray,
       });
       if (!result.ok) {
-        setFieldErrors(Object.fromEntries((result.error?.fields ?? []).map(field => [field.fieldPath, field.message])));
+        const fields = result.error?.fields ?? [];
+        setFieldErrors(Object.fromEntries(fields.map(field => [field.fieldPath, field.message])));
+        if (fields.some(field => field.fieldPath === "captureShortcut" || field.fieldPath === "padShortcut")) setTab("shortcuts");
+        else if (fields.length) setTab("general");
         throw new Error(result.error?.message ?? "Settings were not saved.");
       }
       setSaved(result); setDraft(result);
@@ -90,8 +95,12 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
     <PageHeader eyebrow="Settings" title="Settings" subtitle="Everything stays on this computer. Reminder times, summaries, the week and backups have their own pages."/>
     {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
     {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
+    <Tabs value={tab} onValueChange={setTab} className="gap-4">
+      <div className="max-w-full overflow-x-auto"><TabsList aria-label="Settings categories" className="justify-start">
+        <TabsTrigger value="general">General</TabsTrigger><TabsTrigger value="appearance">Appearance</TabsTrigger><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="computer">This computer</TabsTrigger><TabsTrigger value="more">More settings</TabsTrigger>
+      </TabsList></div>
     {!draft ? <p className="text-sm text-muted-foreground">Loading settings…</p> : <form className="grid gap-5" onSubmit={save}>
-      <Section title="You and your time" icon={<UserRound/>} description="The time zone decides when your day starts and when reminders arrive. Dates on tasks stay the dates you chose.">
+      <TabsContent value="general"><Section title="You and your time" icon={<UserRound/>} description="The time zone decides when your day starts and when reminders arrive. Dates on tasks stay the dates you chose.">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Name"><Input dir="auto" value={draft.displayName ?? ""} aria-invalid={!!fieldErrors.displayName} onChange={e => change({ displayName: e.target.value })} maxLength={100}/></Field>
           <Field label="Time zone"><NativeSelect value={draft.zoneId ?? ""} aria-invalid={!!fieldErrors.zoneId} onChange={e => change({ zoneId: e.target.value })}>
@@ -101,9 +110,9 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
             {dateFormats.map(format => <NativeSelectOption key={format.value} value={format.value}>{format.text}</NativeSelectOption>)}
           </NativeSelect></Field>
         </div>
-      </Section>
+      </Section></TabsContent>
 
-      <Section title="Shortcuts from any app" icon={<Keyboard/>} description="Write a shortcut such as Ctrl+Alt+N, or leave it empty to turn it off. Inside Chaos, Ctrl+N and Ctrl+Shift+P always work.">
+      <TabsContent value="shortcuts"><Section title="Shortcuts from any app" icon={<Keyboard/>} description="Write a shortcut such as Ctrl+Alt+N, or leave it empty to turn it off. Inside Chaos, Ctrl+N and Ctrl+Shift+P always work.">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="grid gap-1">
             <Field label="Quick add"><Input value={draft.captureShortcut ?? ""} placeholder="Off" aria-invalid={!!fieldErrors.captureShortcut} onChange={e => change({ captureShortcut: e.target.value })} autoComplete="off" spellCheck={false}/></Field>
@@ -114,9 +123,9 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
             {fieldErrors.padShortcut ? <p className="text-xs text-destructive">{fieldErrors.padShortcut}</p> : <ShortcutState status={shortcut("pad")}/>}
           </div>
         </div>
-      </Section>
+      </Section></TabsContent>
 
-      <Section title="This computer" icon={<MonitorCog/>} description={status?.packaged
+      <TabsContent value="computer"><Section title="This computer" icon={<MonitorCog/>} description={status?.packaged
         ? "Installed version: reminders are handed to Windows and arrive even when Chaos is closed."
         : "Development run: reminders appear while Chaos is open. The installed version hands them to Windows."}>
         <label className="flex items-start gap-2 text-sm">
@@ -125,22 +134,23 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
             {status && !status.trayAvailable && <span className="block text-xs text-muted-foreground">No notification-area icon is available right now, so closing the window quits Chaos.</span>}</span>
         </label>
         <p className="text-xs text-muted-foreground">Chaos {status?.appVersion ?? ""}</p>
-      </Section>
+      </Section></TabsContent>
 
-      <div className="flex flex-wrap items-center gap-2">
+      {tab !== "appearance" && tab !== "more" && <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy || !dirty}>Save settings</Button>
         <Button type="button" variant="outline" disabled={busy || !dirty} onClick={() => { setDraft(saved); setFieldErrors({}); }}>Undo changes</Button>
-        <Button type="button" variant="ghost" className="ml-auto" onClick={() => void api.quit({})}><LogOut/>Quit Chaos</Button>
-      </div>
+        {tab === "computer" && <Button type="button" variant="ghost" className="ml-auto" onClick={() => void api.quit({})}><LogOut/>Quit Chaos</Button>}
+      </div>}
     </form>}
 
-    <AppearanceSettings/>
+    <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
 
-    <nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
+    <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("notifications")}>Reminder time and quiet hours</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("journal")}>Summary times</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("myweek")}>Week start and available time</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("data")}>Backups, export and import</Button>
-    </nav>
+    </nav></TabsContent>
+    </Tabs>
   </div>;
 }
