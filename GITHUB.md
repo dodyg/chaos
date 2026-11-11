@@ -888,6 +888,13 @@ gate failed because running Chaos.Desktop PID 3388 locked output DLLs. Full fron
 parallel and sequential modes stalled in Reminders.test.tsx and were stopped; the isolated file
 passed 6 tests. G0/G1 remain open; no later package has been marked complete. Removed the
 superseded GitHub App revision from the plan header; the current CLI/direct-API decision stands.
+**Progress (2026-11-11, projection merge):** Implemented complete issue-projection merging,
+returning scalar pushes, element-wise label/assignee deltas, and exact losing local values for
+conflict history. Added independent-edit, concurrent-set, empty-body and state-conflict tests.
+`eng/verify.ps1` passed: clean Release build, 516 tests passed, Slopwatch 0 issues. `npm test`
+passed all 79 tests. Domain suite now has 189 tests. G1 remains open for G0 limit verification;
+G2 has not started. Moving the outstanding live G0 checks to release gates is awaiting the
+user's decision; no gate has been waived.
 ### [ ] G2 — Storage and data protection
 
 **Depends on:** G1. **Files:** `Migrations/014_github.sql`, `Sqlite/SqliteGitHubStore.cs`,
