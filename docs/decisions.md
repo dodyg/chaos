@@ -323,3 +323,16 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
 - **Text fields default to `dir="auto"`.** The shared `Input` and `Textarea` components set it,
   and task-row titles use `unicode-bidi: plaintext`, so Arabic and Latin titles each take their
   own direction. Animations and transitions are cut to nothing under `prefers-reduced-motion`.
+
+## 2026-11-11 (GitHub G0 account-binding blocker)
+
+- **The proposed CLI adapter cannot yet guarantee the connected account for a write.**
+  `gh api` has no documented per-request account selector; `gh auth switch` changes the active
+  account used by subsequent commands. A separate `/user` check and write therefore have a
+  time-of-check/time-of-use gap if another process switches accounts. The documented
+  `gh auth token --user` workaround would make Chaos handle credentials, contrary to GITHUB.md.
+  Stop G0 and dependent implementation until the account-binding design is resolved. This is
+  an assessment of the documented interface, not a completed live concurrency test. See
+  [gh api](https://cli.github.com/manual/gh_api),
+  [gh auth switch](https://cli.github.com/manual/gh_auth_switch), and
+  [CLI multiple-account design](https://github.com/cli/cli/blob/trunk/docs/multiple-accounts.md).
