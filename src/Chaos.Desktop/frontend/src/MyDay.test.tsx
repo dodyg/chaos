@@ -10,9 +10,14 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  Element: { value: dom.window.Element, configurable: true },
+  Node: { value: dom.window.Node, configurable: true },
+  DOMRect: { value: dom.window.DOMRect, configurable: true },
+  CustomEvent: { value: dom.window.CustomEvent, configurable: true },
+  MutationObserver: { value: dom.window.MutationObserver, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
 });
-const { render, screen, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { MyDay, addDays, nextCheckDelay } = await import("./MyDay");
 
@@ -112,5 +117,25 @@ test("chosen tasks can be reordered with the keyboard buttons and removed from t
   assert.deepEqual({ ...(calls[0].request as object), operationId: "" }, { operationId: "", date: "2026-11-10", taskId: "b", index: 0 });
   await user.click(screen.getByRole("button", { name: "Remove First from this day" }));
   await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["move", "remove"]));
+  cleanup();
+});
+
+test("chosen tasks offer completion and a status menu while earlier days remain read-only", async () => {
+  const item = task("a", "Plan the meeting");
+  const { api, query } = fakes("2026-11-10", { "2026-11-10": [item], "2026-11-09": [item] });
+  const changes: string[] = [];
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} onSetStatus={(_, status) => changes.push(status)}/>, { container: dom.window.document.body });
+  await user.click(await screen.findByRole("checkbox", { name: "Mark Plan the meeting as done" }));
+  assert.deepEqual(changes, ["Done"]);
+  fireEvent.contextMenu(screen.getByRole("button", { name: "Plan the meeting" }));
+  const menu = await screen.findByRole("menu", { name: "Status for Plan the meeting" });
+  assert.equal(within(menu).queryByRole("menuitem", { name: "Done" }), null);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "In Progress" }));
+  assert.deepEqual(changes, ["Done", "InProgress"]);
+  await user.click(screen.getByRole("button", { name: "Previous day" }));
+  await screen.findByRole("heading", { name: "Yesterday" });
+  await screen.findByRole("button", { name: "Plan the meeting" });
+  assert.equal(screen.queryByRole("checkbox", { name: "Mark Plan the meeting as done" }), null);
   cleanup();
 });

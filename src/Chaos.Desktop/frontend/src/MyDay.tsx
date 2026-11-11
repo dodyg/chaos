@@ -1,10 +1,11 @@
 import React from "react";
+import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { ArrowDown, ArrowUp, CalendarArrowUp, ChevronLeft, ChevronRight, Clock, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Count, EmptyState, InlineError, PageHeader, PriorityBadge, StatusBadge } from "@/components/common";
+import { Count, EmptyState, InlineError, PageHeader, PriorityBadge, StatusBadge, isFinished, label, statuses } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
 import { taskDragType } from "./tags";
 import { FollowUps } from "./Reminders";
@@ -85,9 +86,9 @@ function minutes(total: number) {
  * to the next day. Earlier days are read-only and stay reviewable. Choosing a task here never
  * changes its planned or due date.
  */
-export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged }: {
+export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged, onSetStatus }: {
   clock: DayClockResponse | null; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void;
+  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void;
 }) {
   const today = clock?.today ?? null;
   const [day, setDay] = React.useState<string | null>(today);
@@ -172,7 +173,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       ? <EmptyState title={editable ? "Nothing chosen yet." : "Nothing was left open on this day."}>
           {day === today ? "Pick from the suggestions below or add a task from its editor." : editable ? "Carry tasks over or add them from a task's editor." : "Finished tasks are listed below."}
         </EmptyState>
-      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen}>
+      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}>
           {editable && <div className="flex gap-0.5">
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={disabled || index === 0} aria-label={`Move ${row.task.title} up`} title="Move up"
               onClick={() => void change(() => api.move({ operationId: operationId(), date: day, taskId: row.task.id, index: index - 1 }), "Could not reorder My Day.", false)}><ArrowUp/></Button>
@@ -193,7 +194,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       <summary className="flex cursor-pointer list-none items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
         <ChevronRight className="mr-1 size-3.5 transition-transform group-open/done:rotate-90"/>Finished<Count>{finished.length}</Count>
       </summary>
-      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen}/>)}</ol>
+      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}/>)}</ol>
     </details>}
 
     {day === today && <section aria-labelledby="suggestions-heading" className="grid gap-1.5 rounded-xl border bg-muted/40 p-3">
@@ -209,13 +210,14 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   </>;
 }
 
-function DayRow({ row, selected, busy, onOpen, badge, children }: {
-  row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; badge?: React.ReactNode; children?: React.ReactNode;
+function DayRow({ row, selected, busy, onOpen, onSetStatus, badge, children }: {
+  row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; badge?: React.ReactNode; children?: React.ReactNode;
 }) {
   const task = row.task;
   const done = task.status === "Done" || task.status === "Cancelled";
-  return <li draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
+  return <li><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
     className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card px-2 py-1.5 shadow-xs hover:border-input", selected && "border-primary ring-1 ring-primary", done && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
+    {onSetStatus && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}/>}
     <div className="grid min-w-0 flex-1 gap-1">
       <button type="button" data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">
@@ -229,5 +231,8 @@ function DayRow({ row, selected, busy, onOpen, badge, children }: {
       </div>
     </div>
     {children}
-  </li>;
+  </div></ContextMenu.Trigger>{onSetStatus && <ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
+    <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
+    {(isFinished(task.status) ? ["NotStarted"] : statuses.filter(status => status !== "Done")).map(status => <ContextMenu.Item key={status} disabled={busy || status === task.status} className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50" onSelect={() => onSetStatus(task, status)}>{isFinished(task.status) ? "Reopen (previous status)" : label(status)}</ContextMenu.Item>)}
+  </ContextMenu.Content></ContextMenu.Portal>}</ContextMenu.Root></li>;
 }

@@ -552,6 +552,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete ${name}`} title="Delete" onClick={onDelete}><Trash2/></Button>
     </div>;
   }
+  function setTaskStatus(task: TaskResponse, status: string) {
+    void run(async () => {
+      const open = status === "Done" && (await refreshSubtasks(task.id)).some(subtask => !isFinished(subtask.status));
+      const choice = open ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null;
+      return taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: choice });
+    }, saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); if (editing?.id === saved.id) void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); });
+  }
   function taskList(rows: TaskResponse[], name: string) {
     const order = rows.map(row => row.id);
     const byId = (id: string) => rows.find(row => row.id === id)!;
@@ -559,11 +566,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => reorderTask(byId(id), insertionIndex))}>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
-      <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => { const status = e.target.checked ? "Done" : "NotStarted"; void run(async () => {
-        const open = status === "Done" && (await refreshSubtasks(task.id)).some(subtask => !isFinished(subtask.status));
-        const choice = open ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null;
-        return taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: choice });
-      }, saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); if (editing?.id === saved.id) void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}/>
+      <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => setTaskStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
@@ -677,7 +680,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => setEditing(task)} onChanged={changed}/>
-      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed} onSetStatus={setTaskStatus}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onNavigate={next => { setEditing(null); setView(next); }}/>
