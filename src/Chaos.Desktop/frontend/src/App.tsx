@@ -20,7 +20,7 @@ import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
 import { useTimeZones, ZoneSelect } from "./ZoneSelect";
-import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, LogOut, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -655,6 +655,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           className="text-muted-foreground hover:bg-sidebar-accent aria-[current=page]:bg-brand-soft aria-[current=page]:text-primary"
           aria-current={view === target ? "page" : undefined}
           onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); setView(target); }}>{icon}</Button>)}
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="Quit Chaos" title="Quit Chaos" className="text-muted-foreground hover:bg-sidebar-accent" onClick={() => void shellApi.quit({})}><LogOut/></Button>
       </nav>
     </aside>
 

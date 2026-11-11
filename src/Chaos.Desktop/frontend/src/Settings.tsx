@@ -1,7 +1,7 @@
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto } from "#neoastra";
-import { Keyboard, LogOut, MonitorCog, UserRound } from "lucide-react";
+import { Keyboard, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -139,17 +139,14 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
       {tab !== "appearance" && tab !== "more" && <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy || !dirty}>Save settings</Button>
         <Button type="button" variant="outline" disabled={busy || !dirty} onClick={() => { setDraft(saved); setFieldErrors({}); }}>Undo changes</Button>
-        {tab === "computer" && <Button type="button" variant="ghost" className="ml-auto" onClick={() => void api.quit({})}><LogOut/>Quit Chaos</Button>}
       </div>}
     </form>}
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
-      <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("notifications")}>Reminder time and quiet hours</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("journal")}>Summary times</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("myweek")}>Week start and available time</Button>
-      <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("data")}>Backups, export and import</Button>
     </nav></TabsContent>
     </Tabs>
   </div>;

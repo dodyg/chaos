@@ -5,6 +5,10 @@ export const fonts: Record<string, string> = {
   sans: 'Arial, sans-serif',
   serif: 'Georgia, serif',
   mono: 'Consolas, monospace',
+  calibri: 'Calibri, "Segoe UI", sans-serif',
+  tahoma: 'Tahoma, "Segoe UI", sans-serif',
+  trebuchet: '"Trebuchet MS", "Segoe UI", sans-serif',
+  verdana: 'Verdana, "Segoe UI", sans-serif',
 };
 const activeKey = "chaos.appearance.active.v1";
 const themesKey = "chaos.appearance.themes.v1";

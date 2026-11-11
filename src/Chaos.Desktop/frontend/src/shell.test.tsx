@@ -94,13 +94,11 @@ test("a refused shortcut shows its message next to the field and an empty shortc
   cleanup();
 });
 
-test("quit asks the host to end Chaos", async () => {
+test("the sidebar quit button asks the host to end Chaos", async () => {
   let quits = 0;
   const api = shellApi({ quit: async () => { quits++; return { ok: true }; } });
   const user = userEvent.setup({ document: dom.window.document });
-  render(<Settings api={api} onSaved={() => {}} onNavigate={() => {}}/>, { container: dom.window.document.body });
-
-  await user.click(await screen.findByRole("tab", { name: "This computer" }));
+  render(<App initialView="settings" api={{ taskRpc, containerRpc, shellRpc: api }} templates={<></>}/>, { container: dom.window.document.body });
   await user.click(await screen.findByRole("button", { name: /Quit Chaos/ }));
 
   assert.equal(quits, 1);

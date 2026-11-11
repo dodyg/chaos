@@ -57,6 +57,7 @@ export function AppearanceSettings() {
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Font"><NativeSelect value={theme.font} onChange={e => update({ ...theme, font: e.target.value })}>
         <NativeSelectOption value="system">System</NativeSelectOption><NativeSelectOption value="sans">Arial</NativeSelectOption><NativeSelectOption value="serif">Georgia</NativeSelectOption><NativeSelectOption value="mono">Consolas</NativeSelectOption>
+        <NativeSelectOption value="calibri">Calibri</NativeSelectOption><NativeSelectOption value="tahoma">Tahoma</NativeSelectOption><NativeSelectOption value="trebuchet">Trebuchet MS</NativeSelectOption><NativeSelectOption value="verdana">Verdana</NativeSelectOption>
       </NativeSelect></Field>
       <Field label="Font size"><NativeSelect value={String(theme.size)} onChange={e => update({ ...theme, size: Number(e.target.value) })}>{Array.from({ length: 11 }, (_, i) => i + 12).map(size => <NativeSelectOption key={size} value={String(size)}>{size} px</NativeSelectOption>)}</NativeSelect></Field>
       <fieldset className="grid content-start gap-2">
