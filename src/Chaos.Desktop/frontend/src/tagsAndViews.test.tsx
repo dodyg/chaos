@@ -76,7 +76,7 @@ function api(overrides: { tagRpc?: Partial<typeof tagRpc>; queryRpc?: Partial<ty
 
 test("the tag tree nests tags, shows counts and opens a tag view whose result opens the editor", async () => {
   const requests: TaskQueryRequest[] = [];
-  const found = task("t1", "Weed the beds");
+  const found = { ...task("t1", "Weed the beds"), notes: "## Garden details\n\nWater the beds." };
   const user = userEvent.setup({ document: dom.window.document });
   render(<App initialView="tasks" templates={<></>} api={api({
     queryRpc: { run: async (request: TaskQueryRequest) => { requests.push(request); return { ok: true, rows: [resultRow(found, ["garden"])], totalCount: 1, nextCursor: null, error: null }; } },
@@ -94,6 +94,10 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
   await waitFor(() => assert.deepEqual(requests.at(-1) && { view: requests.at(-1)!.view, tagId: requests.at(-1)!.tagId }, { view: "Tag", tagId: "home" }));
   const results = await screen.findByRole("list", { name: "Results" });
   assert.ok(within(results).getByText("home/garden"));
+  await user.click(within(results).getByRole("button", { name: "View Weed the beds" }));
+  const panel = screen.getByRole("complementary", { name: "View task" });
+  assert.ok(within(panel).getByRole("heading", { name: "Garden details" }));
+  assert.equal(within(panel).queryByRole("textbox", { name: "Title" }), null);
   await user.click(within(results).getByRole("button", { name: "Weed the beds" }));
   await user.click(screen.getByRole("tab", { name: "Details" })); // tags live on the editor's Details tab
   const applied = await screen.findByRole("list", { name: "Tags applied" });
@@ -120,7 +124,7 @@ test("search runs the typed words and pages with the server cursor", async () =>
   await user.click(screen.getByRole("button", { name: "Load more (1 more)" }));
   await within(results).findByRole("button", { name: "Landlord deposit" });
   assert.equal(requests.at(-1)!.cursor, "page-2");
-  assert.equal(within(results).getAllByRole("button").length, 2);
+  assert.equal(within(results).getAllByRole("listitem").length, 2);
   assert.equal(screen.queryByRole("button", { name: /Load more/ }), null);
   cleanup();
 });

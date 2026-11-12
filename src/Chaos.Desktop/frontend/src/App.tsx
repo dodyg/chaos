@@ -1,3 +1,4 @@
+import { TaskViewContext } from "./TaskViewAction";
 import { GitHubTaskNotice } from "./GitHubTaskNotice";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import type { GitHubTaskSyncResponse } from "#neoastra";
@@ -304,7 +305,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   async function openTaskById(taskId: string) {
     try {
       const result = await taskRpc.get({ taskId });
-      if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task.");
+      if (result.ok && result.task) { setViewingTask(false); setEditing(result.task); } else setError(result.error?.message ?? "Could not open the task.");
     } catch (e) { setError(String(e)); }
   }
 
@@ -676,7 +677,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}</>
       : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
-  return <div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+  function viewTask(task: TaskResponse | string) {
+    if (typeof task !== "string") { setViewingTask(true); setEditing(task); return; }
+    void taskRpc.get({ taskId: task }).then(result => {
+      if (result.ok && result.task) { setViewingTask(true); setEditing(result.task); }
+      else setError(result.error?.message ?? "Could not open the task.");
+    }).catch((error: unknown) => setError(String(error)));
+  }
+
+  return <TaskViewContext.Provider value={viewTask}><div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
@@ -754,13 +763,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
-      : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => setEditing(task)} onChanged={changed}/>
+      : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed}/>
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
-      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => setEditing(task)} header={queryHeader}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
           subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
@@ -916,7 +925,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <Button type="button" size="sm" variant="outline" disabled={busy} title="Undo (Ctrl+Z outside text fields)" onClick={() => void undoLatest()}><Undo2/>Undo</Button>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss undo" onClick={() => setLastUndo(null)}><X/></Button>
     </div>}
-  </div>;
+  </div></TaskViewContext.Provider>;
 }
 
 /**

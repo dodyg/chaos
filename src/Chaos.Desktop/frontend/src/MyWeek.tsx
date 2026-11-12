@@ -1,3 +1,4 @@
+import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
 import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
@@ -179,6 +180,7 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
         <PriorityBadge priority={task.priority}/>
       </div>
     </div>
+    <TaskViewAction task={task} title={task.title}/>
     {children}
   </li>;
 }
@@ -440,8 +442,8 @@ function GoalStep({ week, draft, tasks, containers, onEdit }: { week: WeekOvervi
         <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove goal ${goal.title}`} onClick={() => onEdit({ ...draft, goals: draft.goals.filter(item => item.id !== goal.id) })}><X/></Button>
       </div>
       {weekTasks.length > 0 && <fieldset className="flex flex-wrap gap-x-3 gap-y-1"><legend className="text-xs text-muted-foreground">Linked tasks</legend>
-        {weekTasks.map(item => <label key={item.task.id} className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={goal.taskIds.includes(item.task.id)}
-          onChange={event => update(goal, { taskIds: event.target.checked ? [...goal.taskIds, item.task.id] : goal.taskIds.filter(id => id !== item.task.id) })}/>{item.task.title}</label>)}
+        {weekTasks.map(item => <div key={item.task.id} className="flex items-center gap-1 text-sm"><label className="flex items-center gap-1.5"><input type="checkbox" checked={goal.taskIds.includes(item.task.id)}
+          onChange={event => update(goal, { taskIds: event.target.checked ? [...goal.taskIds, item.task.id] : goal.taskIds.filter(id => id !== item.task.id) })}/>{item.task.title}</label><TaskViewAction task={item.task} title={item.task.title}/></div>)}
       </fieldset>}
     </li>)}</ul>
     <form className="flex gap-2" onSubmit={event => { event.preventDefault(); if (title.trim()) { add({ title: title.trim(), projectId: null, taskIds: [] }); setTitle(""); } }}>

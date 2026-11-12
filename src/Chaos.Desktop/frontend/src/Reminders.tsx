@@ -1,3 +1,4 @@
+import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { reminderRpc, waitingRpc, type FollowUpDto, type FollowUpItemResponse, type NotificationItemResponse, type ReminderRuleDto, type ReminderRuleResponse, type ReminderSettingsResponse, type TaskResponse, type WaitingResponse } from "#neoastra";
 import { Bell, BellOff, Check, Clock, ExternalLink, MessageSquareText, Plus, Trash2, UserRound, X } from "lucide-react";
@@ -296,6 +297,7 @@ export function FollowUps({ day, revision, busy, api = waitingRpc, onOpen, onCha
         <button type="button" className="rounded-sm px-1 text-left font-medium [overflow-wrap:anywhere] hover:text-primary" disabled={disabled} onClick={() => onOpen(item.task)}>{item.task.title}</button>
         <span className="text-xs text-muted-foreground">Follow up{item.person ? <> with <bdi>{item.person}</bdi></> : ""} · {when(item.dueAtUtc)}</span>
         {item.overdue && <Badge variant="outline">Due</Badge>}
+        <TaskViewAction task={item.task} title={item.task.title} disabled={disabled}/>
       </div>
       <div className="flex flex-wrap gap-1">
         <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={() => onOpen(item.task)}><ExternalLink/>Open</Button>

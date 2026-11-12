@@ -1,3 +1,4 @@
+import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { queryRpc, recurrenceRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
@@ -145,6 +146,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
               {row.tagIds.map(id => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined).map(tag => <TagChip key={tag.id} tag={tag}/>)}
             </div>
           </div>
+          <TaskViewAction task={task} title={task.title} disabled={busy}/>
         </li>
       </React.Fragment>;
     })}</ol>}

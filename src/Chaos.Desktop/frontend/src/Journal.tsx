@@ -1,3 +1,4 @@
+import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { journalRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
 import { BookOpen, CalendarArrowUp, Check, RefreshCw, X } from "lucide-react";
@@ -167,6 +168,7 @@ export function Journal({ api = journalRpc, revision, today, openId, onOpenTask,
 function TaskItem({ task, children, onOpen }: { task: SummaryTaskDto; children?: React.ReactNode; onOpen: (taskId: string) => void }) {
   return <li className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm">
     <button type="button" className="min-w-0 flex-1 text-left [overflow-wrap:anywhere] hover:underline" dir="auto" onClick={() => onOpen(task.taskId)}>{task.title}</button>
+    <TaskViewAction task={task.taskId} title={task.title}/>
     {children}
   </li>;
 }
@@ -251,7 +253,7 @@ function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenT
       </Section>}
       {facts.diaryUpdateCount > 0 && <Section title="Diary updates" count={facts.diaryUpdateCount}>
         <ul className="grid gap-1">{facts.diaryUpdates.map(item => <li key={item.entryId} className="grid gap-0.5 rounded-lg border bg-card px-3 py-1.5 text-sm">
-          <button type="button" className="text-left font-medium hover:underline" dir="auto" onClick={() => onOpenTask(item.taskId)}>{item.taskTitle}</button>
+          <div className="flex items-center"><button type="button" className="flex-1 text-left font-medium hover:underline" dir="auto" onClick={() => onOpenTask(item.taskId)}>{item.taskTitle}</button><TaskViewAction task={item.taskId} title={item.taskTitle}/></div>
           <span className="text-muted-foreground [overflow-wrap:anywhere]" dir="auto">{item.excerpt}</span>
         </li>)}</ul>
       </Section>}
@@ -302,13 +304,13 @@ function CarryOver({ detail, api, next, onOpenTask, onCarried }: { detail: Summa
     {!preview && <ul className="grid gap-1">{unfinished.map(item => <TaskItem key={item.task.taskId} task={item.task} onOpen={onOpenTask}><span className="text-xs text-muted-foreground">{sourceText[item.source]}</span></TaskItem>)}</ul>}
     {preview && <fieldset className="grid gap-1">
       <legend className="pb-1 text-sm">Carry to {preview.target === "Week" ? `the week of ${dayText(preview.targetDate)} (as a draft)` : `My Day on ${dayText(preview.targetDate)}`}:</legend>
-      {preview.candidates.map(item => <label key={item.task.taskId} className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm">
+      {preview.candidates.map(item => <div key={item.task.taskId} className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm"><label className="flex min-w-0 flex-1 items-center gap-2">
         <input type="checkbox" disabled={!item.stillOpen || item.alreadyPlanned} checked={chosen.has(item.task.taskId)}
           onChange={event => setChosen(current => { const copy = new Set(current); if (event.target.checked) copy.add(item.task.taskId); else copy.delete(item.task.taskId); return copy; })}/>
         <span className="min-w-0 flex-1" dir="auto">{item.task.title}</span>
         {!item.stillOpen && <span className="text-xs text-muted-foreground">finished or deleted</span>}
         {item.alreadyPlanned && <span className="text-xs text-muted-foreground">already planned</span>}
-      </label>)}
+      </label><TaskViewAction task={item.task.taskId} title={item.task.title}/></div>)}
     </fieldset>}
     {error && <InlineError>{error}</InlineError>}
     {message && <p role="status" className="text-sm">{message}</p>}
