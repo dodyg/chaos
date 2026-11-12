@@ -1,3 +1,5 @@
+using Chaos.Application.GitHub;
+using Chaos.Infrastructure.GitHub;
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
@@ -86,6 +88,8 @@ internal static class Program
             });
 
         // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
+        using var githubApi = new GitHubCliClient();
+        var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
         var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -138,6 +142,7 @@ internal static class Program
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddJournalRpcService(new JournalRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
+                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store));
             });
         });
     }
@@ -160,6 +165,23 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(GitHubStatusRequest))]
+[JsonSerializable(typeof(GitHubConnectRequest))]
+[JsonSerializable(typeof(GitHubCandidatesRequest))]
+[JsonSerializable(typeof(GitHubLookupRequest))]
+[JsonSerializable(typeof(GitHubChangeRequest))]
+[JsonSerializable(typeof(GitHubSettingsRequest))]
+[JsonSerializable(typeof(GitHubFilterDto))]
+[JsonSerializable(typeof(GitHubAddRequest))]
+[JsonSerializable(typeof(GitHubUpdateRequest))]
+[JsonSerializable(typeof(GitHubConnectionDto))]
+[JsonSerializable(typeof(GitHubRepositoryDto))]
+[JsonSerializable(typeof(GitHubCandidateDto))]
+[JsonSerializable(typeof(GitHubSectionDto))]
+[JsonSerializable(typeof(GitHubTargetDto))]
+[JsonSerializable(typeof(GitHubStatusResponse))]
+[JsonSerializable(typeof(GitHubOperationResponse))]
+[JsonSerializable(typeof(GitHubCandidatesResponse))]
 [JsonSerializable(typeof(ShellActivationDto))]
 [JsonSerializable(typeof(ShellTakeRequest))]
 [JsonSerializable(typeof(ShellTakeResponse))]

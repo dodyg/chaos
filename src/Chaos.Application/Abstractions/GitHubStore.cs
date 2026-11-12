@@ -32,4 +32,6 @@ public interface IGitHubStore
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksDueForRetryAsync(DateTimeOffset now, int limit, CancellationToken ct);
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksForTasksAsync(IReadOnlyList<string> ids, CancellationToken ct);
     Task ReplaceChecklistItemsAsync(string issueLinkId, IReadOnlyList<GitHubChecklistItemRecord> rows, CancellationToken ct);
+    Task<IReadOnlyList<GitHubIssueLinkRecord>> ListRepositoryLinksAsync(string repositoryId, string? afterId, int limit, CancellationToken ct);
+    Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct);
 }

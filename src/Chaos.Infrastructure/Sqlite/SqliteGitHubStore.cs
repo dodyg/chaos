@@ -512,6 +512,18 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         foreach (var row in rows) await UpsertChecklistItemAsync(row, ct);
     }
 
+    public Task<IReadOnlyList<GitHubIssueLinkRecord>> ListRepositoryLinksAsync(string repositoryId, string? afterId, int limit, CancellationToken ct) =>
+        QueryAsync("SELECT * FROM GitHubIssueLinks WHERE RepositorySubscriptionId=$repo AND Id>$after ORDER BY Id LIMIT $limit;", ReadIssueLink, ct,
+            ("$repo", repositoryId), ("$after", afterId ?? ""), ("$limit", Bounded(limit)));
+
+    public async Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM GitHubChecklistItems WHERE IssueLinkId=$id; DELETE FROM GitHubCommentLinks WHERE IssueLinkId=$id;";
+        command.Parameters.AddWithValue("$id", issueLinkId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static int Bounded(int limit) => limit is >= 1 and <= 200 ? limit : throw new ArgumentOutOfRangeException(nameof(limit));
 
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken ct, params (string Name, object Value)[] parameters)

@@ -433,3 +433,24 @@ redirects resolve against their original URI, are validated to the API origin, a
 at most once. Mutations never redirect automatically. Both headers and response-body buffering
 share a 30-second deadline. These details have offline regression tests; live checks remain
 release gates.
+
+## 2026-11-12 (GitHub G4 connection management)
+
+GitHub settings opens from its own Settings tab and reads only local connection metadata until
+an explicit Connect, Browse or Find action. Account verification and repository lookup happen
+outside write transactions. Mutations carry operation receipts and optimistic versions; the UI
+retains an operation ID when a response is lost. Native RPC exposes numeric IDs as strings,
+including filter milestone numbers, and returns fixed actionable transport errors as data.
+
+An active connection reuses its identity only for the same numeric GitHub account. Disconnect
+atomically detaches all subscribed links, clears checklist/comment synchronization mappings,
+retains tasks and diary text, and adds a private origin note. Purged issue tombstones stay ignored.
+Reconnecting after an explicit disconnect creates a new connection ID so historical detached
+issue identities cannot collide with the new subscription. GitHub CLI authentication is untouched.
+Filters reset inbound checkpoints only when their scope changes; destination edits affect new
+tasks. G4 does not run synchronization or report fictitious sync counts.
+
+Offline verification uses real SQLite, fake GitHub and RPC/UI tests. Live Connect in a window and
+installed-MSIX checks remain part of the credential release gate. A running development window
+locked the ordinary Release directory, so verification used bin/GitHubVerification without
+closing the user's app. The same locked restore, full Release solution build and test gates ran.

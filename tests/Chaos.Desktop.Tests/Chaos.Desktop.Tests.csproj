@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" />
+    <Compile Include="..\Chaos.Infrastructure.Tests\Testing\FakeGitHub.cs" Link="Testing\FakeGitHub.cs" />
   </ItemGroup>
 
   <ItemGroup>

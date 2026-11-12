@@ -124,7 +124,8 @@ are also listed in section 13 for the product owner.
    own filter and target container. This matches "approving which repositories the space can
    reach".
 3. **GitHub CLI authentication.** The user installs `gh` and signs in independently. Chaos invokes
-   `gh api` for github.com only; `gh` owns credentials and acts as its active account. GitHub CLI
+   `gh auth token --hostname github.com --user=<login> --no-refresh` privately and uses the
+   captured credential only in memory for direct API calls, bound to the numeric user ID. GitHub CLI
    authorizations can grant broader access than an individual repository, and organization policy
    may restrict them. Chaos subscriptions determine what Chaos syncs, not what `gh` can access.
 4. **Assignees are shown, and only self-assignment is pushed.** Without members there is nobody to
@@ -149,11 +150,11 @@ are also listed in section 13 for the product owner.
    snapshot, talks to GitHub with no transaction open, then commits a short write transaction
    that re-checks entity versions. If the task changed in between, the step is abandoned and the
    link stays dirty for the next pass.
-9. **A process adapter for GitHub CLI.** Implement `IGitHubApi` over `gh api` REST and GraphQL,
-   with source-generated JSON, structured process arguments and a fake process runner for tests.
-   G0 must establish whether required status, headers, pagination and redirect behavior can be
-   observed and controlled; do not assume `gh` exposes the same controls as `HttpClient`.
-10. **Credentials belong to GitHub CLI.** Chaos never reads, writes, exports or revokes them.
+9. **CLI authentication and direct HTTP.** Implement `IGitHubApi` with native-only credential
+   acquisition, a single credential snapshot for identity check and API operation, source-generated
+   JSON, destination validation and no automatic redirects. Test with fake processes and HTTP handlers.
+10. **Stored credentials belong to GitHub CLI.** Chaos reads an account-specific credential into
+    memory only for native API calls; it never persists, exports or revokes it.
     GitHub CLI normally uses the system credential store but can fall back to plaintext storage;
     document this and do not promise otherwise. Disconnect and reset leave `gh` signed in.
 11. **Deleting a connected task never closes or deletes the issue.** The link becomes *Ignored*:
@@ -198,7 +199,7 @@ src/Chaos.Application/Abstractions/
   (DataStores.cs)           IDataSession gains IGitHubStore GitHub { get; }
 src/Chaos.Application/Contracts/GitHubRecords.cs
 src/Chaos.Infrastructure/GitHub/
-  GitHubCliClient.cs        IGitHubApi over gh api; REST + GraphQL
+  GitHubCliClient.cs        IGitHubApi with CLI login and direct REST + GraphQL
   GitHubCliRunner.cs        bounded process execution and executable discovery
   GitHubJsonContext.cs      source-generated JSON for GitHub payloads
   GitHubRateLimiter.cs      rate-limit headers, Retry-After, write spacing
@@ -409,8 +410,8 @@ pass-through: GitHub rows are bookkeeping, not undoable) with narrow typed metho
 ## 5. GitHub API usage
 
 Pin `X-GitHub-Api-Version` to the newest version listed in the GitHub REST docs at G0 time and
-record it in `docs/dependency-versions.md`. Call `gh api` with the API version and Accept headers;
-`gh` supplies authentication. G0 must verify response headers and status, conditional requests,
+record it in `docs/dependency-versions.md`. Use direct HTTP with the API version and Accept headers; CLI-owned credentials are captured
+in memory and bound to the verified numeric user ID. G0 must verify response headers and status, conditional requests,
 pagination, proxy behavior, redirect handling, and REST/GraphQL error classification before the
 adapter is designed. If a required property cannot be enforced, record the limitation and amend
 the affected rules before proceeding; do not silently claim the original HTTP guarantees.
@@ -652,16 +653,17 @@ clock:
 
 1. Explain the external dependency and offer installation and `gh auth login` instructions.
    The user handles sign-in independently; Chaos never starts an interactive login in the
-   background or accesses credentials.
+   background or asks the user to paste credentials.
 2. On explicit Connect, check `gh` availability, version and authentication, then `GET /user`;
    make no claims about repository write access based solely on repository visibility. Surface
    missing permissions when GitHub reports them.
-3. On success create or reactivate the connection (same `AccountId` → reuse; different account → refuse with "This
-   space is connected to @other. Disconnect first."), state Active.
-4. A missing CLI, failed authorization or changed active account pauses sync with a clear fix.
+3. On success create or reactivate the active connection (same `AccountId` → reuse; different account → refuse with "This
+   space is connected to @other. Disconnect first."), state Active. After an explicit disconnect,
+   a new connection ID is created; old detached links remain historical and cannot block new subscriptions.
+4. A missing CLI, failed authorization or credential identity mismatch pauses sync with a clear fix.
    Check the account before each pass and before remote writes. Because external account switches
-   may race with those checks, G0 must prove a reliable account-binding strategy or explicitly
-   resolve that risk before implementation proceeds; a preflight alone is not atomic.
+   may race with those checks, each operation uses the same immutable account-specific credential
+   for its identity check and request. The current CLI active-account selection cannot redirect it.
 5. `ListReachableRepositoriesAsync` lists candidates with "already added" flags and allows an
    explicit owner/repository lookup; candidates are not promised to be writable.
 6. `AddRepositoryAsync(repositoryId, target container/section, filter, milestonesAsProjects)`;
@@ -962,7 +964,7 @@ switching without reading live credentials. Final `eng/verify.ps1`: clean Releas
 585 passed, Slopwatch 0 findings. Frontend remains at 79 passing tests (unchanged in G3).
 Live CLI credentials, permissions and installed-MSIX checks remain release gates.
 
-### [ ] G4 — Connect, repositories and settings UI
+### [x] G4 — Connect, repositories and settings UI
 
 **Depends on:** G2, G3. **Files:** `Application/GitHub/GitHubConnectionCommands.cs`,
 `GitHubQueries.cs`, `Desktop/Services/GitHubRpcService.cs` (status, sign-in, repositories,
@@ -974,6 +976,16 @@ say so in the UI only by not showing sync counts (no fake "synced" state). **Tes
 states with the fake API, account mismatch, receipts, RPC round trips, frontend states.
 **Exit:** in a real window, connect using `gh`, see repositories, add one; restart keeps the
 connection; Disconnect leaves CLI authentication unchanged.
+
+**Progress (2026-11-12, G4):** Implemented local-only status, explicit CLI connection and
+repository discovery/lookup, validated subscription filters and destinations, settings, pause,
+remove and disconnect. Operations use receipts and versions; network reads stay outside write
+transactions. Removing/disconnecting preserves tasks and diary text, clears sync mappings and
+adds origin notes across bounded link pages. RPC uses string numeric IDs; Settings has setup
+instructions, repository options and confirmations. Locked restore and full Release build passed
+using `-p:OutputPath=bin/GitHubVerification/` because the user's running app locks the normal
+output; all 600 .NET tests passed, Slopwatch 0 findings. Frontend production build and all 84 tests passed; a focused reminder rerun passed all 6 tests.
+Live Connect and installed-MSIX acceptance remain release gates; no sync engine exists yet.
 
 ### [ ] G5 — Inbound sync and "Sync now"
 
@@ -1068,7 +1080,11 @@ Projects (v2), sub-issues, reactions, issue templates and attachments upload; Gi
 Server UI; custom views and alerts over GitHub fields (they arrive with custom views); agents
 acting through the connection; other connections (Jira, GitLab, Org folders).
 
-### G0 design candidate: account-bound GitHub CLI
+### Superseded G0 candidate: account-bound GitHub CLI fork
+
+Historical candidate only. The user subsequently authorized existing-CLI credential retrieval
+into memory and direct API calls (see the current decision at the top). No fork is required,
+and the old stop instructions below do not apply; live G0 checks are release gates.
 
 The stock `gh api` command cannot satisfy the account-binding requirement. Evaluate a separately
 installed, version-pinned fork of GitHub CLI with a guarded API command. The fork, not Chaos,

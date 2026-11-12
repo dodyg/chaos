@@ -1,3 +1,4 @@
+import { GitHubSettings } from "./GitHubSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto } from "#neoastra";
@@ -92,12 +93,12 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
   const dirty = !!draft && !!saved && JSON.stringify(draft) !== JSON.stringify(saved);
 
   return <div className="grid gap-5">
-    <PageHeader eyebrow="Settings" title="Settings" subtitle="Everything stays on this computer. Reminder times, summaries, the week and backups have their own pages."/>
+    <PageHeader eyebrow="Settings" title="Settings" subtitle="Personal preferences, GitHub connections and settings for this computer."/>
     {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
     {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
     <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="max-w-full overflow-x-auto"><TabsList aria-label="Settings categories" className="justify-start">
-        <TabsTrigger value="general">General</TabsTrigger><TabsTrigger value="appearance">Appearance</TabsTrigger><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="computer">This computer</TabsTrigger><TabsTrigger value="more">More settings</TabsTrigger>
+        <TabsTrigger value="general">General</TabsTrigger><TabsTrigger value="appearance">Appearance</TabsTrigger><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="computer">This computer</TabsTrigger><TabsTrigger value="github">GitHub</TabsTrigger><TabsTrigger value="more">More settings</TabsTrigger>
       </TabsList></div>
     {!draft ? <p className="text-sm text-muted-foreground">Loading settings…</p> : <form className="grid gap-5" onSubmit={save}>
       <TabsContent value="general"><Section title="You and your time" icon={<UserRound/>} description="The time zone decides when your day starts and when reminders arrive. Dates on tasks stay the dates you chose.">
@@ -136,13 +137,14 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
         <p className="text-xs text-muted-foreground">Chaos {status?.appVersion ?? ""}</p>
       </Section></TabsContent>
 
-      {tab !== "appearance" && tab !== "more" && <div className="flex flex-wrap items-center gap-2">
+      {tab !== "appearance" && tab !== "more" && tab !== "github" && <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy || !dirty}>Save settings</Button>
         <Button type="button" variant="outline" disabled={busy || !dirty} onClick={() => { setDraft(saved); setFieldErrors({}); }}>Undo changes</Button>
       </div>}
     </form>}
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
+    <TabsContent value="github"><GitHubSettings/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("journal")}>Summary times</Button>
