@@ -999,6 +999,18 @@ but not sent yet; the task detail must not claim they were sent (show "Not sent 
 **Tests:** Import and Inbound rows of section 11. **Exit:** importing a real test repository via
 Sync now creates the expected tasks, subtasks, tags and diary; an unchanged sync makes no writes and repeating the same conditional list request uses 304 responses; account-verification reads may return 200.
 
+**Progress (2026-11-12, G5 inbound stage):** Added bounded issue-application transactions,
+versioned remote baselines, filter matching, import/history without undo, field merges and
+conflict snapshots, checklist/subtask reconciliation, label tags, milestone projects and due
+dates, scope exit/return and deleted-task restoration. Personal task fields survive inbound
+changes. Comment ingestion keeps the newest 100 new comments, revisions on remote edits,
+hidden/deleted state and diary text after remote deletion. Blank/overlong checklist titles and
+labels that cannot form a valid local tag path remain in notes/baselines; they never become
+accidental remote removals. Aggregate versions advance for tag-only inbound changes.
+This is a local application component, not a completed G5: durable pagination checkpoints,
+fetch orchestration, pre-import backups and manual Sync now remain to be wired and tested.
+Final separate-output Release build passed with no warnings/errors; all 613 .NET tests passed,
+Slopwatch 0 findings. Frontend remains at 84 passing tests, unchanged by this stage.
 ### [ ] G6 — Outbound sync, merge and conflicts
 
 **Depends on:** G5. **Files:** `GitHubSyncCommands.cs` (push half), `GitHubTaskCommands.cs`,
