@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { EmptyState, Field, InlineError, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
+import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagChip, taskDragType } from "./tags";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
@@ -127,7 +128,10 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
         <li draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
           className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card px-2 py-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
           <div className="grid min-w-0 flex-1 gap-1">
-            <button type="button" data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
+            <div className="flex items-center gap-1">
+              <button type="button" data-slot="row-title" className="w-fit min-w-0 rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
+              <GitHubTaskMark taskId={task.id} version={task.version} revision={revision}/>
+            </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1"><FolderKanban className="size-3.5"/>{row.containerName}{row.containerArchived && " · archived"}</span>
               {task.dueDate && <span>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime.slice(0, 5)}` : ""}</span>}

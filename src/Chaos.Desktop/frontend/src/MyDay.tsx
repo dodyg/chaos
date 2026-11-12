@@ -1,12 +1,13 @@
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { ArrowDown, ArrowUp, CalendarArrowUp, ChevronLeft, ChevronRight, Clock, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
+import { CalendarArrowUp, ChevronLeft, ChevronRight, Clock, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Count, EmptyState, InlineError, PageHeader, PriorityBadge, StatusBadge, isFinished, label, statuses } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
+import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { FollowUps } from "./Reminders";
 import { DayBackgroundSettings, type DayBackground } from "./MyDayBackground";
@@ -102,6 +103,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const [local, setLocal] = React.useState(0);
   const requests = React.useRef(createLatestRequest());
   const shownToday = React.useRef(today);
+  const drag = useDragReorder();
 
   // When the local date rolls over, a person looking at "today" moves to the new today;
   // someone reviewing another date stays there. Yesterday's plan is never deleted.
@@ -153,6 +155,11 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const disabled = busy || working;
   const title = day === today ? "My Day" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : day;
   const add = (taskId: string) => change(() => api.add({ operationId: operationId(), date: day, taskId }), "Could not add the task to My Day.");
+  const order = open.map(row => row.task.id);
+  const move = (taskId: string, index: number) => {
+    if (!editable || disabled || index < 0 || index >= order.length || order[index] === taskId) return;
+    void change(() => api.move({ operationId: operationId(), date: day, taskId, index }), "Could not reorder My Day.", false);
+  };
 
   return <>
     <PageHeader eyebrow={day === today ? "Today" : "My Day"} title={title}
@@ -176,12 +183,10 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       ? <EmptyState title={editable ? "Nothing chosen yet." : "Nothing was left open on this day."}>
           {day === today ? "Pick from the suggestions below or add a task from its editor." : editable ? "Carry tasks over or add them from a task's editor." : "Finished tasks are listed below."}
         </EmptyState>
-      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}>
+      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}
+          reorderTarget={drag.target(order, index, day, disabled || !editable, move)}
+          dragHandle={editable && drag.handle(row.task.id, day, disabled, undefined, { label: `Reorder ${row.task.title}`, onMove: offset => move(row.task.id, index + offset) })}>
           {editable && <div className="flex gap-0.5">
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={disabled || index === 0} aria-label={`Move ${row.task.title} up`} title="Move up"
-              onClick={() => void change(() => api.move({ operationId: operationId(), date: day, taskId: row.task.id, index: index - 1 }), "Could not reorder My Day.", false)}><ArrowUp/></Button>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={disabled || index === open.length - 1} aria-label={`Move ${row.task.title} down`} title="Move down"
-              onClick={() => void change(() => api.move({ operationId: operationId(), date: day, taskId: row.task.id, index: index + 1 }), "Could not reorder My Day.", false)}><ArrowDown/></Button>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={disabled} aria-label={`Remove ${row.task.title} from this day`} title="Remove from this day"
               onClick={() => void change(() => api.remove({ operationId: operationId(), date: day, taskId: row.task.id }), "Could not remove the task.")}><X/></Button>
           </div>}
@@ -213,14 +218,16 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   </>;
 }
 
-function DayRow({ row, selected, busy, onOpen, onSetStatus, badge, children }: {
+function DayRow({ row, selected, busy, onOpen, onSetStatus, badge, children, dragHandle, reorderTarget }: {
   row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; badge?: React.ReactNode; children?: React.ReactNode;
+  dragHandle?: React.ReactNode; reorderTarget?: ReturnType<ReturnType<typeof useDragReorder>["target"]>;
 }) {
   const task = row.task;
   const done = task.status === "Done" || task.status === "Cancelled";
-  return <li><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
+  return <li><ContextMenu.Root><ContextMenu.Trigger asChild><div {...reorderTarget} draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
     className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card px-2 py-1.5 shadow-xs hover:border-input", selected && "border-primary ring-1 ring-primary", done && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
     {onSetStatus && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}/>}
+    {dragHandle}
     <div className="grid min-w-0 flex-1 gap-1">
       <button type="button" data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">

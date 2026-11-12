@@ -106,17 +106,31 @@ test("when the local date rolls over, a person looking at today moves to the new
   cleanup();
 });
 
-test("chosen tasks can be reordered with the keyboard buttons and removed from the day", async () => {
+test("chosen tasks can be reordered with a drag handle or keyboard and removed from the day", async () => {
   const { api, query, calls } = fakes("2026-11-10", { "2026-11-10": [task("a", "First"), task("b", "Second")] });
   const user = userEvent.setup({ document: dom.window.document });
   render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
   await screen.findByText("Second");
-  assert.equal((screen.getByRole("button", { name: "Move First up" }) as HTMLButtonElement).disabled, true);
-  await user.click(screen.getByRole("button", { name: "Move Second up" }));
+  assert.equal(screen.queryByRole("button", { name: /Move .* (up|down)/ }), null);
+  fireEvent.keyDown(screen.getByRole("button", { name: "Reorder First" }), { key: "ArrowUp" });
+  assert.equal(calls.length, 0);
+  const dataTransfer = { effectAllowed: "", dropEffect: "", setData: () => {} };
+  fireEvent.dragStart(screen.getByRole("button", { name: "Reorder Second" }), { dataTransfer });
+  assert.equal(dataTransfer.effectAllowed, "move");
+  const firstRow = screen.getByRole("button", { name: "First" }).closest("li")!.firstElementChild!;
+  Object.defineProperty(firstRow, "getBoundingClientRect", { value: () => ({ top: 0, height: 40 }) });
+  fireEvent.dragOver(firstRow, { dataTransfer, clientY: 1 });
+  assert.equal(dataTransfer.dropEffect, "move");
+  fireEvent.drop(firstRow, { dataTransfer, clientY: 1 });
   await waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual({ ...(calls[0].request as object), operationId: "" }, { operationId: "", date: "2026-11-10", taskId: "b", index: 0 });
+  await waitFor(() => assert.equal((screen.getByRole("button", { name: "Reorder First" }) as HTMLButtonElement).disabled, false));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Reorder First" }), { key: "ArrowDown" });
+  await waitFor(() => assert.equal(calls.length, 2));
+  assert.deepEqual({ ...(calls[1].request as object), operationId: "" }, { operationId: "", date: "2026-11-10", taskId: "a", index: 1 });
+  await waitFor(() => assert.equal((screen.getByRole("button", { name: "Remove First from this day" }) as HTMLButtonElement).disabled, false));
   await user.click(screen.getByRole("button", { name: "Remove First from this day" }));
-  await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["move", "remove"]));
+  await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["move", "move", "remove"]));
   cleanup();
 });
 

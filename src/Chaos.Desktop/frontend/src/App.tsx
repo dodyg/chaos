@@ -1,4 +1,5 @@
 import { GitHubTaskNotice } from "./GitHubTaskNotice";
+import { GitHubTaskMark } from "./GitHubTaskMark";
 import type { GitHubTaskSyncResponse } from "#neoastra";
 import React from "react";
 import { ContextMenu } from "radix-ui";
@@ -627,7 +628,10 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
       <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => setTaskStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
-        <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
+        <div className="flex items-center gap-1">
+          <button data-slot="row-title" className="w-fit min-w-0 rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
+          <GitHubTaskMark taskId={task.id} version={task.version} revision={revision}/>
+        </div>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
       {rowActions(task.title, index, rows.length, to => move(task, to), () => void requestTaskDeletion(task))}
