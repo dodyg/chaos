@@ -8,7 +8,7 @@ namespace Chaos.Application.GitHub;
 public sealed record GitHubIssueSnapshot(string Title, string Body, bool Open, string? Reason, long[] LabelIds, long[] AssigneeIds, long? MilestoneNumber, DateOnly? MilestoneDue)
 {
     public IssueProjection Projection() => new(Title, Body, new(Open, Reason), LabelIds.ToHashSet(), AssigneeIds.ToHashSet());
-    public static GitHubIssueSnapshot From(GitHubIssue issue) => new(issue.Title, issue.Body ?? "", issue.State == "open", issue.StateReason,
+    public static GitHubIssueSnapshot From(GitHubIssue issue) => new(issue.Title, issue.Body ?? "", issue.State == "open", issue.State == "closed" ? issue.StateReason ?? "completed" : issue.StateReason,
         issue.Labels.Select(l => l.Id).Order().ToArray(), issue.Assignees.Select(a => a.Id).Order().ToArray(), issue.Milestone?.Number,
         issue.Milestone?.DueOn is { } due ? DateOnly.FromDateTime(due.UtcDateTime) : null);
 }

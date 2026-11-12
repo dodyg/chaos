@@ -186,6 +186,22 @@ public sealed class GitHubInboundCommandsTests
     }
 
     [Test]
+    public async Task ClosedIssueWithoutReason_DoesNotBecomeDirtyOnAnUnchangedFetch()
+    {
+        using var host = await DataHost.StartAsync(); var (repo, connection, inbound) = await Setup(host, new([], IncludeClosedDays: 7));
+        var issue = Issue(state: "closed");
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue]);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue]);
+        await host.Store.QueryAsync(async (s, ct) =>
+        {
+            var link = (await s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct))!;
+            await Assert.That(link.LocalDirty).IsFalse();
+            await Assert.That((await s.Tasks.GetAsync(link.TaskId!, ct))!.Status).IsEqualTo(TaskItemStatus.Done);
+            return true;
+        });
+    }
+
+    [Test]
     public async Task LabelOnlyRemoteChange_AdvancesAggregateVersionForStaleUndoProtection()
     {
         using var host = await DataHost.StartAsync(); var (repo, connection, inbound) = await Setup(host);
