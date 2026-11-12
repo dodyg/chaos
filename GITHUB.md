@@ -367,7 +367,7 @@ The sync engine's own write transaction ends by setting `LocalDirty` to the valu
 triggers firing during inbound writes do not leave a false dirty flag. Write a test for exactly
 that.
 
-### Migration 016 — `016_github_pull_requests.sql` (package G9)
+### Migration 017 — `017_github_pull_requests.sql` (package G9)
 
 **`GitHubPullRequestLinks`** — `(IssueLinkId, PullRequestId)` PK, `RepositoryFullName`, `Number`,
 `Title`, `HtmlUrl`, `State` (0 Open, 1 Draft, 2 Merged, 3 Closed), `ReviewDecision` (NULL,
@@ -1014,7 +1014,7 @@ accidental remote removals. Aggregate versions advance for tag-only inbound chan
 Migration 015 adds device-local query/page checkpoints, excluded from archives and cleared on
 restore or subscription scope changes. Schema 13/14 upgrade safety backups and checkpoint
 restart/stale-version/archive/restore tests pass. Full Release verification: 617 tests passed,
-Slopwatch 0 findings. G9's pull-request migration is consequently 016.
+Slopwatch 0 findings. G9's pull-request migration is consequently 017 (016 now stores comment checkpoints).
 **Progress (2026-11-12, G5 issue-fetch stage):** Added a serialized, bounded fetch pass using
 the saved account, direct API port and real SQLite checkpoints. It resumes after restart,
 replays failed pages idempotently, applies batches of at most 50 issues, overlaps timestamp
@@ -1026,6 +1026,16 @@ G5 remains open: comment-fetch orchestration, manual sync engine/RPC/UI and the 
 inbound acceptance cases still need implementation. G6–G10 remain open.
 Final separate-output Release build passed with no warnings/errors; all 613 .NET tests passed,
 Slopwatch 0 findings. Frontend remains at 84 passing tests, unchanged by this stage.
+**Progress (2026-11-12, G5 comment-fetch stage):** Added incremental repository comment feeds,
+newest-100 per-issue imports using validated next/last/previous Link headers, and bounded daily
+full-list reconciliation. A decreased issue comment count also schedules a check. Deletions are
+applied only after all pages of a check; checks target at most 200 mapped IDs at a time. Both tail
+imports and checks resume after restart. Machine checkpoints contain cursors and IDs, never
+comment bodies, are omitted from archives, and are cleared on restore or scope changes.
+Migration 016 adds per-issue comment checkpoints; G9 now uses migration 017. The transport also
+retains issue_url for feed routing. Full Release build: 634 .NET tests passed, Slopwatch clean.
+Manual Sync now engine/RPC/UI wiring remains in progress. Pagination follows GitHub's
+[documented Link relations](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api).
 ### [ ] G6 — Outbound sync, merge and conflicts
 
 **Depends on:** G5. **Files:** `GitHubSyncCommands.cs` (push half), `GitHubTaskCommands.cs`,
@@ -1065,7 +1075,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/016_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/017_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

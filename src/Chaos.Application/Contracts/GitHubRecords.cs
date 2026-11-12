@@ -2,6 +2,7 @@ namespace Chaos.Application.Contracts;
 
 /// <summary>Device-local pagination/query progress. No issue text or credentials; omitted from archives.</summary>
 public sealed record GitHubSyncCheckpointRecord(string RepositorySubscriptionId, string Kind, long RepositoryVersion, string PayloadJson, DateTimeOffset UpdatedAtUtc);
+public sealed record GitHubCommentCheckpointRecord(string IssueLinkId, long RepositoryVersion, string PayloadJson, DateTimeOffset UpdatedAtUtc);
 
 public sealed record GitHubConnectionRecord
 {

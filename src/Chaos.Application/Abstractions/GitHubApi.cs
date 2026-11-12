@@ -25,8 +25,8 @@ public sealed record GitHubIssue(long Id, string NodeId, long Number, string Htm
     string State, string? StateReason, GitHubUser User, IReadOnlyList<GitHubLabel> Labels, IReadOnlyList<GitHubUser> Assignees,
     GitHubMilestone? Milestone, GitHubIssueType? Type, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? ClosedAt,
     int Comments, GitHubPullRequestMarker? PullRequest);
-public sealed record GitHubComment(long Id, string Body, GitHubUser User, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string HtmlUrl);
-public sealed record GitHubPage<T>(IReadOnlyList<T> Items, string? NextCursor, string? Etag, bool NotModified, long? RateLimitRemaining, DateTimeOffset? RateLimitResetUtc);
+public sealed record GitHubComment(long Id, string Body, GitHubUser User, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string HtmlUrl, string? IssueUrl = null);
+public sealed record GitHubPage<T>(IReadOnlyList<T> Items, string? NextCursor, string? Etag, bool NotModified, long? RateLimitRemaining, DateTimeOffset? RateLimitResetUtc, string? PreviousCursor = null, string? LastCursor = null);
 public sealed record GitHubIssueUpdate(string? Title = null, string? Body = null, string? State = null, string? StateReason = null);
 public sealed record GitHubPullRequestRef(long Id, string NodeId, string RepositoryFullName, long Number, string Title, string HtmlUrl, string State, bool IsDraft, bool Merged, string? ReviewDecision);
 

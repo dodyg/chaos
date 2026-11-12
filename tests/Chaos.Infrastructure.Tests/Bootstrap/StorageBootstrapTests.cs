@@ -19,6 +19,7 @@ public sealed class StorageBootstrapTests
     [Test]
     [Arguments(13, "GitHubConnections")]
     [Arguments(14, "GitHubSyncCheckpoints")]
+    [Arguments(15, "GitHubCommentCheckpoints")]
     public async Task StartAsync_OlderSchema_BacksUpBeforeGitHubUpgrade(int oldVersion, string newTable)
     {
         var root = TestPaths.NewDataRoot();
@@ -30,7 +31,7 @@ public sealed class StorageBootstrapTests
             await Chaos.Infrastructure.Migrations.SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, oldVersion);
         }
         using var handle = await StartAsync(root);
-        await Assert.That(handle.SchemaVersion).IsEqualTo(15L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(16L);
         var manifest = new BackupManager(handle.Store.Source, options.BackupsDirectory, "0.1.0", new FixedTimeProvider(Now)).Latest();
         await Assert.That(manifest).IsNotNull();
         await Assert.That(manifest!.Reason).IsEqualTo(BackupReason.PreMigration);
@@ -101,7 +102,7 @@ public sealed class StorageBootstrapTests
     {
         using var handle = await StartAsync(TestPaths.NewDataRoot());
 
-        await Assert.That(handle.SchemaVersion).IsEqualTo(15L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(16L);
         await Assert.That(handle.PrimaryProfileId).IsNotEmpty();
         await Assert.That(CountRows(handle.DatabasePath, "Profiles")).IsEqualTo(1L);
         await Assert.That(CountRows(handle.DatabasePath, "Spaces")).IsEqualTo(1L);

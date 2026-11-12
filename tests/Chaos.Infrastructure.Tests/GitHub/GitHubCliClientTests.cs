@@ -25,6 +25,37 @@ public sealed class GitHubCliClientTests
     }
 
     [Test]
+    public async Task Comments_ParseIssueIdentityAndPaginationTailLinks()
+    {
+        var handler = new Handler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[{\"id\":3000000000,\"body\":\"text\",\"issue_url\":\"https://api.github.com/repos/person/repo/issues/4\"}]") };
+            response.Headers.TryAddWithoutValidation("Link", "<https://api.github.com/page2>; rel=\"next\", <https://api.github.com/page0>; rel=\"prev\", <https://api.github.com/page9>; rel=\"last\"");
+            return response;
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        var page = await client.ListCommentsAsync(new(1, "person"), "person", "repo", null, 4, null, null, CancellationToken.None);
+        await Assert.That(page.PreviousCursor).IsEqualTo("https://api.github.com/page0");
+        await Assert.That(page.LastCursor).IsEqualTo("https://api.github.com/page9");
+        await Assert.That(page.Items.Single().IssueUrl).IsEqualTo("https://api.github.com/repos/person/repo/issues/4");
+    }
+
+    [Test]
+    [Arguments("prev")]
+    [Arguments("last")]
+    public async Task Comments_RejectUnsafeTailDestination(string relation)
+    {
+        var handler = new Handler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+            response.Headers.TryAddWithoutValidation("Link", "<https://example.com/private>; rel=\"" + relation + "\"");
+            return response;
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        await Assert.That(async () => await client.ListCommentsAsync(new(1, "person"), "person", "repo", null, 4, null, null, CancellationToken.None)).Throws<GitHubApiException>();
+    }
+
+    [Test]
     public async Task GetRepositoryAsync_Moved_FollowsOneApiReadRedirect()
     {
         var handler = new Handler((request, _) =>

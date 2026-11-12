@@ -519,7 +519,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM GitHubChecklistItems WHERE IssueLinkId=$id; DELETE FROM GitHubCommentLinks WHERE IssueLinkId=$id;";
+        command.CommandText = "DELETE FROM GitHubChecklistItems WHERE IssueLinkId=$id; DELETE FROM GitHubCommentLinks WHERE IssueLinkId=$id; DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId=$id;";
         command.Parameters.AddWithValue("$id", issueLinkId);
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -553,7 +553,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task ClearCheckpointsAsync(string repositoryId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id;";
+        command.CommandText = "DELETE FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id; DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId=$id);";
         command.Parameters.AddWithValue("$id", repositoryId);
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -573,6 +573,43 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$cursor", StorageFormats.Instant(watermark));
         command.Parameters.AddWithValue("$etag", (object?)etag ?? DBNull.Value);
         command.Parameters.AddWithValue("$now", StorageFormats.Instant(completedAt));
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<GitHubIssueLinkRecord?> FindLinkByNumberAsync(string repositoryId, long number, CancellationToken ct) =>
+        (await QueryAsync("SELECT * FROM GitHubIssueLinks WHERE RepositorySubscriptionId=$id AND IssueNumber=$number ORDER BY State,Id LIMIT 1;", ReadIssueLink, ct, ("$id", repositoryId), ("$number", number))).SingleOrDefault();
+
+    public async Task<GitHubCommentCheckpointRecord?> GetCommentCheckpointAsync(string issueLinkId, CancellationToken ct) =>
+        (await QueryAsync("SELECT IssueLinkId,RepositoryVersion,PayloadJson,UpdatedAtUtc FROM GitHubCommentCheckpoints WHERE IssueLinkId=$id;",
+            r => new GitHubCommentCheckpointRecord(r.GetString(0), r.GetInt64(1), r.GetString(2), StorageFormats.ParseInstant(r.GetString(3))!.Value), ct, ("$id", issueLinkId))).SingleOrDefault();
+
+    public async Task<bool> SaveCommentCheckpointAsync(GitHubCommentCheckpointRecord row, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO GitHubCommentCheckpoints(IssueLinkId,RepositoryVersion,PayloadJson,UpdatedAtUtc)
+            SELECT l.Id,r.Version,$json,$now FROM GitHubIssueLinks l JOIN GitHubRepositories r ON r.Id=l.RepositorySubscriptionId JOIN GitHubConnections c ON c.Id=r.ConnectionId JOIN Tasks t ON t.Id=l.TaskId
+            WHERE l.Id=$id AND l.State=0 AND t.DeletedAtUtc IS NULL AND r.Version=$version AND r.State=0 AND r.DeletedAtUtc IS NULL AND c.State=0 AND c.DeletedAtUtc IS NULL
+            ON CONFLICT(IssueLinkId) DO UPDATE SET RepositoryVersion=excluded.RepositoryVersion,PayloadJson=excluded.PayloadJson,UpdatedAtUtc=excluded.UpdatedAtUtc;
+            """;
+        command.Parameters.AddWithValue("$id", row.IssueLinkId);
+        command.Parameters.AddWithValue("$version", row.RepositoryVersion);
+        command.Parameters.AddWithValue("$json", row.PayloadJson);
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(row.UpdatedAtUtc));
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> CompleteCommentScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE GitHubRepositories SET CommentsCursorUtc=$cursor,CommentsEtag=$etag WHERE Id=$id AND Version=$version AND State=0 AND DeletedAtUtc IS NULL
+                AND EXISTS(SELECT 1 FROM GitHubConnections c WHERE c.Id=ConnectionId AND c.State=0 AND c.DeletedAtUtc IS NULL);
+            """;
+        command.Parameters.AddWithValue("$id", repositoryId);
+        command.Parameters.AddWithValue("$version", expectedVersion);
+        command.Parameters.AddWithValue("$cursor", StorageFormats.Instant(watermark));
+        command.Parameters.AddWithValue("$etag", (object?)etag ?? DBNull.Value);
         return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 

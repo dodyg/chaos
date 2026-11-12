@@ -5,12 +5,12 @@ using Chaos.Domain.GitHub;
 namespace Chaos.Application.GitHub;
 
 /// <summary>Versioned remote baseline. Arrays make the persisted representation independent of set implementations.</summary>
-public sealed record GitHubIssueSnapshot(string Title, string Body, bool Open, string? Reason, long[] LabelIds, long[] AssigneeIds, long? MilestoneNumber, DateOnly? MilestoneDue)
+public sealed record GitHubIssueSnapshot(string Title, string Body, bool Open, string? Reason, long[] LabelIds, long[] AssigneeIds, long? MilestoneNumber, DateOnly? MilestoneDue, int Comments = 0)
 {
     public IssueProjection Projection() => new(Title, Body, new(Open, Reason), LabelIds.ToHashSet(), AssigneeIds.ToHashSet());
     public static GitHubIssueSnapshot From(GitHubIssue issue) => new(issue.Title, issue.Body ?? "", issue.State == "open", issue.State == "closed" ? issue.StateReason ?? "completed" : issue.StateReason,
         issue.Labels.Select(l => l.Id).Order().ToArray(), issue.Assignees.Select(a => a.Id).Order().ToArray(), issue.Milestone?.Number,
-        issue.Milestone?.DueOn is { } due ? DateOnly.FromDateTime(due.UtcDateTime) : null);
+        issue.Milestone?.DueOn is { } due ? DateOnly.FromDateTime(due.UtcDateTime) : null, issue.Comments);
 }
 
 public static class GitHubIssueScope

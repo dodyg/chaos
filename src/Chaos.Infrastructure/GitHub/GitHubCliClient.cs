@@ -197,28 +197,31 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
     private async Task<GitHubPage<T>> Page<T>(GitHubAccount account, string path, string? etag, JsonTypeInfo<T[]> type, CancellationToken ct)
     {
         using var response = await Request(account, HttpMethod.Get, path, null, etag, ct, nonessentialRead: true);
-        string? next = null;
+        var pagination = new Dictionary<string, string>(StringComparer.Ordinal);
         if (response.Headers.TryGetValues("Link", out var links))
         {
-            Match match;
-            try { match = Regex.Match(string.Join(",", links), "<([^>]+)>;\\s*rel=\"next\"", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1)); }
+            MatchCollection matches;
+            try { matches = Regex.Matches(string.Join(",", links), "<([^>]+)>;\\s*rel=\"(next|prev|last)\"", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1)); }
             catch (RegexMatchTimeoutException) { throw new GitHubApiException(GitHubErrorKind.Validation); }
-            if (match.Success)
+            foreach (Match match in matches)
             {
                 if (!Uri.TryCreate(match.Groups[1].Value, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host != "api.github.com" || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0)
                     throw new GitHubApiException(GitHubErrorKind.Validation);
-                next = uri.AbsoluteUri;
+                pagination[match.Groups[2].Value] = uri.AbsoluteUri;
             }
         }
+        var next = pagination.GetValueOrDefault("next");
+        var previous = pagination.GetValueOrDefault("prev");
+        var last = pagination.GetValueOrDefault("last");
         long? remaining = response.Headers.TryGetValues("X-RateLimit-Remaining", out var values) && long.TryParse(values.FirstOrDefault(), CultureInfo.InvariantCulture, out var count) ? count : null;
         DateTimeOffset? reset = null;
         if (response.Headers.TryGetValues("X-RateLimit-Reset", out values) && long.TryParse(values.FirstOrDefault(), CultureInfo.InvariantCulture, out var seconds) && seconds is >= 0 and <= 253402300799)
             reset = DateTimeOffset.FromUnixTimeSeconds(seconds);
-        if (response.StatusCode == HttpStatusCode.NotModified) return new([], next, response.Headers.ETag?.ToString() ?? etag, true, remaining, reset);
+        if (response.StatusCode == HttpStatusCode.NotModified) return new([], next, response.Headers.ETag?.ToString() ?? etag, true, remaining, reset, previous, last);
         try
         {
             var items = await JsonSerializer.DeserializeAsync(await response.Content.ReadAsStreamAsync(ct), type, ct) ?? throw new GitHubApiException(GitHubErrorKind.Server);
-            return new(items, next, response.Headers.ETag?.ToString(), false, remaining, reset);
+            return new(items, next, response.Headers.ETag?.ToString(), false, remaining, reset, previous, last);
         }
         catch (JsonException) { throw new GitHubApiException(GitHubErrorKind.Server); }
     }

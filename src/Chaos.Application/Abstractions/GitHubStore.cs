@@ -38,4 +38,8 @@ public interface IGitHubStore
     Task<bool> SaveCheckpointAsync(GitHubSyncCheckpointRecord row, CancellationToken ct);
     Task ClearCheckpointsAsync(string repositoryId, CancellationToken ct);
     Task<bool> CompleteIssueScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, DateTimeOffset completedAt, CancellationToken ct);
+    Task<GitHubIssueLinkRecord?> FindLinkByNumberAsync(string repositoryId, long number, CancellationToken ct);
+    Task<GitHubCommentCheckpointRecord?> GetCommentCheckpointAsync(string issueLinkId, CancellationToken ct);
+    Task<bool> SaveCommentCheckpointAsync(GitHubCommentCheckpointRecord row, CancellationToken ct);
+    Task<bool> CompleteCommentScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, CancellationToken ct);
 }

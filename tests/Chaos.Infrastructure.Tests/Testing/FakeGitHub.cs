@@ -25,6 +25,7 @@ public sealed class FakeGitHub : IGitHubApi
     private static string Key(string owner, string name) => (owner + "/" + name).ToLowerInvariant();
     public void PutRepository(GitHubRepository repository) { _repositories[repository.FullName.ToLowerInvariant()] = repository; Tick(); }
     public void PutIssue(string repository, GitHubIssue issue) { _issues[(repository.ToLowerInvariant(), issue.Number)] = issue; Tick(); }
+    public void PutComments(string repository, long number, IEnumerable<GitHubComment> comments) { _comments[(repository.ToLowerInvariant(), number)] = comments.ToList(); Tick(); }
     public void PutLabels(string repository, IEnumerable<GitHubLabel> labels) { _labels[repository.ToLowerInvariant()] = labels.ToList(); Tick(); }
     public void PutMilestones(string repository, IEnumerable<GitHubMilestone> milestones) { _milestones[repository.ToLowerInvariant()] = milestones.ToList(); Tick(); }
 
@@ -37,13 +38,14 @@ public sealed class FakeGitHub : IGitHubApi
 
     private GitHubPage<T> Page<T>(IEnumerable<T> source, string? cursor, string? etag)
     {
-        var current = "\"fake-" + _revision + "\"";
-        if (etag == current) { NotModifiedCount++; return new([], null, current, true, 5000, Now.AddHours(1)); }
-        var offset = cursor is null ? 0 : int.Parse(cursor, System.Globalization.CultureInfo.InvariantCulture);
         var all = source.ToArray();
+        var offset = cursor is null ? 0 : int.Parse(cursor, System.Globalization.CultureInfo.InvariantCulture);
+        var current = "\"fake-" + _revision + "-" + offset + "-" + Chaos.Application.Abstractions.StoredJsonFormats.Hash(all) + "\"";
+        if (etag == current) { NotModifiedCount++; return new([], null, current, true, 5000, Now.AddHours(1)); }
         var items = all.Skip(offset).Take(PageSize).ToArray();
         var next = offset + items.Length < all.Length ? (offset + items.Length).ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
-        return new(items, next, current, false, 5000, Now.AddHours(1));
+        return new(items, next, current, false, 5000, Now.AddHours(1), offset > 0 ? Math.Max(0, offset - PageSize).ToString(System.Globalization.CultureInfo.InvariantCulture) : null,
+            offset + items.Length < all.Length ? ((all.Length - 1) / PageSize * PageSize).ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
     }
 
     public Task<GitHubAccount> GetSetupAccountAsync(CancellationToken ct) { Check(); return Task.FromResult(Account); }
@@ -70,7 +72,7 @@ public sealed class FakeGitHub : IGitHubApi
     public Task<GitHubPage<GitHubMilestone>> ListMilestonesAsync(GitHubAccount account, string owner, string name, string? cursor, string? etag, CancellationToken ct)
     { Check(account); return Task.FromResult(Page(_milestones.GetValueOrDefault(Key(owner, name)) ?? [], cursor, etag)); }
     public Task<GitHubPage<GitHubComment>> ListCommentsAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, long? issueNumber, string? cursor, string? etag, CancellationToken ct)
-    { Check(account); return Task.FromResult(Page(_comments.Where(pair => pair.Key.Repository == Key(owner, name) && (issueNumber is null || pair.Key.Number == issueNumber)).SelectMany(pair => pair.Value).Where(comment => since is null || comment.UpdatedAt >= since).OrderBy(comment => comment.UpdatedAt).ThenBy(comment => comment.Id), cursor, etag)); }
+    { Check(account); return Task.FromResult(Page(_comments.Where(pair => pair.Key.Repository == Key(owner, name) && (issueNumber is null || pair.Key.Number == issueNumber)).SelectMany(pair => pair.Value.Select(c => c with { IssueUrl = "https://api.github.com/repos/" + Key(owner, name) + "/issues/" + pair.Key.Number })).Where(comment => since is null || comment.UpdatedAt >= since).OrderBy(comment => issueNumber is null ? comment.UpdatedAt : comment.CreatedAt).ThenBy(comment => comment.Id), cursor, etag)); }
     public Task<GitHubComment> PostCommentAsync(GitHubAccount account, string owner, string name, long number, string body, CancellationToken ct)
     {
         Check(account);
