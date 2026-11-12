@@ -4,6 +4,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Tasks;
 using NeoAstra.Rpc;
+using Chaos.Desktop.Platform;
 
 namespace Chaos.Desktop.Services;
 
@@ -45,7 +46,7 @@ public sealed record LinkResolveResponse(bool Ok, IReadOnlyList<LinkTargetRespon
 
 /// <summary>Task history viewer: the append-only feed, the state as of an instant or entry, restoring old values (PLAN §9).</summary>
 [NeoRpcService("history", Version = 1)]
-public sealed class HistoryRpcService(TaskHistoryCommands history)
+public sealed class HistoryRpcService(TaskHistoryCommands history, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("list")]
     public async ValueTask<HistoryListResponse> ListAsync(HistoryTaskRequest request, CancellationToken ct)
@@ -85,6 +86,7 @@ public sealed class HistoryRpcService(TaskHistoryCommands history)
                 ? value
                 : throw AppException.Validation("fields", $"“{field}” cannot be restored from history.")).ToList();
             var result = await history.RestoreFieldsAsync(new(request.OperationId, request.TaskId, HistoryRpc.Version(request.ExpectedVersion), request.EntryId, fields), ct);
+            sync?.RequestTaskSync(request.TaskId);
             return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null, result.Warning);
         }
         catch (AppException error) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(error)); }
@@ -93,7 +95,7 @@ public sealed class HistoryRpcService(TaskHistoryCommands history)
 
 /// <summary>Task diary: dated Markdown updates with revisions, plus the merged timeline (PLAN §9).</summary>
 [NeoRpcService("diary", Version = 1)]
-public sealed class DiaryRpcService(DiaryCommands diary)
+public sealed class DiaryRpcService(DiaryCommands diary, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("list")]
     public async ValueTask<DiaryListResponse> ListAsync(DiaryListRequest request, CancellationToken ct)
@@ -144,9 +146,9 @@ public sealed class DiaryRpcService(DiaryCommands diary)
     public async ValueTask<DiaryOperationResponse> RestoreAsync(DiaryChangeRequest request, CancellationToken ct) =>
         await RunAsync(() => diary.RestoreAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion)), ct));
 
-    private static async ValueTask<DiaryOperationResponse> RunAsync(Func<Task<DiaryMutationResult>> action)
+    private async ValueTask<DiaryOperationResponse> RunAsync(Func<Task<DiaryMutationResult>> action)
     {
-        try { return new(true, HistoryRpc.Map((await action()).Entry), null); }
+        try { var result = await action(); sync?.RequestTaskSync(result.Entry.TaskId); return new(true, HistoryRpc.Map(result.Entry), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 }
@@ -180,7 +182,7 @@ public sealed record OpenExternalResponse(bool Ok, TaskErrorResponse? Error);
 /// for absolute http, https or mailto URLs.
 /// </summary>
 [NeoRpcService("markdown", Version = 1)]
-public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommands tasks, Func<Uri, bool>? opener = null)
+public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommands tasks, Func<Uri, bool>? opener = null, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("openExternal")]
     public ValueTask<OpenExternalResponse> OpenExternalAsync(OpenExternalRequest request, CancellationToken ct)
@@ -216,6 +218,7 @@ public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommand
         try
         {
             var result = await checklists.ConvertAsync(new(request.OperationId, request.TaskId, [.. request.Items.Select(item => new ChecklistItem(item.ItemKey, item.Title, item.Done))]), ct);
+            sync?.RequestTaskSync(request.TaskId);
             return new(true, [.. result.Created.Select(SubtaskRpcService.Map)], result.AlreadyConverted, null);
         }
         catch (AppException error) { return new(false, [], 0, TaskRpcService.ToErrorResponse(error)); }

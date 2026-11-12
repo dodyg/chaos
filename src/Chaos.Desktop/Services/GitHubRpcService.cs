@@ -13,7 +13,7 @@ public sealed record GitHubTaskSyncRequest(string TaskId);
 public sealed record GitHubSelfAssignmentRequest(string OperationId, string TaskId, bool Assigned);
 public sealed record GitHubTaskActionRequest(string OperationId, string TaskId, string ExpectedVersion);
 public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error, bool? AssignedToMe = null, bool PostDiaryByDefault = false,
-    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false);
+    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false, bool Syncing = false);
 public sealed record GitHubConnectRequest(string OperationId);
 public sealed record GitHubCandidatesRequest(string? Cursor);
 public sealed record GitHubLookupRequest(string Owner, string Name);
@@ -79,8 +79,11 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson);
                 var assigned = link.LocalAssigneeIntent is { } intent ? intent == 1 : baseline?.AssigneeIds.Contains(c.AccountId);
                 var error = link.LastErrorKind is { } kind && Enum.IsDefined((GitHubErrorKind)kind) ? Error(new((GitHubErrorKind)kind)).Message : null;
+                var activity = sync?.TaskStatus(task.Id);
+                if (link.LocalDirty && error is null && activity?.GitHubError is { } failure) error = Error(new(failure)).Message;
+                if (link.LocalDirty && error is null && activity?.AppError is { } appError) error = TaskRpcService.ToErrorResponse(appError).Message;
                 return new(true, true, link.LocalDirty, state, null, assigned, c.PostDiaryByDefault, Number(link.Version), link.ConflictNoticeUtc is not null,
-                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null);
+                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true);
             }, ct);
         }
         catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
@@ -144,9 +147,9 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<GitHubOperationResponse> UpdateSettingsAsync(GitHubSettingsRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateSettingsAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.PostDiaryByDefault, r.CreateLabelsForTags), ct); });
     [NeoRpcMethod("setSelfAssignment")]
-    public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct) => await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); });
+    public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct) => await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); sync?.RequestTaskSync(r.TaskId); });
     [NeoRpcMethod("retryTask")]
-    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); }, ct); });
+    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); sync?.RequestTaskSync(r.TaskId); });
     [NeoRpcMethod("dismissConflict")]
     public async ValueTask<GitHubOperationResponse> DismissConflictAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.DismissConflictAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); });
     [NeoRpcMethod("keepAsOrdinaryTask")]

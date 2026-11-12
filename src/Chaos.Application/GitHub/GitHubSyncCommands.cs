@@ -7,11 +7,60 @@ public sealed record GitHubSyncResult(int Created, int Updated, int CommentChang
 public interface IGitHubSyncRunner
 {
     Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null);
+    Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct);
 }
 
 /// <summary>One explicit sync pass. The desktop engine owns scheduling, cancellation and replacement quiescence.</summary>
 public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, GitHubIssueFetcher issues, GitHubCommentFetcher comments, IIdGenerator ids, TimeProvider clock) : IGitHubSyncRunner
 {
+    /// <summary>Syncs only an existing linked issue after a local action; never advances repository feed cursors.</summary>
+    public async Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct)
+    {
+        var context = await store.QueryAsync(async (s, token) =>
+        {
+            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var task = await s.Tasks.GetAsync(taskId, token);
+            var link = await s.GitHub.FindLinkByTaskAsync(taskId, token);
+            if (task is null || task.SpaceId != space.Id || link is not { State: 0 or 2, LocalDirty: true } || link.NextAttemptUtc > clock.GetUtcNow()) return null;
+            var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
+            var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
+            if (repo is not { State: 0, DeletedAtUtc: null } || connection is not { State: 0, DeletedAtUtc: null }
+                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RateLimitResetUtc > clock.GetUtcNow()) return null;
+            return new { Link = link, Repo = repo, Connection = connection };
+        }, ct);
+        if (context is null) return new(0, 0, 0, 0, false);
+        var started = clock.GetUtcNow();
+        var repo = context.Repo;
+        var inbound = new GitHubInboundCommands(store, ids, clock);
+        var outbound = new GitHubOutboundCommands(store, api, inbound, clock);
+        var diary = new GitHubOutboundComments(store, api, ids, clock);
+        try
+        {
+            repo = await new GitHubInboundRefresh(store, api, inbound, clock).RefreshIdentityAsync(repo.Id, ct);
+            await diary.RunAsync(repo.Id, false, ct, context.Link.Id);
+            var recovery = await outbound.RecoverAsync(repo.Id, ct, context.Link.Id);
+            var account = new GitHubAccount(context.Connection.AccountId, context.Connection.AccountLogin);
+            var issue = await api.GetIssueAsync(account, repo.Owner, repo.Name, context.Link.IssueNumber, ct);
+            if (issue.Id != context.Link.IssueId) throw new GitHubApiException(GitHubErrorKind.Validation);
+            var pulled = await inbound.ApplyAsync(repo.Id, repo.Version, [issue], ct);
+            var pulledComments = await comments.PullIssueAsync(context.Link.Id, ct);
+            var pushed = await outbound.PushAsync(repo.Id, ct, context.Link.Id);
+            var posted = await diary.RunAsync(repo.Id, true, ct, context.Link.Id);
+            return new(0, recovery.Updated + pulled.Updated + pushed.Updated, pulledComments.Changed + posted, recovery.Conflicts + pulled.Conflicts + pushed.Conflicts, pulledComments.MorePages);
+        }
+        catch (GitHubApiException error)
+        {
+            if (GitHubOutboundCommands.IsLinkError(error.Kind)) await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, context.Link.Id, error.Kind, ct);
+            else await store.ExecuteAsync(async (s, token) =>
+            {
+                await s.GitHub.RecordSyncOutcomeAsync(context.Connection.Id, null, started, clock.GetUtcNow(), error.Kind,
+                    error.Kind == GitHubErrorKind.RateLimited ? error.RetryAtUtc ?? clock.GetUtcNow().AddMinutes(1) : null, token);
+                return true;
+            }, ct);
+            throw;
+        }
+    }
+
     public async Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null)
     {
         var (connection, repositories) = await store.QueryAsync(async (s, token) =>

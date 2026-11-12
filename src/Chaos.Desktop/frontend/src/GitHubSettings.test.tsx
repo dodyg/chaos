@@ -90,7 +90,7 @@ test("Sync now returns immediately, polls status and refreshes views after compl
     await screen.findByText(/Imported 2 tasks; updated 1 task; 3 comment changes/);
     await screen.findByRole("button", { name: "Continue sync" });
     await waitFor(() => assert.equal(refreshes, 1));
-    assert.match(screen.getByText(/Local edits are not sent/).textContent!, /newest 100 comments/);
+    assert.match(screen.getByText(/Actions on linked tasks sync/).textContent!, /newest 100 comments/);
   } finally { cleanup(); }
 });
 

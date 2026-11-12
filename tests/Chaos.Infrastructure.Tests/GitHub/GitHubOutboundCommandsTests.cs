@@ -14,6 +14,61 @@ namespace Chaos.Infrastructure.Tests.GitHub;
 public sealed class GitHubOutboundCommandsTests
 {
     [Test]
+    public async Task RunTask_TwoDirtyIssues_SyncsOnlySelectedIssueWithoutRepositoryFeeds()
+    {
+        using var host = await DataHost.StartAsync(); var api = new FakeGitHub();
+        var (repo, connection, inbound) = await Setup(host, api);
+        var first = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        var issue = await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None);
+        var secondIssue = issue with { Id = 2, NodeId = "I2", Number = 2, HtmlUrl = "https://github.com/person/repo/issues/2" };
+        api.PutIssue("person/repo", secondIssue);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [secondIssue]);
+        var second = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 2, ct)))!;
+        await SetTitle(host, first.Id, "First local edit");
+        await SetTitle(host, second.Id, "Second local edit");
+        await new DiaryCommands(host.Store, host.Ids, host.Clock).AddAsync(new(DataHost.Op(), first.TaskId!, "Post only to first", null, true));
+        var issueReads = new List<long>();
+        api.AfterIssueRead = remote => { issueReads.Add(remote.Number); return Task.CompletedTask; };
+        using var issues = new GitHubIssueFetcher(host.Store, api, inbound, _ => throw new InvalidOperationException("A task action must not import a repository."), host.Clock);
+        using var comments = new GitHubCommentFetcher(host.Store, api, new(host.Store, host.Ids, host.Clock), host.Clock);
+        await new GitHubSyncCommands(host.Store, api, issues, comments, host.Ids, host.Clock).RunTaskAsync(first.TaskId!, CancellationToken.None);
+        await Assert.That(issueReads.All(number => number == 1)).IsTrue();
+        await Assert.That(api.IssueListStates.Count).IsEqualTo(0);
+        await Assert.That(await host.Store.QueryAsync((s, ct) => s.GitHub.GetCheckpointAsync(repo.Id, "comments", ct))).IsNull();
+        await Assert.That(await host.Store.QueryAsync((s, ct) => s.GitHub.GetCheckpointAsync(repo.Id, "comment-check", ct))).IsNull();
+        await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)).Title).IsEqualTo("First local edit");
+        await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 2, CancellationToken.None)).Title).IsEqualTo("Original");
+        await Assert.That((await host.Store.QueryAsync((s, ct) => s.GitHub.GetIssueLinkAsync(second.Id, ct)))!.LocalDirty).IsTrue();
+        await Assert.That((await api.ListCommentsAsync(api.Account, "person", "repo", null, 1, null, null, CancellationToken.None)).Items.Count).IsEqualTo(1);
+        await Assert.That((await api.ListCommentsAsync(api.Account, "person", "repo", null, 2, null, null, CancellationToken.None)).Items.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments("ordinary")]
+    [Arguments("paused")]
+    [Arguments("ignored")]
+    [Arguments("rate-limited")]
+    public async Task RunTask_IneligibleTask_DoesNotContactGitHub(string scenario)
+    {
+        using var host = await DataHost.StartAsync(); var api = new FakeGitHub();
+        var (repo, connection, inbound) = await Setup(host, api);
+        var link = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        await SetTitle(host, link.Id, "Local title");
+        await host.Store.ExecuteAsync(async (s, ct) =>
+        {
+            if (scenario == "paused") await s.GitHub.UpdateRepositoryAsync(repo with { State = 1 }, repo.Version, ct);
+            if (scenario == "ignored") await s.GitHub.UpdateIssueLinkAsync(link with { State = 3 }, link.Version, ct);
+            if (scenario == "rate-limited") await s.GitHub.UpdateConnectionAsync(connection with { RateLimitResetUtc = host.Clock.GetUtcNow().AddHours(1) }, connection.Version, ct);
+            return true;
+        });
+        var requests = api.Requests;
+        using var issues = new GitHubIssueFetcher(host.Store, api, inbound, _ => Task.FromResult("unused.db"), host.Clock);
+        using var comments = new GitHubCommentFetcher(host.Store, api, new(host.Store, host.Ids, host.Clock), host.Clock);
+        await new GitHubSyncCommands(host.Store, api, issues, comments, host.Ids, host.Clock).RunTaskAsync(scenario == "ordinary" ? Guid.NewGuid().ToString() : link.TaskId!, CancellationToken.None);
+        await Assert.That(api.Requests).IsEqualTo(requests);
+    }
+
+    [Test]
     public async Task CommentEdit_RemoteChangesAfterRead_DefersAndPreservesLocalRevision()
     {
         using var host = await DataHost.StartAsync(); var api = new FakeGitHub();

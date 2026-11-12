@@ -11,6 +11,51 @@ namespace Chaos.Desktop.Tests.Rpc;
 
 public sealed class GitHubSyncRpcTests
 {
+    [Test]
+    public async Task TaskAction_ReturnsBeforeRemoteWrite_AndBackgroundSyncsOnlyThatIssue()
+    {
+        var clock = new FixedTimeProvider(new(2026, 11, 12, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var host = new { Store = storage.Store, Ids = ids, Clock = clock, Tasks = new Chaos.Application.Tasks.TaskCommands(storage.Store, ids, clock) };
+        var api = new FakeGitHub { Now = clock.GetUtcNow() };
+        api.PutRepository(new(10, "R", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", false, true));
+        var commands = new GitHubConnectionCommands(host.Store, api, host.Ids, host.Clock);
+        var connection = await commands.ConnectAsync(new(Op()));
+        var inbox = await host.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
+        var repo = await commands.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, GitHubFilter.Empty, false));
+        var issue = new Chaos.Application.Abstractions.GitHubIssue(1, "I1", 1, "https://github.com/person/repo/issues/1", "Issue", "Body", "open", null, new(1, "person"), [], [], null, null, host.Clock.GetUtcNow(), host.Clock.GetUtcNow(), null, 0, null);
+        api.PutIssue("person/repo", issue);
+        var inbound = new GitHubInboundCommands(host.Store, host.Ids, host.Clock);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue]);
+        var link = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        var task = (await host.Store.QueryAsync((s, ct) => s.Tasks.GetAsync(link.TaskId!, ct)))!;
+        using var issues = new GitHubIssueFetcher(host.Store, api, inbound, _ => Task.FromResult("unused.db"), host.Clock);
+        using var comments = new GitHubCommentFetcher(host.Store, api, new(host.Store, host.Ids, host.Clock), host.Clock);
+        using var engine = new GitHubSyncEngine(new GitHubSyncCommands(host.Store, api, issues, comments, host.Ids, host.Clock), host.Clock);
+        var rpc = new TaskRpcService(host.Tasks, engine);
+        var github = new GitHubRpcService(commands, host.Store, engine);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        api.AfterIssueRead = async _ => { entered.TrySetResult(); await release.Task; };
+        try
+        {
+            var result = await rpc.SetStatusAsync(new(Op(), task.Id, task.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), "Done", null), CancellationToken.None);
+            await Assert.That(result.Ok).IsTrue();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.That(api.RemoteWrites).IsEqualTo(0);
+            await Assert.That((await github.TaskSyncAsync(new(task.Id), CancellationToken.None)).Syncing).IsTrue();
+            api.AfterIssueRead = null; release.TrySetResult();
+            await engine.WaitForIdleAsync();
+            await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)).State).IsEqualTo("closed");
+            await Assert.That(api.IssueListStates.Count).IsEqualTo(0);
+            var info = await github.TaskSyncAsync(new(task.Id), CancellationToken.None);
+            await Assert.That(info.Syncing).IsFalse();
+            await Assert.That(info.Pending).IsFalse();
+        }
+        finally { api.AfterIssueRead = null; release.TrySetResult(); }
+    }
+
     private static string Op() => Guid.NewGuid().ToString();
 
     [Test]
@@ -62,7 +107,8 @@ public sealed class GitHubSyncRpcTests
         await Assert.That((await rpc.RetryTaskAsync(new(Op(), linked.TaskId!, syncInfo.LinkVersion!), CancellationToken.None)).Error!.Kind).IsEqualTo("versionConflict");
         var currentInfo = await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None);
         await Assert.That((await rpc.RetryTaskAsync(new(Op(), linked.TaskId!, currentInfo.LinkVersion!), CancellationToken.None)).Ok).IsTrue();
-        await Assert.That(api.Requests).IsEqualTo(requestsBeforeActions);
+        await engine.WaitForIdleAsync();
+        await Assert.That(api.Requests > requestsBeforeActions).IsTrue();
         await storage.Store.ExecuteAsync(async (s, ct) => { var task = (await s.Tasks.GetAsync(linked.TaskId!, ct))!; await s.Tasks.UpdateAsync(task with { Title = "Local pending edit", Version = task.Version + 1 }, task.Version, ct); return true; });
         var callsBeforeStatus = api.Requests;
         await Assert.That((await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None)).Pending).IsTrue();

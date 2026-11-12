@@ -1104,8 +1104,8 @@ errors are recorded with retry times and do not stop other links in the covered 
 Lifecycle and task UI follow-up: migration 019 immediately ignores trashed tasks across task,
 container, import and undo paths, and queues a fresh merge on restoration. Purged issue identities
 remain ignored. Recovery skips ignored links; detaching a task or removing a subscription clears
-its pending writes and mappings while keeping local content and a provenance diary note. Pause,
-retry and detach drain active desktop sync work. Task controls expose Retry, Dismiss conflict,
+its pending writes and mappings while keeping local content and a provenance diary note. Pause
+and detach drain active desktop sync work. Task controls expose Retry, Dismiss conflict,
 Keep as ordinary task, safe issue navigation and repository identity, using versioned local RPCs.
 The editor limits connected titles, locks milestone-managed due dates and explains the recurrence
 restriction. Diary status refresh preserves an explicitly unticked posting choice. Tag settings
@@ -1136,6 +1136,23 @@ mismatched GitHub CLI authentication.
 **Tests:** Engine list in section 11 plus restore during a pass. **Exit:** left running for an
 hour against the test repository with remote and local edits, everything converges; restore while
 connected leaves no half-written pass.
+
+Action-triggered increment: successful task saves/status changes/restores, checklist mutations,
+task tag links/unlinks, diary changes, history restores and self-assignment queue an issue-scoped
+background pass after local commit. Retry now queues that issue without draining unrelated work.
+The serialized engine coalesces queued task IDs, schedules one follow-up for actions during an
+active pass, and keeps full-sync progress separate. Replacement drains and clears queued work.
+Unlinked, trashed, detached, paused, signed-out and rate-limited contexts make no GitHub requests.
+The scoped runner reuses outbound recovery/merge and per-issue comment checkpoints; it never
+scans repository issue/comment feeds or advances their shared cursors. Other dirty issues wait
+for their own queued action or an explicit full pass. The task notice animates queued/running
+work, polls only local metadata, refreshes after completion and preserves unsaved task drafts.
+There is no startup scan, periodic timer, connectivity retry or automatic retry loop yet; failed
+changes remain dirty for a later action or Retry. Full G7 scheduling and live acceptance remain open.
+Offline validation passed: locked restore and Release build, all 701 .NET tests, all 96 frontend
+tests and zero Slopwatch findings. The final desktop rerun passed all 76 tests. Coverage includes
+returning before remote writes, issue isolation, unchanged shared cursors, inactive/rate-limited
+contexts, queue coalescing/follow-ups, replacement cancellation and both slow/fast UI completion.
 
 ### [ ] G8 — Task-level UI and repository views
 

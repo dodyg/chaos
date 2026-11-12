@@ -3,6 +3,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
 using NeoAstra.Rpc;
+using Chaos.Desktop.Platform;
 
 namespace Chaos.Desktop.Services;
 
@@ -54,7 +55,7 @@ public sealed record TaskGetResponse(bool Ok, TaskResponse? Task, TaskErrorRespo
 /// renderer can always render them.
 /// </summary>
 [NeoRpcService("tasks", Version = 1)]
-public sealed class TaskRpcService(TaskCommands commands)
+public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct)
@@ -95,9 +96,9 @@ public sealed class TaskRpcService(TaskCommands commands)
     public async ValueTask<TaskOperationResponse> RestoreAsync(DeleteTaskRequest request, CancellationToken cancellationToken) =>
         await MutateAsync(request.OperationId, async () => await commands.RestoreAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), cancellationToken));
 
-    private static async ValueTask<TaskOperationResponse> MutateAsync(string operationId, Func<Task<TaskMutationResult>> action)
+    private async ValueTask<TaskOperationResponse> MutateAsync(string operationId, Func<Task<TaskMutationResult>> action)
     {
-        try { var result = await action(); return new(true, operationId, ToResponse(result.Task), null, result.Warning); }
+        try { var result = await action(); sync?.RequestTaskSync(result.Task.Id); return new(true, operationId, ToResponse(result.Task), null, result.Warning); }
         catch (AppException error) { return new(false, operationId, null, ToErrorResponse(error)); }
     }
 

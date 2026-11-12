@@ -82,6 +82,9 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [completionFilter, setCompletionFilter] = React.useState("all");
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
+  const currentEditorTaskId = React.useRef(editing?.id); currentEditorTaskId.current = editing?.id;
+  const taskDraftEdited = React.useRef(false);
+  React.useEffect(() => { taskDraftEdited.current = false; }, [editing?.id]);
   const [githubTask, setGitHubTask] = React.useState<{ taskId: string; info: GitHubTaskSyncResponse | null } | null>(null);
   const updateGitHubStatus = React.useCallback((taskId: string, info: GitHubTaskSyncResponse | null) => {
     setGitHubTask(current => info ? { taskId, info } : current?.taskId === taskId ? current : { taskId, info: null });
@@ -442,7 +445,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       dueDate: t.dueDate || null, dueTime: t.dueTime || null, dueZoneId: t.dueZoneId || null,
       priority: t.priority, estimateMinutes: t.estimateMinutes, category: t.category }), () => setEditing(null));
   }
-  function change(patch: Partial<TaskResponse>) { setEditing(t => t ? { ...t, ...patch } : null); }
+  function change(patch: Partial<TaskResponse>) { taskDraftEdited.current = true; setEditing(t => t ? { ...t, ...patch } : null); }
+  function issueSyncFinished(taskId: string) {
+    changed();
+    void refresh().catch((e: unknown) => setError(String(e)));
+    if (!taskDraftEdited.current) void taskRpc.get({ taskId }).then(result => {
+      if (result.ok && result.task) setEditing(current => current?.id === taskId && !taskDraftEdited.current ? result.task : current);
+    }).catch(() => setError("The issue synced, but its latest task details could not be loaded."));
+    void refreshSubtasks(taskId).then(rows => { if (currentEditorTaskId.current === taskId) setSubtasks(rows); }).catch(() => setError("The issue synced, but its checklist could not be refreshed."));
+  }
   async function requestTaskDeletion(task: TaskResponse) {
     try {
       const result = await recurrenceApi.get({ taskId: task.id });
@@ -789,7 +800,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </div>
       <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
-          <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed}/>
+          <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed} onSynced={() => issueSyncFinished(editing.id)}/>
           <Field label="Title"><Input required maxLength={taskGitHub?.connected ? 256 : undefined} form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
           <TabsList className="w-full">
             <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>

@@ -3,6 +3,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
 using NeoAstra.Rpc;
+using Chaos.Desktop.Platform;
 
 namespace Chaos.Desktop.Services;
 
@@ -17,7 +18,7 @@ public sealed record SubtaskRestoreRequest(string OperationId, string TaskId, st
 public sealed record SubtaskOperationResponse(bool Ok, SubtaskResponse? Subtask, TaskErrorResponse? Error);
 
 [NeoRpcService("subtasks", Version = 1)]
-public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtasks)
+public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtasks, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<SubtaskListResponse> ListDeletedAsync(SubtaskListRequest request, CancellationToken ct)
@@ -60,9 +61,9 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
     public async ValueTask<SubtaskOperationResponse> ReorderAsync(SubtaskOrderRequest request, CancellationToken ct) =>
         await RunAsync(() => subtasks.ReorderAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
 
-    private static async ValueTask<SubtaskOperationResponse> RunAsync(Func<Task<SubtaskMutationResult>> action)
+    private async ValueTask<SubtaskOperationResponse> RunAsync(Func<Task<SubtaskMutationResult>> action)
     {
-        try { return new(true, Map((await action()).Subtask), null); }
+        try { var result = await action(); sync?.RequestTaskSync(result.Subtask.TaskId); return new(true, Map(result.Subtask), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 

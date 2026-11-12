@@ -1,13 +1,16 @@
 import React from "react";
+import { RefreshCw } from "lucide-react";
 import { gitHubRpc, markdownRpc, type GitHubTaskSyncResponse } from "#neoastra";
 
 /** Local metadata only: opening a task never starts authentication or a sync pass. */
-export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, onStatus, onChanged }: { taskId: string; version: string; revision: number; api?: typeof gitHubRpc; onStatus?: (taskId: string, info: GitHubTaskSyncResponse | null) => void; onChanged?: () => void }) {
+export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, onStatus, onChanged, onSynced, pollIntervalMs = 1000 }: { taskId: string; version: string; revision: number; api?: typeof gitHubRpc; onStatus?: (taskId: string, info: GitHubTaskSyncResponse | null) => void; onChanged?: () => void; onSynced?: () => void; pollIntervalMs?: number }) {
   const [info, setInfo] = React.useState<GitHubTaskSyncResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
   const [working, setWorking] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const selectedTask = React.useRef(taskId);
+  const onSyncedRef = React.useRef(onSynced); onSyncedRef.current = onSynced;
+  const previousInfo = React.useRef<{ taskId: string; info: GitHubTaskSyncResponse } | null>(null);
   selectedTask.current = taskId;
   React.useEffect(() => {
     let current = true;
@@ -16,6 +19,26 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
       .catch(() => { if (current) setFailed(true); });
     return () => { current = false; };
   }, [api, taskId, version, revision]);
+  React.useEffect(() => {
+    if (!info?.syncing) return;
+    let current = true, inFlight = false;
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      void api.taskSync({ taskId }).then(result => {
+        if (!current) return;
+        setInfo(result); setFailed(!result.ok);
+      }).catch(() => { if (current) setFailed(true); }).finally(() => { inFlight = false; });
+    }, pollIntervalMs);
+    return () => { current = false; clearInterval(timer); };
+  }, [api, taskId, info?.syncing, pollIntervalMs]);
+  React.useEffect(() => {
+    if (!info?.ok) return;
+    const previous = previousInfo.current;
+    previousInfo.current = { taskId, info };
+    if (previous?.taskId === taskId && !info.syncing && (previous.info.syncing
+      || !info.pending && (previous.info.pending || info.linkVersion !== previous.info.linkVersion))) onSyncedRef.current?.();
+  }, [taskId, info]);
   React.useEffect(() => { onStatus?.(taskId, info); }, [onStatus, taskId, info]);
   if (failed) return <p role="status" className="text-xs text-muted-foreground">Could not check GitHub sync status.</p>;
   if (!info?.connected) return null;
@@ -28,7 +51,7 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
       const refreshed = await api.taskSync({ taskId });
       if (selectedTask.current === taskId) {
         setInfo(refreshed); setFailed(!refreshed.ok);
-        if (kind === "retryTask") setMessage("Ready to retry. Use Sync now in GitHub settings.");
+        if (kind === "retryTask") setMessage("Issue queued for background sync.");
         onChanged?.();
       }
     } catch (error) { if (selectedTask.current === taskId) setMessage(error instanceof Error ? error.message : "Could not update GitHub sync."); }
@@ -48,6 +71,7 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
   }
   return <div role="status" aria-label="GitHub sync status" className="grid gap-1 rounded-lg border bg-muted/50 px-3 py-2 text-xs">
     <span>GitHub · {info.state}</span>
+    {info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}
     {info.repository && <span dir="auto">{info.repository}</span>}
     {info.issueUrl && <button type="button" className="w-fit underline" onClick={() => {
       void markdownRpc.openExternal({ url: info.issueUrl! }).then(result => { if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the issue."); })

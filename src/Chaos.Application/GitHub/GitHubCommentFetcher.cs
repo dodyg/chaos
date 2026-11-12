@@ -15,6 +15,17 @@ public sealed record GitHubCommentFetchResult(int Changed, int PagesRead, bool M
 public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api, GitHubInboundComments inbound, TimeProvider clock) : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    public async Task<GitHubCommentFetchResult> PullIssueAsync(string issueLinkId, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var link = await store.QueryAsync((s, token) => s.GitHub.GetIssueLinkAsync(issueLinkId, token), ct);
+            if (link is not { State: 0, TaskId: not null }) return new(0, 0, false);
+            return await PullCore(link.RepositorySubscriptionId, 20, ct, issueLinkId);
+        }
+        finally { _gate.Release(); }
+    }
     public async Task<GitHubCommentFetchResult> PullAsync(string repositoryId, int pageLimit = 20, CancellationToken ct = default)
     {
         if (pageLimit is < 2 or > 100) throw new ArgumentOutOfRangeException(nameof(pageLimit));
@@ -23,7 +34,7 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
         finally { _gate.Release(); }
     }
 
-    private async Task<GitHubCommentFetchResult> PullCore(string repositoryId, int pageLimit, CancellationToken ct)
+    private async Task<GitHubCommentFetchResult> PullCore(string repositoryId, int pageLimit, CancellationToken ct, string? issueLinkId = null)
     {
         var (repo, account, checkpoint, rotationRow) = await store.QueryAsync(async (s, token) =>
         {
@@ -36,8 +47,9 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
         var previous = checkpoint?.RepositoryVersion == repo.Version ? StoredJsonFormats.ReadSnapshot<GitHubCommentScan>(checkpoint.PayloadJson) : null;
         var since = repo.CommentsCursorUtc?.AddSeconds(-1) ?? previous?.Since ?? clock.GetUtcNow();
         var scan = previous is { Finished: false } ? previous : new(since, null, repo.CommentsCursorUtc ?? since, previous?.Since == since ? previous?.Etag : null, 0, false);
+        if (issueLinkId is not null) scan = scan with { Finished = true };
         int pages = 0, changed = 0;
-        for (; pages < Math.Max(1, pageLimit / 2);)
+        for (; issueLinkId is null && pages < Math.Max(1, pageLimit / 2);)
         {
             var page = await api.ListCommentsAsync(account, repo.Owner, repo.Name, scan.Since, null, scan.NextCursor, scan.NextCursor is null ? scan.Etag : null, ct);
             pages++;
@@ -64,14 +76,19 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
         var reachedEnd = false;
         for (var inspected = 0; inspected < 200 && pages < pageLimit; inspected++)
         {
-            var link = (await store.QueryAsync((s, token) => s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 1, token), ct)).SingleOrDefault();
+            if (issueLinkId is not null && inspected > 0) { reachedEnd = true; break; }
+            var link = issueLinkId is null ? (await store.QueryAsync((s, token) => s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 1, token), ct)).SingleOrDefault()
+                : await store.QueryAsync((s, token) => s.GitHub.GetIssueLinkAsync(issueLinkId, token), ct);
             if (link is null) { reachedEnd = true; after = null; break; }
+            if (link.RepositorySubscriptionId != repo.Id) throw Changed();
             if (link.State != 0 || link.TaskId is null || link.NextAttemptUtc > clock.GetUtcNow() || !await store.QueryAsync(async (s, token) => await s.Tasks.GetAsync(link.TaskId, token) is not null, ct)) { after = link.Id; continue; }
             try
             {
             var row = await store.QueryAsync((s, token) => s.GitHub.GetCommentCheckpointAsync(link.Id, token), ct);
             var state = row?.RepositoryVersion == repo.Version ? StoredJsonFormats.ReadSnapshot<GitHubCommentState>(row.PayloadJson) ?? new() : new GitHubCommentState();
             var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson) ?? throw Changed();
+            if (issueLinkId is not null && state.InitialDone)
+                state = baseline.Comments > state.LastKnownCount ? new GitHubCommentState() : state with { LastCheckedUtc = null, ListEtag = null };
             var mappings = await store.QueryAsync((s, token) => s.GitHub.ListCommentLinksAsync(link.Id, token), ct);
             if (!state.InitialDone && baseline.Comments == 0 && mappings.Count == 0)
             {
@@ -138,6 +155,7 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
                 await SaveIssue(repo, link.Id, state, ct);
             }
             if (!state.InitialDone || due) { pending = true; break; }
+            if (issueLinkId is not null) { reachedEnd = true; break; }
             after = link.Id;
             }
             catch (GitHubApiException error) when (GitHubOutboundCommands.IsLinkError(error.Kind))
@@ -152,7 +170,7 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
             }
         }
         if (!reachedEnd) pending = true;
-        await store.ExecuteAsync(async (s, token) =>
+        if (issueLinkId is null) await store.ExecuteAsync(async (s, token) =>
         {
             if (!await s.GitHub.SaveCheckpointAsync(new(repo.Id, "comment-check", repo.Version, StoredJsonFormats.Snapshot(new GitHubCommentRotation(after)), clock.GetUtcNow()), token)) throw Changed();
             return true;

@@ -10,8 +10,79 @@ public sealed class GitHubSyncEngineTests
     {
         public int Calls { get; private set; }
         public Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null) { Calls++; return run(ct); }
+        public Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct) { Calls++; return run(ct); }
     }
     private static GitHubSyncResult Done() => new(1, 0, 2, 0, false);
+
+    private sealed class ScopedRunner(Func<string, CancellationToken, Task> run) : IGitHubSyncRunner
+    {
+        public List<string> Calls { get; } = [];
+        public async Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null) { Calls.Add("full"); await run("full", ct); return Done(); }
+        public async Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct) { Calls.Add(taskId); await run(taskId, ct); return Done(); }
+    }
+
+    [Test]
+    public async Task TaskActions_DuringFullPass_CoalesceAndRunAfterIt()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new ScopedRunner(async (id, ct) => { if (id == "full") { entered.SetResult(); await release.Task.WaitAsync(ct); } });
+        using var engine = new GitHubSyncEngine(runner, TimeProvider.System);
+        engine.RequestSync(null, "account");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        engine.RequestTaskSync("a"); engine.RequestTaskSync("a"); engine.RequestTaskSync("b");
+        await Assert.That(engine.TaskStatus("a")!.Running).IsTrue();
+        release.SetResult(); await engine.WaitForIdleAsync();
+        await Assert.That(string.Join(",", runner.Calls)).IsEqualTo("full,a,b");
+        await Assert.That(engine.TaskStatus("a")!.Running).IsFalse();
+    }
+
+    [Test]
+    public async Task TaskActions_DuringSameTaskPass_QueueOneFollowupWithoutLosingOtherTasks()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = true;
+        var runner = new ScopedRunner(async (_, ct) => { if (first) { first = false; entered.SetResult(); await release.Task.WaitAsync(ct); } });
+        using var engine = new GitHubSyncEngine(runner, TimeProvider.System);
+        engine.RequestTaskSync("a");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        engine.RequestTaskSync("a"); engine.RequestTaskSync("a"); engine.RequestTaskSync("b");
+        release.SetResult(); await engine.WaitForIdleAsync();
+        await Assert.That(string.Join(",", runner.Calls)).IsEqualTo("a,a,b");
+    }
+
+    [Test]
+    public async Task Replacement_CancelsTaskPassAndDropsQueuedWork()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new ScopedRunner(async (_, ct) => { entered.TrySetResult(); await release.Task.WaitAsync(ct); });
+        using var engine = new GitHubSyncEngine(runner, TimeProvider.System);
+        engine.RequestTaskSync("a"); await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        engine.RequestTaskSync("b");
+        await engine.RunPausedAsync(() => { engine.RequestTaskSync("c"); return Task.CompletedTask; }, CancellationToken.None);
+        await engine.WaitForIdleAsync();
+        await Assert.That(string.Join(",", runner.Calls)).IsEqualTo("a");
+        await Assert.That(engine.TaskStatus("b")).IsNull();
+    }
+
+    [Test]
+    public async Task FullSync_DuringTaskPass_RunsAndRetainsItsOwnStatusAfterQueuedTasks()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new ScopedRunner(async (id, ct) => { if (id == "a") { entered.SetResult(); await release.Task.WaitAsync(ct); } });
+        using var engine = new GitHubSyncEngine(runner, TimeProvider.System);
+        engine.RequestTaskSync("a"); await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        engine.RequestSync(null, "account"); engine.RequestTaskSync("b");
+        await Assert.That(engine.Status.Running).IsTrue();
+        await Assert.That(engine.Status.ConnectionId).IsEqualTo("account");
+        release.SetResult(); await engine.WaitForIdleAsync();
+        await Assert.That(string.Join(",", runner.Calls)).IsEqualTo("a,full,b");
+        await Assert.That(engine.Status.Running).IsFalse();
+        await Assert.That(engine.Status.ConnectionId).IsEqualTo("account");
+    }
 
     [Test]
     public async Task CoalescingNeverAcknowledgesADifferentConnection()

@@ -13,7 +13,7 @@ public static class GitHubCommentMarker
 /// <summary>Posts explicitly queued diary entries, finding their marker before every retry.</summary>
 public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi api, IIdGenerator ids, TimeProvider clock)
 {
-    public async Task<int> RunAsync(string repositoryId, bool post, CancellationToken ct)
+    public async Task<int> RunAsync(string repositoryId, bool post, CancellationToken ct, string? issueLinkId = null)
     {
         var (repo, connection) = await store.QueryAsync(async (s, token) =>
         {
@@ -29,8 +29,9 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
         int posted = 0;
         while (true)
         {
-            var links = await store.QueryAsync((s, token) => s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 200, token), ct);
-            foreach (var link in links.Where(l => l.State == 0 && l.TaskId is not null && (l.NextAttemptUtc is null || l.NextAttemptUtc <= clock.GetUtcNow())))
+            var links = await store.QueryAsync(async (s, token) => issueLinkId is null ? await s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 200, token)
+                : await s.GitHub.GetIssueLinkAsync(issueLinkId, token) is { } link ? new[] { link } : Array.Empty<GitHubIssueLinkRecord>(), ct);
+            foreach (var link in links.Where(l => l.RepositorySubscriptionId == repo.Id && l.State == 0 && l.TaskId is not null && (l.NextAttemptUtc is null || l.NextAttemptUtc <= clock.GetUtcNow())))
             {
                 try
                 {

@@ -104,7 +104,7 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
       </div>
       <div className="grid gap-2 rounded-xl border p-4" aria-label="GitHub sync">
         <Button className="justify-self-start" aria-busy={sync?.running === true} disabled={working || connection.state !== "Active" || !status.repositories.some(r => r.state === "Active")} onClick={() => void syncNow()}><RefreshCw aria-hidden="true" className={sync?.running ? "motion-safe:animate-spin" : undefined}/>{sync?.running ? "Syncing…" : sync?.morePages ? "Continue sync" : "Sync now"}</Button>
-        <p className="text-sm text-muted-foreground">Fetch incoming changes from GitHub. Local edits are not sent to GitHub yet. The first import includes the newest 100 comments; older comments stay on GitHub.</p>
+        <p className="text-sm text-muted-foreground">Sync changes with GitHub. Actions on linked tasks sync that issue in the background. The first import includes the newest 100 comments; older comments stay on GitHub.</p>
         {sync?.running && <p role="status" className="text-sm">Fetching GitHub issues and comments…</p>}
         {sync?.error && <Banner tone="error">{sync.error.message} Some changes may already have arrived; retry to continue.</Banner>}
         {!sync?.running && sync?.created != null && <p role="status" className="text-sm">Imported {sync.created} {sync.created === 1 ? "task" : "tasks"}; updated {sync.updated ?? 0} {sync.updated === 1 ? "task" : "tasks"}; {sync.commentChanges ?? 0} comment {sync.commentChanges === 1 ? "change" : "changes"}.{sync.morePages ? " More pages remain. Continue sync to fetch them." : " This pass is complete."}{sync.conflicts ? ` GitHub won ${sync.conflicts} conflicts; local values are kept in history.` : ""}</p>}

@@ -26,7 +26,7 @@ public sealed record TagIdsResponse(bool Ok, IReadOnlyList<string> TagIds, TaskE
 
 /// <summary>Tag tree, management and tagging RPC (PLAN §15 WP3). Errors are returned as data.</summary>
 [NeoRpcService("tags", Version = 1)]
-public sealed class TagRpcService(TagCommands tags)
+public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("list")]
     public async ValueTask<TagListResponse> ListAsync(TagListRequest request, CancellationToken ct) =>
@@ -92,11 +92,11 @@ public sealed class TagRpcService(TagCommands tags)
 
     [NeoRpcMethod("link")]
     public async ValueTask<TagIdsResponse> LinkAsync(TagLinkRequest request, CancellationToken ct) =>
-        await IdsAsync(async () => (await tags.LinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, Blank(request.TagId), Blank(request.Path)), ct)).TagIds);
+        await IdsAsync(async () => { var result = await tags.LinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, Blank(request.TagId), Blank(request.Path)), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
 
     [NeoRpcMethod("unlink")]
     public async ValueTask<TagIdsResponse> UnlinkAsync(TagUnlinkRequest request, CancellationToken ct) =>
-        await IdsAsync(async () => (await tags.UnlinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, request.TagId), ct)).TagIds);
+        await IdsAsync(async () => { var result = await tags.UnlinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, request.TagId), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
 
     private static async ValueTask<TagListResponse> ListResponseAsync(Func<Task<IReadOnlyList<TagResponse>>> load)
     {

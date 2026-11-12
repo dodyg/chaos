@@ -13,16 +13,17 @@ internal sealed record GitHubSetWrite(string? Label, bool Present, bool IsAssign
 /// <summary>Prepares issue writes against a fresh read and recovers interrupted PATCHes before inbound merging.</summary>
 public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi api, GitHubInboundCommands inbound, TimeProvider clock)
 {
-    public async Task<GitHubOutboundResult> RecoverAsync(string repositoryId, CancellationToken ct)
+    public async Task<GitHubOutboundResult> RecoverAsync(string repositoryId, CancellationToken ct, string? issueLinkId = null)
     {
         var (repo, connection) = await Context(repositoryId, ct);
-        var pending = await store.QueryAsync((s, token) => s.GitHub.ListIssueWritesAsync(repo.Id, token), ct);
+        var pending = await store.QueryAsync(async (s, token) => issueLinkId is null ? await s.GitHub.ListIssueWritesAsync(repo.Id, token)
+            : await s.GitHub.GetIssueWriteAsync(issueLinkId, token) is { } write ? new[] { write } : Array.Empty<GitHubIssueWriteRecord>(), ct);
         int updated = 0, conflicts = 0;
         foreach (var intent in pending)
         {
             if (StoredJsonFormats.ReadSnapshot<GitHubIssueWriteIntent>(intent.PayloadJson)?.CommentEntryId is not null) continue;
             var link = await store.QueryAsync((s, token) => s.GitHub.GetIssueLinkAsync(intent.IssueLinkId, token), ct);
-            if (link is not { State: 0, TaskId: not null } || link.NextAttemptUtc > clock.GetUtcNow()) continue;
+            if (link is not { State: 0, TaskId: not null } || link.RepositorySubscriptionId != repo.Id || link.NextAttemptUtc > clock.GetUtcNow()) continue;
             if (await store.QueryAsync((s, token) => s.Tasks.GetAsync(link.TaskId, token), ct) is null) continue;
             try
             {
@@ -38,7 +39,7 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         return new(0, updated, conflicts);
     }
 
-    public async Task<GitHubOutboundResult> PushAsync(string repositoryId, CancellationToken ct)
+    public async Task<GitHubOutboundResult> PushAsync(string repositoryId, CancellationToken ct, string? issueLinkId = null)
     {
         var (repo, connection) = await Context(repositoryId, ct);
         var account = new GitHubAccount(connection.AccountId, connection.AccountLogin);
@@ -46,8 +47,9 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         int pushed = 0, updated = 0, conflicts = 0;
         while (true)
         {
-            var links = await store.QueryAsync((s, token) => s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 200, token), ct);
-            foreach (var candidate in links.Where(l => l.State == 0 && l.LocalDirty && l.TaskId is not null && (l.NextAttemptUtc is null || l.NextAttemptUtc <= clock.GetUtcNow())))
+            var links = await store.QueryAsync(async (s, token) => issueLinkId is null ? await s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 200, token)
+                : await s.GitHub.GetIssueLinkAsync(issueLinkId, token) is { } link ? new[] { link } : Array.Empty<GitHubIssueLinkRecord>(), ct);
+            foreach (var candidate in links.Where(l => l.RepositorySubscriptionId == repo.Id && l.State == 0 && l.LocalDirty && l.TaskId is not null && (l.NextAttemptUtc is null || l.NextAttemptUtc <= clock.GetUtcNow())))
             {
                 try
                 {
@@ -64,7 +66,7 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
                         if (deferred is not null) { updated += deferred.Updated; conflicts += deferred.Conflicts; continue; }
                         await api.UpdateIssueAsync(account, repo.Owner, repo.Name, issue.Number, write, ct);
                         pushed++;
-                        var recovered = await RecoverAsync(repo.Id, ct);
+                        var recovered = await RecoverAsync(repo.Id, ct, issueLinkId);
                         updated += recovered.Updated; conflicts += recovered.Conflicts;
                     }
                     for (var count = 0; count < 100; count++)
@@ -81,7 +83,7 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
                         else if (setWrite.Present) await api.AddLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
                         else await api.RemoveLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
                         pushed++;
-                        var recovered = await RecoverAsync(repo.Id, ct);
+                        var recovered = await RecoverAsync(repo.Id, ct, issueLinkId);
                         updated += recovered.Updated; conflicts += recovered.Conflicts;
                     }
                 }

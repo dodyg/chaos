@@ -567,3 +567,41 @@ Offline verification: locked restore and Release build passed; all 691 .NET test
 tests passed; Slopwatch found zero issues. No live credential or repository operation was run.
 Live G6 acceptance and installed-MSIX verification remain required. Automatic scheduling, full
 repository views and pull-request links remain G7–G9 work.
+
+## 2026-11-12 (GitHub issue sync after local actions)
+
+Native RPCs queue a task ID only after a successful local mutation. Task edits/status/restores,
+subtasks and checklist conversion, task tag links/unlinks, diary mutations, history field restore
+and self-assignment use this path. Retry resets the link error and queues the same issue; it no
+longer cancels unrelated sync work. Ordinary or ineligible tasks are checked locally and cause
+no GitHub request. Failed local commands never queue work. The RPC returns without waiting for
+GitHub, and dirty flags and existing write intents remain the recovery authority.
+
+The background engine serializes these passes with manual repository/full passes. Queued task IDs
+coalesce, while an action arriving during that task's active pass queues one follow-up. A FIFO
+queue prevents a frequently edited task from starving others. Full-sync activity is retained
+separately so subsequent task passes cannot hide its result in Settings. Restore/reset/pause,
+removal and detach retain cancellation/drain behavior; queued work is cleared before replacement.
+
+Issue-scoped passes refresh repository identity, recover uncertain writes, merge the one current
+issue, refresh that issue's comments with its existing bounded checkpoint logic, and push only
+its pending fields and selected diary entries. They do not read repository-wide issue/comment
+feeds, create an import backup or advance shared repository scan cursors. The existing account,
+pause, sign-in, rate-limit, link-backoff and read/write revalidation checks still apply.
+
+The task notice shows a reduced-motion-aware spinner while queued/running and polls local status
+until completion. A changed settled link version also refreshes the editor if a fast sync finished
+before the first poll. Refreshing a clean editor reloads its current version; unsaved task fields
+are retained. Opening a task does not initiate a GitHub request. Settings copy now describes
+two-way sync and issue actions instead of claiming local edits are never sent.
+
+This increment does not introduce periodic scheduling, a connectivity trigger, automatic retry
+timers or an initial dirty scan. Offline and failed writes remain dirty and can be retried by a
+later action or Retry. Global tag delete/merge and operation-level undo still rely on a later
+issue action or explicit full sync. Live GitHub and installed-MSIX acceptance remain release gates.
+
+Validation: locked restore and Release build passed with no .NET warnings/errors; all 701 .NET
+tests and 96 frontend tests passed, with zero Slopwatch findings. Final desktop verification
+passed all 76 tests. A frontend run under concurrent build/test load timed out on the unchanged
+initial Settings loading assertion; its focused run and the complete isolated rerun passed.
+No test timeout was increased and no assertion was disabled. Live GitHub requests were not used.

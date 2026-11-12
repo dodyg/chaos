@@ -7,7 +7,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http:
 Object.defineProperties(globalThis, { window: { value: dom.window, configurable: true }, document: { value: dom.window.document, configurable: true }, navigator: { value: dom.window.navigator, configurable: true }, HTMLElement: { value: dom.window.HTMLElement, configurable: true } });
 const { render, screen, waitFor, cleanup, act, fireEvent } = await import("@testing-library/react");
 const { GitHubTaskNotice } = await import("./GitHubTaskNotice");
-const ordinary: GitHubTaskSyncResponse = { ok: true, connected: false, pending: false, state: null, error: null, assignedToMe: null, postDiaryByDefault: false, linkVersion: null, hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false };
+const ordinary: GitHubTaskSyncResponse = { ok: true, connected: false, pending: false, state: null, error: null, assignedToMe: null, postDiaryByDefault: false, linkVersion: null, hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false };
 
 test("ordinary tasks show no GitHub mark and only query local task metadata", async () => {
   const requests: string[] = [];
@@ -68,7 +68,7 @@ test("conflict dismissal, retry and detach refresh versioned local metadata", as
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss conflict" }));
     await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Dismiss conflict" }) === null, true));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("Ready to retry. Use Sync now in GitHub settings.");
+    await screen.findByText("Issue queued for background sync.");
     fireEvent.click(screen.getByRole("button", { name: "Keep as ordinary task" }));
     await waitFor(() => assert.equal(screen.queryByRole("status", { name: "GitHub sync status" }) === null, true));
     assert.deepEqual(requests.map(r => r.expectedVersion), ["7", "8", "9"]);
@@ -84,5 +84,36 @@ test("a failed task action keeps the notice and displays its error", async () =>
     fireEvent.click(await screen.findByRole("button", { name: "Keep as ordinary task" }));
     await screen.findByText("Reload this task and try again.");
     assert.equal(screen.getByRole("button", { name: "Keep as ordinary task" }).hasAttribute("disabled"), false);
+  } finally { cleanup(); }
+});
+
+test("issue sync polls local status and refreshes the task when background work finishes", async () => {
+  let response = { ...ordinary, connected: true, state: "Linked", syncing: true, pending: true };
+  let refreshed = 0;
+  const api = { ...gitHubRpc, taskSync: async () => response };
+  render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api} pollIntervalMs={10} onSynced={() => { refreshed++; }}/>);
+  try {
+    await screen.findByText("Syncing this issue…");
+    response = { ...response, syncing: false, pending: false };
+    await waitFor(() => assert.equal(refreshed, 1));
+    assert.equal(screen.queryByText("Syncing this issue…") === null, true);
+    assert.equal(screen.queryByText("Not sent to GitHub yet.") === null, true);
+  } finally { cleanup(); }
+});
+
+test("an issue sync finishing before status is read still refreshes once", async () => {
+  let response = { ...ordinary, connected: true, state: "Linked", linkVersion: "1" };
+  let refreshed = 0, reads = 0;
+  const api = { ...gitHubRpc, taskSync: async () => { reads++; return response; } };
+  const props = { taskId: "t1", version: "1", api, onSynced: () => { refreshed++; } };
+  const view = render(<GitHubTaskNotice {...props} revision={0}/>);
+  try {
+    await screen.findByRole("button", { name: "Keep as ordinary task" });
+    response = { ...response, linkVersion: "2" };
+    view.rerender(<GitHubTaskNotice {...props} revision={1}/>);
+    await waitFor(() => assert.equal(refreshed, 1));
+    view.rerender(<GitHubTaskNotice {...props} revision={2}/>);
+    await waitFor(() => assert.equal(reads, 3));
+    assert.equal(refreshed, 1);
   } finally { cleanup(); }
 });
