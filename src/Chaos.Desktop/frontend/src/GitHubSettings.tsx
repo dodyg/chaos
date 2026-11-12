@@ -1,4 +1,5 @@
 import React from "react";
+import { RefreshCw } from "lucide-react";
 import { gitHubRpc as githubRpc, type GitHubStatusResponse, type GitHubCandidateDto, type GitHubRepositoryDto, type GitHubFilterDto, type GitHubTargetDto, type GitHubOperationResponse } from "#neoastra";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,7 +103,7 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
         <Button variant="outline" disabled={working} onClick={() => setConfirm("disconnect")}>Disconnect</Button>
       </div>
       <div className="grid gap-2 rounded-xl border p-4" aria-label="GitHub sync">
-        <Button className="justify-self-start" disabled={working || connection.state !== "Active" || !status.repositories.some(r => r.state === "Active")} onClick={() => void syncNow()}>{sync?.running ? "Syncing…" : sync?.morePages ? "Continue sync" : "Sync now"}</Button>
+        <Button className="justify-self-start" aria-busy={sync?.running === true} disabled={working || connection.state !== "Active" || !status.repositories.some(r => r.state === "Active")} onClick={() => void syncNow()}><RefreshCw aria-hidden="true" className={sync?.running ? "motion-safe:animate-spin" : undefined}/>{sync?.running ? "Syncing…" : sync?.morePages ? "Continue sync" : "Sync now"}</Button>
         <p className="text-sm text-muted-foreground">Fetch incoming changes from GitHub. Local edits are not sent to GitHub yet. The first import includes the newest 100 comments; older comments stay on GitHub.</p>
         {sync?.running && <p role="status" className="text-sm">Fetching GitHub issues and comments…</p>}
         {sync?.error && <Banner tone="error">{sync.error.message} Some changes may already have arrived; retry to continue.</Banner>}

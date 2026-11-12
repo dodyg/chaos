@@ -22,6 +22,48 @@ function row(id: string, title: string): TaskResponse {
   return { id, title, spaceId: "space", containerId: id, notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null };
 }
 
+test("completion filtering covers sections and preserves full ordering when hidden tasks intervene", async () => {
+  const container: ContainerResponse = { id: "project", name: "Sprint", kind: "Project", version: "1", archived: false, deadlineDate: null };
+  const items = [
+    { ...row("first", "First open task"), containerId: "project", sectionId: "phase" },
+    { ...row("done", "Completed task"), containerId: "project", sectionId: "phase", status: "Done" },
+    { ...row("last", "Last open task"), containerId: "project", sectionId: "phase", status: "InProgress" },
+    { ...row("cancelled", "Cancelled task"), containerId: "project", status: "Cancelled" },
+  ];
+  const moves: number[] = [];
+  const api = {
+    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      reorder: async (request: { insertionIndex: number }) => { moves.push(request.insertionIndex); return { ok: true, task: items[0], error: null, operationId: "move", warning: null }; },
+    },
+    containerRpc: { ...containerRpc,
+      list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
+      tasks: async () => ({ ok: true, tasks: items, error: null }),
+      sections: async () => ({ ok: true, sections: [{ id: "phase", title: "Phase", version: "1" }], error: null }),
+      deletedSections: async () => ({ ok: true, sections: [], error: null }),
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  try {
+    await user.click(await screen.findByRole("button", { name: "Sprint" }));
+    await screen.findByRole("button", { name: "Completed task" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "open");
+    assert.equal(screen.queryByRole("button", { name: "Completed task" }) === null, true);
+    assert.equal(screen.queryByRole("button", { name: "Cancelled task" }) === null, true);
+    assert.ok(screen.getByRole("button", { name: "Last open task" }));
+    await user.click(screen.getByRole("button", { name: "Move First open task down" }));
+    await waitFor(() => assert.deepEqual(moves, [2]));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "finished");
+    assert.ok(screen.getByRole("button", { name: "Completed task" }));
+    assert.ok(screen.getByRole("button", { name: "Cancelled task" }));
+    assert.equal(screen.queryByRole("button", { name: "First open task" }) === null, true);
+    assert.ok(screen.getByText("Showing 2 of 4 tasks"));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "all");
+    assert.ok(screen.getByRole("button", { name: "First open task" }));
+    assert.ok(screen.getByText("Showing 4 of 4 tasks"));
+  } finally { cleanup(); }
+});
+
 test("deleting an active repeating task offers skip or end and delete", async () => {
   const repeated = { ...row("repeat", "Repeated"), containerId: "inbox" };
   let ended = false;

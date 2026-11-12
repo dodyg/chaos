@@ -79,6 +79,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [editorTab, setEditorTab] = React.useState("notes");
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
+  const [completionFilter, setCompletionFilter] = React.useState("all");
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
   const [githubTask, setGitHubTask] = React.useState<{ taskId: string; info: GitHubTaskSyncResponse | null } | null>(null);
@@ -603,16 +604,22 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   function taskList(rows: TaskResponse[], name: string) {
     const order = rows.map(row => row.id);
     const byId = (id: string) => rows.find(row => row.id === id)!;
+    function move(task: TaskResponse, to: number) {
+      const target = rows[to];
+      if (!target) return;
+      const siblings = tasks.filter(row => row.containerId === task.containerId && row.sectionId === task.sectionId);
+      reorderTask(task, siblings.findIndex(row => row.id === target.id));
+    }
     return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div className={rowClass(editing?.id === task.id, task.status)}
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
-      {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => reorderTask(byId(id), insertionIndex))}>
+      {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => move(byId(id), insertionIndex))}>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
       <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => setTaskStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <button data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
-      {rowActions(task.title, index, rows.length, to => reorderTask(task, to), () => void requestTaskDeletion(task))}
+      {rowActions(task.title, index, rows.length, to => move(task, to), () => void requestTaskDeletion(task))}
     </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
       <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
       {(isFinished(task.status) ? ["NotStarted"] : statuses.filter(status => status !== "Done")).map(status => <ContextMenu.Item key={status} disabled={busy || status === task.status} className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50" onSelect={() => void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: null }), saved => setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current))}>{isFinished(task.status) ? "Reopen (previous status)" : label(status)}</ContextMenu.Item>)}
@@ -621,9 +628,10 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   function groupHeading(text: string, count?: number) {
     return <h3 className="flex items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{text}{count !== undefined && <Count>{count}</Count>}</h3>;
   }
-  const unsectioned = tasks.filter(task => task.sectionId === null);
+  const visibleTasks = tasks.filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)));
+  const unsectioned = visibleTasks.filter(task => task.sectionId === null);
   const knownSectionIds = new Set(sections.map(section => section.id));
-  const unknownSections = [...new Set(tasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
+  const unknownSections = [...new Set(visibleTasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
   const selected = containers.find(c => c.id === containerId);
   const listName = selected?.name ?? "Inbox";
   const openCount = tasks.filter(t => !isFinished(t.status)).length;
@@ -746,10 +754,19 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
           placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home`} onSubmit={saveCaptured}/>
 
+        <div className="flex flex-wrap items-center gap-3">
+          <Field label="Completion"><NativeSelect value={completionFilter} onChange={e => setCompletionFilter(e.target.value)}>
+            <NativeSelectOption value="all">All tasks</NativeSelectOption>
+            <NativeSelectOption value="open">Open tasks</NativeSelectOption>
+            <NativeSelectOption value="finished">Finished tasks</NativeSelectOption>
+          </NativeSelect></Field>
+          <p role="status" className="text-xs text-muted-foreground">Showing {visibleTasks.length} of {tasks.length} tasks</p>
+        </div>
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
+        {tasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All tasks to see everything in this list.</EmptyState>}
         {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
-        {sections.map(section => { const rows = tasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">No tasks in this section.</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
-        {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(tasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
+        {sections.map(section => { const rows = visibleTasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">{completionFilter === "all" ? "No tasks in this section." : `No ${completionFilter} tasks in this section.`}</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
+        {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(visibleTasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
 
         {containerId && <form className="flex gap-2" onSubmit={createSection}>
           <label htmlFor="new-section" className="sr-only">New section</label>
