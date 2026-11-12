@@ -526,6 +526,38 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
 
     private static int Bounded(int limit) => limit is >= 1 and <= 200 ? limit : throw new ArgumentOutOfRangeException(nameof(limit));
 
+    public async Task<GitHubSyncCheckpointRecord?> GetCheckpointAsync(string repositoryId, string kind, CancellationToken ct)
+    {
+        var rows = await QueryAsync("SELECT * FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id AND Kind=$kind;",
+            r => new GitHubSyncCheckpointRecord(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetString(3), StorageFormats.ParseInstant(r.GetString(4))!.Value), ct, ("$id", repositoryId), ("$kind", kind));
+        return rows.SingleOrDefault();
+    }
+
+    public async Task<bool> SaveCheckpointAsync(GitHubSyncCheckpointRecord row, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO GitHubSyncCheckpoints(RepositorySubscriptionId,Kind,RepositoryVersion,PayloadJson,UpdatedAtUtc)
+            SELECT r.Id,$kind,r.Version,$json,$now FROM GitHubRepositories r JOIN GitHubConnections c ON c.Id=r.ConnectionId
+            WHERE r.Id=$id AND r.Version=$version AND r.DeletedAtUtc IS NULL AND r.State=0 AND c.DeletedAtUtc IS NULL AND c.State=0
+            ON CONFLICT(RepositorySubscriptionId,Kind) DO UPDATE SET RepositoryVersion=excluded.RepositoryVersion,PayloadJson=excluded.PayloadJson,UpdatedAtUtc=excluded.UpdatedAtUtc;
+            """;
+        command.Parameters.AddWithValue("$id", row.RepositorySubscriptionId);
+        command.Parameters.AddWithValue("$kind", row.Kind);
+        command.Parameters.AddWithValue("$version", row.RepositoryVersion);
+        command.Parameters.AddWithValue("$json", row.PayloadJson);
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(row.UpdatedAtUtc));
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task ClearCheckpointsAsync(string repositoryId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id;";
+        command.Parameters.AddWithValue("$id", repositoryId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken ct, params (string Name, object Value)[] parameters)
     {
         using var command = connection.CreateCommand();

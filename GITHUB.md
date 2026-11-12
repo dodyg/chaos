@@ -367,7 +367,7 @@ The sync engine's own write transaction ends by setting `LocalDirty` to the valu
 triggers firing during inbound writes do not leave a false dirty flag. Write a test for exactly
 that.
 
-### Migration 015 — `015_github_pull_requests.sql` (package G9)
+### Migration 016 — `016_github_pull_requests.sql` (package G9)
 
 **`GitHubPullRequestLinks`** — `(IssueLinkId, PullRequestId)` PK, `RepositoryFullName`, `Number`,
 `Title`, `HtmlUrl`, `State` (0 Open, 1 Draft, 2 Merged, 3 Closed), `ReviewDecision` (NULL,
@@ -1007,6 +1007,10 @@ changes. Comment ingestion keeps the newest 100 new comments, revisions on remot
 hidden/deleted state and diary text after remote deletion. Blank/overlong checklist titles and
 labels that cannot form a valid local tag path remain in notes/baselines; they never become
 accidental remote removals. Aggregate versions advance for tag-only inbound changes.
+Migration 015 adds device-local query/page checkpoints, excluded from archives and cleared on
+restore or subscription scope changes. Schema 13/14 upgrade safety backups and checkpoint
+restart/stale-version/archive/restore tests pass. Full Release verification: 617 tests passed,
+Slopwatch 0 findings. G9's pull-request migration is consequently 016.
 This is a local application component, not a completed G5: durable pagination checkpoints,
 fetch orchestration, pre-import backups and manual Sync now remain to be wired and tested.
 Final separate-output Release build passed with no warnings/errors; all 613 .NET tests passed,
@@ -1050,7 +1054,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/015_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/016_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

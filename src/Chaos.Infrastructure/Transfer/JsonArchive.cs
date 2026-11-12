@@ -65,6 +65,7 @@ public static class JsonArchive
         ["SearchDocuments"] = "search index, rebuilt",
         ["SearchIndexState"] = "search index, rebuilt",
         ["GitHubSyncRuns"] = "device synchronization diagnostics",
+        ["GitHubSyncCheckpoints"] = "device pagination, query and pre-import backup bookkeeping",
     };
 
     /// <summary>Columns reset on export because they describe this machine, not the data.</summary>

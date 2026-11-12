@@ -117,6 +117,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             CheckVersion(row.Version, command.ExpectedVersion);
             await Target(s, space.Id, command.TargetContainerId, command.TargetSectionId, token);
             var changed = filter != row.FilterJson || command.MilestonesAsProjects != row.MilestonesAsProjects;
+            if (changed) await s.GitHub.ClearCheckpointsAsync(row.Id, token);
             return await s.GitHub.UpdateRepositoryAsync(row with { TargetContainerId = command.TargetContainerId, TargetSectionId = command.TargetSectionId,
                 FilterJson = filter, MilestonesAsProjects = command.MilestonesAsProjects, IssuesCursorUtc = changed ? null : row.IssuesCursorUtc,
                 IssuesEtag = changed ? null : row.IssuesEtag, InitialImportDoneUtc = changed ? null : row.InitialImportDoneUtc, UpdatedAtUtc = now }, row.Version, token) ?? throw Conflict();
@@ -178,6 +179,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             if (links.Count < 200) break;
             after = links[^1].Id;
         }
+        await s.GitHub.ClearCheckpointsAsync(row.Id, ct);
         return await s.GitHub.UpdateRepositoryAsync(row with { State = 1, DeletedAtUtc = now, UpdatedAtUtc = now,
             IssuesCursorUtc = null, CommentsCursorUtc = null, IssuesEtag = null, CommentsEtag = null, LabelsEtag = null, MilestonesEtag = null,
             InitialImportDoneUtc = null, LastErrorKind = null, LastErrorMessage = null }, row.Version, ct) ?? throw Conflict();

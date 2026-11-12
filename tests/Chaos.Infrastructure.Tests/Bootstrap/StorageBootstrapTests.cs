@@ -17,7 +17,9 @@ namespace Chaos.Infrastructure.Tests.Bootstrap;
 public sealed class StorageBootstrapTests
 {
     [Test]
-    public async Task StartAsync_SchemaThirteen_BacksUpBeforeGitHubUpgrade()
+    [Arguments(13, "GitHubConnections")]
+    [Arguments(14, "GitHubSyncCheckpoints")]
+    public async Task StartAsync_OlderSchema_BacksUpBeforeGitHubUpgrade(int oldVersion, string newTable)
     {
         var root = TestPaths.NewDataRoot();
         var options = StorageOptions.FromDataRoot(root);
@@ -25,18 +27,19 @@ public sealed class StorageBootstrapTests
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = options.DatabasePath, Pooling = false }.ToString()))
         {
             await connection.OpenAsync();
-            await Chaos.Infrastructure.Migrations.SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 13);
+            await Chaos.Infrastructure.Migrations.SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, oldVersion);
         }
         using var handle = await StartAsync(root);
-        await Assert.That(handle.SchemaVersion).IsEqualTo(14L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(15L);
         var manifest = new BackupManager(handle.Store.Source, options.BackupsDirectory, "0.1.0", new FixedTimeProvider(Now)).Latest();
         await Assert.That(manifest).IsNotNull();
         await Assert.That(manifest!.Reason).IsEqualTo(BackupReason.PreMigration);
-        await Assert.That(manifest.SchemaVersion).IsEqualTo(13L);
+        await Assert.That(manifest.SchemaVersion).IsEqualTo((long)oldVersion);
         using var backup = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(options.BackupsDirectory, manifest.FileName), Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
         await backup.OpenAsync();
         using var probe = backup.CreateCommand();
-        probe.CommandText = "SELECT count(*) FROM sqlite_master WHERE name='GitHubConnections';";
+        probe.CommandText = "SELECT count(*) FROM sqlite_master WHERE name=$table;";
+        probe.Parameters.AddWithValue("$table", newTable);
         await Assert.That(Convert.ToInt64(await probe.ExecuteScalarAsync())).IsEqualTo(0L);
     }
 
@@ -98,7 +101,7 @@ public sealed class StorageBootstrapTests
     {
         using var handle = await StartAsync(TestPaths.NewDataRoot());
 
-        await Assert.That(handle.SchemaVersion).IsEqualTo(14L);
+        await Assert.That(handle.SchemaVersion).IsEqualTo(15L);
         await Assert.That(handle.PrimaryProfileId).IsNotEmpty();
         await Assert.That(CountRows(handle.DatabasePath, "Profiles")).IsEqualTo(1L);
         await Assert.That(CountRows(handle.DatabasePath, "Spaces")).IsEqualTo(1L);

@@ -34,4 +34,7 @@ public interface IGitHubStore
     Task ReplaceChecklistItemsAsync(string issueLinkId, IReadOnlyList<GitHubChecklistItemRecord> rows, CancellationToken ct);
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListRepositoryLinksAsync(string repositoryId, string? afterId, int limit, CancellationToken ct);
     Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct);
+    Task<GitHubSyncCheckpointRecord?> GetCheckpointAsync(string repositoryId, string kind, CancellationToken ct);
+    Task<bool> SaveCheckpointAsync(GitHubSyncCheckpointRecord row, CancellationToken ct);
+    Task ClearCheckpointsAsync(string repositoryId, CancellationToken ct);
 }

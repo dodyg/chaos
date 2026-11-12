@@ -218,6 +218,17 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
             jobs.ExecuteNonQuery();
         }
 
+        using (var github = connection.CreateCommand())
+        {
+            github.CommandText = """
+                DELETE FROM GitHubSyncCheckpoints;
+                UPDATE GitHubRepositories SET IssuesCursorUtc=NULL,CommentsCursorUtc=NULL,IssuesEtag=NULL,CommentsEtag=NULL,LabelsEtag=NULL,MilestonesEtag=NULL;
+                UPDATE GitHubConnections SET RateLimitResetUtc=NULL;
+                UPDATE GitHubIssueLinks SET IssueEtag=NULL,NextAttemptUtc=NULL,ErrorAttempts=0;
+                UPDATE GitHubCommentLinks SET NextAttemptUtc=NULL,ErrorAttempts=0;
+                """;
+            await github.ExecuteNonQueryAsync(ct);
+        }
         return (version, BackupManager.ReadCounts(connection));
     }
 
