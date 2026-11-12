@@ -403,3 +403,33 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   Comment diary IDs are preserved when links are kept so pending-post markers remain stable;
   a colliding comment diary ID also detaches the imported task. Imported links are dirty for
   reconciliation, and device retry/ETag state is cleared. Full restore is still device-gated.
+
+## 2026-11-11 (GitHub G3 transport)
+
+- **CLI only reads local metadata and credentials.** Setup reads the configured login using
+  `gh config get user --host github.com`; token lookup names that account and uses `--no-refresh`.
+  Login/refresh stays outside Chaos. This avoids letting a CLI refresh path or configured API
+  host bypass Chaos's direct-HTTP destination policy. Switching the active CLI account does
+  not change an existing connection while its saved account credential still verifies by ID.
+- **Each API operation verifies one immutable credential snapshot.** `/user` and the operation
+  use the same captured credential; no issue body is sent on a mismatch. Only setup establishes
+  the initial account identity. Credentials never cross the application port or RPC, persist,
+  appear in URLs/arguments/environment, or enter error/log text. Redirects and cookies are off.
+- **The adapter returns typed REST pages and GraphQL references.** Conditional requests preserve
+  server pagination cursors and ETags; cursors are restricted to the API origin. Writes are
+  serialized/spaced, rate-limit resets pause further requests, and the last 100 requests are
+  reserved for essential work. Native counters include identity verification requests, so a
+  no-change sync may have 200 identity responses as well as 304 list responses. Dot-segment
+  label names use the documented GraphQL ID mutation rather than a normalized REST URL path.
+  See [GitHub Issues GraphQL reference](https://docs.github.com/en/graphql/reference/issues#removelabelsfromlabelable).
+- **G3 has deterministic process and HTTP seams.** Tests use synthetic credentials, fake child
+  processes/HTTP handlers, and an in-memory remote GitHub API with real SQLite in integration
+  tests. This does not substitute for the live credential, permissions, proxy or installed-MSIX
+  release gates approved by the user. Machine CLI discovery currently targets Program Files.
+
+G3 follow-up (2026-11-12): GraphQL pull-request references use `fullDatabaseId` and retain
+64-bit numeric identity; dot-only label names are removed through GraphQL node IDs. Read
+redirects resolve against their original URI, are validated to the API origin, and are followed
+at most once. Mutations never redirect automatically. Both headers and response-body buffering
+share a 30-second deadline. These details have offline regression tests; live checks remain
+release gates.

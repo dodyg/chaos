@@ -5,7 +5,7 @@
 > existing GitHub CLI login and use it in memory. This decision supersedes the GitHub App proposal and the earlier ban on `gh auth token` and tokens in Chaos.
 > GitHub CLI owns persistent credentials; Chaos must never store tokens in Credential Manager,
 > SQLite, backups, exports, logs, exceptions, RPC, renderer, command lines, URLs or environment.
-> Invoke trusted `gh auth token --hostname github.com --user <login>` directly without a shell,
+> Invoke trusted `gh auth token --hostname github.com --user <login> --no-refresh` directly without a shell,
 > capture bounded stdout privately, and discard all diagnostic output after sanitization. Clear
 > inherited token/debug/host overrides; never pass credentials to another process. Resolve one
 > token snapshot for a request, verify `/user` with that exact token against the connected numeric
@@ -27,6 +27,13 @@
 > implementable. Per user approval, outstanding live G0 checks are release gates; offline-tested
 > G2 and later work may proceed. Keep live evidence incomplete until actually verified.
 
+> **G3 transport detail:** CLI children only read local configuration/credentials: `gh config
+> get user --host github.com` for setup metadata and account-specific `gh auth token` with
+> `--no-refresh`. Expired authorization requires the user to refresh/sign in externally.
+> CLI active-account selection is used during setup; existing connections use their saved login
+> and verified numeric ID, so switching the CLI's active account does not silently change the
+> Chaos account. Current support targets the standard Program Files installation and baseline
+> CLI version 2.103.3. Direct API requests own host/redirect, timeout, rate and size controls.
 Prepared 11 November 2026 from `SPEC.md` (Connecting to other systems → GitHub Issues), `PLAN.md`
 and the Phase 1 code as it stands at commit `2ddc3fe`. This is a handoff for implementing agents,
 not a claim that the feature exists. Work through the packages in section 12 in order, keep their
@@ -937,7 +944,7 @@ backup predates migration 014. Final `eng/verify.ps1`: 544 passed, clean Release
 0 findings. Frontend: all 79 passed with sequential file execution; a reminder test now waits
 for the post-log action to become enabled. G1/G2 offline implementation gates are complete;
 G0 live API limits, credential/account-switch and installed-MSIX checks remain release gates.
-### [ ] G3 — GitHub CLI client
+### [x] G3 — GitHub CLI authentication and direct API client
 
 **Depends on:** G0. Can run in parallel with G1–G2 (different files). **Files:**
 `Abstractions/GitHubApi.cs`, `Infrastructure/GitHub/*`, process-runner and API test fakes
@@ -947,6 +954,13 @@ Implement section 5 transport against the G0-verified CLI behavior: structured e
 conditional requests, pagination, rate limiting, error classification, account checks, GraphQL,
 size caps and sanitization. No sync logic. **Tests:** client list in section 11. **Exit:** client
 tests green; no credentials or issue text in exception strings or captured trace output.
+
+**Progress (2026-11-12, G3 completion):** Added account-bound CLI credential retrieval and direct
+REST/GraphQL calls, strict destination validation, bounded processes and responses, pagination,
+conditional reads, rate limits and sanitized failures. Fake-process and HTTP tests cover account
+switching without reading live credentials. Final `eng/verify.ps1`: clean Release build,
+585 passed, Slopwatch 0 findings. Frontend remains at 79 passing tests (unchanged in G3).
+Live CLI credentials, permissions and installed-MSIX checks remain release gates.
 
 ### [ ] G4 — Connect, repositories and settings UI
 
@@ -971,8 +985,7 @@ Steps 1–5 and 7 of section 6.1 for inbound only, plus 6.3, 6.5 (label → tag)
 diary), 6.8, and the Out of scope / Unavailable rules. Local edits on connected tasks are allowed
 but not sent yet; the task detail must not claim they were sent (show "Not sent to GitHub yet").
 **Tests:** Import and Inbound rows of section 11. **Exit:** importing a real test repository via
-Sync now creates the expected tasks, subtasks, tags and diary; a second pass with no remote change
-makes only 304 requests.
+Sync now creates the expected tasks, subtasks, tags and diary; an unchanged sync makes no writes and repeating the same conditional list request uses 304 responses; account-verification reads may return 200.
 
 ### [ ] G6 — Outbound sync, merge and conflicts
 

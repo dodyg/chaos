@@ -100,3 +100,25 @@ Every project restores the `win-x64` RID (`Directory.Build.props`), so the lock 
   `dotnet tests/Chaos.Domain.Tests/bin/Release/net11.0/Chaos.Domain.Tests.dll`) are the
   documented fallback in restricted environments and are encoded in `eng/verify.ps1`.
 - `frontend/.npmrc` sets `install-links=true`; see above.
+
+## GitHub transport baseline (G3, 2026-11-11)
+
+- GitHub CLI minimum supported baseline: **2.103.3**, the installed version checked during G0.
+  Discovery currently accepts the standard machine installation under `Program Files\GitHub
+  CLI\gh.exe`; alternate/user-local installations are not yet supported.
+- Setup metadata is read locally using `gh config get user --host github.com` (verified to return
+  the configured login). Credential retrieval uses explicit hostname/user and `--no-refresh`;
+  the user refreshes or signs in outside Chaos when authorization expires. See
+  [config get](https://cli.github.com/manual/gh_config_get) and
+  [auth token](https://cli.github.com/manual/gh_auth_token).
+- REST API version remains `2026-03-10`. Authentication and issue requests use direct HTTPS
+  to `api.github.com`, source-generated JSON, no redirects/cookies, 30-second request/body
+  deadlines, a 16 MiB response cap and 1 MiB request cap. CLI streams are capped at 16,384
+  characters, and child execution at 30 seconds. No new dependency was added.
+- These are implementation baselines, not a claim that credential/account-switch or installed
+  MSIX acceptance has passed; those remain live release gates.
+
+G3 follow-up (2026-11-12): pull-request identity uses GraphQL `fullDatabaseId` (64-bit),
+not the deprecated `databaseId`; the decoder accepts numeric or string BigInt values. The
+[GitHub pull-request reference](https://docs.github.com/en/graphql/reference/pulls) documents
+that distinction. No credential retrieval was run during the offline test gate.
