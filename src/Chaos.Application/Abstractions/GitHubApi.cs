@@ -28,6 +28,7 @@ public sealed record GitHubIssue(long Id, string NodeId, long Number, string Htm
 public sealed record GitHubComment(long Id, string Body, GitHubUser User, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string HtmlUrl, string? IssueUrl = null);
 public sealed record GitHubPage<T>(IReadOnlyList<T> Items, string? NextCursor, string? Etag, bool NotModified, long? RateLimitRemaining, DateTimeOffset? RateLimitResetUtc, string? PreviousCursor = null, string? LastCursor = null);
 public sealed record GitHubIssueUpdate(string? Title = null, string? Body = null, string? State = null, string? StateReason = null);
+public sealed record GitHubIssueRead(GitHubIssue? Issue, string? Etag, bool NotModified);
 public sealed record GitHubPullRequestRef(long Id, string NodeId, string RepositoryFullName, long Number, string Title, string HtmlUrl, string State, bool IsDraft, bool Merged, string? ReviewDecision);
 
 /// <summary>No credentials or HTTP types cross this port. Setup is called only by explicit user action.</summary>
@@ -38,8 +39,9 @@ public interface IGitHubApi
     Task<GitHubAccount> GetSetupAccountAsync(CancellationToken ct);
     Task<GitHubPage<GitHubRepository>> ListRepositoriesAsync(GitHubAccount account, string? cursor, string? etag, CancellationToken ct);
     Task<GitHubRepository> GetRepositoryAsync(GitHubAccount account, string owner, string name, CancellationToken ct);
-    Task<GitHubPage<GitHubIssue>> ListIssuesAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, string? cursor, string? etag, CancellationToken ct);
+    Task<GitHubPage<GitHubIssue>> ListIssuesAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, string? cursor, string? etag, CancellationToken ct, string? state = null);
     Task<GitHubIssue> GetIssueAsync(GitHubAccount account, string owner, string name, long number, CancellationToken ct);
+    Task<GitHubIssueRead> ReadIssueAsync(GitHubAccount account, string owner, string name, long number, string? etag, CancellationToken ct);
     Task<GitHubIssue> UpdateIssueAsync(GitHubAccount account, string owner, string name, long number, GitHubIssueUpdate update, CancellationToken ct);
     Task<GitHubPage<GitHubLabel>> ListLabelsAsync(GitHubAccount account, string owner, string name, string? cursor, string? etag, CancellationToken ct);
     Task<GitHubPage<GitHubMilestone>> ListMilestonesAsync(GitHubAccount account, string owner, string name, string? cursor, string? etag, CancellationToken ct);

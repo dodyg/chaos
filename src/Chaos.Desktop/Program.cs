@@ -171,6 +171,8 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(GitHubTaskSyncRequest))]
+[JsonSerializable(typeof(GitHubTaskSyncResponse))]
 [JsonSerializable(typeof(GitHubSyncRequest))]
 [JsonSerializable(typeof(GitHubSyncDto))]
 [JsonSerializable(typeof(GitHubSyncResponse))]

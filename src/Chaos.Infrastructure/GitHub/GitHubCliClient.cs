@@ -39,11 +39,23 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
     public Task<GitHubRepository> GetRepositoryAsync(GitHubAccount account, string owner, string name, CancellationToken ct) =>
         Read(account, HttpMethod.Get, Repo(owner, name), null, GitHubRestJson.Default.GitHubRepository, ct);
 
-    public Task<GitHubPage<GitHubIssue>> ListIssuesAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, string? cursor, string? etag, CancellationToken ct) =>
-        Page(account, cursor ?? Repo(owner, name) + "/issues?state=all&sort=updated&direction=asc&per_page=100" + Since(since), etag, GitHubRestJson.Default.GitHubIssueArray, ct);
+    public Task<GitHubPage<GitHubIssue>> ListIssuesAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, string? cursor, string? etag, CancellationToken ct, string? state = null) =>
+        Page(account, cursor ?? Repo(owner, name) + "/issues?state=" + IssueState(state) + "&sort=updated&direction=asc&per_page=100" + Since(since), etag, GitHubRestJson.Default.GitHubIssueArray, ct);
 
     public Task<GitHubIssue> GetIssueAsync(GitHubAccount account, string owner, string name, long number, CancellationToken ct) =>
         Read(account, HttpMethod.Get, Issue(owner, name, number), null, GitHubRestJson.Default.GitHubIssue, ct);
+
+    public async Task<GitHubIssueRead> ReadIssueAsync(GitHubAccount account, string owner, string name, long number, string? etag, CancellationToken ct)
+    {
+        using var response = await ReadResponse(account, HttpMethod.Get, Issue(owner, name, number), null, ct, etag);
+        if (response.StatusCode == HttpStatusCode.NotModified) return new(null, response.Headers.ETag?.ToString() ?? etag, true);
+        try
+        {
+            var issue = await JsonSerializer.DeserializeAsync(await response.Content.ReadAsStreamAsync(ct), GitHubRestJson.Default.GitHubIssue, ct) ?? throw new GitHubApiException(GitHubErrorKind.Server);
+            return new(issue, response.Headers.ETag?.ToString(), false);
+        }
+        catch (JsonException) { throw new GitHubApiException(GitHubErrorKind.Server); }
+    }
 
     public Task<GitHubIssue> UpdateIssueAsync(GitHubAccount account, string owner, string name, long number, GitHubIssueUpdate update, CancellationToken ct) =>
         Read(account, HttpMethod.Patch, Issue(owner, name, number), JsonSerializer.Serialize(update, GitHubRestJson.Default.GitHubIssueUpdate), GitHubRestJson.Default.GitHubIssue, ct);
@@ -136,6 +148,7 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
     private static string Repo(string owner, string name) => "/repos/" + Segment(owner) + "/" + Segment(name);
     private static string Issue(string owner, string name, long number) => Repo(owner, name) + "/issues/" + Number(number);
     private static string Number(long number) => number > 0 ? number.ToString(CultureInfo.InvariantCulture) : throw new GitHubApiException(GitHubErrorKind.Validation);
+    private static string IssueState(string? state) => state is null or "all" ? "all" : state is "open" or "closed" ? state : throw new GitHubApiException(GitHubErrorKind.Validation);
     private static string Since(DateTimeOffset? since) => since is { } value ? "&since=" + Uri.EscapeDataString(value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)) : "";
 
     private static string Segment(string text, bool allowSlash = false)
@@ -179,9 +192,9 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
         catch (JsonException) { throw new GitHubApiException(GitHubErrorKind.Server); }
     }
 
-    private async Task<HttpResponseMessage> ReadResponse(GitHubAccount account, HttpMethod method, string path, string? body, CancellationToken ct)
+    private async Task<HttpResponseMessage> ReadResponse(GitHubAccount account, HttpMethod method, string path, string? body, CancellationToken ct, string? etag = null)
     {
-        try { return await Request(account, method, path, body, null, ct); }
+        try { return await Request(account, method, path, body, etag, ct); }
         catch (GitHubApiException error) when (method == HttpMethod.Get && error.Kind == GitHubErrorKind.Moved && error.MovedToUrl is not null)
         {
             // Follow one verified read redirect only. A write is never forwarded automatically.

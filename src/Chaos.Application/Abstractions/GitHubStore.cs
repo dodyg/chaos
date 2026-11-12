@@ -33,6 +33,7 @@ public interface IGitHubStore
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksForTasksAsync(IReadOnlyList<string> ids, CancellationToken ct);
     Task ReplaceChecklistItemsAsync(string issueLinkId, IReadOnlyList<GitHubChecklistItemRecord> rows, CancellationToken ct);
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListRepositoryLinksAsync(string repositoryId, string? afterId, int limit, CancellationToken ct);
+    Task ClearCommentCheckpointAsync(string issueLinkId, CancellationToken ct);
     Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct);
     Task<GitHubSyncCheckpointRecord?> GetCheckpointAsync(string repositoryId, string kind, CancellationToken ct);
     Task<bool> SaveCheckpointAsync(GitHubSyncCheckpointRecord row, CancellationToken ct);
@@ -43,4 +44,6 @@ public interface IGitHubStore
     Task<bool> SaveCommentCheckpointAsync(GitHubCommentCheckpointRecord row, CancellationToken ct);
     Task<bool> CompleteCommentScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, CancellationToken ct);
     Task RecordSyncOutcomeAsync(string connectionId, string? failedRepositoryId, DateTimeOffset started, DateTimeOffset finished, GitHubErrorKind? error, DateTimeOffset? retryAtUtc, CancellationToken ct);
+    Task<bool> RefreshRepositoryIdentityAsync(string repositoryId, long expectedVersion, GitHubRepository remote, CancellationToken ct);
+    Task<bool> SaveCatalogEtagAsync(string repositoryId, long expectedVersion, string kind, string? etag, CancellationToken ct);
 }

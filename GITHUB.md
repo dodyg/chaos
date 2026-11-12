@@ -367,7 +367,7 @@ The sync engine's own write transaction ends by setting `LocalDirty` to the valu
 triggers firing during inbound writes do not leave a false dirty flag. Write a test for exactly
 that.
 
-### Migration 017 — `017_github_pull_requests.sql` (package G9)
+### Migration 018 — `018_github_pull_requests.sql` (package G9)
 
 **`GitHubPullRequestLinks`** — `(IssueLinkId, PullRequestId)` PK, `RepositoryFullName`, `Number`,
 `Title`, `HtmlUrl`, `State` (0 Open, 1 Draft, 2 Merged, 3 Closed), `ReviewDecision` (NULL,
@@ -991,7 +991,7 @@ using `-p:OutputPath=bin/GitHubVerification/` because the user's running app loc
 output; all 600 .NET tests passed, Slopwatch 0 findings. Frontend production build and all 84 tests passed; a focused reminder rerun passed all 6 tests.
 Live Connect and installed-MSIX acceptance remain release gates; no sync engine exists yet.
 
-### [ ] G5 — Inbound sync and "Sync now"
+### [x] G5 — Inbound sync and "Sync now"
 
 **Depends on:** G4. **Files:** `Application/GitHub/GitHubSyncCommands.cs` (pull half),
 `Desktop/Platform/GitHubSyncEngine.cs` (manual pass only: `syncNow`), task creation via stores,
@@ -1000,8 +1000,12 @@ Live Connect and installed-MSIX acceptance remain release gates; no sync engine 
 Steps 1–5 and 7 of section 6.1 for inbound only, plus 6.3, 6.5 (label → tag), 6.6, 6.7 (comment →
 diary), 6.8, and the Out of scope / Unavailable rules. Local edits on connected tasks are allowed
 but not sent yet; the task detail must not claim they were sent (show "Not sent to GitHub yet").
-**Tests:** Import and Inbound rows of section 11. **Exit:** importing a real test repository via
-Sync now creates the expected tasks, subtasks, tags and diary; an unchanged sync makes no writes and repeating the same conditional list request uses 304 responses; account-verification reads may return 200.
+**Tests:** Import and Inbound rows of section 11. **Offline exit:** real-SQLite, fake-API and
+RPC/UI acceptance tests create the expected tasks, subtasks, tags and diary, converge on repeat
+without remote mutations or new task/diary history, and use 304 for unchanged conditional reads.
+Device checkpoints and diagnostics may update. **Release gate (approved live-check deferral):**
+repeat the acceptance run against a real throwaway repository in an installed MSIX. No live
+credential or installed-app pass is claimed by the offline checkbox.
 
 **Progress (2026-11-12, G5 inbound stage):** Added bounded issue-application transactions,
 versioned remote baselines, filter matching, import/history without undo, field merges and
@@ -1047,9 +1051,34 @@ Settings → GitHub offers Sync now, per-repository Sync, Continue sync for capp
 results and actionable errors. Completion refreshes tasks, tags, counts and milestone projects.
 The UI states that local edits are not sent yet and that initial comments are limited to 100.
 Final separate-output Release build: 643 .NET tests passed; Slopwatch clean. Frontend production build and all 86 tests passed. No live credentials were read and no installed-MSIX acceptance run is claimed.
-The requested comment-fetch/manual-sync path is implemented. G5 stays open for remaining label/
-milestone catalog refresh, transfer/convergence acceptance cases and live release validation;
+The comment-fetch/manual-sync stage was implemented; the remaining catalog and transfer work
+is completed in the note below. Live validation remains a release gate;
 G6 outbound writes and G7 automatic scheduling are not part of this stage.
+**Progress (2026-11-12, G5 completion):** Added open-first import with a separately checkpointed
+recent-closed phase, so historic closed issues cannot starve the first open import. Catalog
+refresh uses per-page ETags and bounded caches, periodically revalidates unconditionally, and
+continues after restart. Issue payloads provide current definitions during the backed-up initial
+import; catalog-driven project updates and known-link verification follow it, so they cannot
+precede the pre-import backup. Repository metadata is refreshed by stable ID before fetching;
+renames invalidate URL-based caches while preserving timestamp watermarks and the original
+backup reference. Labels follow IDs without renaming local tags. Milestone project collisions,
+user-edited names/deadlines and personal task dates are preserved.
+Known links are re-read conditionally in bounded resumable batches, including out-of-scope,
+unavailable and restored tasks. 404 requires confirmation; 410 marks the link unavailable.
+Transfers into an active subscription preserve task/checklist/comment identity, source URLs and
+user placement. Transfers outside subscriptions remain unavailable with a safe destination URL;
+adding that subscription resumes the same task. Transfers outside the target filter keep their
+identity and resume managed placement if they re-enter scope. Local container/section moves
+relinquish managed placement. Task details now use a local-only status query and show "Not sent
+to GitHub yet" for pending edits; opening a task never authenticates or starts a sync.
+Migration 017 extends device checkpoints and adds the placement trigger; G9's migration is 018.
+Offline acceptance covers catalog-only changes, no-change convergence, capped restart, 404/410
+recovery, transient 404, rename, subscribed/unsubscribed/filter-crossing transfers, first-import
+phases, real backups, comments and the task notice. Locked restore and the separate-output
+Release build passed without warnings/errors; all 662 .NET tests and all 89 frontend tests
+passed, with Slopwatch 0 findings. The offline G5 implementation gate is complete.
+Live credentials, a real throwaway-repository run and installed-MSIX validation remain release
+gates. G6 outbound writes and G7 automatic scheduling remain separate packages.
 ### [ ] G6 — Outbound sync, merge and conflicts
 
 **Depends on:** G5. **Files:** `GitHubSyncCommands.cs` (push half), `GitHubTaskCommands.cs`,
@@ -1089,7 +1118,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/017_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/018_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

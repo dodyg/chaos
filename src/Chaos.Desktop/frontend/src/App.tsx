@@ -1,3 +1,4 @@
+import { GitHubTaskNotice } from "./GitHubTaskNotice";
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
@@ -765,6 +766,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </div>
       <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
+          <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision}/>
           <Field label="Title"><Input required form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
           <TabsList className="w-full">
             <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>

@@ -36,8 +36,12 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             foreach (var repo in repositories)
             {
                 currentRepository = repo.Id;
+                var refresh = new GitHubInboundRefresh(store, api, new GitHubInboundCommands(store, ids, clock), clock);
+                await refresh.RefreshIdentityAsync(repo.Id, ct);
                 var pull = await issues.PullAsync(repo.Id, ct: ct);
                 result = result with { Created = result.Created + pull.Created, Updated = result.Updated + pull.Updated, Conflicts = result.Conflicts + pull.Conflicts, MorePages = result.MorePages || pull.MorePages };
+                var verified = await refresh.PullAsync(repo.Id, ct: ct);
+                result = result with { Updated = result.Updated + verified.Updated, Conflicts = result.Conflicts + verified.Conflicts, MorePages = result.MorePages || verified.MorePages };
                 var diary = await comments.PullAsync(repo.Id, ct: ct);
                 result = result with { CommentChanges = result.CommentChanges + diary.Changed, MorePages = result.MorePages || diary.MorePages };
             }

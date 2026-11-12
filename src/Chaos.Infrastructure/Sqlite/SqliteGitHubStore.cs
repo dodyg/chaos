@@ -516,6 +516,14 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         QueryAsync("SELECT * FROM GitHubIssueLinks WHERE RepositorySubscriptionId=$repo AND Id>$after ORDER BY Id LIMIT $limit;", ReadIssueLink, ct,
             ("$repo", repositoryId), ("$after", afterId ?? ""), ("$limit", Bounded(limit)));
 
+    public async Task ClearCommentCheckpointAsync(string issueLinkId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId=$id;";
+        command.Parameters.AddWithValue("$id", issueLinkId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -633,6 +641,50 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$auth", error is GitHubErrorKind.CliUnavailable or GitHubErrorKind.Unauthorized or GitHubErrorKind.AccountMismatch);
         command.Parameters.AddWithValue("$unavailable", error is GitHubErrorKind.NotFound or GitHubErrorKind.Gone);
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> RefreshRepositoryIdentityAsync(string repositoryId, long expectedVersion, GitHubRepository remote, CancellationToken ct)
+    {
+        var before = await GetRepositoryAsync(repositoryId, ct);
+        if (before is null || before.Version != expectedVersion || before.DeletedAtUtc is not null || before.State != 0 || before.RepositoryId != remote.Id) return false;
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE GitHubRepositories SET Owner=$owner,Name=$name,FullName=$full,HtmlUrl=$url,IsPrivate=$private
+            WHERE Id=$id AND Version=$version AND State=0 AND DeletedAtUtc IS NULL
+                AND EXISTS(SELECT 1 FROM GitHubConnections c WHERE c.Id=ConnectionId AND c.State=0 AND c.DeletedAtUtc IS NULL);
+            """;
+        command.Parameters.AddWithValue("$id", repositoryId);
+        command.Parameters.AddWithValue("$version", expectedVersion);
+        command.Parameters.AddWithValue("$owner", remote.Owner.Login);
+        command.Parameters.AddWithValue("$name", remote.Name);
+        command.Parameters.AddWithValue("$full", remote.FullName);
+        command.Parameters.AddWithValue("$url", remote.HtmlUrl);
+        command.Parameters.AddWithValue("$private", remote.Private);
+        if (await command.ExecuteNonQueryAsync(ct) != 1) return false;
+        if (!before.Owner.Equals(remote.Owner.Login, StringComparison.Ordinal) || !before.Name.Equals(remote.Name, StringComparison.Ordinal))
+        {
+            using var clear = connection.CreateCommand();
+            clear.CommandText = """
+                DELETE FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id AND Kind<>'initial-import-backup';
+                DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId=$id);
+                UPDATE GitHubRepositories SET IssuesEtag=NULL,CommentsEtag=NULL,LabelsEtag=NULL,MilestonesEtag=NULL WHERE Id=$id;
+                UPDATE GitHubIssueLinks SET IssueEtag=NULL WHERE RepositorySubscriptionId=$id;
+                """;
+            clear.Parameters.AddWithValue("$id", repositoryId);
+            await clear.ExecuteNonQueryAsync(ct);
+        }
+        return true;
+    }
+
+    public async Task<bool> SaveCatalogEtagAsync(string repositoryId, long expectedVersion, string kind, string? etag, CancellationToken ct)
+    {
+        var column = kind switch { "labels" => "LabelsEtag", "milestones" => "MilestonesEtag", _ => throw new ArgumentOutOfRangeException(nameof(kind)) };
+        using var command = connection.CreateCommand();
+        command.CommandText = $"UPDATE GitHubRepositories SET {column}=$etag WHERE Id=$id AND Version=$version AND State=0 AND DeletedAtUtc IS NULL AND EXISTS(SELECT 1 FROM GitHubConnections c WHERE c.Id=ConnectionId AND c.State=0 AND c.DeletedAtUtc IS NULL);";
+        command.Parameters.AddWithValue("$id", repositoryId);
+        command.Parameters.AddWithValue("$version", expectedVersion);
+        command.Parameters.AddWithValue("$etag", (object?)etag ?? DBNull.Value);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken ct, params (string Name, object Value)[] parameters)

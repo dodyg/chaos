@@ -3,7 +3,7 @@ using Chaos.Application.Contracts;
 
 namespace Chaos.Application.GitHub;
 
-public sealed record GitHubIssueScan(DateTimeOffset? Since, string? NextCursor, DateTimeOffset? Watermark, string? Etag, int PagesRead, bool Finished, DateTimeOffset StartedAtUtc);
+public sealed record GitHubIssueScan(DateTimeOffset? Since, string? NextCursor, DateTimeOffset? Watermark, string? Etag, int PagesRead, bool Finished, DateTimeOffset StartedAtUtc, string? State = null, bool FirstImport = false);
 public sealed record GitHubImportBackup(string FileName);
 public sealed record GitHubIssueFetchResult(int Created, int Updated, int Conflicts, int PagesRead, bool MorePages, bool NotModified);
 
@@ -32,16 +32,17 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
             return (repo, connection, await s.GitHub.GetCheckpointAsync(repo.Id, "issues", token));
         }, ct);
         var previous = checkpoint?.RepositoryVersion == repo.Version ? StoredJsonFormats.ReadSnapshot<GitHubIssueScan>(checkpoint.PayloadJson) : null;
-        var since = repo.IssuesCursorUtc?.AddSeconds(-1); // API timestamps have second precision; overlap protects boundary updates.
+        if (repo.InitialImportDoneUtc is null && previous is { FirstImport: false }) previous = null;
+        var since = repo.InitialImportDoneUtc is null ? null : repo.IssuesCursorUtc?.AddSeconds(-1); // API timestamps have second precision; overlap protects boundary updates.
         var scan = previous is { Finished: false } ? previous : new GitHubIssueScan(since, null, repo.IssuesCursorUtc,
-            previous?.Since == since ? previous?.Etag : null, 0, false, clock.GetUtcNow());
+            previous?.Since == since && previous?.State is null ? previous?.Etag : null, 0, false, clock.GetUtcNow(), repo.InitialImportDoneUtc is null ? "open" : null, repo.InitialImportDoneUtc is null);
         var account = new GitHubAccount(connection.AccountId, connection.AccountLogin);
         var filter = GitHubIssueScope.Parse(repo.FilterJson);
         int created = 0, updated = 0, conflicts = 0;
         for (var pageIndex = 0; pageIndex < pageLimit; pageIndex++)
         {
             var conditional = scan.NextCursor is null ? scan.Etag : null;
-            var page = await api.ListIssuesAsync(account, repo.Owner, repo.Name, scan.Since, scan.NextCursor, conditional, ct);
+            var page = await api.ListIssuesAsync(account, repo.Owner, repo.Name, scan.Since, scan.NextCursor, conditional, ct, scan.State);
             if (page.NotModified)
             {
                 if (conditional is null || scan.NextCursor is not null) throw new GitHubApiException(GitHubErrorKind.Server);
@@ -83,7 +84,9 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
             foreach (var issue in page.Items) if (watermark is null || issue.UpdatedAt > watermark) watermark = issue.UpdatedAt;
             scan = scan with { NextCursor = page.NextCursor, Watermark = watermark, PagesRead = scan.PagesRead + 1, Finished = page.NextCursor is null,
                 Etag = scan.PagesRead == 0 && page.NextCursor is null ? page.Etag : null };
-            if (scan.Finished) scan = scan with { Watermark = scan.Watermark ?? scan.StartedAtUtc };
+            if (scan.Finished && scan.FirstImport && scan.State == "open" && filter.IncludeClosedDays > 0)
+                scan = scan with { State = "closed", Since = scan.StartedAtUtc.AddDays(-filter.IncludeClosedDays), NextCursor = null, Etag = null, PagesRead = 0, Finished = false };
+            if (scan.Finished) scan = scan with { Watermark = scan.FirstImport && (scan.Watermark is null || scan.Watermark < scan.StartedAtUtc) ? scan.StartedAtUtc : scan.Watermark ?? scan.StartedAtUtc };
             await Save(repo, scan, ct);
             if (scan.Finished) return new(created, updated, conflicts, pageIndex + 1, false, false);
         }

@@ -25,6 +25,54 @@ public sealed class GitHubCliClientTests
     }
 
     [Test]
+    [Arguments("open")]
+    [Arguments("closed")]
+    public async Task InitialIssueQueriesUseTheRequestedState(string state)
+    {
+        var handler = new Handler((request, _) =>
+        {
+            if (!request.RequestUri!.Query.Contains("state=" + state, StringComparison.Ordinal)) throw new InvalidOperationException("Wrong initial issue state.");
+            return new(HttpStatusCode.OK) { Content = new StringContent("[]") };
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        await client.ListIssuesAsync(new(1, "person"), "person", "repo", null, null, null, CancellationToken.None, state);
+    }
+
+    [Test]
+    public async Task ReadIssueAsync_ConditionalAndMovedReads_NeverForwardAnOldEtag()
+    {
+        var handler = new Handler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/repos/person/repo/issues/1")
+            {
+                if (request.Headers.IfNoneMatch.ToString() != "\"old\"") throw new InvalidOperationException("Missing fixture ETag.");
+                var moved = new HttpResponseMessage(HttpStatusCode.MovedPermanently);
+                moved.Headers.Location = new Uri("https://api.github.com/repos/other/next/issues/9");
+                return moved;
+            }
+            if (request.Headers.IfNoneMatch.Count != 0) throw new InvalidOperationException("ETag crossed an issue address.");
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"id\":100,\"number\":9,\"html_url\":\"https://github.com/other/next/issues/9\"}") };
+            response.Headers.ETag = new("\"new\""); return response;
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        var read = await client.ReadIssueAsync(new(1, "person"), "person", "repo", 1, "\"old\"", CancellationToken.None);
+        await Assert.That(read.Issue!.Id).IsEqualTo(100L);
+        await Assert.That(read.Etag).IsEqualTo("\"new\"");
+        await Assert.That(read.NotModified).IsFalse();
+    }
+
+    [Test]
+    public async Task ReadIssueAsync_NotModified_DoesNotRequireAnIssueBody()
+    {
+        var handler = new Handler((_, _) => new(HttpStatusCode.NotModified));
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        var read = await client.ReadIssueAsync(new(1, "person"), "person", "repo", 1, "\"old\"", CancellationToken.None);
+        await Assert.That(read.NotModified).IsTrue();
+        await Assert.That(read.Issue).IsNull();
+        await Assert.That(read.Etag).IsEqualTo("\"old\"");
+    }
+
+    [Test]
     public async Task Comments_ParseIssueIdentityAndPaginationTailLinks()
     {
         var handler = new Handler((_, _) =>

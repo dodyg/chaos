@@ -50,6 +50,14 @@ public sealed class GitHubSyncRpcTests
         status = await rpc.StatusAsync(new(), CancellationToken.None);
         await Assert.That(status.Sync!.Created).IsEqualTo(0);
         await Assert.That(status.Sync.CommentChanges).IsEqualTo(0);
+        var linked = (await storage.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        var syncInfo = await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None);
+        await Assert.That(syncInfo.Connected).IsTrue();
+        await Assert.That(syncInfo.Pending).IsFalse();
+        await storage.Store.ExecuteAsync(async (s, ct) => { var task = (await s.Tasks.GetAsync(linked.TaskId!, ct))!; await s.Tasks.UpdateAsync(task with { Title = "Local pending edit", Version = task.Version + 1 }, task.Version, ct); return true; });
+        var callsBeforeStatus = api.Requests;
+        await Assert.That((await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None)).Pending).IsTrue();
+        await Assert.That(api.Requests).IsEqualTo(callsBeforeStatus);
         api.Account = new(2, "other");
         await rpc.SyncNowAsync(new(null), CancellationToken.None); await engine.WaitForIdleAsync();
         status = await rpc.StatusAsync(new(), CancellationToken.None);

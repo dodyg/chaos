@@ -33,13 +33,21 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 if (issue.PullRequest is not null) continue;
                 if (issue.Id <= 0 || issue.Number <= 0 || string.IsNullOrEmpty(issue.NodeId) || string.IsNullOrWhiteSpace(issue.Title) || issue.Title.Length > 256 || (issue.Body?.Length ?? 0) > 65536)
                     throw AppException.Validation("issue", "GitHub returned an issue outside the supported size or identity limits.");
+                if (!GitHubIssueAddress.TryParse(issue.HtmlUrl, out var address) || !address.IsIn(repo.Owner, repo.Name) || address.Number != issue.Number)
+                    throw AppException.Validation("issue", "The issue moved during retrieval. Run sync again to refresh its destination.");
                 var link = await s.GitHub.FindLinkByIssueAsync(connection.Id, issue.Id, token);
-                // A removed subscription's detached identity must never attach to a different local task accidentally.
-                if (link is not null && link.RepositorySubscriptionId != repo.Id) continue;
-                var remote = GitHubIssueSnapshot.From(issue);
+                var transferred = link is not null && link.RepositorySubscriptionId != repo.Id;
+                if (transferred && link!.State == 4) continue;
+                if (transferred)
+                {
+                    var origin = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link!.BaseJson);
+                    link = link with { BaseJson = origin is null ? link.BaseJson : StoredJsonFormats.Snapshot(origin with { RepositorySubscriptionId = origin.RepositorySubscriptionId ?? link.RepositorySubscriptionId }), RepositorySubscriptionId = repo.Id, IssueEtag = null, IssueNumber = issue.Number, HtmlUrl = address.WebUrl };
+                    await s.GitHub.ClearCommentCheckpointAsync(link.Id, token);
+                }
+                var remote = GitHubIssueSnapshot.From(issue) with { RepositorySubscriptionId = repo.Id };
                 if (link is { State: 4 } or { State: 3, TaskId: null })
                 {
-                    if (issue.UpdatedAt > link.BaseRemoteUpdatedUtc)
+                    if (transferred || issue.UpdatedAt > link.BaseRemoteUpdatedUtc)
                         await s.GitHub.UpdateIssueLinkAsync(link with { BaseRemoteUpdatedUtc = issue.UpdatedAt, UpdatedAtUtc = now }, link.Version, token);
                     continue;
                 }
@@ -52,13 +60,14 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 var matches = GitHubIssueScope.Matches(filter, issue, connection.AccountId, now, link is not null);
                 if (!matches)
                 {
-                    if (link is not null && link.State != 1) await s.GitHub.UpdateIssueLinkAsync(link with { State = 1, LocalDirty = false, LocalDirtySinceUtc = null, UpdatedAtUtc = now }, link.Version, token);
+                    if (link is not null && (link.State != 1 || transferred)) await s.GitHub.UpdateIssueLinkAsync(link with { State = 1, LocalDirty = false, LocalDirtySinceUtc = null, UpdatedAtUtc = now }, link.Version, token);
                     continue;
                 }
                 var before = task is null ? null : await Snapshot(s, task, token);
                 var baseline = link is null ? remote : StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson)
                     ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
                 if (link is not null && issue.UpdatedAt < link.BaseRemoteUpdatedUtc) continue;
+                if (transferred) baseline = baseline with { LabelIds = remote.LabelIds };
                 var local = task is null ? remote.Projection() : await Project(s, repo, link!, task, baseline, connection.AccountId, token);
                 var merge = SyncMerge.Issue(baseline.Projection(), local, remote.Projection());
                 var conflict = merge.Conflicts.Title is not null || merge.Conflicts.Body is not null || merge.Conflicts.State is not null;
@@ -66,6 +75,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 var status = IssueStateMapping.ToTask(merge.Value.State, task?.Status ?? TaskItemStatus.NotStarted,
                     task is { IsTerminal: true } ? await TaskMutationSupport.PreviousNonterminalStatusAsync(s, task.Id, null, token) : null);
                 var placement = await Placement(s, repo, issue.Milestone, space.Id, now, token);
+                if (task is null || (link!.PlacementManaged && (transferred || (baseline.RepositorySubscriptionId is not null && baseline.RepositorySubscriptionId != repo.Id) || baseline.MilestoneNumber != remote.MilestoneNumber))) await ValidatePlacement(s, placement.ContainerId, placement.SectionId, token);
                 if (task is null)
                 {
                     task = new TaskRecord { Id = ids.NewId().ToString(), SpaceId = space.Id, ContainerId = placement.ContainerId, SectionId = placement.SectionId,
@@ -81,7 +91,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 }
                 else
                 {
-                    var move = link!.PlacementManaged && baseline.MilestoneNumber != remote.MilestoneNumber;
+                    var move = link!.PlacementManaged && (transferred || (baseline.RepositorySubscriptionId is not null && baseline.RepositorySubscriptionId != repo.Id) || baseline.MilestoneNumber != remote.MilestoneNumber);
                     var due = task.DueDate == baseline.MilestoneDue && task.DueTime is null && task.DueZoneId is null ? remote.MilestoneDue : task.DueDate;
                     var next = task with { Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = due,
                         ContainerId = move ? placement.ContainerId : task.ContainerId, SectionId = move ? placement.SectionId : task.SectionId,
@@ -103,9 +113,9 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                     after = after with { Task = task };
                     updated++;
                 }
-                if (before is null || StoredJsonFormats.Hash(before) != StoredJsonFormats.Hash(after) || conflict)
+                if (before is null || StoredJsonFormats.Hash(before) != StoredJsonFormats.Hash(after) || conflict || transferred)
                     await s.History.AddAsync(new TaskHistoryRecord { Id = ids.NewId().ToString(), TaskId = task.Id, OperationId = ids.NewId().ToString(),
-                        EffectiveAtUtc = now, RecordedAtUtc = now, Actor = "github:" + connection.AccountLogin, EventKind = before is null ? "github.imported" : conflict ? "github.conflict" : "github.updated",
+                        EffectiveAtUtc = now, RecordedAtUtc = now, Actor = "github:" + connection.AccountLogin, EventKind = before is null ? "github.imported" : conflict ? "github.conflict" : transferred ? "github.transferred" : "github.updated",
                         ChangedFields = before is null ? ["Imported"] : TaskMutationSupport.ChangedTaskFields(before.Task, task).Concat(["GitHub"]).ToArray(),
                         SnapshotBefore = before is null ? null : StoredJsonFormats.Snapshot(before), SnapshotAfter = StoredJsonFormats.Snapshot(after), AggregateVersion = task.Version }, token);
                 if (conflict) conflicts++;
@@ -196,7 +206,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         var mapping = (await s.GitHub.ListMilestoneProjectsAsync(repo.Id, ct)).FirstOrDefault(m => m.MilestoneId == milestone.Id);
         var project = mapping is null ? null : await s.Containers.GetAsync(mapping.ContainerId, ct);
         var due = milestone.DueOn is { } date ? DateOnly.FromDateTime(date.UtcDateTime) : (DateOnly?)null;
-        if (mapping is not null && project is null) return (repo.TargetContainerId, repo.TargetSectionId);
+        if (mapping is not null && (project is null || project.ArchivedAtUtc is not null)) return (repo.TargetContainerId, repo.TargetSectionId);
         if (project is null)
         {
             var used = (await s.Containers.ListBySpaceAsync(space, ct)).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -209,14 +219,46 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         }
         else
         {
-            var title = project.Name == mapping!.BaseTitle ? milestone.Title : project.Name;
+            var managed = project.Name == mapping!.BaseTitle;
+            var title = project.Name;
+            if (managed)
+            {
+                var used = (await s.Containers.ListBySpaceAsync(space, ct)).Where(c => c.Id != project.Id).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                title = milestone.Title;
+                for (var suffix = 1; used.Contains(title); suffix++) title = milestone.Title + " (" + repo.Name + (suffix == 1 ? "" : " " + suffix) + ")";
+            }
             var deadline = project.DeadlineDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) == mapping.BaseDueOn ? due : project.DeadlineDate;
             if (title != project.Name || deadline != project.DeadlineDate)
                 project = await s.Containers.UpdateAsync(project with { Version = project.Version + 1, Name = title, DeadlineDate = deadline, UpdatedAtUtc = now }, project.Version, ct) ?? throw AppException.VersionConflict("Milestone project changed.");
-            mapping = mapping with { BaseTitle = milestone.Title, BaseDueOn = due?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) };
+            mapping = mapping with { BaseTitle = managed ? title : milestone.Title, BaseDueOn = due?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) };
         }
         await s.GitHub.UpsertMilestoneProjectAsync(mapping!, ct);
         return (project.Id, null);
+    }
+
+    public Task<bool> ApplyCatalogAsync(string repositoryId, long expectedVersion, IReadOnlyList<GitHubLabel> labels, IReadOnlyList<GitHubMilestone> milestones, CancellationToken ct) => store.ExecuteAsync(async (s, token) =>
+    {
+        var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+        var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
+        var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
+        if (repo.Version != expectedVersion || repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.SpaceId != space.Id || connection.ProfileId != profile.Id || connection.State != 0 || connection.DeletedAtUtc is not null) throw AppException.VersionConflict("Repository settings changed during catalog retrieval.");
+        var mappings = await s.GitHub.ListLabelTagsAsync(repo.Id, token);
+        foreach (var label in labels)
+        {
+            var mapping = mappings.FirstOrDefault(m => m.LabelId == label.Id);
+            if (mapping is not null && (mapping.LabelName != label.Name || mapping.LabelColor != label.Color)) await s.GitHub.UpsertLabelTagAsync(mapping with { LabelName = label.Name, LabelColor = label.Color }, token);
+        }
+        var projects = await s.GitHub.ListMilestoneProjectsAsync(repo.Id, token);
+        foreach (var milestone in milestones)
+            if (projects.Any(m => m.MilestoneId == milestone.Id)) await Placement(s, repo, milestone, space.Id, clock.GetUtcNow(), token);
+        return true;
+    }, ct);
+
+    private static async Task ValidatePlacement(IDataSession s, string containerId, string? sectionId, CancellationToken ct)
+    {
+        var container = await s.Containers.GetAsync(containerId, ct);
+        if (container is null || container.ArchivedAtUtc is not null) throw AppException.Validation("targetContainerId", "Choose an active destination for this repository before syncing.");
+        if (sectionId is not null && (await s.Sections.GetAsync(sectionId, ct))?.ContainerId != containerId) throw AppException.Validation("targetSectionId", "Choose an active destination section before syncing.");
     }
 
     private static async Task<TaskAggregateSnapshot> Snapshot(IDataSession s, TaskRecord task, CancellationToken ct) =>

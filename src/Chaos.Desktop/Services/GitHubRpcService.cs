@@ -9,6 +9,8 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record GitHubStatusRequest();
+public sealed record GitHubTaskSyncRequest(string TaskId);
+public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error);
 public sealed record GitHubConnectRequest(string OperationId);
 public sealed record GitHubCandidatesRequest(string? Cursor);
 public sealed record GitHubLookupRequest(string Owner, string Name);
@@ -52,6 +54,28 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects)).ToArray(), targets, null, SyncStatus(status.Connection));
         }
         catch (AppException e) { return new(false, null, [], [], TaskRpcService.ToErrorResponse(e)); }
+    }
+
+    [NeoRpcMethod("taskSync")]
+    public async ValueTask<GitHubTaskSyncResponse> TaskSyncAsync(GitHubTaskSyncRequest request, CancellationToken ct)
+    {
+        try
+        {
+            return await store.QueryAsync(async (s, token) =>
+            {
+                var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
+                var space = await s.Spaces.GetPersonalByOwnerAsync(profile.Id, token) ?? throw AppException.NotFound("Personal space is unavailable.");
+                var task = await s.Tasks.GetIncludingDeletedAsync(request.TaskId, token);
+                if (task is null || task.SpaceId != space.Id) throw AppException.NotFound("Task was not found.");
+                var link = await s.GitHub.FindLinkByTaskAsync(task.Id, token);
+                if (link is null || link.State == 4) return new GitHubTaskSyncResponse(true, false, false, null, null);
+                var c = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
+                if (c is null || c.DeletedAtUtc is not null || c.ProfileId != profile.Id || c.SpaceId != space.Id) return new(true, false, false, null, null);
+                var state = c.State == 1 ? "Paused" : c.State == 2 ? "Needs sign-in" : link.State switch { 0 => "Linked", 1 => "Out of scope", 2 => "Unavailable", _ => "Ignored" };
+                return new(true, true, link.LocalDirty, state, null);
+            }, ct);
+        }
+        catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
     }
 
     [NeoRpcMethod("syncNow")]

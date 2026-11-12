@@ -487,3 +487,39 @@ acceptance remain release gates; this work does not claim a live GitHub acceptan
 
 Final validation for this stage: locked restore, clean separate-output Release build, all 643
 .NET tests and all 86 frontend tests passed; Slopwatch reported no findings.
+
+## 2026-11-12 (GitHub G5 completion)
+
+First import reads open issues before the optional recent-closed phase. Both phases share the
+page budget and persist their phase/cursor across restart; completion publishes a watermark no
+earlier than the scan start so old closed history is not replayed on the incremental pass.
+Repository canonical metadata is checked against its saved numeric ID. Rename handling clears
+URL caches while retaining timestamp watermarks and the original pre-import backup reference.
+
+Issue payloads supply current label and milestone definitions while the initial import remains
+protected by its pre-import backup. Catalog refresh follows that guarded import, then a bounded
+known-link verification pass applies catalog-only changes, missing issues and transfers. Each
+catalog page has its own ETag and remembered next link, with bounded metadata storage and daily
+unconditional revalidation. Verification cursors survive restart and use conditional issue reads;
+a daily full check and catalog changes force fresh issue reads. No issue text enters checkpoints.
+
+Transfers preserve the task and its checklist/comment mappings. Old repository tags remain local
+when they no longer map to the new repository. Managed placement follows the new subscription;
+any local container/section move disables it, while an inbound move restores the flag it read in
+the same transaction. The baseline records its repository so transfers that are temporarily out
+of scope can resume the correct placement even if both repositories use the same milestone
+number. Non-subscribed destinations stay unavailable, with a validated GitHub URL, until added.
+404 is confirmed before hiding a link; 410 is immediately unavailable, and later reads recover
+its existing task. Milestone title clashes and user-edited project names, deadlines and task due
+dates are preserved. The task editor's local status notice explicitly identifies pending edits
+as not sent; it makes no GitHub call. G6 still owns outbound writes and their validation.
+
+Migration 017 extends device-local checkpoint kinds and adds local-placement detection. Applied
+migrations are unchanged, upgrade backups precede the migration, and the planned PR migration
+moves to 018. G5's offline implementation exit is distinct from its live throwaway-repository and
+installed-MSIX release acceptance, as authorized by the existing live-check deferral.
+
+Final G5 validation: locked restore and the separate-output Release build passed with no warnings
+or errors; all 662 .NET tests and all 89 frontend tests passed; Slopwatch reported no findings.
+G5 is marked complete for offline implementation. Live credential, throwaway-repository and
+installed-MSIX evidence remains unclaimed and required at the release gate.
