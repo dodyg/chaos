@@ -155,6 +155,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
             DELETE FROM SubtaskTags WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM GitHubChecklistItems WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM GitHubCommentLinks WHERE DiaryEntryId IN (SELECT Id FROM temp.PurgeDiary);
+            DELETE FROM GitHubIssueWrites WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks));
             UPDATE GitHubIssueLinks SET TaskId = NULL, State = 3, LocalDirty = 0, LocalDirtySinceUtc = NULL WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ChecklistConversions WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM Subtasks WHERE Id IN (SELECT Id FROM temp.PurgeSubtasks);

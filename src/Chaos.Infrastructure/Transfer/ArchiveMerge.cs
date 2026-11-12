@@ -18,6 +18,8 @@ public static class ArchiveMerge
         var warnings = new List<ImportIssue>();
         var links = Rows(archive, "GitHubIssueLinks").Where(row => row.Text("TaskId") is not null)
             .ToDictionary(row => row.Text("TaskId")!, ReadIssueLink, StringComparer.Ordinal);
+        var writes = Rows(archive, "GitHubIssueWrites").ToDictionary(row => row.Text("IssueLinkId")!, row =>
+            new GitHubIssueWriteRecord(row.Text("IssueLinkId")!, row.Text("PayloadJson")!, StorageFormats.ParseInstant(row.Text("CreatedAtUtc"))!.Value), StringComparer.Ordinal);
         var checklist = Rows(archive, "GitHubChecklistItems").ToDictionary(row => row.Text("SubtaskId")!, row => new GitHubChecklistItemRecord
         {
             SubtaskId = row.Text("SubtaskId")!, IssueLinkId = row.Text("IssueLinkId")!, BaseOrdinal = row.Long("BaseOrdinal"),
@@ -76,6 +78,7 @@ public static class ArchiveMerge
                 Subtasks = [.. subtasks[id]],
                 Diary = [.. diary[id]],
                 GitHubLink = links.GetValueOrDefault(id),
+                GitHubIssueWrite = links.TryGetValue(id, out var link) ? writes.GetValueOrDefault(link.Id) : null,
             });
         }
 

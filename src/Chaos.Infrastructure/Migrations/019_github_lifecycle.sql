@@ -1,0 +1,4 @@
+-- Cover all task deletion paths, including container deletion, import and undo.
+CREATE TRIGGER GitHubTaskDeleted AFTER UPDATE OF DeletedAtUtc ON Tasks WHEN NEW.DeletedAtUtc IS NOT NULL BEGIN UPDATE GitHubIssueLinks SET State = 3, LocalDirty = 0, LocalDirtySinceUtc = NULL, IssueEtag = NULL, NextAttemptUtc = NULL, Version = Version + 1 WHERE TaskId = NEW.Id AND State <> 4; END;
+CREATE TRIGGER GitHubTaskRestored AFTER UPDATE OF DeletedAtUtc ON Tasks WHEN OLD.DeletedAtUtc IS NOT NULL AND NEW.DeletedAtUtc IS NULL BEGIN UPDATE GitHubIssueLinks SET State = 0, LocalDirty = 1, LocalDirtySinceUtc = NEW.UpdatedAtUtc, IssueEtag = NULL, NextAttemptUtc = NULL, Version = Version + 1 WHERE TaskId = NEW.Id AND State = 3; END;
+UPDATE GitHubIssueLinks SET State = 3, LocalDirty = 0, LocalDirtySinceUtc = NULL, IssueEtag = NULL, NextAttemptUtc = NULL, Version = Version + 1 WHERE State <> 4 AND TaskId IN (SELECT Id FROM Tasks WHERE DeletedAtUtc IS NOT NULL);

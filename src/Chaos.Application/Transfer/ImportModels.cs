@@ -46,6 +46,7 @@ public sealed record ImportTask
     public IReadOnlyList<ImportSubtask> Subtasks { get; init; } = [];
     public IReadOnlyList<ImportDiaryEntry> Diary { get; init; } = [];
     public GitHubIssueLinkRecord? GitHubLink { get; init; }
+    public GitHubIssueWriteRecord? GitHubIssueWrite { get; init; }
 }
 
 /// <summary>A problem found while reading or validating a source. Line 0 means the whole file.</summary>

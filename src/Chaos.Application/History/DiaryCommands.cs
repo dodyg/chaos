@@ -4,11 +4,11 @@ using Chaos.Application.Tasks;
 
 namespace Chaos.Application.History;
 
-public sealed record AddDiaryEntryCommand(string OperationId, string TaskId, string Markdown, DateTimeOffset? EntryAtUtc);
+public sealed record AddDiaryEntryCommand(string OperationId, string TaskId, string Markdown, DateTimeOffset? EntryAtUtc, bool PostToGitHub = false);
 
 public sealed record EditDiaryEntryCommand(string OperationId, string EntryId, long ExpectedVersion, string Markdown);
 
-public sealed record DiaryEntryChangeCommand(string OperationId, string EntryId, long ExpectedVersion);
+public sealed record DiaryEntryChangeCommand(string OperationId, string EntryId, long ExpectedVersion, bool DeleteOnGitHub = false);
 
 public sealed record DiaryMutationResult(DiaryEntryRecord Entry, bool Replayed);
 
@@ -59,6 +59,13 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
             {
                 var task = await session.Tasks.GetAsync(normalized.TaskId, inner)
                     ?? throw AppException.NotFound("That task no longer exists. Refresh and try again.");
+                GitHubIssueLinkRecord? github = null;
+                if (normalized.PostToGitHub)
+                {
+                    github = await session.GitHub.FindLinkByTaskAsync(task.Id, inner);
+                    if (github is not { State: 0 }) throw AppException.Validation("postToGitHub", "Connect this task to an active GitHub issue before posting.");
+                    if (normalized.Markdown.Length > 65450) throw AppException.Validation("markdown", "A GitHub comment can hold at most 65,450 characters.");
+                }
                 var entry = new DiaryEntryRecord
                 {
                     Id = ids.NewId().ToString(),
@@ -72,6 +79,7 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
                     UpdatedAtUtc = now,
                 };
                 await session.Diary.AddAsync(entry, inner);
+                if (github is not null) await session.GitHub.UpsertCommentLinkAsync(new() { DiaryEntryId = entry.Id, IssueLinkId = github.Id, Origin = 1, State = 1 }, inner);
                 await RegisterAsync(session, task.Id, "diary.added", inner);
                 return new DiaryMutationResult(entry, Replayed: false);
             }, token);
@@ -89,7 +97,7 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
 
     public async Task<DiaryMutationResult> DeleteAsync(DiaryEntryChangeCommand command, CancellationToken ct = default) =>
         await ChangeAsync(command.OperationId, "diary.delete", command, command.EntryId, command.ExpectedVersion, "diary.deleted",
-            (entry, now) => entry.DeletedAtUtc is not null ? null : entry with { DeletedAtUtc = now }, requireActive: false, ct);
+            (entry, now) => entry.DeletedAtUtc is not null ? null : entry with { DeletedAtUtc = now }, requireActive: false, ct, command.DeleteOnGitHub);
 
     public async Task<DiaryMutationResult> RestoreAsync(DiaryEntryChangeCommand command, CancellationToken ct = default) =>
         await ChangeAsync(command.OperationId, "diary.restore", command, command.EntryId, command.ExpectedVersion, "diary.restored",
@@ -104,7 +112,8 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
         string eventKind,
         Func<DiaryEntryRecord, DateTimeOffset, DiaryEntryRecord?> change,
         bool requireActive,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool deleteOnGitHub = false)
     {
         ct.ThrowIfCancellationRequested();
         return await InWriteAsync(async (session, profile, now, token) =>
@@ -125,6 +134,15 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
 
                 _ = await session.Tasks.GetAsync(entry.TaskId, inner)
                     ?? throw AppException.Validation("taskId", "Restore the task before changing its diary.");
+                var link = await session.GitHub.FindLinkByTaskAsync(entry.TaskId, inner);
+                var mapping = link is null or { State: 4 } ? null : (await session.GitHub.ListCommentLinksAsync(link.Id, inner)).FirstOrDefault(m => m.DiaryEntryId == entry.Id);
+                if (deleteOnGitHub && (mapping is null || mapping.CommentId is null)) throw AppException.Validation("entryId", "This diary entry has no GitHub comment to delete.");
+                if (mapping is not null && (commandKind == "diary.edit" || deleteOnGitHub))
+                {
+                    var connection = await session.GitHub.GetConnectionAsync(link!.ConnectionId, inner);
+                    if (connection is null || mapping.Origin != 1 && !string.Equals(mapping.AuthorLogin, connection.AccountLogin, StringComparison.OrdinalIgnoreCase))
+                        throw AppException.Validation("entryId", "Only the GitHub comment author can change it on GitHub.");
+                }
                 if (change(entry, now) is not { } updated)
                 {
                     return new DiaryMutationResult(entry, Replayed: false); // nothing to change
@@ -134,6 +152,11 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
                     updated with { Revision = entry.Revision + 1, Version = entry.Version + 1, UpdatedAtUtc = now },
                     entry.Version, inner)
                     ?? throw AppException.VersionConflict("This diary entry changed elsewhere while you were working. Refresh and try again.");
+                if (commandKind == "diary.delete" && mapping is not null)
+                {
+                    var current = (await session.GitHub.ListCommentLinksAsync(link!.Id, inner)).First(m => m.DiaryEntryId == entry.Id);
+                    await session.GitHub.UpsertCommentLinkAsync(current with { State = deleteOnGitHub && current.CommentId is not null ? 3 : 5 }, inner);
+                }
                 await RegisterAsync(session, entry.TaskId, eventKind, inner);
                 return new DiaryMutationResult(applied, Replayed: false);
             }, token);

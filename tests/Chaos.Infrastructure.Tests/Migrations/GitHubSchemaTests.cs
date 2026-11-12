@@ -53,7 +53,6 @@ public sealed class GitHubSchemaTests
     [Test]
     [Arguments("UPDATE Tasks SET Title='Changed' WHERE Id='t';")]
     [Arguments("UPDATE Tasks SET Notes='Changed' WHERE Id='t';")]
-    [Arguments("UPDATE Tasks SET DeletedAtUtc='later' WHERE Id='t';")]
     [Arguments("UPDATE Subtasks SET Title='Changed' WHERE Id='st';")]
     [Arguments("DELETE FROM TaskTags WHERE TaskId='t';")]
     [Arguments("UPDATE DiaryEntries SET RawMarkdown='Changed' WHERE Id='d';")]
@@ -64,6 +63,21 @@ public sealed class GitHubSchemaTests
         await Execute(connection, mutation);
         await Assert.That(await Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks;")).IsEqualTo(1L);
         await Execute(connection, "UPDATE GitHubIssueLinks SET State=1,LocalDirty=0;" + mutation);
+        await Assert.That(await Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks;")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task LifecycleTriggers_DeleteAndRestore_IgnoreThenRequeueLink()
+    {
+        using var connection = await OpenAsync();
+        await Execute(connection, "UPDATE Tasks SET DeletedAtUtc='later' WHERE Id='t';");
+        await Assert.That(await Scalar(connection, "SELECT State FROM GitHubIssueLinks;")).IsEqualTo(3L);
+        await Assert.That(await Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks;")).IsEqualTo(0L);
+        await Execute(connection, "UPDATE Tasks SET DeletedAtUtc=NULL WHERE Id='t';");
+        await Assert.That(await Scalar(connection, "SELECT State FROM GitHubIssueLinks;")).IsEqualTo(0L);
+        await Assert.That(await Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks;")).IsEqualTo(1L);
+        await Execute(connection, "UPDATE GitHubIssueLinks SET State=4, LocalDirty=0; UPDATE Tasks SET DeletedAtUtc='later' WHERE Id='t'; UPDATE Tasks SET DeletedAtUtc=NULL WHERE Id='t';");
+        await Assert.That(await Scalar(connection, "SELECT State FROM GitHubIssueLinks;")).IsEqualTo(4L);
         await Assert.That(await Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks;")).IsEqualTo(0L);
     }
 

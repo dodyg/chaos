@@ -210,7 +210,7 @@ export function TagSettings({ tag, tags, api = tagRpc, onChanged, onDeleted }: {
     </div>}
     <div><Button type="button" variant="outline" className="text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={busy}
       onClick={() => void change(() => api.delete(base), onDeleted)}><Trash2/>Delete tag</Button>
-      <p className="mt-1 text-xs text-muted-foreground">Deleting removes the tag (and nested tags) from tasks but keeps the tasks. You can restore it from Deleted tags.</p></div>
+      <p className="mt-1 text-xs text-muted-foreground">Deleting removes the tag (and nested tags) from tasks but keeps the tasks. You can restore it from Deleted tags. Deleting or merging a mapped GitHub tag also removes its label from linked issues on the next sync.</p></div>
     {error && <InlineError>{error}</InlineError>}
   </div>;
 }

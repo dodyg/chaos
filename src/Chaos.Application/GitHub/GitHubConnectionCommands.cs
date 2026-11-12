@@ -27,10 +27,60 @@ public sealed record AddGitHubRepositoryCommand(string OperationId, string Conne
 public sealed record UpdateGitHubRepositoryCommand(string OperationId, string RepositoryId, long ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilter Filter, bool MilestonesAsProjects);
 public sealed record ChangeGitHubCommand(string OperationId, string Id, long ExpectedVersion, bool Paused = false);
 public sealed record GitHubSettingsCommand(string OperationId, string Id, long ExpectedVersion, bool PostDiaryByDefault, bool CreateLabelsForTags);
+public sealed record GitHubSelfAssignmentCommand(string OperationId, string TaskId, bool Assigned);
+public sealed record GitHubTaskActionCommand(string OperationId, string TaskId, long ExpectedVersion);
 
 /// <summary>Local configuration with explicit remote setup reads. No network call holds a database transaction.</summary>
 public sealed partial class GitHubConnectionCommands(IApplicationStore store, IGitHubApi api, IIdGenerator ids, TimeProvider clock)
 {
+    public Task<bool> RetryTaskAsync(GitHubTaskActionCommand command, CancellationToken ct = default) =>
+        TaskAction(command, "retry", ct);
+
+    public Task<bool> DismissConflictAsync(GitHubTaskActionCommand command, CancellationToken ct = default) =>
+        TaskAction(command, "dismiss-conflict", ct);
+
+    public Task<bool> KeepAsOrdinaryTaskAsync(GitHubTaskActionCommand command, CancellationToken ct = default) =>
+        TaskAction(command, "detach", ct);
+
+    private Task<bool> TaskAction(GitHubTaskActionCommand command, string action, CancellationToken ct) =>
+        Mutate(command.OperationId, "github." + action, command, async (s, profile, space, now, token) =>
+        {
+            var task = await s.Tasks.GetAsync(command.TaskId, token);
+            var link = await s.GitHub.FindLinkByTaskAsync(command.TaskId, token);
+            if (task is null || task.SpaceId != space.Id || link is null || link.State == 4)
+                throw AppException.NotFound("The linked GitHub task was not found.");
+            await Connection(s, link.ConnectionId, token);
+            CheckVersion(link.Version, command.ExpectedVersion);
+            var next = action switch
+            {
+                "retry" => link with { LastErrorKind = null, LastErrorMessage = null, ErrorAttempts = 0, NextAttemptUtc = null, IssueEtag = null, LocalDirty = true, LocalDirtySinceUtc = link.LocalDirtySinceUtc ?? now },
+                "dismiss-conflict" => link with { ConflictNoticeUtc = null },
+                _ => link with { State = 4, LocalDirty = false, LocalDirtySinceUtc = null, LocalAssigneeIntent = null, ConflictNoticeUtc = null, LastErrorKind = null, LastErrorMessage = null, ErrorAttempts = 0, NextAttemptUtc = null, IssueEtag = null },
+            };
+            if (action == "detach")
+            {
+                await s.Diary.AddAsync(new DiaryEntryRecord { Id = ids.NewId().ToString(), TaskId = task.Id, AuthorProfileId = profile.Id,
+                    EntryAtUtc = now, RawMarkdown = "Came from " + link.HtmlUrl, Revision = 1, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now }, token);
+                await s.GitHub.DeleteIssueWriteAsync(link.Id, token);
+                await s.GitHub.ClearIssueMappingsAsync(link.Id, token);
+            }
+            return await s.GitHub.UpdateIssueLinkAsync(next with { UpdatedAtUtc = now }, link.Version, token) is not null;
+        }, ct);
+
+    public Task<bool> SetSelfAssignmentAsync(GitHubSelfAssignmentCommand command, CancellationToken ct = default) =>
+        Mutate(command.OperationId, "github.self-assignment", command, async (s, profile, space, now, token) =>
+        {
+            var task = await s.Tasks.GetAsync(command.TaskId, token);
+            var link = await s.GitHub.FindLinkByTaskAsync(command.TaskId, token);
+            if (task is null || task.SpaceId != space.Id || link is not { State: 0 }) throw AppException.Validation("taskId", "Choose a task linked to an active GitHub issue.");
+            var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
+            var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
+            if (connection is null || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || repo is null || repo.DeletedAtUtc is not null)
+                throw AppException.NotFound("The GitHub connection is unavailable.");
+            _ = await s.GitHub.UpdateIssueLinkAsync(link with { LocalAssigneeIntent = command.Assigned ? 1 : 0, LocalDirty = true,
+                LocalDirtySinceUtc = link.LocalDirtySinceUtc ?? now, UpdatedAtUtc = now }, link.Version, token) ?? throw Conflict();
+            return true;
+        }, ct);
     public Task<GitHubStatus> StatusAsync(CancellationToken ct = default) => store.QueryAsync(async (s, token) =>
     {
         var (_, space) = await Context(s, token);
@@ -175,6 +225,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
                 await s.GitHub.UpdateIssueLinkAsync(link with { State = link.TaskId is null ? 3 : 4, LocalDirty = false, LocalDirtySinceUtc = null,
                     LocalAssigneeIntent = null, NextAttemptUtc = null, IssueEtag = null, LastErrorKind = null, LastErrorMessage = null, UpdatedAtUtc = now }, link.Version, ct);
                 await s.GitHub.ClearIssueMappingsAsync(link.Id, ct);
+                await s.GitHub.DeleteIssueWriteAsync(link.Id, ct);
             }
             if (links.Count < 200) break;
             after = links[^1].Id;

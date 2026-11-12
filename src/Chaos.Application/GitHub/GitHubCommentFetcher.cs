@@ -51,7 +51,8 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
             {
                 var link = await store.QueryAsync((s, token) => s.GitHub.FindLinkByNumberAsync(repo.Id, group.Key, token), ct);
                 if (link is not { State: 0, TaskId: not null }) continue;
-                changed += await inbound.ApplyAsync(link.Id, link.Version, group.DistinctBy(c => c.Id).ToArray(), false, ct, 2000, repo.Version);
+                try { changed += await inbound.ApplyAsync(link.Id, link.Version, group.DistinctBy(c => c.Id).ToArray(), false, ct, 2000, repo.Version); }
+                catch (AppException error) when (error.Kind == AppErrorKind.Validation) { await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, GitHubErrorKind.Validation, ct); }
             }
             scan = scan with { NextCursor = page.NextCursor, PagesRead = scan.PagesRead + 1, Finished = page.NextCursor is null,
                 Watermark = page.Items.Aggregate(scan.Watermark, (value, c) => c.UpdatedAt > value ? c.UpdatedAt : value), Etag = scan.PagesRead == 0 && page.NextCursor is null ? page.Etag : null };
@@ -65,7 +66,9 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
         {
             var link = (await store.QueryAsync((s, token) => s.GitHub.ListRepositoryLinksAsync(repo.Id, after, 1, token), ct)).SingleOrDefault();
             if (link is null) { reachedEnd = true; after = null; break; }
-            if (link.State != 0 || link.TaskId is null || !await store.QueryAsync(async (s, token) => await s.Tasks.GetAsync(link.TaskId, token) is not null, ct)) { after = link.Id; continue; }
+            if (link.State != 0 || link.TaskId is null || link.NextAttemptUtc > clock.GetUtcNow() || !await store.QueryAsync(async (s, token) => await s.Tasks.GetAsync(link.TaskId, token) is not null, ct)) { after = link.Id; continue; }
+            try
+            {
             var row = await store.QueryAsync((s, token) => s.GitHub.GetCommentCheckpointAsync(link.Id, token), ct);
             var state = row?.RepositoryVersion == repo.Version ? StoredJsonFormats.ReadSnapshot<GitHubCommentState>(row.PayloadJson) ?? new() : new GitHubCommentState();
             var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson) ?? throw Changed();
@@ -136,6 +139,17 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
             }
             if (!state.InitialDone || due) { pending = true; break; }
             after = link.Id;
+            }
+            catch (GitHubApiException error) when (GitHubOutboundCommands.IsLinkError(error.Kind))
+            {
+                await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, error.Kind, ct);
+                after = link.Id;
+            }
+            catch (AppException error) when (error.Kind == AppErrorKind.Validation)
+            {
+                await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, GitHubErrorKind.Validation, ct);
+                after = link.Id;
+            }
         }
         if (!reachedEnd) pending = true;
         await store.ExecuteAsync(async (s, token) =>

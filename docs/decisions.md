@@ -324,6 +324,16 @@ authority stays with `SPEC.md`; PLAN.md pins stay binding.
   and task-row titles use `unicode-bidi: plaintext`, so Arabic and Latin titles each take their
   own direction. Animations and transitions are cut to nothing under `prefers-reduced-motion`.
 
+## 2026-11-11 (GitHub prerequisites, in progress)
+
+- **Use GitHub CLI as an external dependency for the first GitHub connection.** This replaces
+  the earlier token-entry decision at the user's direction. Chaos calls `gh api` and does not
+  manage credentials; disconnect leaves CLI authentication intact. GitHub CLI's active account
+  and its permissions govern access, which can be broader than the repositories Chaos syncs.
+  GitHub CLI may fall back to plaintext credential storage; see the
+  [GitHub CLI authentication documentation](https://cli.github.com/manual/gh_auth_login).
+  CLI capability, safe account binding and installed-MSIX behavior remain G0 prerequisites.
+
 ## 2026-11-11 (GitHub G0 account-binding blocker)
 
 - **The proposed CLI adapter cannot yet guarantee the connected account for a write.**
@@ -523,3 +533,37 @@ Final G5 validation: locked restore and the separate-output Release build passed
 or errors; all 662 .NET tests and all 89 frontend tests passed; Slopwatch reported no findings.
 G5 is marked complete for offline implementation. Live credential, throwaway-repository and
 installed-MSIX evidence remains unclaimed and required at the release gate.
+
+## 2026-11-12 (GitHub G6 lifecycle, task controls and write revalidation)
+
+Migration 019 handles trash/restore at the database boundary so container deletion, undo and
+imports follow the same rule as task commands: trash ignores a link without changing GitHub;
+restore queues a fresh merge. Purge retains the issue identity. Recovery leaves ignored links
+alone until restoration. Detach retains task content and a provenance diary entry, clears
+checklist/comment mappings and pending write intents, and prevents future imports from relinking
+that task. Repository removal also clears its write intents. Desktop pause, retry and detach
+cancel and drain active sync work before changing local configuration.
+
+Task status remains a local read. Its RPC exposes link versions, conflict/error notices, a
+validated issue URL, repository identity and milestone due-date ownership. Retry and conflict
+dismissal use optimistic link versions and operation receipts. The task UI provides those actions
+and detach, restricts connected title lengths and recurrence, and locks milestone-owned due
+fields. Journal metadata refresh preserves the user's current posting choice, including opt-out.
+Tag settings warn that removing mapped tags removes issue labels on the next sync; detailed
+per-label affected-issue counts remain an enhancement.
+
+GitHub's REST documentation explicitly excludes conditional unsafe-method requests unless an
+endpoint documents support. Issue PATCH and comment mutations therefore cannot be made atomic
+with a preceding GET by adding If-Match. See
+[GitHub REST best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).
+Chaos now checks the remote snapshot again after preparing a write and checks local task/link
+versions and active configuration before sending it. A changed snapshot discards the unsent
+intent and defers to inbound merging. Comment edits/deletes similarly revalidate remote content,
+and comments recheck local eligibility before mutations. These are best-effort race mitigations:
+a GitHub edit after the final read can still race the write. Recovery records continue to cover
+uncertain mutation outcomes; they do not provide server-side compare-and-swap.
+
+Offline verification: locked restore and Release build passed; all 691 .NET tests and 93 frontend
+tests passed; Slopwatch found zero issues. No live credential or repository operation was run.
+Live G6 acceptance and installed-MSIX verification remain required. Automatic scheduling, full
+repository views and pull-request links remain G7–G9 work.

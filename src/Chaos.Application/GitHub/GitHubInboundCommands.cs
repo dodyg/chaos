@@ -36,6 +36,8 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 if (!GitHubIssueAddress.TryParse(issue.HtmlUrl, out var address) || !address.IsIn(repo.Owner, repo.Name) || address.Number != issue.Number)
                     throw AppException.Validation("issue", "The issue moved during retrieval. Run sync again to refresh its destination.");
                 var link = await s.GitHub.FindLinkByIssueAsync(connection.Id, issue.Id, token);
+                // An unresolved PATCH must be reconciled before its old baseline is merged.
+                if (link is not null && await s.GitHub.GetIssueWriteAsync(link.Id, token) is not null) continue;
                 var transferred = link is not null && link.RepositorySubscriptionId != repo.Id;
                 if (transferred && link!.State == 4) continue;
                 if (transferred)
@@ -71,7 +73,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 var local = task is null ? remote.Projection() : await Project(s, repo, link!, task, baseline, connection.AccountId, token);
                 var merge = SyncMerge.Issue(baseline.Projection(), local, remote.Projection());
                 var conflict = merge.Conflicts.Title is not null || merge.Conflicts.Body is not null || merge.Conflicts.State is not null;
-                var dirty = !merge.Value.EquivalentTo(remote.Projection());
+                var dirty = !merge.Value.EquivalentTo(remote.Projection()) || link is not null && (await s.GitHub.ListCommentLinksAsync(link.Id, token)).Any(comment => comment.State is 1 or 2 or 3);
                 var status = IssueStateMapping.ToTask(merge.Value.State, task?.Status ?? TaskItemStatus.NotStarted,
                     task is { IsTerminal: true } ? await TaskMutationSupport.PreviousNonterminalStatusAsync(s, task.Id, null, token) : null);
                 var placement = await Placement(s, repo, issue.Milestone, space.Id, now, token);
@@ -122,7 +124,10 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 // The remote baseline advances even when local-only edits still need a later push.
                 await s.GitHub.UpdateIssueLinkAsync(link! with { BaseJson = StoredJsonFormats.Snapshot(remote), BaseRemoteUpdatedUtc = issue.UpdatedAt,
                     State = 0, HtmlUrl = issue.HtmlUrl, IssueNumber = issue.Number, LocalDirty = dirty, LocalDirtySinceUtc = dirty ? link!.LocalDirtySinceUtc ?? now : null,
-                    LastSyncedUtc = now, ConflictNoticeUtc = conflict ? now : link!.ConflictNoticeUtc, LastErrorKind = null, LastErrorMessage = null, ErrorAttempts = 0, NextAttemptUtc = null, UpdatedAtUtc = now }, link!.Version, token);
+                    LocalAssigneeIntent = link.LocalAssigneeIntent is { } intent && remote.AssigneeIds.Contains(connection.AccountId) == (intent == 1) ? null : link.LocalAssigneeIntent,
+                    LastSyncedUtc = now, ConflictNoticeUtc = conflict ? now : link!.ConflictNoticeUtc,
+                    LastErrorKind = link.NextAttemptUtc > now ? link.LastErrorKind : null, LastErrorMessage = link.NextAttemptUtc > now ? link.LastErrorMessage : null,
+                    ErrorAttempts = link.NextAttemptUtc > now ? link.ErrorAttempts : 0, NextAttemptUtc = link.NextAttemptUtc > now ? link.NextAttemptUtc : null, UpdatedAtUtc = now }, link!.Version, token);
             }
             return new GitHubInboundResult(created, updated, conflicts);
         }, ct);
@@ -158,10 +163,16 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         // Unsupported blank or overlong checklist titles stay byte-for-byte in notes.
         var current = IssueBody.ScanChecklist(task.Notes).Where(i => !string.IsNullOrWhiteSpace(i.Text) && i.Text.EnumerateRunes().Count() <= TaskTitle.MaxUnicodeScalarValues).ToArray();
         var reconciliation = ChecklistReconciler.Match(previous.Select(p => new ChecklistBase(Guid.Parse(p.SubtaskId), checked((int)p.BaseOrdinal), p.BaseText)).ToArray(), current);
+        var unmapped = (await s.Subtasks.ListByTaskAsync(task.Id, ct)).Where(sub => !previous.Any(item => item.SubtaskId == sub.Id)).ToList();
         var rows = new List<GitHubChecklistItemRecord>();
         foreach (var match in reconciliation.Items)
         {
             var existing = match.SubtaskId is { } id ? await s.Subtasks.GetAsync(id.ToString(), ct) : null;
+            if (existing is null && match.SubtaskId is null)
+            {
+                existing = unmapped.FirstOrDefault(sub => sub.Title == match.Item.Text && (sub.Status == TaskItemStatus.Done) == match.Item.Checked);
+                if (existing is not null) unmapped.Remove(existing);
+            }
             var state = match.Item.Checked ? TaskItemStatus.Done : existing?.Status == TaskItemStatus.Done ? TaskItemStatus.NotStarted : existing?.Status ?? TaskItemStatus.NotStarted;
             var sub = existing is null ? new SubtaskRecord { Id = ids.NewId().ToString(), TaskId = task.Id, Title = match.Item.Text, Status = state,
                 Position = await s.Subtasks.GetNextPositionAsync(task.Id, ct), Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, CompletedAtUtc = match.Item.Checked ? now : null } :

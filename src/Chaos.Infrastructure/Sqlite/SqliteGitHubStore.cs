@@ -7,6 +7,32 @@ namespace Chaos.Infrastructure.Sqlite;
 /// <summary>GitHub bookkeeping on the caller's connection and transaction; no network access.</summary>
 public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStore
 {
+    private static GitHubIssueWriteRecord ReadIssueWrite(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), StorageFormats.ParseInstant(r.GetString(2))!.Value);
+
+    public async Task<GitHubIssueWriteRecord?> GetIssueWriteAsync(string linkId, CancellationToken ct) =>
+        (await QueryAsync("SELECT IssueLinkId,PayloadJson,CreatedAtUtc FROM GitHubIssueWrites WHERE IssueLinkId=$id;", ReadIssueWrite, ct, ("$id", linkId))).SingleOrDefault();
+
+    public Task<IReadOnlyList<GitHubIssueWriteRecord>> ListIssueWritesAsync(string repositoryId, CancellationToken ct) =>
+        QueryAsync("SELECT w.IssueLinkId,w.PayloadJson,w.CreatedAtUtc FROM GitHubIssueWrites w JOIN GitHubIssueLinks l ON l.Id=w.IssueLinkId WHERE l.RepositorySubscriptionId=$id ORDER BY w.IssueLinkId;", ReadIssueWrite, ct, ("$id", repositoryId));
+
+    public async Task AddIssueWriteAsync(GitHubIssueWriteRecord row, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO GitHubIssueWrites (IssueLinkId,PayloadJson,CreatedAtUtc) VALUES ($id,$payload,$created);";
+        command.Parameters.AddWithValue("$id", row.IssueLinkId);
+        command.Parameters.AddWithValue("$payload", row.PayloadJson);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(row.CreatedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task DeleteIssueWriteAsync(string linkId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM GitHubIssueWrites WHERE IssueLinkId=$id;";
+        command.Parameters.AddWithValue("$id", linkId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static GitHubConnectionRecord ReadConnection(SqliteDataReader reader) => new()
     {
         Id = reader.GetString(reader.GetOrdinal("Id")),

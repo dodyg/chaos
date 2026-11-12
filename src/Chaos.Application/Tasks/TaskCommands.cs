@@ -1,5 +1,6 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.GitHub;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
 
@@ -169,6 +170,15 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var task = await RequireTaskAsync(session, normalized.TaskId, inner);
                     RequireCurrentVersion(task, normalized.ExpectedVersion);
+                    var link = await session.GitHub.FindLinkByTaskAsync(task.Id, inner);
+                    if (link is { State: not 4 })
+                    {
+                        if (normalized.Title.Length > 256) throw AppException.Validation("title", "A GitHub issue title can hold at most 256 characters.");
+                        var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson)
+                            ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
+                        if (baseline.MilestoneDue is not null && (normalized.DueDate != task.DueDate || normalized.DueTime != task.DueTime || normalized.DueZoneId != task.DueZoneId))
+                            throw AppException.Validation("dueDate", "Change the milestone due date on GitHub.");
+                    }
                     var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, subtasks);
 

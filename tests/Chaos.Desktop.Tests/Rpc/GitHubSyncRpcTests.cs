@@ -54,6 +54,15 @@ public sealed class GitHubSyncRpcTests
         var syncInfo = await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None);
         await Assert.That(syncInfo.Connected).IsTrue();
         await Assert.That(syncInfo.Pending).IsFalse();
+        await Assert.That(syncInfo.IssueUrl).IsEqualTo("https://github.com/person/repo/issues/1");
+        await Assert.That(syncInfo.Repository).IsEqualTo("person/repo");
+        var requestsBeforeActions = api.Requests;
+        await Assert.That((await rpc.RetryTaskAsync(new(Op(), linked.TaskId!, "bad-version"), CancellationToken.None)).Error!.Kind).IsEqualTo("validation");
+        await Assert.That((await rpc.DismissConflictAsync(new(Op(), linked.TaskId!, syncInfo.LinkVersion!), CancellationToken.None)).Ok).IsTrue();
+        await Assert.That((await rpc.RetryTaskAsync(new(Op(), linked.TaskId!, syncInfo.LinkVersion!), CancellationToken.None)).Error!.Kind).IsEqualTo("versionConflict");
+        var currentInfo = await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None);
+        await Assert.That((await rpc.RetryTaskAsync(new(Op(), linked.TaskId!, currentInfo.LinkVersion!), CancellationToken.None)).Ok).IsTrue();
+        await Assert.That(api.Requests).IsEqualTo(requestsBeforeActions);
         await storage.Store.ExecuteAsync(async (s, ct) => { var task = (await s.Tasks.GetAsync(linked.TaskId!, ct))!; await s.Tasks.UpdateAsync(task with { Title = "Local pending edit", Version = task.Version + 1 }, task.Version, ct); return true; });
         var callsBeforeStatus = api.Requests;
         await Assert.That((await rpc.TaskSyncAsync(new(linked.TaskId!), CancellationToken.None)).Pending).IsTrue();

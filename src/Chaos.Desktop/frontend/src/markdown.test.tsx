@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { containerRpc, diaryRpc, historyRpc, markdownRpc, queryRpc, recurrenceRpc, tagRpc, taskRpc, undoRpc, type TaskResponse } from "#neoastra";
+import { containerRpc, diaryRpc, gitHubRpc, historyRpc, markdownRpc, queryRpc, recurrenceRpc, tagRpc, taskRpc, undoRpc, type TaskResponse } from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -243,6 +243,32 @@ test("the journal shows diary Markdown and history events, opens an earlier vers
   assert.equal(restored[0].expectedVersion, "3");
   assert.equal(saved?.title, "Old title");
   cleanup();
+});
+
+test("a connected journal offers explicit GitHub posting and deletion choices", async () => {
+  const { TaskJournal } = await import("./TaskJournal");
+  const deleted: boolean[] = [];
+  const entry = { id: "d1", taskId, entryAtUtc: "2026-11-10T10:00:00Z", markdown: "Comment", revision: "1", editedAtUtc: null, version: "1", deleted: false };
+  const journalApi = { diaryRpc: { ...diaryRpc,
+    timeline: async () => ({ ok: true, error: null, items: [{ atUtc: entry.entryAtUtc, event: null, diary: entry }] }),
+    list: async () => ({ ok: true, entries: [], error: null }),
+    delete: async (request: { deleteOnGitHub: boolean }) => { deleted.push(request.deleteOnGitHub); return { ok: true, entry, error: null }; },
+  }, historyRpc };
+  let statusReads = 0;
+  const githubApi = { ...gitHubRpc, taskSync: async () => { statusReads++; return { ok: true, connected: true, pending: false, state: "Linked", error: null, assignedToMe: false, postDiaryByDefault: true, linkVersion: "1", hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false }; } };
+  const user = userEvent.setup({ document: dom.window.document });
+  const view = render(<TaskJournal task={task(taskId, "Task")} api={journalApi} githubApi={githubApi} revision={0} busy={false} onChanged={() => {}} onError={message => assert.fail(message)}/>);
+  try {
+    assert.equal((await screen.findByRole("checkbox", { name: "Also post to GitHub on sync" }) as HTMLInputElement).checked, true);
+    await user.click(screen.getByRole("checkbox", { name: "Also post to GitHub on sync" }));
+    view.rerender(<TaskJournal task={task(taskId, "Task")} api={journalApi} githubApi={githubApi} revision={1} busy={false} onChanged={() => {}} onError={message => assert.fail(message)}/>);
+    await waitFor(() => assert.equal(statusReads, 2));
+    assert.equal((screen.getByRole("checkbox", { name: "Also post to GitHub on sync" }) as HTMLInputElement).checked, false);
+    await user.click(await screen.findByRole("button", { name: "Delete diary entry" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete diary entry" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete on GitHub too" }));
+    await waitFor(() => assert.deepEqual(deleted, [true]));
+  } finally { cleanup(); }
 });
 
 test("the task editor opens on a roomy Notes tab, keeps fields on Details and saves from any tab", async () => {

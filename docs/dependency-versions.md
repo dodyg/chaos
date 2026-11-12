@@ -95,6 +95,10 @@ Every project restores the `win-x64` RID (`Directory.Build.props`), so the lock 
 
 ## Sandbox/CI notes
 
+- GitHub REST API version selected for the planned connection: `2026-03-10`, the latest
+  supported version in the [GitHub API version documentation](https://docs.github.com/en/rest/about-the-rest-api/api-versions)
+  checked 2026-11-11. The G0 live compatibility checks remain outstanding.
+
 - `dotnet test` in MTP solution mode needs one-time download of the dotnet-test extension
   from `builds.dotnet.microsoft.com`; direct TUnit executable runs (e.g.
   `dotnet tests/Chaos.Domain.Tests/bin/Release/net11.0/Chaos.Domain.Tests.dll`) are the

@@ -49,6 +49,11 @@ public sealed class GitHubInboundRefresh(IApplicationStore store, IGitHubApi api
             }
             GitHubIssueRead read;
             try { read = await api.ReadIssueAsync(account, repo.Owner, repo.Name, link.IssueNumber, force || link.State != 0 || link.LocalDirty ? null : link.IssueEtag, ct); }
+            catch (GitHubApiException error) when (error.Kind is GitHubErrorKind.Forbidden or GitHubErrorKind.Validation or GitHubErrorKind.Server)
+            {
+                await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, error.Kind, ct);
+                continue;
+            }
             catch (GitHubApiException error) when (error.Kind is GitHubErrorKind.NotFound or GitHubErrorKind.Gone or GitHubErrorKind.Moved)
             {
                 if (error.Kind == GitHubErrorKind.NotFound)
@@ -81,7 +86,13 @@ public sealed class GitHubInboundRefresh(IApplicationStore store, IGitHubApi api
                 }
                 if (target is null) { await Unavailable(link, repo, GitHubErrorKind.Moved, address.WebUrl, ct); continue; }
             }
-            var applied = await inbound.ApplyAsync(target.Id, target.Version, [issue], ct);
+            GitHubInboundResult applied;
+            try { applied = await inbound.ApplyAsync(target.Id, target.Version, [issue], ct); }
+            catch (AppException error) when (error.Kind == AppErrorKind.Validation && error.Fields.Any(field => field.FieldPath == "issue"))
+            {
+                await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, GitHubErrorKind.Validation, ct);
+                continue;
+            }
             updated += applied.Updated; conflicts += applied.Conflicts;
             await SaveLink(link, target, row => row with { IssueEtag = read.Etag }, ct, false);
         }

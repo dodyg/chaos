@@ -308,6 +308,8 @@ internal static class Program
 [JsonSerializable(typeof(TimelineItemResponse))]
 [JsonSerializable(typeof(TimelineResponse))]
 [JsonSerializable(typeof(DiaryAddRequest))]
+[JsonSerializable(typeof(GitHubSelfAssignmentRequest))]
+[JsonSerializable(typeof(GitHubTaskActionRequest))]
 [JsonSerializable(typeof(DiaryEditRequest))]
 [JsonSerializable(typeof(DiaryChangeRequest))]
 [JsonSerializable(typeof(DiaryOperationResponse))]

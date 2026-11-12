@@ -10,7 +10,10 @@ namespace Chaos.Desktop.Services;
 
 public sealed record GitHubStatusRequest();
 public sealed record GitHubTaskSyncRequest(string TaskId);
-public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error);
+public sealed record GitHubSelfAssignmentRequest(string OperationId, string TaskId, bool Assigned);
+public sealed record GitHubTaskActionRequest(string OperationId, string TaskId, string ExpectedVersion);
+public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error, bool? AssignedToMe = null, bool PostDiaryByDefault = false,
+    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false);
 public sealed record GitHubConnectRequest(string OperationId);
 public sealed record GitHubCandidatesRequest(string? Cursor);
 public sealed record GitHubLookupRequest(string Owner, string Name);
@@ -71,8 +74,13 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 if (link is null || link.State == 4) return new GitHubTaskSyncResponse(true, false, false, null, null);
                 var c = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
                 if (c is null || c.DeletedAtUtc is not null || c.ProfileId != profile.Id || c.SpaceId != space.Id) return new(true, false, false, null, null);
-                var state = c.State == 1 ? "Paused" : c.State == 2 ? "Needs sign-in" : link.State switch { 0 => "Linked", 1 => "Out of scope", 2 => "Unavailable", _ => "Ignored" };
-                return new(true, true, link.LocalDirty, state, null);
+                var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
+                var state = c.State == 1 || repo?.State == 1 ? "Paused" : c.State == 2 ? "Needs sign-in" : link.State switch { 0 when link.LastErrorKind is not null => "Needs attention", 0 => "Linked", 1 => "Out of scope", 2 => "Unavailable", _ => "Ignored" };
+                var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson);
+                var assigned = link.LocalAssigneeIntent is { } intent ? intent == 1 : baseline?.AssigneeIds.Contains(c.AccountId);
+                var error = link.LastErrorKind is { } kind && Enum.IsDefined((GitHubErrorKind)kind) ? Error(new((GitHubErrorKind)kind)).Message : null;
+                return new(true, true, link.LocalDirty, state, null, assigned, c.PostDiaryByDefault, Number(link.Version), link.ConflictNoticeUtc is not null,
+                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null);
             }, ct);
         }
         catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
@@ -130,11 +138,19 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("updateRepository")]
     public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); });
     [NeoRpcMethod("pauseConnection")]
-    public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); });
+    public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); }, ct); });
     [NeoRpcMethod("pauseRepository")]
-    public async ValueTask<GitHubOperationResponse> PauseRepositoryAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await commands.SetRepositoryPausedAsync(Change(r), ct); });
+    public async ValueTask<GitHubOperationResponse> PauseRepositoryAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetRepositoryPausedAsync(Change(r), ct); }, ct); });
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<GitHubOperationResponse> UpdateSettingsAsync(GitHubSettingsRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateSettingsAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.PostDiaryByDefault, r.CreateLabelsForTags), ct); });
+    [NeoRpcMethod("setSelfAssignment")]
+    public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct) => await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); });
+    [NeoRpcMethod("retryTask")]
+    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); }, ct); });
+    [NeoRpcMethod("dismissConflict")]
+    public async ValueTask<GitHubOperationResponse> DismissConflictAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.DismissConflictAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); });
+    [NeoRpcMethod("keepAsOrdinaryTask")]
+    public async ValueTask<GitHubOperationResponse> KeepAsOrdinaryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.KeepAsOrdinaryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); }, ct); });
     [NeoRpcMethod("removeRepository")]
     public async ValueTask<GitHubOperationResponse> RemoveRepositoryAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(() => commands.RemoveRepositoryAsync(Change(r), ct), ct); });
     [NeoRpcMethod("disconnect")]

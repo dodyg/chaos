@@ -344,6 +344,8 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
                 TaskId = task.Id, Version = 1, UpdatedAtUtc = now, IssueEtag = null, NextAttemptUtc = null,
                 ErrorAttempts = 0, LastErrorKind = null, LastErrorMessage = null, LocalDirty = true,
             }, token);
+            if (item.GitHubIssueWrite is { } write && write.IssueLinkId == item.GitHubLink!.Id)
+                await session.GitHub.AddIssueWriteAsync(write, token);
         }
 
         var subtasks = new List<SubtaskRecord>(item.Subtasks.Count);

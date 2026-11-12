@@ -19,8 +19,10 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
                 || connection.State != 0 || connection.DeletedAtUtc is not null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null || repo.Version != expectedRepositoryVersion || await s.Tasks.GetAsync(link.TaskId, token) is null)
                 throw AppException.VersionConflict("The GitHub issue link changed during comment retrieval.");
             var changed = 0;
+            var write = await s.GitHub.GetIssueWriteAsync(link.Id, token);
+            var writingEntry = write is null ? null : StoredJsonFormats.ReadSnapshot<GitHubIssueWriteIntent>(write.PayloadJson)?.CommentEntryId;
             foreach (var mapping in await s.GitHub.ListCommentLinksAsync(link.Id, token))
-                if (mapping.CommentId is { } id && targets.Contains(id) && !seen.Contains(id) && mapping.State is not (3 or 4 or 5))
+                if (mapping.DiaryEntryId != writingEntry && mapping.CommentId is { } id && targets.Contains(id) && !seen.Contains(id) && mapping.State is not (3 or 4 or 5))
                 {
                     await s.GitHub.UpsertCommentLinkAsync(mapping with { State = 4, NextAttemptUtc = null, LastErrorKind = null, LastErrorMessage = null }, token);
                     changed++;
@@ -43,16 +45,35 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
                 || connection.State != 0 || connection.DeletedAtUtc is not null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null || (expectedRepositoryVersion is not null && repo.Version != expectedRepositoryVersion) || await s.Tasks.GetAsync(link.TaskId, token) is null)
                 throw AppException.VersionConflict("The GitHub issue link changed during comment retrieval.");
             var mappings = await s.GitHub.ListCommentLinksAsync(link.Id, token);
+            var write = await s.GitHub.GetIssueWriteAsync(link.Id, token);
+            var writingEntry = write is null ? null : StoredJsonFormats.ReadSnapshot<GitHubIssueWriteIntent>(write.PayloadJson)?.CommentEntryId;
             var now = clock.GetUtcNow();
             var changed = 0;
             // New imports are bounded to the newest 100, but every supplied ID participates in deletion detection.
             var newest = comments.OrderByDescending(c => c.CreatedAt).ThenByDescending(c => c.Id).Take(newCommentLimit).Select(c => c.Id).ToHashSet();
-            foreach (var comment in comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id))
+            foreach (var fetched in comments.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id))
             {
+                var comment = fetched;
                 if (comment.Id <= 0 || comment.Body.Length > 65536) throw AppException.Validation("comment", "GitHub returned an unsupported comment.");
                 var mapping = mappings.FirstOrDefault(m => m.CommentId == comment.Id);
+                if (mapping is not null && mapping.DiaryEntryId == writingEntry) continue;
+                var pending = mapping is null && comment.User.Id == connection.AccountId
+                    ? mappings.FirstOrDefault(m => m.Origin == 1 && m.State == 1 && m.CommentId is null && comment.Body.EndsWith(GitHubCommentMarker.Suffix(m.DiaryEntryId), StringComparison.Ordinal)) : null;
+                if (pending is not null)
+                {
+                    var pendingEntry = await s.Diary.GetIncludingDeletedAsync(pending.DiaryEntryId, token);
+                    if (pendingEntry is not null)
+                    {
+                        var body = GitHubCommentMarker.Strip(comment.Body, pendingEntry.Id);
+                        await s.GitHub.UpsertCommentLinkAsync(pending with { CommentId = comment.Id, AuthorLogin = comment.User.Login, HtmlUrl = comment.HtmlUrl,
+                            BaseBody = body, BaseRemoteUpdatedUtc = comment.UpdatedAt, State = pendingEntry.DeletedAtUtc is not null ? 5 : pendingEntry.RawMarkdown == body ? 0 : 2 }, token);
+                        changed++;
+                    }
+                    continue;
+                }
                 if (mapping is null && !newest.Contains(comment.Id)) continue;
                 if (mapping is { State: 3 or 5 }) continue; // A local delete request or hide must not resurrect the entry.
+                if (mapping is { Origin: 1 }) comment = comment with { Body = GitHubCommentMarker.Strip(comment.Body, mapping.DiaryEntryId) };
                 if (mapping?.BaseRemoteUpdatedUtc > comment.UpdatedAt) continue;
                 var entry = mapping is null ? null : await s.Diary.GetIncludingDeletedAsync(mapping.DiaryEntryId, token);
                 if (mapping is not null && (entry is null || entry.DeletedAtUtc is not null)) continue;
@@ -77,7 +98,7 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
             if (complete)
             {
                 var present = comments.Select(c => c.Id).ToHashSet();
-                foreach (var mapping in mappings.Where(m => m.CommentId is not null && m.State is not (3 or 4 or 5) && !present.Contains(m.CommentId.Value)))
+                foreach (var mapping in mappings.Where(m => m.DiaryEntryId != writingEntry && m.CommentId is not null && m.State is not (3 or 4 or 5) && !present.Contains(m.CommentId.Value)))
                 {
                     await s.GitHub.UpsertCommentLinkAsync(mapping with { State = 4, NextAttemptUtc = null, LastErrorKind = null, LastErrorMessage = null }, token);
                     changed++;

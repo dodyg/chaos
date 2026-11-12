@@ -96,6 +96,8 @@ public sealed record GitHubChecklistItemRecord
     public bool BaseChecked { get; init; }
 }
 
+public sealed record GitHubIssueWriteRecord(string IssueLinkId, string PayloadJson, DateTimeOffset CreatedAtUtc);
+
 public sealed record GitHubCommentLinkRecord
 {
     public required string DiaryEntryId { get; init; }

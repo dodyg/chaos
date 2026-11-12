@@ -103,6 +103,8 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
     {
         try { rule.Validate(); }
         catch (DomainValidationException error) { throw AppException.Validation("rule", error.Message); }
+        if (await session.GitHub.FindLinkByTaskAsync(task.Id, ct) is { State: not 4 })
+            throw AppException.Validation("taskId", "A task connected to GitHub cannot recur.");
         if (task.IsTerminal || task.RecurrenceOccurrenceKey is not null)
             throw AppException.Validation("taskId", "Choose an open task that is not already recurring.");
         var slots = rule.Mode == RecurrenceMode.FixedSchedule

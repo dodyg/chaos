@@ -11,6 +11,14 @@ public sealed class FakeGitHub : IGitHubApi
     public DateTimeOffset Now { get; set; } = new(2026, 11, 11, 12, 0, 0, TimeSpan.Zero);
     public int Requests { get; private set; }
     public int RemoteWrites { get; private set; }
+    public Func<Task>? AfterIssueWrite { get; set; }
+    public Func<GitHubIssue, Task>? AfterIssueRead { get; set; }
+    public Func<Task>? AfterSetWrite { get; set; }
+    public Func<Task>? AfterCommentPost { get; set; }
+    public Func<Task>? AfterCommentEdit { get; set; }
+    public Func<Task>? AfterCommentDelete { get; set; }
+    public Func<Task>? AfterCommentRead { get; set; }
+    public Dictionary<long, GitHubErrorKind> IssueUpdateFailures { get; } = [];
     public long RequestCount => Requests;
     public long NotModifiedCount { get; private set; }
     private long _revision;
@@ -64,8 +72,13 @@ public sealed class FakeGitHub : IGitHubApi
         if (issue.Milestone is { } milestone && _milestones.TryGetValue(Key(owner, name), out var milestones)) issue = issue with { Milestone = milestones.FirstOrDefault(m => m.Id == milestone.Id) };
         return issue;
     }
-    public Task<GitHubIssue> GetIssueAsync(GitHubAccount account, string owner, string name, long number, CancellationToken ct)
-    { Check(account); return Task.FromResult(Issue(owner, name, number)); }
+    public async Task<GitHubIssue> GetIssueAsync(GitHubAccount account, string owner, string name, long number, CancellationToken ct)
+    {
+        Check(account);
+        var issue = Issue(owner, name, number);
+        if (AfterIssueRead is { } hook) await hook(issue);
+        return issue;
+    }
     public Dictionary<string, GitHubRepository> RedirectedRepositories { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<(string Repository, long Number), int> IssueReads { get; } = [];
     public Dictionary<(string Repository, long Number), Queue<GitHubErrorKind>> IssueFailureSequences { get; } = [];
@@ -85,22 +98,30 @@ public sealed class FakeGitHub : IGitHubApi
         return Task.FromResult(new GitHubIssueRead(issue, current, false));
     }
 
-    public Task<GitHubIssue> UpdateIssueAsync(GitHubAccount account, string owner, string name, long number, GitHubIssueUpdate update, CancellationToken ct)
+    public async Task<GitHubIssue> UpdateIssueAsync(GitHubAccount account, string owner, string name, long number, GitHubIssueUpdate update, CancellationToken ct)
     {
-        Check(account); RemoteWrites++;
+        Check(account);
+        if (IssueUpdateFailures.TryGetValue(number, out var failure)) throw new GitHubApiException(failure);
+        RemoteWrites++;
         var issue = Issue(owner, name, number);
         var changed = issue with { Title = update.Title ?? issue.Title, Body = update.Body ?? issue.Body,
             State = update.State ?? issue.State, StateReason = update.StateReason ?? issue.StateReason, UpdatedAt = Tick() };
         _issues[(Key(owner, name), number)] = changed;
-        return Task.FromResult(changed);
+        if (AfterIssueWrite is { } hook) await hook();
+        return changed;
     }
     public Task<GitHubPage<GitHubLabel>> ListLabelsAsync(GitHubAccount account, string owner, string name, string? cursor, string? etag, CancellationToken ct)
     { Check(account); return Task.FromResult(Page(_labels.GetValueOrDefault(Key(owner, name)) ?? [], cursor, etag)); }
     public Task<GitHubPage<GitHubMilestone>> ListMilestonesAsync(GitHubAccount account, string owner, string name, string? cursor, string? etag, CancellationToken ct)
     { Check(account); return Task.FromResult(Page(_milestones.GetValueOrDefault(Key(owner, name)) ?? [], cursor, etag)); }
-    public Task<GitHubPage<GitHubComment>> ListCommentsAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, long? issueNumber, string? cursor, string? etag, CancellationToken ct)
-    { Check(account); return Task.FromResult(Page(_comments.Where(pair => pair.Key.Repository == Key(owner, name) && (issueNumber is null || pair.Key.Number == issueNumber)).SelectMany(pair => pair.Value.Select(c => c with { IssueUrl = "https://api.github.com/repos/" + Key(owner, name) + "/issues/" + pair.Key.Number })).Where(comment => since is null || comment.UpdatedAt >= since).OrderBy(comment => issueNumber is null ? comment.UpdatedAt : comment.CreatedAt).ThenBy(comment => comment.Id), cursor, etag)); }
-    public Task<GitHubComment> PostCommentAsync(GitHubAccount account, string owner, string name, long number, string body, CancellationToken ct)
+    public async Task<GitHubPage<GitHubComment>> ListCommentsAsync(GitHubAccount account, string owner, string name, DateTimeOffset? since, long? issueNumber, string? cursor, string? etag, CancellationToken ct)
+    {
+        Check(account);
+        var page = Page(_comments.Where(pair => pair.Key.Repository == Key(owner, name) && (issueNumber is null || pair.Key.Number == issueNumber)).SelectMany(pair => pair.Value.Select(c => c with { IssueUrl = "https://api.github.com/repos/" + Key(owner, name) + "/issues/" + pair.Key.Number })).Where(comment => since is null || comment.UpdatedAt >= since).OrderBy(comment => issueNumber is null ? comment.UpdatedAt : comment.CreatedAt).ThenBy(comment => comment.Id), cursor, etag);
+        if (AfterCommentRead is { } hook) await hook();
+        return page;
+    }
+    public async Task<GitHubComment> PostCommentAsync(GitHubAccount account, string owner, string name, long number, string body, CancellationToken ct)
     {
         Check(account); RemoteWrites++;
         var issue = Issue(owner, name, number);
@@ -110,7 +131,8 @@ public sealed class FakeGitHub : IGitHubApi
         if (!_comments.TryGetValue(key, out var comments)) _comments[key] = comments = [];
         comments.Add(comment);
         _issues[key] = issue with { Comments = comments.Count, UpdatedAt = time };
-        return Task.FromResult(comment);
+        if (AfterCommentPost is { } hook) await hook();
+        return comment;
     }
     private (List<GitHubComment> Comments, int Index, (string Repository, long Number) IssueKey) Comment(string owner, string name, long id)
     {
@@ -121,27 +143,29 @@ public sealed class FakeGitHub : IGitHubApi
         }
         throw new GitHubApiException(GitHubErrorKind.NotFound);
     }
-    public Task<GitHubComment> EditCommentAsync(GitHubAccount account, string owner, string name, long commentId, string body, CancellationToken ct)
+    public async Task<GitHubComment> EditCommentAsync(GitHubAccount account, string owner, string name, long commentId, string body, CancellationToken ct)
     {
         Check(account); RemoteWrites++; var (comments, index, key) = Comment(owner, name, commentId);
         if (comments[index].User.Id != account.Id) throw new GitHubApiException(GitHubErrorKind.Forbidden);
         var changed = comments[index] with { Body = body, UpdatedAt = Tick() };
         comments[index] = changed;
         _issues[key] = _issues[key] with { UpdatedAt = changed.UpdatedAt };
-        return Task.FromResult(changed);
+        if (AfterCommentEdit is { } hook) await hook();
+        return changed;
     }
-    public Task DeleteCommentAsync(GitHubAccount account, string owner, string name, long commentId, CancellationToken ct)
+    public async Task DeleteCommentAsync(GitHubAccount account, string owner, string name, long commentId, CancellationToken ct)
     {
         Check(account); RemoteWrites++; var (comments, index, key) = Comment(owner, name, commentId);
         if (comments[index].User.Id != account.Id) throw new GitHubApiException(GitHubErrorKind.Forbidden);
-        comments.RemoveAt(index); _issues[key] = _issues[key] with { Comments = comments.Count, UpdatedAt = Tick() }; return Task.CompletedTask;
+        comments.RemoveAt(index); _issues[key] = _issues[key] with { Comments = comments.Count, UpdatedAt = Tick() };
+        if (AfterCommentDelete is { } hook) await hook();
     }
-    public Task AddLabelAsync(GitHubAccount account, string owner, string name, long number, string label, CancellationToken ct)
+    public async Task AddLabelAsync(GitHubAccount account, string owner, string name, long number, string label, CancellationToken ct)
     {
         Check(account); RemoteWrites++; var issue = Issue(owner, name, number);
         var existing = (_labels.GetValueOrDefault(Key(owner, name)) ?? []).FirstOrDefault(item => item.Name.Equals(label, StringComparison.OrdinalIgnoreCase)) ?? throw new GitHubApiException(GitHubErrorKind.Validation);
         PutIssue(Key(owner, name), issue with { Labels = issue.Labels.Append(existing).DistinctBy(item => item.Id).ToArray(), UpdatedAt = Tick() });
-        return Task.CompletedTask;
+        if (AfterSetWrite is { } hook) await hook();
     }
     public Task RemoveLabelAsync(GitHubAccount account, string owner, string name, long number, string label, CancellationToken ct)
     { Check(account); RemoteWrites++; var issue = Issue(owner, name, number); PutIssue(Key(owner, name), issue with { Labels = issue.Labels.Where(item => !item.Name.Equals(label, StringComparison.OrdinalIgnoreCase)).ToArray(), UpdatedAt = Tick() }); return Task.CompletedTask; }
@@ -152,12 +176,12 @@ public sealed class FakeGitHub : IGitHubApi
         if (labels.Any(item => item.Name.Equals(label, StringComparison.OrdinalIgnoreCase))) throw new GitHubApiException(GitHubErrorKind.Validation);
         var created = new GitHubLabel(++_nextId, label, "cfd3d7"); labels.Add(created); Tick(); return Task.FromResult(created);
     }
-    public Task SetSelfAssignmentAsync(GitHubAccount account, string owner, string name, long number, bool assign, CancellationToken ct)
+    public async Task SetSelfAssignmentAsync(GitHubAccount account, string owner, string name, long number, bool assign, CancellationToken ct)
     {
         Check(account); RemoteWrites++; var issue = Issue(owner, name, number);
         var others = issue.Assignees.Where(user => user.Id != account.Id);
         PutIssue(Key(owner, name), issue with { Assignees = (assign ? others.Append(new(account.Id, account.Login)) : others).ToArray(), UpdatedAt = Tick() });
-        return Task.CompletedTask;
+        if (AfterSetWrite is { } hook) await hook();
     }
     public Task<IReadOnlyDictionary<string, IReadOnlyList<GitHubPullRequestRef>>> GetClosingPullRequestsAsync(GitHubAccount account, IReadOnlyList<string> issueNodeIds, CancellationToken ct)
     {

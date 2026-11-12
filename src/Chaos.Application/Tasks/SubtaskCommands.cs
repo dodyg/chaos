@@ -41,6 +41,7 @@ public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, T
                 var subtask = all.SingleOrDefault(x => x.Id == command.SubtaskId) ?? throw AppException.NotFound("That subtask no longer exists.");
                 RequireCurrentVersion(subtask, command.ExpectedVersion);
                 if (subtask.DeletedAtUtc is null) return new SubtaskMutationResult(subtask, false);
+                await ValidateGitHubTitleAsync(session, task.Id, subtask.Title, inner);
                 var before = new TaskAggregateSnapshot(task, all);
                 var restored = subtask with { DeletedAtUtc = null, Version = subtask.Version + 1, UpdatedAtUtc = now };
                 var applied = await ApplySubtaskUpdateAsync(session, restored, subtask.Version, inner);
@@ -62,6 +63,7 @@ public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, T
                     var title = TaskFieldValidation.Title(command.Title, "title");
                     var notes = TaskFieldValidation.Notes(command.Notes, "notes");
                     var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    await ValidateGitHubTitleAsync(session, task.Id, title, inner);
                     var beforeSubtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
                     var position = await session.Subtasks.GetNextPositionAsync(task.Id, inner);
 
@@ -105,6 +107,7 @@ public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, T
                     var before = new TaskAggregateSnapshot(await RequireTaskAsync(session, subtask.TaskId, inner), await session.Subtasks.ListByTaskAsync(subtask.TaskId, inner));
                     var title = TaskFieldValidation.Title(command.Title, "title");
                     var notes = TaskFieldValidation.Notes(command.Notes, "notes");
+                    await ValidateGitHubTitleAsync(session, subtask.TaskId, title, inner);
 
                     var updated = subtask with { Title = title, Notes = notes, Version = subtask.Version + 1, UpdatedAtUtc = now };
                     var applied = await ApplySubtaskUpdateAsync(session, updated, subtask.Version, token);
@@ -115,6 +118,12 @@ public sealed class SubtaskCommands(IApplicationStore store, IIdGenerator ids, T
 
             return replayed ? envelope with { Replayed = true } : envelope;
         }, ct);
+    }
+
+    private static async Task ValidateGitHubTitleAsync(IDataSession session, string taskId, string title, CancellationToken ct)
+    {
+        if ((title.Contains('\r') || title.Contains('\n')) && await session.GitHub.FindLinkByTaskAsync(taskId, ct) is { State: not 4 })
+            throw AppException.Validation("title", "A GitHub checklist item must fit on one line.");
     }
 
     public async Task<SubtaskMutationResult> SetStatusAsync(SetSubtaskStatusCommand command, CancellationToken ct = default)

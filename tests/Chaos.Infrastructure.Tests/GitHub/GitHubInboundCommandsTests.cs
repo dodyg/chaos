@@ -2,6 +2,8 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.GitHub;
 using Chaos.Domain.Tasks;
+using Chaos.Domain.Recurrence;
+using Chaos.Application.Tasks;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
 
@@ -9,6 +11,62 @@ namespace Chaos.Infrastructure.Tests.GitHub;
 
 public sealed class GitHubInboundCommandsTests
 {
+    [Test]
+    public async Task UpdateDetails_ConnectedIssue_EnforcesTitleAndMilestoneDueLimits()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host);
+        var issue = Issue() with { Milestone = new(22, 1, "Release", "open", DataHost.Start.AddDays(7)) };
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue]);
+        var link = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        var task = (await host.Store.QueryAsync((s, ct) => s.Tasks.GetAsync(link.TaskId!, ct)))!;
+        var commands = new TaskCommands(host.Store, host.Ids, host.Clock);
+        UpdateTaskDetailsCommand Edit(string title, DateOnly? due) => new(DataHost.Op(), task.Id, task.Version, title, task.Notes,
+            task.PlannedDate, task.PlannedTime, task.PlannedZoneId, due, task.DueTime, task.DueZoneId, task.Priority, task.EstimateMinutes, task.CapacityCategory);
+        await Assert.That(async () => await commands.UpdateDetailsAsync(Edit(new string('x', 257), task.DueDate))).Throws<AppException>();
+        await Assert.That(async () => await commands.UpdateDetailsAsync(Edit(task.Title, task.DueDate!.Value.AddDays(1)))).Throws<AppException>();
+        var saved = await commands.UpdateDetailsAsync(Edit(new string('x', 256), task.DueDate));
+        await Assert.That(saved.Task.Title.Length).IsEqualTo(256);
+        await Assert.That(saved.Task.DueDate).IsEqualTo(task.DueDate);
+    }
+
+    [Test]
+    public async Task ConnectedTask_RejectsRecurrenceAndMultilineChecklistTitles()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue()]);
+        var link = (await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        var task = (await host.Store.QueryAsync((s, ct) => s.Tasks.GetAsync(link.TaskId!, ct)))!;
+        var subtasks = new SubtaskCommands(host.Store, host.Ids, host.Clock);
+        var existing = (await host.Store.QueryAsync((s, ct) => s.Subtasks.ListByTaskAsync(task.Id, ct)))[0];
+        await Assert.That(async () => await subtasks.AddAsync(new(DataHost.Op(), task.Id, "first\nsecond", null))).Throws<AppException>();
+        await Assert.That(async () => await subtasks.UpdateAsync(new(DataHost.Op(), existing.Id, existing.Version, "first\rsecond", null))).Throws<AppException>();
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 10), null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        await Assert.That(async () => await new RecurrenceCommands(host.Store, host.Ids, host.Clock).StartAsync(new(DataHost.Op(), task.Id, task.Version, rule))).Throws<AppException>();
+        await Assert.That(await host.Store.QueryAsync((s, ct) => s.Recurrence.FindByTaskAsync(task.Id, ct))).IsNull();
+        await Assert.That((await host.Store.QueryAsync((s, ct) => s.Subtasks.ListByTaskAsync(task.Id, ct))).Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task DetachedTask_AllowsRecurrenceAndMultilineSubtasks()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue()]);
+        var task = await host.Store.ExecuteAsync(async (s, ct) =>
+        {
+            var link = (await s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct))!;
+            await s.GitHub.UpdateIssueLinkAsync(link with { State = 4 }, link.Version, ct);
+            return (await s.Tasks.GetAsync(link.TaskId!, ct))!;
+        });
+        var subtask = await new SubtaskCommands(host.Store, host.Ids, host.Clock).AddAsync(new(DataHost.Op(), task.Id, "first\nsecond", null));
+        await Assert.That(subtask.Subtask.Title).IsEqualTo("first\nsecond");
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 1, new(2026, 11, 10), null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        await new RecurrenceCommands(host.Store, host.Ids, host.Clock).StartAsync(new(DataHost.Op(), task.Id, task.Version, rule));
+        await Assert.That(await host.Store.QueryAsync((s, ct) => s.Recurrence.FindByTaskAsync(task.Id, ct))).IsNotNull();
+    }
+
     private static GitHubIssue Issue(long id = 1, string title = "Remote title", string body = "Text\r\n- [ ] First\r\n- [x] Second", string state = "open", DateTimeOffset? updated = null) =>
         new(id, "I" + id, id, "https://github.com/person/repo/issues/" + id, title, body, state, null, new(1, "person"),
             [new(11, "work/bug", "abcdef")], [], null, null, DataHost.Start, updated ?? DataHost.Start, state == "closed" ? DataHost.Start : null, 0, null);

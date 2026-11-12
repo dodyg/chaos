@@ -13,6 +13,10 @@ public interface IGitHubStore
     Task<GitHubRepositoryRecord?> UpdateRepositoryAsync(GitHubRepositoryRecord row, long expectedVersion, CancellationToken ct);
     Task AddIssueLinkAsync(GitHubIssueLinkRecord row, CancellationToken ct);
     Task<GitHubIssueLinkRecord?> GetIssueLinkAsync(string id, CancellationToken ct);
+    Task<GitHubIssueWriteRecord?> GetIssueWriteAsync(string linkId, CancellationToken ct);
+    Task<IReadOnlyList<GitHubIssueWriteRecord>> ListIssueWritesAsync(string repositoryId, CancellationToken ct);
+    Task AddIssueWriteAsync(GitHubIssueWriteRecord row, CancellationToken ct);
+    Task DeleteIssueWriteAsync(string linkId, CancellationToken ct);
     Task<GitHubIssueLinkRecord?> UpdateIssueLinkAsync(GitHubIssueLinkRecord row, long expectedVersion, CancellationToken ct);
     Task UpsertChecklistItemAsync(GitHubChecklistItemRecord row, CancellationToken ct);
     Task UpsertCommentLinkAsync(GitHubCommentLinkRecord row, CancellationToken ct);

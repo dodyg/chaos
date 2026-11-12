@@ -1,5 +1,5 @@
 import React from "react";
-import { diaryRpc, historyRpc, type DiaryEntryResponse, type HistoryAsOfResponse, type HistoryEntryResponse, type TaskResponse, type TimelineItemResponse } from "#neoastra";
+import { diaryRpc, gitHubRpc, historyRpc, type DiaryEntryResponse, type HistoryAsOfResponse, type HistoryEntryResponse, type TaskResponse, type TimelineItemResponse } from "#neoastra";
 import { History, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,9 +70,10 @@ function errorText(error: { message: string; fields: ReadonlyArray<{ message: st
  * field-change feed, a read-only viewer for any earlier version or instant, and restoring
  * chosen values as a new recorded edit.
  */
-export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, busy, links, searchLinks, onChanged, onError }: {
+export function TaskJournal({ task, api = { diaryRpc, historyRpc }, githubApi = gitHubRpc, revision, busy, links, searchLinks, onChanged, onError }: {
   task: TaskResponse;
   api?: Api;
+  githubApi?: typeof gitHubRpc;
   revision: number;
   busy: boolean;
   links?: MarkdownLinks;
@@ -83,7 +84,28 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
   const [items, setItems] = React.useState<TimelineItemResponse[]>([]);
   const [deleted, setDeleted] = React.useState<DiaryEntryResponse[]>([]);
   const [draft, setDraft] = React.useState("");
+  const [connected, setConnected] = React.useState(false);
+  const [postToGitHub, setPostToGitHub] = React.useState(false);
+  const [postDefault, setPostDefault] = React.useState(false);
+  const postingContext = React.useRef({ taskId: "", initialized: false });
+  React.useEffect(() => {
+    let active = true;
+    if (postingContext.current.taskId !== task.id) {
+      postingContext.current = { taskId: task.id, initialized: false };
+      setConnected(false); setPostToGitHub(false); setPostDefault(false);
+    }
+    void githubApi.taskSync({ taskId: task.id }).then(result => {
+      if (!active) return;
+      const enabled = result.ok && result.connected && result.state === "Linked";
+      setConnected(enabled); setPostDefault(enabled && result.postDiaryByDefault);
+      const initial = !postingContext.current.initialized;
+      postingContext.current.initialized = true;
+      setPostToGitHub(previous => enabled && (initial ? result.postDiaryByDefault : previous));
+    }).catch(() => { if (active) { setConnected(false); setPostToGitHub(false); } });
+    return () => { active = false; };
+  }, [githubApi, task.id, revision]);
   const [editing, setEditing] = React.useState<DiaryEntryResponse | null>(null);
+  const [deleting, setDeleting] = React.useState<DiaryEntryResponse | null>(null);
   const [working, setWorking] = React.useState(false);
   const [viewer, setViewer] = React.useState<HistoryAsOfResponse | null>(null);
   const [asOf, setAsOf] = React.useState("");
@@ -115,7 +137,7 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
   const operationId = () => crypto.randomUUID();
   function add(event: React.FormEvent) {
     event.preventDefault();
-    void mutate(() => api.diaryRpc.add({ operationId: operationId(), taskId: task.id, markdown: draft, entryAtUtc: null }), "Could not add the diary entry.", () => setDraft(""));
+    void mutate(() => api.diaryRpc.add({ operationId: operationId(), taskId: task.id, markdown: draft, entryAtUtc: null, postToGitHub }), "Could not add the diary entry.", () => { setDraft(""); setPostToGitHub(postDefault); });
   }
 
   async function view(request: { entryId: string | null; atUtc: string | null }) {
@@ -144,6 +166,7 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
 
     <form className="grid gap-2" onSubmit={add}>
       <MarkdownEditor id="diary-new" label="New diary entry" rows={3} value={draft} onChange={setDraft} disabled={disabled} placeholder="What happened? Markdown works here." links={links} searchLinks={searchLinks}/>
+      {connected && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={postToGitHub} onChange={e => setPostToGitHub(e.target.checked)} disabled={disabled}/>Also post to GitHub on sync</label>}
       <div><Button variant="outline" size="sm" disabled={disabled || !draft.trim()}>Add entry</Button></div>
     </form>
 
@@ -186,7 +209,7 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
             <span>{when(item.diary.entryAtUtc)}{item.diary.editedAtUtc && ` · edited ${when(item.diary.editedAtUtc)}`}</span>
             <span className="flex gap-0.5">
               <Button type="button" variant="ghost" size="icon-xs" aria-label="Edit diary entry" disabled={disabled} onClick={() => setEditing(item.diary)}><Pencil/></Button>
-              <Button type="button" variant="ghost" size="icon-xs" className="hover:text-destructive" aria-label="Delete diary entry" disabled={disabled} onClick={() => { const entry = item.diary!; void mutate(() => api.diaryRpc.delete({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version }), "Could not delete the diary entry."); }}><Trash2/></Button>
+              <Button type="button" variant="ghost" size="icon-xs" className="hover:text-destructive" aria-label="Delete diary entry" disabled={disabled} onClick={() => { const entry = item.diary!; if (connected) setDeleting(entry); else void mutate(() => api.diaryRpc.delete({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version, deleteOnGitHub: false }), "Could not delete the diary entry."); }}><Trash2/></Button>
             </span>
           </div>
           {editing?.id === item.diary.id
@@ -201,7 +224,14 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, revision, bu
           <Button type="button" variant="ghost" size="xs" onClick={() => { const event = item.event!; void view({ entryId: event.id, atUtc: null }); }}>View</Button>
         </li>)}</ol>}
 
+    {deleting && <div role="dialog" aria-label="Delete diary entry" className="grid gap-2 rounded-lg border bg-background p-3 text-sm">
+      <p>Remove this entry from Chaos, or also delete its GitHub comment if you authored it.</p>
+      <div className="flex flex-wrap gap-2">{[false, true].map(remote => <Button key={String(remote)} type="button" size="sm" variant="outline" disabled={disabled} onClick={() => {
+        const entry = deleting;
+        void mutate(() => api.diaryRpc.delete({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version, deleteOnGitHub: remote }), "Could not delete the diary entry.", () => setDeleting(null));
+      }}>{remote ? "Delete on GitHub too" : "Remove from Chaos only"}</Button>)}<Button type="button" size="sm" variant="ghost" onClick={() => setDeleting(null)}>Cancel</Button></div>
+    </div>}
     <DeletedItems noun="diary entries" items={deleted} name={entry => entry.markdown.split("\n")[0].slice(0, 60)} busy={disabled}
-      onRestore={entry => void mutate(() => api.diaryRpc.restore({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version }), "Could not restore the diary entry.")}/>
+      onRestore={entry => void mutate(() => api.diaryRpc.restore({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version, deleteOnGitHub: false }), "Could not restore the diary entry.")}/>
   </section>;
 }

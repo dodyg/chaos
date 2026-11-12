@@ -77,8 +77,29 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
             }
             foreach (var batch in page.Items.Chunk(50))
             {
-                var result = await inbound.ApplyAsync(repo.Id, repo.Version, batch, ct);
-                created += result.Created; updated += result.Updated; conflicts += result.Conflicts;
+                try
+                {
+                    var result = await inbound.ApplyAsync(repo.Id, repo.Version, batch, ct);
+                    created += result.Created; updated += result.Updated; conflicts += result.Conflicts;
+                }
+                catch (AppException error) when (error.Kind == AppErrorKind.Validation && error.Fields.Any(field => field.FieldPath == "issue"))
+                {
+                    // The batch transaction rolled back. Isolate bad linked issues without losing the others.
+                    foreach (var issue in batch)
+                    {
+                        try
+                        {
+                            var result = await inbound.ApplyAsync(repo.Id, repo.Version, [issue], ct);
+                            created += result.Created; updated += result.Updated; conflicts += result.Conflicts;
+                        }
+                        catch (AppException issueError) when (issueError.Kind == AppErrorKind.Validation && issueError.Fields.Any(field => field.FieldPath == "issue"))
+                        {
+                            var link = await store.QueryAsync((s, token) => s.GitHub.FindLinkByIssueAsync(connection.Id, issue.Id, token), ct);
+                            if (link is null || link.RepositorySubscriptionId != repo.Id) throw;
+                            await GitHubOutboundCommands.RecordLinkError(store, clock, repo.Id, link.Id, GitHubErrorKind.Validation, ct);
+                        }
+                    }
+                }
             }
             var watermark = scan.Watermark;
             foreach (var issue in page.Items) if (watermark is null || issue.UpdatedAt > watermark) watermark = issue.UpdatedAt;

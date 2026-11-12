@@ -1,4 +1,5 @@
 import { GitHubTaskNotice } from "./GitHubTaskNotice";
+import type { GitHubTaskSyncResponse } from "#neoastra";
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
@@ -80,6 +81,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
+  const [githubTask, setGitHubTask] = React.useState<{ taskId: string; info: GitHubTaskSyncResponse | null } | null>(null);
+  const updateGitHubStatus = React.useCallback((taskId: string, info: GitHubTaskSyncResponse | null) => {
+    setGitHubTask(current => info ? { taskId, info } : current?.taskId === taskId ? current : { taskId, info: null });
+  }, []);
+  const taskGitHub = githubTask?.taskId === editing?.id ? githubTask?.info : null;
   const [recurrenceDelete, setRecurrenceDelete] = React.useState<TaskResponse | null>(null);
   const [recurrenceConflict, setRecurrenceConflict] = React.useState<{ taskId: string; message: string } | null>(null);
   const [deleted, setDeleted] = React.useState<TaskResponse[]>([]);
@@ -766,8 +772,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </div>
       <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
-          <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision}/>
-          <Field label="Title"><Input required form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
+          <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed}/>
+          <Field label="Title"><Input required maxLength={taskGitHub?.connected ? 256 : undefined} form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
           <TabsList className="w-full">
             <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>
             <TabsTrigger value="details"><SlidersHorizontal/>Details</TabsTrigger>
@@ -796,11 +802,12 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
             <Field label="Estimate (minutes)"><Input type="number" min="0" value={editing.estimateMinutes ?? ""} onChange={e => change({ estimateMinutes: e.target.value === "" ? null : Number(e.target.value) })}/></Field>
           </div>
           {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
-            <div className="grid grid-cols-2 gap-3">
+            <fieldset disabled={kind === "due" && taskGitHub?.dueDateManaged} className="grid grid-cols-2 gap-3">
               <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change({ [`${kind}Date`]: e.target.value || null })}/></Field>
               <Field label="Time"><Input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null, ...(e.target.value && !editing[`${kind}ZoneId`] ? { [`${kind}ZoneId`]: timeZones.preferred } : {}) })}/></Field>
               <Field label="Time zone" className="col-span-2"><ZoneSelect value={editing[`${kind}ZoneId`]} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zone => change({ [`${kind}ZoneId`]: zone })}/></Field>
-            </div>
+            </fieldset>
+            {kind === "due" && taskGitHub?.dueDateManaged && <p className="text-xs text-muted-foreground">This due date comes from the GitHub milestone. Change it on GitHub.</p>}
           </FieldGroup>)}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Move to list or project"><NativeSelect value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <NativeSelectOption key={c.id} value={c.id}>{c.name}</NativeSelectOption>)}</NativeSelect></Field>
@@ -847,8 +854,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           <TaskWaiting task={editing} revision={revision} busy={busy} api={waitingApi}
             onChanged={saved => { if (saved) setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); changed(); }}/>
         </TabsContent>
-        <TabsContent value="recurrence"><RecurrenceEditor task={editing} timeZones={timeZones} revision={revision} busy={busy} onError={setError} taskApi={taskRpc} api={recurrenceApi}
-          onChanged={saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version, plannedDate: saved.plannedDate, plannedTime: saved.plannedTime, plannedZoneId: saved.plannedZoneId, dueDate: saved.dueDate, dueTime: saved.dueTime, dueZoneId: saved.dueZoneId } : current); void refresh().catch((e: unknown) => setError(String(e))); changed(); }}/></TabsContent>
+        <TabsContent value="recurrence">{taskGitHub?.connected ? <p className="text-sm text-muted-foreground">GitHub tasks cannot repeat. Keep this as an ordinary task to add recurrence.</p> : <RecurrenceEditor task={editing} timeZones={timeZones} revision={revision} busy={busy} onError={setError} taskApi={taskRpc} api={recurrenceApi}
+          onChanged={saved => { setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version, plannedDate: saved.plannedDate, plannedTime: saved.plannedTime, plannedZoneId: saved.plannedZoneId, dueDate: saved.dueDate, dueTime: saved.dueTime, dueZoneId: saved.dueZoneId } : current); void refresh().catch((e: unknown) => setError(String(e))); changed(); }}/>}</TabsContent>
         </div>
       </Tabs>
       <div className="flex gap-2 border-t px-5 py-3">

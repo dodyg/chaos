@@ -367,7 +367,7 @@ The sync engine's own write transaction ends by setting `LocalDirty` to the valu
 triggers firing during inbound writes do not leave a false dirty flag. Write a test for exactly
 that.
 
-### Migration 018 — `018_github_pull_requests.sql` (package G9)
+### Migration 019 — `019_github_pull_requests.sql` (package G9)
 
 **`GitHubPullRequestLinks`** — `(IssueLinkId, PullRequestId)` PK, `RepositoryFullName`, `Number`,
 `Title`, `HtmlUrl`, `State` (0 Open, 1 Draft, 2 Merged, 3 Closed), `ReviewDecision` (NULL,
@@ -1092,6 +1092,38 @@ Validation rows. **Exit:** with the test repository, every mapped field round-tr
 Sync now, a forced conflict shows GitHub's value plus the local value in history, and an edit made
 offline is sent after reconnecting.
 
+Incremental G6 implementation: Sync now pushes issue title, body/checklist and state. A fresh
+read and three-way merge precede each PATCH. Migration 018 records hashes of attempted fields
+before the request; recovery reads GitHub and acknowledges matching fields before inbound merge,
+including after a restart or a lost response. These records travel with JSON backups and retained
+links on merge import, and purge removes them. Outbound labels follow existing mappings or match
+tag paths to repository labels, with optional label creation; self-assignment and label mutations
+also use write intents. Explicitly selected diary entries post with a hidden entry marker; edits
+use an intent and explicit remote deletes are recovered by checking the comment ID. Link-scoped
+errors are recorded with retry times and do not stop other links in the covered passes.
+Lifecycle and task UI follow-up: migration 019 immediately ignores trashed tasks across task,
+container, import and undo paths, and queues a fresh merge on restoration. Purged issue identities
+remain ignored. Recovery skips ignored links; detaching a task or removing a subscription clears
+its pending writes and mappings while keeping local content and a provenance diary note. Pause,
+retry and detach drain active desktop sync work. Task controls expose Retry, Dismiss conflict,
+Keep as ordinary task, safe issue navigation and repository identity, using versioned local RPCs.
+The editor limits connected titles, locks milestone-managed due dates and explains the recurrence
+restriction. Diary status refresh preserves an explicitly unticked posting choice. Tag settings
+warn about label removal; per-label affected-issue counts are still a UI enhancement.
+
+Issue fields and set mutations now re-read after write preparation and compare both the remote
+snapshot (including changes with the same timestamp) and the local task/link versions immediately
+before invoking the write. Changed snapshots discard the unsent intent and defer to merging.
+Comment edits/deletes recheck remote content, and all comment mutations recheck local eligibility.
+These checks narrow the read/write race; they cannot eliminate it. GitHub explicitly documents
+that unsafe-method conditional requests are unsupported unless an endpoint says otherwise:
+[REST best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).
+No ETag-based atomic-write guarantee is claimed. Lost-response recovery remains necessary.
+
+Offline validation: locked restore, Release build, all 691 .NET tests and all 93 frontend tests
+passed; Slopwatch reported zero findings. G6 remains open for the live throwaway-repository and
+installed-MSIX exit criteria. G7 scheduling and G8 repository views remain separate work.
+
 ### [ ] G7 — Background engine and status
 
 **Depends on:** G6. **Files:** `GitHubSyncEngine.cs`, `Program.cs` (construction, disposal order,
@@ -1118,7 +1150,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/018_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/020_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

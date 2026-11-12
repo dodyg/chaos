@@ -36,6 +36,7 @@ public sealed class TransferTests
                 SELECT 'l','r','g',Id,1,'node',1,'url','{}',UpdatedAtUtc,CreatedAtUtc,UpdatedAtUtc FROM Tasks WHERE Id=$task;
                 INSERT INTO GitHubChecklistItems SELECT Id,'l',Position,Title,0 FROM Subtasks WHERE TaskId=$task;
                 INSERT INTO GitHubCommentLinks(DiaryEntryId,IssueLinkId,Origin,State) SELECT Id,'l',1,0 FROM DiaryEntries WHERE TaskId=$task;
+                INSERT INTO GitHubIssueWrites VALUES ('l','{}','2026-11-10T09:00:00.0000000Z');
                 """;
             command.Parameters.AddWithValue("$task", seed.PaintTaskId);
             await command.ExecuteNonQueryAsync(ct);
@@ -47,6 +48,7 @@ public sealed class TransferTests
         await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubIssueLinks WHERE TaskId IS NULL AND State=3 AND LocalDirty=0;")).IsEqualTo(1L);
         await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubChecklistItems;")).IsEqualTo(0L);
         await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubCommentLinks;")).IsEqualTo(0L);
+        await Assert.That(await host.CountAsync("SELECT count(*) FROM GitHubIssueWrites;")).IsEqualTo(0L);
         await Assert.That(await host.CountAsync("SELECT count(*) FROM pragma_foreign_key_check;")).IsEqualTo(0L);
     }
 

@@ -21,9 +21,9 @@ public sealed record DiaryListRequest(string TaskId, bool IncludeDeleted);
 public sealed record DiaryListResponse(bool Ok, IReadOnlyList<DiaryEntryResponse> Entries, TaskErrorResponse? Error);
 public sealed record TimelineItemResponse(string AtUtc, DiaryEntryResponse? Diary, HistoryEntryResponse? Event);
 public sealed record TimelineResponse(bool Ok, IReadOnlyList<TimelineItemResponse> Items, TaskErrorResponse? Error);
-public sealed record DiaryAddRequest(string OperationId, string TaskId, string Markdown, string? EntryAtUtc);
+public sealed record DiaryAddRequest(string OperationId, string TaskId, string Markdown, string? EntryAtUtc, bool PostToGitHub = false);
 public sealed record DiaryEditRequest(string OperationId, string EntryId, string ExpectedVersion, string Markdown);
-public sealed record DiaryChangeRequest(string OperationId, string EntryId, string ExpectedVersion);
+public sealed record DiaryChangeRequest(string OperationId, string EntryId, string ExpectedVersion, bool DeleteOnGitHub = false);
 public sealed record DiaryOperationResponse(bool Ok, DiaryEntryResponse? Entry, TaskErrorResponse? Error);
 public sealed record DiaryRevisionsRequest(string EntryId);
 public sealed record DiaryRevisionResponse(string Revision, string Markdown, bool Deleted, string RecordedAtUtc);
@@ -129,7 +129,7 @@ public sealed class DiaryRpcService(DiaryCommands diary)
         await RunAsync(() =>
         {
             DateTimeOffset? at = string.IsNullOrEmpty(request.EntryAtUtc) ? null : StorageFormats.ParseInstant(request.EntryAtUtc) ?? throw AppException.Validation("entryAtUtc", "Choose a valid entry time.");
-            return diary.AddAsync(new(request.OperationId, request.TaskId, request.Markdown, at), ct);
+            return diary.AddAsync(new(request.OperationId, request.TaskId, request.Markdown, at, request.PostToGitHub), ct);
         });
 
     [NeoRpcMethod("edit")]
@@ -138,7 +138,7 @@ public sealed class DiaryRpcService(DiaryCommands diary)
 
     [NeoRpcMethod("delete")]
     public async ValueTask<DiaryOperationResponse> DeleteAsync(DiaryChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => diary.DeleteAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion)), ct));
+        await RunAsync(() => diary.DeleteAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion), request.DeleteOnGitHub), ct));
 
     [NeoRpcMethod("restore")]
     public async ValueTask<DiaryOperationResponse> RestoreAsync(DiaryChangeRequest request, CancellationToken ct) =>

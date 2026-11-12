@@ -9,7 +9,7 @@ public interface IGitHubSyncRunner
     Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null);
 }
 
-/// <summary>One explicit inbound pass. The desktop engine owns scheduling, cancellation and replacement quiescence.</summary>
+/// <summary>One explicit sync pass. The desktop engine owns scheduling, cancellation and replacement quiescence.</summary>
 public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, GitHubIssueFetcher issues, GitHubCommentFetcher comments, IIdGenerator ids, TimeProvider clock) : IGitHubSyncRunner
 {
     public async Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null)
@@ -30,6 +30,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
         if (repositories.Length == 0) throw AppException.Validation("repository", "Add or resume a repository first.");
         var started = clock.GetUtcNow(); var requests = api.RequestCount; var notModified = api.NotModifiedCount;
         var result = new GitHubSyncResult(0, 0, 0, 0, false);
+        var pushed = 0;
         string? currentRepository = null;
         try
         {
@@ -38,12 +39,21 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
                 currentRepository = repo.Id;
                 var refresh = new GitHubInboundRefresh(store, api, new GitHubInboundCommands(store, ids, clock), clock);
                 await refresh.RefreshIdentityAsync(repo.Id, ct);
+                var outboundComments = new GitHubOutboundComments(store, api, ids, clock);
+                await outboundComments.RunAsync(repo.Id, false, ct);
+                var outbound = new GitHubOutboundCommands(store, api, new GitHubInboundCommands(store, ids, clock), clock);
+                var recovered = await outbound.RecoverAsync(repo.Id, ct);
+                result = result with { Updated = result.Updated + recovered.Updated, Conflicts = result.Conflicts + recovered.Conflicts };
                 var pull = await issues.PullAsync(repo.Id, ct: ct);
                 result = result with { Created = result.Created + pull.Created, Updated = result.Updated + pull.Updated, Conflicts = result.Conflicts + pull.Conflicts, MorePages = result.MorePages || pull.MorePages };
                 var verified = await refresh.PullAsync(repo.Id, ct: ct);
                 result = result with { Updated = result.Updated + verified.Updated, Conflicts = result.Conflicts + verified.Conflicts, MorePages = result.MorePages || verified.MorePages };
                 var diary = await comments.PullAsync(repo.Id, ct: ct);
                 result = result with { CommentChanges = result.CommentChanges + diary.Changed, MorePages = result.MorePages || diary.MorePages };
+                var sent = await outbound.PushAsync(repo.Id, ct);
+                pushed += sent.Pushed;
+                result = result with { Updated = result.Updated + sent.Updated, Conflicts = result.Conflicts + sent.Conflicts };
+                pushed += await outboundComments.RunAsync(repo.Id, true, ct);
             }
         }
         catch (GitHubApiException error)
@@ -64,7 +74,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             var finished = clock.GetUtcNow();
             await s.GitHub.RecordSyncOutcomeAsync(connection.Id, error is null ? null : currentRepository, started, finished, error, retry, token);
             await s.GitHub.AddSyncRunAsync(new GitHubSyncRunRecord { Id = ids.NewId().ToString(), ConnectionId = connection.Id, StartedAtUtc = started, FinishedAtUtc = finished,
-                RequestCount = api.RequestCount - requests, NotModifiedCount = api.NotModifiedCount - notModified, CreatedCount = result.Created, UpdatedCount = result.Updated, ConflictCount = result.Conflicts,
+                RequestCount = api.RequestCount - requests, NotModifiedCount = api.NotModifiedCount - notModified, CreatedCount = result.Created, UpdatedCount = result.Updated, PushedCount = pushed, ConflictCount = result.Conflicts,
                 ErrorKind = error is null ? null : (int)error }, token);
             return true;
         }, ct);
