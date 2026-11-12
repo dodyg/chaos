@@ -43,7 +43,7 @@ function ShortcutState({ status }: { status: ShortcutStatusDto | undefined }) {
  * with whether Windows accepted them, keeping Chaos in the notification area, and Quit. Other
  * settings stay next to what they change and are linked from here.
  */
-export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; onSaved: (zoneChanged: boolean) => void; onNavigate: (view: SettingsLink) => void }) {
+export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced }: { api?: Api; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onNavigate: (view: SettingsLink) => void }) {
   const [saved, setSaved] = React.useState<ProfileSettingsResponse | null>(null);
   const [draft, setDraft] = React.useState<ProfileSettingsResponse | null>(null);
   const [zones, setZones] = React.useState<string[]>([]);
@@ -144,7 +144,7 @@ export function Settings({ api = shellRpc, onSaved, onNavigate }: { api?: Api; o
     </form>}
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
-    <TabsContent value="github"><GitHubSettings/></TabsContent>
+    <TabsContent value="github"><GitHubSettings onSynced={onGitHubSynced}/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("journal")}>Summary times</Button>

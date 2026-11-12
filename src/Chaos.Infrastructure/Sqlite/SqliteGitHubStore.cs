@@ -613,6 +613,28 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    public async Task RecordSyncOutcomeAsync(string connectionId, string? failedRepositoryId, DateTimeOffset started, DateTimeOffset finished, GitHubErrorKind? error, DateTimeOffset? retryAtUtc, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE GitHubConnections SET LastSyncStartedUtc=$start,LastSyncCompletedUtc=CASE WHEN $error IS NULL THEN $end ELSE LastSyncCompletedUtc END,
+                LastErrorKind=$error,LastErrorMessage=$message,RateLimitResetUtc=$retry,
+                State=CASE WHEN State=0 AND $auth THEN 2 ELSE State END WHERE Id=$connection AND DeletedAtUtc IS NULL;
+            UPDATE GitHubRepositories SET LastErrorKind=$error,LastErrorMessage=$message,
+                State=CASE WHEN State=0 AND $unavailable THEN 2 ELSE State END WHERE Id=$repo AND ConnectionId=$connection AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$connection", connectionId);
+        command.Parameters.AddWithValue("$repo", (object?)failedRepositoryId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$start", StorageFormats.Instant(started));
+        command.Parameters.AddWithValue("$end", StorageFormats.Instant(finished));
+        command.Parameters.AddWithValue("$error", error is null ? DBNull.Value : (object)(int)error);
+        command.Parameters.AddWithValue("$message", error is null ? DBNull.Value : (object)error.ToString()!);
+        command.Parameters.AddWithValue("$retry", retryAtUtc is { } retry ? StorageFormats.Instant(retry) : DBNull.Value);
+        command.Parameters.AddWithValue("$auth", error is GitHubErrorKind.CliUnavailable or GitHubErrorKind.Unauthorized or GitHubErrorKind.AccountMismatch);
+        command.Parameters.AddWithValue("$unavailable", error is GitHubErrorKind.NotFound or GitHubErrorKind.Gone);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken ct, params (string Name, object Value)[] parameters)
     {
         using var command = connection.CreateCommand();

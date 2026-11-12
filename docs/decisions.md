@@ -454,3 +454,36 @@ Offline verification uses real SQLite, fake GitHub and RPC/UI tests. Live Connec
 installed-MSIX checks remain part of the credential release gate. A running development window
 locked the ordinary Release directory, so verification used bin/GitHubVerification without
 closing the user's app. The same locked restore, full Release solution build and test gates ran.
+
+## 2026-11-12 (GitHub G5 comment fetch and manual sync)
+
+Sync now is an explicit, inbound-only background pass. It returns immediately, coalesces requests
+for the same connection, and exposes local status for UI polling. A queued job carries the
+connection ID selected by the RPC and validates it before any API request; activity is scoped to
+that connection and cleared after data replacement. Opening the app or Settings starts no GitHub
+request. A pass fetches at most 20 issue pages and 20 comment pages per repository, retaining
+continuations for the next explicit pass. G7's automatic scheduling is still separate.
+
+Initial comment import follows validated last/previous Link relations to select the newest 100.
+The repository-wide updated feed handles subsequent edits and additions. During a pass, issues
+with checks older than one day, or a decreased comment count, receive bounded full-list checks.
+Only a completed check can mark mapped comments remotely deleted; diary text remains. Each
+check tracks at most 200 mapped comment IDs, continuing larger sets in later checks. Metadata
+contains cursors, timestamps and IDs, never comment bodies. Migration 016 adds per-issue device
+checkpoints, omitted from archives and cleared on restore or subscription scope changes; the
+planned pull-request migration moves to 017.
+
+The manual engine cancels and drains a pass before restore/reset, repository removal or
+disconnect. Completed batches remain committed after cancellation, and subsequent passes replay
+safely. A real pre-import backup is supplied by the desktop composition. Completion refreshes
+query revisions, tags, counts and milestone containers. Transport errors use fixed messages;
+rate limits block subsequent reads, authorization failures require verification, and 404/410
+mark subscriptions unavailable. Error-run counts cover completed subpasses; the UI shows counts
+only for successful completed passes. It explicitly says local edits are not sent yet.
+
+Offline verification uses real SQLite, fake GitHub, actual backup creation, RPC integration,
+engine cancellation/coalescing tests and UI polling tests. Live credentials and installed-MSIX
+acceptance remain release gates; this work does not claim a live GitHub acceptance run.
+
+Final validation for this stage: locked restore, clean separate-output Release build, all 643
+.NET tests and all 86 frontend tests passed; Slopwatch reported no findings.

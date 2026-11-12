@@ -42,4 +42,5 @@ public interface IGitHubStore
     Task<GitHubCommentCheckpointRecord?> GetCommentCheckpointAsync(string issueLinkId, CancellationToken ct);
     Task<bool> SaveCommentCheckpointAsync(GitHubCommentCheckpointRecord row, CancellationToken ct);
     Task<bool> CompleteCommentScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, CancellationToken ct);
+    Task RecordSyncOutcomeAsync(string connectionId, string? failedRepositoryId, DateTimeOffset started, DateTimeOffset finished, GitHubErrorKind? error, DateTimeOffset? retryAtUtc, CancellationToken ct);
 }

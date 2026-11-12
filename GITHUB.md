@@ -1021,9 +1021,9 @@ replays failed pages idempotently, applies batches of at most 50 issues, overlap
 boundaries and reuses ETags only for the same single-page query. A required backup callback
 runs before first-import mutations; failed backups and changed settings stop application.
 Derived scan metadata preserves the settings version. All 623 .NET tests passed with a clean
-Release build; Slopwatch 0 findings. This component is not yet mounted in the desktop app.
-G5 remains open: comment-fetch orchestration, manual sync engine/RPC/UI and the remaining
-inbound acceptance cases still need implementation. G6–G10 remain open.
+Release build; Slopwatch 0 findings. At this stage the component was not yet mounted in the app.
+At that stage, comment orchestration and manual sync wiring remained open (implemented below).
+G6–G10 remain open.
 Final separate-output Release build passed with no warnings/errors; all 613 .NET tests passed,
 Slopwatch 0 findings. Frontend remains at 84 passing tests, unchanged by this stage.
 **Progress (2026-11-12, G5 comment-fetch stage):** Added incremental repository comment feeds,
@@ -1034,8 +1034,22 @@ imports and checks resume after restart. Machine checkpoints contain cursors and
 comment bodies, are omitted from archives, and are cleared on restore or scope changes.
 Migration 016 adds per-issue comment checkpoints; G9 now uses migration 017. The transport also
 retains issue_url for feed routing. Full Release build: 634 .NET tests passed, Slopwatch clean.
-Manual Sync now engine/RPC/UI wiring remains in progress. Pagination follows GitHub's
+Manual Sync now wiring follows in the next stage below. Pagination follows GitHub's
 [documented Link relations](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api).
+**Progress (2026-11-12, G5 manual Sync now wiring):** The desktop now composes real pre-import
+backups, issue and comment fetchers, the manual engine and github.syncNow RPC. Requests return
+immediately, coalesce per connection, and validate the captured connection ID before network
+work. Status is local-only and scoped to that connection; restore/reset cancels and drains work
+before swapping data. Repository removal/disconnect also drain work. Run diagnostics and fixed
+transport errors are persisted; rate-limit preflight prevents additional API calls, and 404/410
+mark a repository unavailable without changing settings versions.
+Settings → GitHub offers Sync now, per-repository Sync, Continue sync for capped work, progress,
+results and actionable errors. Completion refreshes tasks, tags, counts and milestone projects.
+The UI states that local edits are not sent yet and that initial comments are limited to 100.
+Final separate-output Release build: 643 .NET tests passed; Slopwatch clean. Frontend production build and all 86 tests passed. No live credentials were read and no installed-MSIX acceptance run is claimed.
+The requested comment-fetch/manual-sync path is implemented. G5 stays open for remaining label/
+milestone catalog refresh, transfer/convergence acceptance cases and live release validation;
+G6 outbound writes and G7 automatic scheduling are not part of this stage.
 ### [ ] G6 — Outbound sync, merge and conflicts
 
 **Depends on:** G5. **Files:** `GitHubSyncCommands.cs` (push half), `GitHubTaskCommands.cs`,

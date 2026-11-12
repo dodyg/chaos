@@ -89,6 +89,12 @@ internal static class Program
 
         // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
         using var githubApi = new GitHubCliClient();
+        using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System),
+            async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, TimeProvider.System);
+        using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
+        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
+        var pauseReminders = protection.Quiesce;
+        protection.Quiesce = (work, ct) => githubEngine.RunPausedAsync(() => pauseReminders(work, ct), ct);
         var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
         var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
@@ -142,7 +148,7 @@ internal static class Program
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddJournalRpcService(new JournalRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
-                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store));
+                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine));
             });
         });
     }
@@ -165,6 +171,9 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(GitHubSyncRequest))]
+[JsonSerializable(typeof(GitHubSyncDto))]
+[JsonSerializable(typeof(GitHubSyncResponse))]
 [JsonSerializable(typeof(GitHubStatusRequest))]
 [JsonSerializable(typeof(GitHubConnectRequest))]
 [JsonSerializable(typeof(GitHubCandidatesRequest))]
