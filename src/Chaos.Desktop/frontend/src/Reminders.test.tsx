@@ -148,7 +148,7 @@ test("My Day follow-ups can be logged privately and snoozed", async () => {
   await waitFor(() => assert.equal((screen.getByRole("button", { name: /Tomorrow/ }) as HTMLButtonElement).disabled, false));
   await user.click(screen.getByRole("button", { name: /Tomorrow/ }));
 
-  await waitFor(() => assert.equal(screen.queryByRole("list", { name: "Follow-ups" }), null));
+  await waitFor(() => assert.equal(screen.queryByRole("list", { name: "Follow-ups" }) === null, true));
   assert.deepEqual(calls, ["log:Left a voicemail", "snooze:Tomorrow"]);
   cleanup();
 });
