@@ -7,7 +7,7 @@ import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, und
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { TaskJournal } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
-import { extractChecklist, type MarkdownLinks } from "./markdown";
+import { extractChecklist, MarkdownPreview, type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
 import { ContainerManagement } from "./ContainerManagement";
 import { createLatestRequest } from "./latestRequest";
@@ -25,7 +25,7 @@ import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
 import { useTimeZones, ZoneSelect } from "./ZoneSelect";
-import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, LogOut, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
+import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Eye, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, LogOut, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -83,6 +83,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [completionFilter, setCompletionFilter] = React.useState("all");
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
+  const [viewingTask, setViewingTask] = React.useState(false);
+  React.useEffect(() => { if (!editing) setViewingTask(false); }, [editing]);
   const currentEditorTaskId = React.useRef(editing?.id); currentEditorTaskId.current = editing?.id;
   const taskDraftEdited = React.useRef(false);
   React.useEffect(() => { taskDraftEdited.current = false; }, [editing?.id]);
@@ -629,12 +631,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => setTaskStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <div className="flex items-center gap-1">
-          <button data-slot="row-title" className="w-fit min-w-0 rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => setEditing(task)}>{task.title}</button>
+          <button data-slot="row-title" className="w-fit min-w-0 rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => { setViewingTask(false); setEditing(task); }}>{task.title}</button>
           <GitHubTaskMark taskId={task.id} version={task.version} revision={revision}/>
         </div>
         {taskMeta(task).length > 0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">{taskMeta(task)}</div>}
       </div>
-      {rowActions(task.title, index, rows.length, to => move(task, to), () => void requestTaskDeletion(task))}
+      <div className="flex gap-0.5 opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100">
+        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`View ${task.title}`} title="View" onClick={() => { setViewingTask(true); setEditing(task); }}><Eye/></Button>
+        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete ${task.title}`} title="Delete" onClick={() => void requestTaskDeletion(task)}><Trash2/></Button>
+      </div>
     </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
       <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
       {(isFinished(task.status) ? ["NotStarted"] : statuses.filter(status => status !== "Done")).map(status => <ContextMenu.Item key={status} disabled={busy || status === task.status} className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50" onSelect={() => void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: null }), saved => setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current))}>{isFinished(task.status) ? "Reopen (previous status)" : label(status)}</ContextMenu.Item>)}
@@ -750,7 +755,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => setEditing(task)} onChanged={changed}/>
-      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => setEditing(task)} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
@@ -796,13 +801,20 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
     {editing && view !== "templates" && <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
       <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
-        <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Edit task</h2>
+        <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{viewingTask ? "View task" : "Edit task"}</h2>
         <div className="flex items-center gap-1">
           {!isFinished(editing.status) && <Button type="button" variant="outline" size="sm" disabled={busy || !dayClock} title="Choose this task for today without changing its dates" onClick={() => void addToMyDay(editing)}><SunMedium/>Add to My Day</Button>}
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close task editor" onClick={() => setEditing(null)}><X/></Button>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={viewingTask ? "Close task view" : "Close task editor"} onClick={() => setEditing(null)}><X/></Button>
         </div>
       </div>
-      <Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
+      {viewingTask ? <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <h3 className="text-xl font-semibold [overflow-wrap:anywhere]">{editing.title}</h3>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"><StatusBadge status={editing.status}/><PriorityBadge priority={editing.priority}/><span>{editing.category}</span>{editing.estimateMinutes != null && <span>{editing.estimateMinutes} min</span>}</div>
+        {(editing.plannedDate || editing.dueDate) && <div className="mt-3 grid gap-1 text-sm text-muted-foreground">{editing.plannedDate && <p>Planned {editing.plannedDate}{editing.plannedTime ? ` ${editing.plannedTime}` : ""}</p>}{editing.dueDate && <p>Due {editing.dueDate}{editing.dueTime ? ` ${editing.dueTime}` : ""}</p>}</div>}
+        <section className="mt-6"><h4 className="mb-2 font-semibold">Notes</h4>{editing.notes ? <MarkdownPreview source={editing.notes} links={links}/> : <p className="text-sm text-muted-foreground">No notes.</p>}</section>
+        {subtasks.length > 0 && <section className="mt-6"><h4 className="mb-2 font-semibold">Subtasks</h4><ul className="grid gap-3">{subtasks.map(subtask => <li key={subtask.id}><div className="flex items-center gap-2"><StatusBadge status={subtask.status}/><span className="font-medium">{subtask.title}</span></div>{subtask.notes && <MarkdownPreview source={subtask.notes} links={links} className="mt-2"/>}</li>)}</ul></section>}
+        <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>Edit task</Button>
+      </div> : <><Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
           <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed} onSynced={() => issueSyncFinished(editing.id)}/>
           <Field label="Title"><Input required maxLength={taskGitHub?.connected ? 256 : undefined} form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
@@ -893,7 +905,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <div className="flex gap-2 border-t px-5 py-3">
         <Button form="task-editor-form" disabled={busy}>Save</Button>
         <Button type="button" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-      </div>
+      </div></>}
     </aside>}
 
     {recurrenceConflict && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-conflict-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-conflict-title" className="font-semibold">Review the later occurrence</h2><p className="text-sm">{recurrenceConflict.message}</p><p className="text-sm">The completion and the later work are unchanged. Open the later task to review its edits and diary before deciding how to reconcile them.</p><div className="flex gap-2"><Button type="button" onClick={() => { const id = recurrenceConflict.taskId; setRecurrenceConflict(null); void taskRpc.get({ taskId: id }).then(result => { if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task."); }).catch((error: unknown) => setError(String(error))); }}>Open later task</Button><Button type="button" variant="outline" onClick={() => setRecurrenceConflict(null)}>Keep current state</Button></div></div></div>}

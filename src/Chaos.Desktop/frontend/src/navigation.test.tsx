@@ -25,7 +25,7 @@ function row(id: string, title: string): TaskResponse {
 test("completion filtering covers sections and preserves full ordering when hidden tasks intervene", async () => {
   const container: ContainerResponse = { id: "project", name: "Sprint", kind: "Project", version: "1", archived: false, deadlineDate: null };
   const items = [
-    { ...row("first", "First open task"), containerId: "project", sectionId: "phase" },
+    { ...row("first", "First open task"), containerId: "project", sectionId: "phase", notes: "## Full details\n\nA **rendered** description." },
     { ...row("done", "Completed task"), containerId: "project", sectionId: "phase", status: "Done" },
     { ...row("last", "Last open task"), containerId: "project", sectionId: "phase", status: "InProgress" },
     { ...row("cancelled", "Cancelled task"), containerId: "project", status: "Cancelled" },
@@ -51,7 +51,21 @@ test("completion filtering covers sections and preserves full ordering when hidd
     assert.equal(screen.queryByRole("button", { name: "Completed task" }) === null, true);
     assert.equal(screen.queryByRole("button", { name: "Cancelled task" }) === null, true);
     assert.ok(screen.getByRole("button", { name: "Last open task" }));
-    await user.click(screen.getByRole("button", { name: "Move First open task down" }));
+    await user.click(screen.getByRole("button", { name: "View First open task" }));
+    const panel = screen.getByRole("complementary", { name: "View task" });
+    assert.ok(within(panel).getByRole("heading", { name: "Full details" }));
+    assert.equal(within(panel).queryByRole("textbox", { name: "Title" }), null);
+    await user.click(within(panel).getByRole("button", { name: "Edit task" }));
+    assert.ok(screen.getByRole("textbox", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Close task editor" }));
+    const source = screen.getByRole("button", { name: "First open task" }).closest("li")!;
+    const target = screen.getByRole("button", { name: "Last open task" }).closest("li")!.firstElementChild!;
+    const dataTransfer = { setData() {}, effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(within(source).getByTitle("Drag to reorder"), { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer, clientY: 100 });
+    const drop = new dom.window.MouseEvent("drop", { bubbles: true, cancelable: true, clientY: 100 });
+    Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
+    fireEvent(target, drop);
     await waitFor(() => assert.deepEqual(moves, [2]));
     await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "finished");
     assert.ok(screen.getByRole("button", { name: "Completed task" }));
@@ -133,7 +147,7 @@ test("tasks are grouped under their section and ordered within that group", asyn
   const section = await screen.findByRole("list", { name: "Phase tasks" });
   await waitFor(() => assert.ok(within(section).getByRole("button", { name: "Section task" })));
   assert.ok(within(screen.getByRole("list", { name: "Unsectioned tasks" })).getByRole("button", { name: "Unsectioned" }));
-  assert.equal((within(section).getByRole("button", { name: "Move Section task up" }) as HTMLButtonElement).disabled, true);
+  assert.ok(within(section).getByRole("button", { name: "View Section task" }));
   cleanup();
 });
 

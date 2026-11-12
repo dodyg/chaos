@@ -109,8 +109,11 @@ test("when the local date rolls over, a person looking at today moves to the new
 test("chosen tasks can be reordered with a drag handle or keyboard and removed from the day", async () => {
   const { api, query, calls } = fakes("2026-11-10", { "2026-11-10": [task("a", "First"), task("b", "Second")] });
   const user = userEvent.setup({ document: dom.window.document });
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  const viewed: TaskResponse[] = [];
+  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onView={task => { viewed.push(task); }} onChanged={() => {}}/>, { container: dom.window.document.body });
   await screen.findByText("Second");
+  await user.click(screen.getByRole("button", { name: "View First" }));
+  assert.equal(viewed[0]?.id, "a");
   assert.equal(screen.queryByRole("button", { name: /Move .* (up|down)/ }), null);
   fireEvent.keyDown(screen.getByRole("button", { name: "Reorder First" }), { key: "ArrowUp" });
   assert.equal(calls.length, 0);

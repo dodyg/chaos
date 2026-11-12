@@ -1,7 +1,7 @@
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { CalendarArrowUp, ChevronLeft, ChevronRight, Clock, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
+import { CalendarArrowUp, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -88,9 +88,9 @@ function minutes(total: number) {
  * to the next day. Earlier days are read-only and stay reviewable. Choosing a task here never
  * changes its planned or due date.
  */
-export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onChanged, onSetStatus, background, onBackgroundChange }: {
+export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onView, onChanged, onSetStatus, background, onBackgroundChange }: {
   clock: DayClockResponse | null; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void; background?: DayBackground; onBackgroundChange?: (background: DayBackground) => boolean;
+  api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void; background?: DayBackground; onBackgroundChange?: (background: DayBackground) => boolean;
 }) {
   const today = clock?.today ?? null;
   const [day, setDay] = React.useState<string | null>(today);
@@ -183,7 +183,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       ? <EmptyState title={editable ? "Nothing chosen yet." : "Nothing was left open on this day."}>
           {day === today ? "Pick from the suggestions below or add a task from its editor." : editable ? "Carry tasks over or add them from a task's editor." : "Finished tasks are listed below."}
         </EmptyState>
-      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}
+      : <ol className="grid gap-1" aria-label="Chosen tasks">{open.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined}
           reorderTarget={drag.target(order, index, day, disabled || !editable, move)}
           dragHandle={editable && drag.handle(row.task.id, day, disabled, undefined, { label: `Reorder ${row.task.title}`, onMove: offset => move(row.task.id, index + offset) })}>
           {editable && <div className="flex gap-0.5">
@@ -202,7 +202,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       <summary className="flex cursor-pointer list-none items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
         <ChevronRight className="mr-1 size-3.5 transition-transform group-open/done:rotate-90"/>Finished<Count>{finished.length}</Count>
       </summary>
-      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onSetStatus={editable ? onSetStatus : undefined}/>)}</ol>
+      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined}/>)}</ol>
     </details>}
 
     {day === today && <section aria-labelledby="suggestions-heading" className="grid gap-1.5 rounded-xl border bg-muted/40 p-3">
@@ -210,7 +210,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       <p className="text-xs text-muted-foreground">Nothing is added by itself. Choose what fits today.</p>
       {suggestions.length === 0
         ? <p className="py-2 text-sm text-muted-foreground">No suggestions right now.</p>
-        : <ol className="grid gap-1" aria-label="Suggested tasks">{suggestions.map(item => <DayRow key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen}
+        : <ol className="grid gap-1" aria-label="Suggested tasks">{suggestions.map(item => <DayRow key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen} onView={onView}
             badge={<Badge variant="outline">{reasonText[item.reason] ?? item.reason}</Badge>}>
             <Button type="button" variant="outline" size="sm" disabled={disabled} aria-label={`Add ${item.task.title} to My Day`} onClick={() => void add(item.task.id)}><Plus/>Add</Button>
           </DayRow>)}</ol>}
@@ -218,8 +218,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   </>;
 }
 
-function DayRow({ row, selected, busy, onOpen, onSetStatus, badge, children, dragHandle, reorderTarget }: {
-  row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; badge?: React.ReactNode; children?: React.ReactNode;
+function DayRow({ row, selected, busy, onOpen, onView, onSetStatus, badge, children, dragHandle, reorderTarget }: {
+  row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; badge?: React.ReactNode; children?: React.ReactNode;
   dragHandle?: React.ReactNode; reorderTarget?: ReturnType<ReturnType<typeof useDragReorder>["target"]>;
 }) {
   const task = row.task;
@@ -240,6 +240,7 @@ function DayRow({ row, selected, busy, onOpen, onSetStatus, badge, children, dra
         <PriorityBadge priority={task.priority}/>
       </div>
     </div>
+    {onView && <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`View ${task.title}`} title="View" onClick={() => onView(task)}><Eye/></Button>}
     {children}
   </div></ContextMenu.Trigger>{onSetStatus && <ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
     <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
