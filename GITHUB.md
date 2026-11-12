@@ -473,7 +473,9 @@ connection and per link: 1, 2, 4, 8, 16, 30 minutes (cap), reset on success.
    - Link exists and the issue no longer matches → `OutOfScope`; matches again → back to
      `Linked` and merge.
    - Link `Linked` → merge (6.1 step 5) using the fetched issue as *remote*.
-   Advance `IssuesCursorUtc` only after the batch commits, to the newest `updated_at` in it.
+   Save the next-page checkpoint after committed batches. Publish `IssuesCursorUtc` only after
+   the complete scan finishes; subsequent scans overlap the watermark by one second. A crash
+   can replay committed pages safely without skipping unfinished pages.
 4. **Apply inbound comments** to linked issues (6.7), advancing `CommentsCursorUtc` the same way.
 5. **Merge (pure, in Domain).** For each field compute base *B* (from `BaseJson`), local *L* (the
    task's projection, 6.2) and remote *R*:
@@ -628,8 +630,10 @@ estimate, container/section per 6.6, appended to the end of the container; subta
 checklist; tags from labels; diary from comments; search documents maintained in the same
 transaction (`SearchIndexWriter`); one `TaskHistory` row `github.imported` with actor
 `github:<login>`. No undo entry. The first import of a repository takes a pre-import backup
-(`BackupManager`, reason `pre-import`) when it will create more than 50 tasks, and records the
-backup in the subscription so "undo this import" can be explained in `docs/github.md`.
+(`BackupManager`, reason `pre-import`) before the first matching issue is applied, even for a
+small import, so later pages exceeding 50 tasks are still protected by a pre-import snapshot.
+A scope re-evaluation also takes this conservative backup. The device-local subscription
+checkpoint records its file name so "undo this import" can be explained in `docs/github.md`.
 
 ### 6.9 Local deletion, restore and removal
 
@@ -1011,8 +1015,15 @@ Migration 015 adds device-local query/page checkpoints, excluded from archives a
 restore or subscription scope changes. Schema 13/14 upgrade safety backups and checkpoint
 restart/stale-version/archive/restore tests pass. Full Release verification: 617 tests passed,
 Slopwatch 0 findings. G9's pull-request migration is consequently 016.
-This is a local application component, not a completed G5: durable pagination checkpoints,
-fetch orchestration, pre-import backups and manual Sync now remain to be wired and tested.
+**Progress (2026-11-12, G5 issue-fetch stage):** Added a serialized, bounded fetch pass using
+the saved account, direct API port and real SQLite checkpoints. It resumes after restart,
+replays failed pages idempotently, applies batches of at most 50 issues, overlaps timestamp
+boundaries and reuses ETags only for the same single-page query. A required backup callback
+runs before first-import mutations; failed backups and changed settings stop application.
+Derived scan metadata preserves the settings version. All 623 .NET tests passed with a clean
+Release build; Slopwatch 0 findings. This component is not yet mounted in the desktop app.
+G5 remains open: comment-fetch orchestration, manual sync engine/RPC/UI and the remaining
+inbound acceptance cases still need implementation. G6–G10 remain open.
 Final separate-output Release build passed with no warnings/errors; all 613 .NET tests passed,
 Slopwatch 0 findings. Frontend remains at 84 passing tests, unchanged by this stage.
 ### [ ] G6 — Outbound sync, merge and conflicts

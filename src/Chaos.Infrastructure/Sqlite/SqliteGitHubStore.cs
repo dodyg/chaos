@@ -558,6 +558,24 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<bool> CompleteIssueScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, DateTimeOffset completedAt, CancellationToken ct)
+    {
+        // Derived state does not change the user's settings version or invalidate another resource's checkpoint.
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE GitHubRepositories SET IssuesCursorUtc=$cursor,IssuesEtag=$etag,InitialImportDoneUtc=COALESCE(InitialImportDoneUtc,$now),
+                LastSyncedUtc=$now,LastErrorKind=NULL,LastErrorMessage=NULL
+            WHERE Id=$id AND Version=$version AND State=0 AND DeletedAtUtc IS NULL
+                AND EXISTS(SELECT 1 FROM GitHubConnections c WHERE c.Id=ConnectionId AND c.State=0 AND c.DeletedAtUtc IS NULL);
+            """;
+        command.Parameters.AddWithValue("$id", repositoryId);
+        command.Parameters.AddWithValue("$version", expectedVersion);
+        command.Parameters.AddWithValue("$cursor", StorageFormats.Instant(watermark));
+        command.Parameters.AddWithValue("$etag", (object?)etag ?? DBNull.Value);
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(completedAt));
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken ct, params (string Name, object Value)[] parameters)
     {
         using var command = connection.CreateCommand();

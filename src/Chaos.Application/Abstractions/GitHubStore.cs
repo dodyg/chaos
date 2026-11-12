@@ -37,4 +37,5 @@ public interface IGitHubStore
     Task<GitHubSyncCheckpointRecord?> GetCheckpointAsync(string repositoryId, string kind, CancellationToken ct);
     Task<bool> SaveCheckpointAsync(GitHubSyncCheckpointRecord row, CancellationToken ct);
     Task ClearCheckpointsAsync(string repositoryId, CancellationToken ct);
+    Task<bool> CompleteIssueScanAsync(string repositoryId, long expectedVersion, DateTimeOffset watermark, string? etag, DateTimeOffset completedAt, CancellationToken ct);
 }
