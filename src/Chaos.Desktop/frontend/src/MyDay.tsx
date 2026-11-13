@@ -1,5 +1,6 @@
 import React from "react";
 import { DateText } from "./dates";
+import { GitHubTaskMark } from "./GitHubTaskMark";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { AlertTriangle, CalendarArrowUp, ImagePlus, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
@@ -217,7 +218,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const rowList = (rows: QueryRowResponse[], name: string, group: string) => {
     const laneOrder = rows.map(row => row.task.id);
     const toDay = (taskId: string, laneIndex: number) => lanes ? laneToDayIndex(order, laneOrder, taskId, laneIndex) : laneIndex;
-    return <ol className="grid gap-1" aria-label={name}>{rows.map((row, index) => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined}
+    return <ol className="grid gap-1" aria-label={name}>{rows.map((row, index) => <DayRow revision={revision + local} key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined}
       onSetCategory={onSetCategory}
       reorderTarget={drag.target(laneOrder, index, group, disabled || !editable, (id, laneIndex) => move(id, toDay(id, laneIndex)))}
       dragHandle={editable && drag.handle(row.task.id, group, disabled, undefined, { label: `Reorder ${row.task.title}`, onMove: offset => { const target = index + offset; if (target >= 0 && target < rows.length) move(row.task.id, toDay(row.task.id, target)); } })}>
@@ -283,7 +284,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       <summary className="flex cursor-pointer list-none items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
         <ChevronRight className="mr-1 size-3.5 transition-transform group-open/done:rotate-90"/>Finished<Count>{finished.length}</Count>
       </summary>
-      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined} onSetCategory={onSetCategory}/>)}</ol>
+      <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow revision={revision + local} key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined} onSetCategory={onSetCategory}/>)}</ol>
     </details>}
 
     {day === today && shownSuggestions.length === 0 && <p className="inline-flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
@@ -291,7 +292,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
     {day === today && shownSuggestions.length > 0 && <section aria-labelledby="suggestions-heading" className="grid gap-1.5 rounded-xl border bg-muted/40 p-3">
       <h3 id="suggestions-heading" className="flex items-center gap-1.5 font-semibold"><Lightbulb className="size-4 text-primary"/>Suggestions<Count>{shownSuggestions.length}</Count></h3>
       <p className="text-xs text-muted-foreground">Nothing is added by itself. Choose what fits today.</p>
-      <ol className="grid gap-1" aria-label="Suggested tasks">{shownSuggestions.map(item => <DayRow key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen} onView={onView}
+      <ol className="grid gap-1" aria-label="Suggested tasks">{shownSuggestions.map(item => <DayRow revision={revision + local} key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen} onView={onView}
             badge={<Badge variant="outline">{reasonText[item.reason] ?? item.reason}</Badge>}>
             <Button type="button" variant="outline" size="sm" disabled={disabled} aria-label={`Add ${item.task.title} to My Day`} onClick={() => void add(item.task.id)}><Plus/>Add</Button>
           </DayRow>)}</ol>
@@ -299,8 +300,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   </>;
 }
 
-function DayRow({ row, selected, busy, onOpen, onView, onSetStatus, onSetCategory, badge, children, dragHandle, reorderTarget }: {
-  row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; onSetCategory?: (task: TaskResponse, category: Category) => void; badge?: React.ReactNode; children?: React.ReactNode;
+function DayRow({ revision, row, selected, busy, onOpen, onView, onSetStatus, onSetCategory, badge, children, dragHandle, reorderTarget }: {
+  revision: number; row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; onSetCategory?: (task: TaskResponse, category: Category) => void; badge?: React.ReactNode; children?: React.ReactNode;
   dragHandle?: React.ReactNode; reorderTarget?: ReturnType<ReturnType<typeof useDragReorder>["target"]>;
 }) {
   const task = row.task;
@@ -311,7 +312,7 @@ function DayRow({ row, selected, busy, onOpen, onView, onSetStatus, onSetCategor
     {onSetStatus && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}/>}
     {dragHandle}
     <div className="grid min-w-0 flex-1 gap-1">
-      <button type="button" data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
+      <div className="flex min-w-0 items-center gap-1"><button type="button" data-slot="row-title" className="w-fit rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button><GitHubTaskMark taskId={task.id} version={task.version} revision={revision}/></div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">
         {badge}
         <span className="inline-flex items-center gap-1"><FolderKanban className="size-3.5"/>{row.containerName}</span>

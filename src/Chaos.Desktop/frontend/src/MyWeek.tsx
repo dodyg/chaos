@@ -2,6 +2,7 @@ import { TaskViewAction } from "./TaskViewAction";
 import { asCategory, categoryIcon, categoryTone, type Focus } from "./category";
 import React from "react";
 import { DateText } from "./dates";
+import { GitHubTaskMark } from "./GitHubTaskMark";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
 import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -174,7 +175,7 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
   const task = item.task;
   return <li className={cn("flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-card px-2 py-1 text-sm shadow-xs", isFinished(task.status) && "text-muted-foreground [&_[data-slot=title]]:line-through")}>
     <div className="grid min-w-0 flex-[1_1_8rem] grid-cols-[minmax(0,1fr)] gap-0.5">
-      <button type="button" data-slot="title" className="w-fit max-w-full min-w-0 rounded-sm text-left font-medium [overflow-wrap:anywhere] hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none" onClick={() => onOpen(task)}>{task.title}</button>
+      <div className="flex min-w-0 items-center gap-1"><button type="button" data-slot="title" className="w-fit max-w-full min-w-0 rounded-sm text-left font-medium [overflow-wrap:anywhere] hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none" onClick={() => onOpen(task)}>{task.title}</button><GitHubTaskMark taskId={task.id} version={task.version} revision={0}/></div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground [&_[data-slot=badge]]:max-w-full [&_[data-slot=badge]]:whitespace-normal [&_[data-slot=badge]]:[overflow-wrap:anywhere]">
         {badge}
         {task.estimateMinutes !== null ? <span className="inline-flex items-center gap-1"><Clock className="size-3"/>{minutesText(task.estimateMinutes)}</span> : <span>No estimate</span>}

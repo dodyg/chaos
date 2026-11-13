@@ -223,7 +223,8 @@ const handlers: Record<string, Handler> = {
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),
   "pad.locate": () => ok({ anchor: null }),
-  "github.taskSync": () => ({ ok: true, error: null, connected: false, assignedToMe: null, dueDateManaged: false, hasConflict: false, issueUrl: null, linkVersion: null, pending: false, postDiaryByDefault: false, repository: null, state: null, syncError: null, syncing: false }),
+  "github.taskSync": (r: { taskId: string }) => ({ ok: true, error: null, connected: r.taskId === "task-2", // one sample task is linked to a GitHub issue
+    assignedToMe: null, dueDateManaged: false, hasConflict: false, issueUrl: null, linkVersion: null, pending: false, postDiaryByDefault: false, repository: null, state: null, syncError: null, syncing: false }),
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
