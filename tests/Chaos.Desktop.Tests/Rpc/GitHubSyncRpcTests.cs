@@ -59,6 +59,54 @@ public sealed class GitHubSyncRpcTests
     private static string Op() => Guid.NewGuid().ToString();
 
     [Test]
+    public async Task TaskSync_ReportsIssueAssignees_AndShowsSelfAfterAssignMe()
+    {
+        var clock = new FixedTimeProvider(new(2026, 11, 12, 9, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var api = new FakeGitHub { Now = clock.GetUtcNow() };
+        api.PutRepository(new(10, "R", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", false, true));
+        var commands = new GitHubConnectionCommands(storage.Store, api, ids, clock);
+        var connection = await commands.ConnectAsync(new(Op()));
+        var inbox = await storage.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
+        var repo = await commands.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, GitHubFilter.Empty, false));
+        var assigned = new Chaos.Application.Abstractions.GitHubIssue(1, "I1", 1, "https://github.com/person/repo/issues/1", "Assigned", "", "open", null, new(1, "person"), [], [new(7, "octocat")], null, null, clock.GetUtcNow(), clock.GetUtcNow(), null, 0, null);
+        var unassigned = assigned with { Id = 2, NodeId = "I2", Number = 2, HtmlUrl = "https://github.com/person/repo/issues/2", Title = "Unassigned", Assignees = [] };
+        api.PutIssue("person/repo", assigned); api.PutIssue("person/repo", unassigned);
+        var inbound = new GitHubInboundCommands(storage.Store, ids, clock);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [assigned, unassigned]);
+        var taskId = async (long number) => (await storage.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, number, ct)))!.TaskId!;
+        using var issues = new GitHubIssueFetcher(storage.Store, api, inbound, _ => Task.FromResult("unused.db"), clock);
+        using var comments = new GitHubCommentFetcher(storage.Store, api, new(storage.Store, ids, clock), clock);
+        using var engine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, api, issues, comments, ids, clock), clock);
+        var rpc = new GitHubRpcService(commands, storage.Store, engine);
+
+        await Assert.That((await rpc.TaskSyncAsync(new(await taskId(2)), CancellationToken.None)).Assignees!).IsEmpty();
+        var task = await taskId(1);
+        await Assert.That((await rpc.TaskSyncAsync(new(task), CancellationToken.None)).Assignees!).IsEquivalentTo(["octocat"]);
+
+        await Assert.That((await rpc.SetSelfAssignmentAsync(new(Op(), task, true), CancellationToken.None)).Ok).IsTrue();
+        await Assert.That((await rpc.TaskSyncAsync(new(task), CancellationToken.None)).Assignees!).IsEquivalentTo(["person", "octocat"]);
+        await engine.WaitForIdleAsync();
+        await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)).Assignees.Select(a => a.Login)).Contains("person");
+        var synced = await rpc.TaskSyncAsync(new(task), CancellationToken.None);
+        await Assert.That(synced.Pending).IsFalse();
+        await Assert.That(synced.AssignedToMe == true).IsTrue();
+        await Assert.That(synced.Assignees!).IsEquivalentTo(["person", "octocat"]);
+    }
+
+    [Test]
+    public async Task Assignees_AreUnknownForOlderBaselinesThatStoredOnlyIds()
+    {
+        var legacy = new GitHubIssueSnapshot("T", "", true, null, [], [7], null, null);
+        await Assert.That(GitHubRpcService.Assignees(legacy, null, "person")).IsNull();
+        await Assert.That(GitHubRpcService.Assignees(legacy with { AssigneeIds = [] }, 1, "person")!).IsEquivalentTo(["person"]);
+        var current = legacy with { AssigneeIds = [1, 7], AssigneeLogins = ["Person", "octocat"] };
+        await Assert.That(GitHubRpcService.Assignees(current, 0, "person")!).IsEquivalentTo(["octocat"]);
+        await Assert.That(GitHubRpcService.Assignees(null, 1, "person")).IsNull();
+    }
+
+    [Test]
     public async Task SyncNowImportsIssueAndCommentsWithRealBackup_AndRepeatIsIdempotent()
     {
         var clock = new FixedTimeProvider(new(2026, 11, 12, 9, 0, 0, TimeSpan.Zero)); var ids = new SequentialIdGenerator();

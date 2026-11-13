@@ -17,7 +17,7 @@ public sealed record GitHubAttachmentResponse(bool Ok, string? ContentType, stri
 public sealed record GitHubSelfAssignmentRequest(string OperationId, string TaskId, bool Assigned);
 public sealed record GitHubTaskActionRequest(string OperationId, string TaskId, string ExpectedVersion);
 public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error, bool? AssignedToMe = null, bool PostDiaryByDefault = false,
-    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false, bool Syncing = false);
+    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false, bool Syncing = false, IReadOnlyList<string>? Assignees = null);
 public sealed record GitHubConnectRequest(string OperationId);
 public sealed record GitHubCandidatesRequest(string? Cursor);
 public sealed record GitHubLookupRequest(string Owner, string Name);
@@ -82,15 +82,25 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 var state = c.State == 1 || repo?.State == 1 ? "Paused" : c.State == 2 ? "Needs sign-in" : link.State switch { 0 when link.LastErrorKind is not null => "Needs attention", 0 => "Linked", 1 => "Out of scope", 2 => "Unavailable", _ => "Ignored" };
                 var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson);
                 var assigned = link.LocalAssigneeIntent is { } intent ? intent == 1 : baseline?.AssigneeIds.Contains(c.AccountId);
+                var assignees = Assignees(baseline, link.LocalAssigneeIntent, c.AccountLogin);
                 var error = link.LastErrorKind is { } kind && Enum.IsDefined((GitHubErrorKind)kind) ? Error(new((GitHubErrorKind)kind)).Message : null;
                 var activity = sync?.TaskStatus(task.Id);
                 if (link.LocalDirty && error is null && activity?.GitHubError is { } failure) error = Error(new(failure)).Message;
                 if (link.LocalDirty && error is null && activity?.AppError is { } appError) error = TaskRpcService.ToErrorResponse(appError).Message;
                 return new(true, true, link.LocalDirty, state, null, assigned, c.PostDiaryByDefault, Number(link.Version), link.ConflictNoticeUtc is not null,
-                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true);
+                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true, assignees);
             }, ct);
         }
         catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
+    }
+
+    /// <summary>Issue assignees as last seen on GitHub, with a pending "Assign me" change already applied. Null when unknown.</summary>
+    public static IReadOnlyList<string>? Assignees(GitHubIssueSnapshot? baseline, int? localIntent, string accountLogin)
+    {
+        if (baseline?.DisplayAssignees() is not { } known) return null;
+        var result = known.Where(l => !l.Equals(accountLogin, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (localIntent is { } intent ? intent == 1 : known.Contains(accountLogin, StringComparer.OrdinalIgnoreCase)) result.Insert(0, accountLogin);
+        return result;
     }
 
     [NeoRpcMethod("attachment")]

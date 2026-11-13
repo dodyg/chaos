@@ -303,7 +303,7 @@ test("a connected journal offers explicit GitHub posting and deletion choices", 
     delete: async (request: { deleteOnGitHub: boolean }) => { deleted.push(request.deleteOnGitHub); return { ok: true, entry, error: null }; },
   }, historyRpc };
   let statusReads = 0;
-  const githubApi = { ...gitHubRpc, taskSync: async () => { statusReads++; return { ok: true, connected: true, pending: false, state: "Linked", error: null, assignedToMe: false, postDiaryByDefault: true, linkVersion: "1", hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false }; } };
+  const githubApi = { ...gitHubRpc, taskSync: async () => { statusReads++; return { ok: true, connected: true, pending: false, state: "Linked", error: null, assignedToMe: false, postDiaryByDefault: true, linkVersion: "1", hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false, assignees: null }; } };
   const user = userEvent.setup({ document: dom.window.document });
   const view = render(<TaskJournal task={task(taskId, "Task")} api={journalApi} githubApi={githubApi} revision={0} busy={false} onChanged={() => {}} onError={message => assert.fail(message)}/>);
   try {

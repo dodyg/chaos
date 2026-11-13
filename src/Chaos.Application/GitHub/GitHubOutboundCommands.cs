@@ -261,17 +261,20 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         }
         var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token) ?? throw AppException.VersionConflict("The GitHub connection changed during recovery.");
         var assignees = baseline.AssigneeIds.ToHashSet();
+        var logins = baseline.AssigneeLogins?.ToList();
         var assignmentAcknowledged = attempted.SelfAssigned is { } assigned && remote.AssigneeIds.Contains(connection.AccountId) == assigned;
         if (assignmentAcknowledged)
         {
             if (attempted.SelfAssigned == true) assignees.Add(connection.AccountId); else assignees.Remove(connection.AccountId);
+            logins?.RemoveAll(l => l.Equals(connection.AccountLogin, StringComparison.OrdinalIgnoreCase));
+            if (attempted.SelfAssigned == true) logins?.Add(connection.AccountLogin);
         }
         var next = baseline with {
             Title = attempted.TitleHash is not null && attempted.TitleHash == StoredJsonFormats.Hash(remote.Title) ? remote.Title : baseline.Title,
             Body = attempted.BodyHash is not null && attempted.BodyHash == StoredJsonFormats.Hash(remote.Body) ? remote.Body : baseline.Body,
             Open = attempted.StateHash is not null && attempted.StateHash == StateHash(remoteState) ? remote.Open : baseline.Open,
             Reason = attempted.StateHash is not null && attempted.StateHash == StateHash(remoteState) ? remote.Reason : baseline.Reason,
-            LabelIds = labelIds.Order().ToArray(), AssigneeIds = assignees.Order().ToArray() };
+            LabelIds = labelIds.Order().ToArray(), AssigneeIds = assignees.Order().ToArray(), AssigneeLogins = logins?.ToArray() };
         var clearIntent = assignmentAcknowledged && link.LocalAssigneeIntent == (attempted.SelfAssigned == true ? 1 : 0);
         if (await s.GitHub.UpdateIssueLinkAsync(link with { BaseJson = StoredJsonFormats.Snapshot(next), LocalAssigneeIntent = clearIntent ? null : link.LocalAssigneeIntent, IssueEtag = null, LocalDirty = true, LocalDirtySinceUtc = link.LocalDirtySinceUtc ?? clock.GetUtcNow() }, link.Version, token) is null)
             throw AppException.VersionConflict("The GitHub link changed during recovery.");

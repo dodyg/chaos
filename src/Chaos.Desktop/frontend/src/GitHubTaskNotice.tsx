@@ -73,6 +73,7 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
     <span>GitHub · {info.state}</span>
     {info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}
     {info.repository && <span dir="auto">{info.repository}</span>}
+    {info.assignees && <span dir="auto">{info.assignees.length ? `Assigned to ${info.assignees.join(", ")}` : "Unassigned"}</span>}
     {info.issueUrl && <button type="button" className="w-fit underline" onClick={() => {
       void markdownRpc.openExternal({ url: info.issueUrl! }).then(result => { if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the issue."); })
         .catch(() => { if (selectedTask.current === taskId) setMessage("Could not open the issue."); });

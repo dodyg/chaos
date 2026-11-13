@@ -7,7 +7,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http:
 Object.defineProperties(globalThis, { window: { value: dom.window, configurable: true }, document: { value: dom.window.document, configurable: true }, navigator: { value: dom.window.navigator, configurable: true }, HTMLElement: { value: dom.window.HTMLElement, configurable: true } });
 const { render, screen, waitFor, cleanup, act, fireEvent } = await import("@testing-library/react");
 const { GitHubTaskNotice } = await import("./GitHubTaskNotice");
-const ordinary: GitHubTaskSyncResponse = { ok: true, connected: false, pending: false, state: null, error: null, assignedToMe: null, postDiaryByDefault: false, linkVersion: null, hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false };
+const ordinary: GitHubTaskSyncResponse = { ok: true, connected: false, pending: false, state: null, error: null, assignedToMe: null, postDiaryByDefault: false, linkVersion: null, hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false, assignees: null };
 
 test("ordinary tasks show no GitHub mark and only query local task metadata", async () => {
   const requests: string[] = [];
@@ -53,6 +53,31 @@ test("self-assignment queues a local change and updates the task notice", async 
     assert.equal(requests[0].taskId, "t1");
     assert.equal(requests[0].assigned, true);
     assert.ok(screen.getByText("Not sent to GitHub yet."));
+  } finally { cleanup(); }
+});
+
+test("linked issues show their assignees and the new assignee after Assign me", async () => {
+  let assignees = ["octocat"];
+  const api = { ...gitHubRpc, taskSync: async () => ({ ...ordinary, connected: true, state: "Linked", assignedToMe: assignees.includes("person"), assignees }),
+    setSelfAssignment: async () => { assignees = ["person", ...assignees]; return { ok: true, error: null }; } };
+  render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api}/>);
+  try {
+    await screen.findByText("Assigned to octocat");
+    fireEvent.click(screen.getByRole("button", { name: "Assign me" }));
+    await screen.findByText("Assigned to person, octocat");
+  } finally { cleanup(); }
+});
+
+test("an issue with no assignees says Unassigned, and unknown assignees show nothing", async () => {
+  let response: GitHubTaskSyncResponse = { ...ordinary, connected: true, state: "Linked", assignees: [] };
+  const api = { ...gitHubRpc, taskSync: async () => response };
+  const view = render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api}/>);
+  try {
+    await screen.findByText("Unassigned");
+    response = { ...response, assignees: null };
+    view.rerender(<GitHubTaskNotice taskId="t1" version="2" revision={0} api={api}/>);
+    await waitFor(() => assert.equal(screen.queryByText("Unassigned") === null, true));
+    assert.equal(screen.queryByText(/Assigned to/) === null, true);
   } finally { cleanup(); }
 });
 

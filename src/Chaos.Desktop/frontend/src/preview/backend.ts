@@ -20,6 +20,7 @@ export function addDays(date: string, days: number) {
 const today = localDate(new Date());
 const now = () => new Date().toISOString();
 let sequence = 100;
+let previewIssueAssignees = ["octocat"];
 const newId = (prefix: string) => `${prefix}-${++sequence}`;
 
 const containers: ContainerResponse[] = [
@@ -235,8 +236,12 @@ const handlers: Record<string, Handler> = {
   // One sample task was made from a pad note whose quote is a long link, like real ones often are.
   "pad.locate": (r: { taskId: string }) => ok({ anchor: r.taskId !== "task-1" ? null : { padItemId: "pad-1", taskId: "task-1", state: "Exact", start: 0, end: 80, archived: false, deleted: false,
     quote: "https://x.com/OpenAI/status/2120216592395174382?a=ryqqhK9R05Hs5Zv4HK0&s=20" } }),
-  "github.taskSync": (r: { taskId: string }) => ({ ok: true, error: null, connected: r.taskId === "task-2", // one sample task is linked to a GitHub issue
-    assignedToMe: null, dueDateManaged: false, hasConflict: false, issueUrl: null, linkVersion: null, pending: false, postDiaryByDefault: false, repository: null, state: null, syncError: null, syncing: false }),
+  // One sample task is linked to a GitHub issue; "Assign me" adds the preview's own login to its assignees.
+  "github.taskSync": (r: { taskId: string }) => { const linked = r.taskId === "task-2"; return { ok: true, error: null, connected: linked,
+    assignedToMe: linked ? previewIssueAssignees.includes("preview-user") : null, dueDateManaged: false, hasConflict: false, issueUrl: linked ? "https://github.com/example/chaos/issues/42" : null,
+    linkVersion: linked ? "1" : null, pending: false, postDiaryByDefault: false, repository: linked ? "example/chaos" : null, state: linked ? "Linked" : null, syncError: null, syncing: false,
+    assignees: linked ? previewIssueAssignees : null }; },
+  "github.setSelfAssignment": (r: { assigned: boolean }) => { previewIssueAssignees = r.assigned ? ["preview-user", ...previewIssueAssignees.filter(a => a !== "preview-user")] : previewIssueAssignees.filter(a => a !== "preview-user"); return ok({}); },
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
