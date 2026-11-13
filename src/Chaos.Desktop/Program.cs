@@ -92,10 +92,18 @@ internal static class Program
         using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System),
             async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, TimeProvider.System);
         using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
-        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
+        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10));
         var pauseReminders = protection.Quiesce;
         protection.Quiesce = (work, ct) => githubEngine.RunPausedAsync(() => pauseReminders(work, ct), ct);
         var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
+        using var githubScheduler = new GitHubSyncScheduler(githubEngine, github.ScheduleAsync, TimeProvider.System);
+        githubScheduler.Start();
+        var pauseGitHub = protection.Quiesce;
+        protection.Quiesce = async (work, ct) =>
+        {
+            try { await pauseGitHub(work, ct); }
+            finally { githubScheduler.Wake(); }
+        };
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
         var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -148,7 +156,7 @@ internal static class Program
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddJournalRpcService(new JournalRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
-                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine, githubApi));
+                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine, githubApi, githubScheduler));
             });
         });
     }

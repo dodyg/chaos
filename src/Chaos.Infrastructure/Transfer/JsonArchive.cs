@@ -65,6 +65,7 @@ public static class JsonArchive
         ["SearchDocuments"] = "search index, rebuilt",
         ["SearchIndexState"] = "search index, rebuilt",
         ["GitHubSyncRuns"] = "device synchronization diagnostics",
+        ["GitHubConnectionBackoff"] = "device synchronization retry state",
         ["GitHubSyncCheckpoints"] = "device pagination, query and pre-import backup bookkeeping",
         ["GitHubCommentCheckpoints"] = "device comment pagination and deletion-check bookkeeping",
     };

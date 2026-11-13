@@ -6,7 +6,7 @@ namespace Chaos.Desktop.Platform;
 public sealed record GitHubSyncActivity(bool Running, DateTimeOffset? StartedAtUtc, DateTimeOffset? FinishedAtUtc, GitHubSyncResult? Result, GitHubErrorKind? GitHubError, AppException? AppError, string? ConnectionId = null);
 
 /// <summary>Serializes explicit full passes and per-task action syncs, and drains before data replacement. No startup authentication.</summary>
-public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider clock) : IDisposable
+public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider clock, TimeSpan debounce = default) : IDisposable
 {
     private readonly object _stateGate = new();
     private readonly CancellationTokenSource _stop = new();
@@ -19,30 +19,63 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
     private readonly HashSet<string> _pendingTasks = new(StringComparer.Ordinal);
     private readonly Queue<string> _taskQueue = new();
     private readonly Dictionary<string, GitHubSyncActivity> _taskActivity = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ITimer Timer, long Generation)> _debounced = new(StringComparer.Ordinal);
+    private long _generation;
     private (string? RepositoryId, string? ConnectionId)? _pendingFull;
     private GitHubSyncActivity _activity = new(false, null, null, null, null, null);
     private GitHubSyncActivity _fullActivity = new(false, null, null, null, null, null);
     public GitHubSyncActivity Status { get { lock (_stateGate) return _fullActivity; } }
+    public event Action? WorkCompleted;
 
     public GitHubSyncActivity? TaskStatus(string taskId)
     {
         lock (_stateGate)
         {
-            if (_activeTaskId == taskId || _pendingTasks.Contains(taskId)) return new(true, null, null, null, null, null);
+            if (_activeTaskId == taskId || _pendingTasks.Contains(taskId) || _debounced.ContainsKey(taskId)) return new(true, null, null, null, null, null);
             return _taskActivity.GetValueOrDefault(taskId);
         }
     }
 
     // Called only after a committed local action. Pausing/replacing data must not turn a
     // successful local edit into an RPC failure; the persisted dirty flag remains authoritative.
-    public void RequestTaskSync(string taskId)
+    public void RequestTaskSync(string taskId, bool immediate = false)
     {
         lock (_stateGate)
         {
             if (_disposed || _pauseDepth != 0) return;
+            if (_debounced.Remove(taskId, out var previous)) previous.Timer.Dispose();
+            if (!immediate && debounce > TimeSpan.Zero)
+            {
+                var generation = ++_generation;
+                var timer = clock.CreateTimer(_ => FlushTask(taskId, generation), null, debounce, Timeout.InfiniteTimeSpan);
+                _debounced.Add(taskId, (timer, generation));
+                return;
+            }
+            QueueTask(taskId);
+        }
+    }
+
+    private void FlushTask(string taskId, long generation)
+    {
+        lock (_stateGate)
+        {
+            if (_disposed || _pauseDepth != 0 || !_debounced.TryGetValue(taskId, out var pending) || pending.Generation != generation) return;
+            _debounced.Remove(taskId);
+            pending.Timer.Dispose();
+            QueueTask(taskId);
+        }
+    }
+
+    private void QueueTask(string taskId)
+    {
             if (_activity.Running) { if (_pendingTasks.Add(taskId)) _taskQueue.Enqueue(taskId); return; }
             Start(null, null, taskId);
-        }
+    }
+
+    private void ClearDebounced()
+    {
+        foreach (var pending in _debounced.Values) pending.Timer.Dispose();
+        _debounced.Clear();
     }
 
     private void Start(string? repositoryId, string? connectionId, string? taskId)
@@ -89,6 +122,7 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
             catch (AppException error) { appError = error; }
             catch (OperationCanceledException) { appError = new(AppErrorKind.Cancelled, "GitHub sync was cancelled. Committed changes are kept; the next pass can continue."); }
             catch (Exception) { appError = new(AppErrorKind.StorageUnavailable, "GitHub sync could not finish. Some changes may already have arrived; retry to continue."); }
+            WorkCompleted?.Invoke();
             lock (_stateGate)
             {
                 _activity = new(false, started, clock.GetUtcNow(), result, githubError, appError, connectionId);
@@ -124,6 +158,7 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
         {
             if (_disposed) throw new AppException(AppErrorKind.Cancelled, "GitHub sync is shutting down.");
             _pauseDepth++;
+            ClearDebounced();
             _pendingTasks.Clear(); _taskQueue.Clear(); _pendingFull = null;
             _active?.Cancel();
             active = _work;
@@ -149,6 +184,7 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
         {
             if (_disposed) return;
             _disposed = true;
+            ClearDebounced();
             _pendingTasks.Clear(); _taskQueue.Clear(); _pendingFull = null;
             _stop.Cancel();
             active = _work;

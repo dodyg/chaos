@@ -6,6 +6,23 @@ namespace Chaos.Desktop.Tests.Rpc;
 
 public sealed class GitHubSyncEngineTests
 {
+    private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+    {
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+        public void Dispose() { GC.SuppressFinalize(this); }
+        public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        public void Fire() => callback(state);
+    }
+    private sealed class ManualClock : TimeProvider
+    {
+        public List<ManualTimer> Timers { get; } = [];
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(callback, state);
+            Timers.Add(timer);
+            return timer;
+        }
+    }
     private sealed class Runner(Func<CancellationToken, Task<GitHubSyncResult>> run) : IGitHubSyncRunner
     {
         public int Calls { get; private set; }
@@ -13,6 +30,35 @@ public sealed class GitHubSyncEngineTests
         public Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct) { Calls++; return run(ct); }
     }
     private static GitHubSyncResult Done() => new(1, 0, 2, 0, false);
+
+    [Test]
+    public async Task TaskChanges_DebounceAndIgnoreSupersededTimer()
+    {
+        var clock = new ManualClock();
+        var runner = new Runner(_ => Task.FromResult(Done()));
+        using var engine = new GitHubSyncEngine(runner, clock, TimeSpan.FromSeconds(10));
+        engine.RequestTaskSync("a");
+        engine.RequestTaskSync("a");
+        clock.Timers[0].Fire();
+        await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(engine.TaskStatus("a")!.Running).IsTrue();
+        clock.Timers[1].Fire();
+        await engine.WaitForIdleAsync();
+        await Assert.That(runner.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Replacement_CancelsDebouncedTask()
+    {
+        var clock = new ManualClock();
+        var runner = new Runner(_ => Task.FromResult(Done()));
+        using var engine = new GitHubSyncEngine(runner, clock, TimeSpan.FromSeconds(10));
+        engine.RequestTaskSync("a");
+        await engine.RunPausedAsync(() => Task.CompletedTask, CancellationToken.None);
+        clock.Timers[0].Fire();
+        await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(engine.TaskStatus("a")).IsNull();
+    }
 
     private sealed class ScopedRunner(Func<string, CancellationToken, Task> run) : IGitHubSyncRunner
     {

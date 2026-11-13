@@ -223,6 +223,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
             github.CommandText = """
                 DELETE FROM GitHubSyncCheckpoints;
                 DELETE FROM GitHubCommentCheckpoints;
+                DELETE FROM GitHubConnectionBackoff;
                 UPDATE GitHubRepositories SET IssuesCursorUtc=NULL,CommentsCursorUtc=NULL,IssuesEtag=NULL,CommentsEtag=NULL,LabelsEtag=NULL,MilestonesEtag=NULL;
                 UPDATE GitHubConnections SET RateLimitResetUtc=NULL;
                 UPDATE GitHubIssueLinks SET IssueEtag=NULL,NextAttemptUtc=NULL,ErrorAttempts=0;

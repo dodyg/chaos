@@ -520,6 +520,24 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksDueForRetryAsync(DateTimeOffset now, int limit, CancellationToken ct) =>
         QueryAsync("SELECT * FROM GitHubIssueLinks WHERE State=0 AND NextAttemptUtc <= $now ORDER BY NextAttemptUtc, Id LIMIT $limit;", ReadIssueLink, ct, ("$now", StorageFormats.Instant(now)), ("$limit", Bounded(limit)));
 
+    public Task<IReadOnlyList<GitHubIssueLinkRecord>> ListScheduledRetriesAsync(string connectionId, int limit, CancellationToken ct) =>
+        QueryAsync("""
+            SELECT l.* FROM GitHubIssueLinks l
+            JOIN GitHubRepositories r ON r.Id=l.RepositorySubscriptionId AND r.ConnectionId=l.ConnectionId
+            JOIN Tasks t ON t.Id=l.TaskId
+            WHERE l.ConnectionId=$id AND l.State=0 AND l.LocalDirty=1 AND l.NextAttemptUtc IS NOT NULL
+              AND r.State=0 AND r.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL
+            ORDER BY l.NextAttemptUtc,l.Id LIMIT $limit;
+            """, ReadIssueLink, ct, ("$id", connectionId), ("$limit", Bounded(limit)));
+
+    public async Task<DateTimeOffset?> GetConnectionRetryAsync(string connectionId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT NextAttemptUtc FROM GitHubConnectionBackoff WHERE ConnectionId=$id;";
+        command.Parameters.AddWithValue("$id", connectionId);
+        return await command.ExecuteScalarAsync(ct) is string value ? StorageFormats.ParseInstant(value) : null;
+    }
+
     public Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksForTasksAsync(IReadOnlyList<string> ids, CancellationToken ct)
     {
         if (ids.Count == 0) return Task.FromResult<IReadOnlyList<GitHubIssueLinkRecord>>([]);
@@ -649,6 +667,25 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
 
     public async Task RecordSyncOutcomeAsync(string connectionId, string? failedRepositoryId, DateTimeOffset started, DateTimeOffset finished, GitHubErrorKind? error, DateTimeOffset? retryAtUtc, CancellationToken ct)
     {
+        using (var backoff = connection.CreateCommand())
+        {
+            if (error is null)
+            {
+                backoff.CommandText = "DELETE FROM GitHubConnectionBackoff WHERE ConnectionId=$id;";
+                backoff.Parameters.AddWithValue("$id", connectionId);
+                await backoff.ExecuteNonQueryAsync(ct);
+            }
+            else if (error is not (GitHubErrorKind.RateLimited or GitHubErrorKind.Unauthorized or GitHubErrorKind.CliUnavailable or GitHubErrorKind.AccountMismatch))
+            {
+                backoff.CommandText = "SELECT ErrorAttempts FROM GitHubConnectionBackoff WHERE ConnectionId=$id;";
+                backoff.Parameters.AddWithValue("$id", connectionId);
+                var attempts = Math.Min(Convert.ToInt32(await backoff.ExecuteScalarAsync(ct), System.Globalization.CultureInfo.InvariantCulture) + 1, 6);
+                backoff.CommandText = "INSERT INTO GitHubConnectionBackoff(ConnectionId,ErrorAttempts,NextAttemptUtc) VALUES($id,$attempts,$next) ON CONFLICT(ConnectionId) DO UPDATE SET ErrorAttempts=excluded.ErrorAttempts,NextAttemptUtc=excluded.NextAttemptUtc;";
+                backoff.Parameters.AddWithValue("$attempts", attempts);
+                backoff.Parameters.AddWithValue("$next", StorageFormats.Instant(finished.AddMinutes(Math.Min(30, 1 << (attempts - 1)))));
+                await backoff.ExecuteNonQueryAsync(ct);
+            }
+        }
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE GitHubConnections SET LastSyncStartedUtc=$start,LastSyncCompletedUtc=CASE WHEN $error IS NULL THEN $end ELSE LastSyncCompletedUtc END,

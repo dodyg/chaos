@@ -1147,8 +1147,19 @@ The scoped runner reuses outbound recovery/merge and per-issue comment checkpoin
 scans repository issue/comment feeds or advances their shared cursors. Other dirty issues wait
 for their own queued action or an explicit full pass. The task notice animates queued/running
 work, polls only local metadata, refreshes after completion and preserves unsaved task drafts.
-There is no startup scan, periodic timer, connectivity retry or automatic retry loop yet; failed
-changes remain dirty for a later action or Retry. Full G7 scheduling and live acceptance remain open.
+The desktop now schedules a first full pass after ten seconds, subsequent passes every five
+minutes, and a pass when connectivity returns. It remains dormant without an active connection
+and repository, respects persisted rate-limit resets and connection backoff, and rechecks
+configuration after replacement. Local actions debounce for ten seconds; explicit Retry is
+immediate. The engine wakes for each eligible link's persisted retry deadline and retries that
+issue without waiting for a full pass. Connection failures use persisted one, two, four, eight,
+sixteen and thirty minute backoff; a successful pass clears it. Migration 020 stores device-local
+connection retry state, which is excluded from JSON exports and cleared on restore. Live G7
+acceptance and the G6 prerequisite remain open.
+Offline verification: separate-output Release build passed with zero build warnings or errors;
+712 .NET tests passed, including fake-clock retry deadlines and connection backoff across a
+database restart. Slopwatch reported no findings. The normal Release output was in use by a
+running Chaos instance, so verification used a separate artifacts directory.
 Offline validation passed: locked restore and Release build, all 701 .NET tests, all 96 frontend
 tests and zero Slopwatch findings. The final desktop rerun passed all 76 tests. Coverage includes
 returning before remote writes, issue isolation, unchanged shared cursors, inactive/rate-limited
@@ -1167,7 +1178,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/020_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/021_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

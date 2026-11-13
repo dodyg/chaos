@@ -307,6 +307,6 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         var now = clock.GetUtcNow();
         return await s.GitHub.UpdateIssueLinkAsync(link with { LocalDirty = true, LocalDirtySinceUtc = link.LocalDirtySinceUtc ?? now,
             LastErrorKind = (int)kind, LastErrorMessage = kind.ToString(), ErrorAttempts = attempts,
-            NextAttemptUtc = now.AddMinutes(Math.Min(60, 1 << Math.Min(attempts - 1, 6))), UpdatedAtUtc = now }, link.Version, token) is not null;
+            NextAttemptUtc = now.AddMinutes(Math.Min(30, 1 << Math.Min(attempts - 1, 5))), UpdatedAtUtc = now }, link.Version, token) is not null;
     }, ct);
 }

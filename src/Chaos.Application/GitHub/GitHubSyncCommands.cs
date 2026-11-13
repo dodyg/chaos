@@ -25,7 +25,8 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
             var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
             if (repo is not { State: 0, DeletedAtUtc: null } || connection is not { State: 0, DeletedAtUtc: null }
-                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RateLimitResetUtc > clock.GetUtcNow()) return null;
+                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RateLimitResetUtc > clock.GetUtcNow()
+                || await s.GitHub.GetConnectionRetryAsync(connection.Id, token) > clock.GetUtcNow()) return null;
             return new { Link = link, Repo = repo, Connection = connection };
         }, ct);
         if (context is null) return new(0, 0, 0, 0, false);
@@ -46,6 +47,11 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             var pulledComments = await comments.PullIssueAsync(context.Link.Id, ct);
             var pushed = await outbound.PushAsync(repo.Id, ct, context.Link.Id);
             var posted = await diary.RunAsync(repo.Id, true, ct, context.Link.Id);
+            await store.ExecuteAsync(async (s, token) =>
+            {
+                await s.GitHub.RecordSyncOutcomeAsync(context.Connection.Id, null, started, clock.GetUtcNow(), null, null, token);
+                return true;
+            }, ct);
             return new(0, recovery.Updated + pulled.Updated + pushed.Updated, pulledComments.Changed + posted, recovery.Conflicts + pulled.Conflicts + pushed.Conflicts, pulledComments.MorePages);
         }
         catch (GitHubApiException error)

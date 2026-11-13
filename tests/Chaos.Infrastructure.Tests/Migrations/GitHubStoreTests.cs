@@ -2,11 +2,66 @@ using Chaos.Application.Contracts;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Application.Transfer;
 using Chaos.Infrastructure.Transfer;
+using Chaos.Application.Abstractions;
 
 namespace Chaos.Infrastructure.Tests.Migrations;
 
 public sealed class GitHubStoreTests
 {
+    [Test]
+    public async Task ConnectionBackoff_SurvivesRestart_IncreasesAndClearsOnSuccess()
+    {
+        var host = await DataHost.StartAsync();
+        var root = host.Root;
+        var (connection, _) = await SeedAsync(host);
+        await host.Store.ExecuteAsync(async (s, ct) =>
+        {
+            await s.GitHub.RecordSyncOutcomeAsync(connection.Id, null, DataHost.Start, DataHost.Start, GitHubErrorKind.Network, null, ct);
+            await Assert.That(await s.GitHub.GetConnectionRetryAsync(connection.Id, ct)).IsEqualTo(DataHost.Start.AddMinutes(1));
+            return true;
+        });
+        host.Dispose();
+        using var reopened = await DataHost.StartAsync(root);
+        await reopened.Store.ExecuteAsync(async (s, ct) =>
+        {
+            await Assert.That(await s.GitHub.GetConnectionRetryAsync(connection.Id, ct)).IsEqualTo(DataHost.Start.AddMinutes(1));
+            await s.GitHub.RecordSyncOutcomeAsync(connection.Id, null, DataHost.Start.AddMinutes(1), DataHost.Start.AddMinutes(1), GitHubErrorKind.Network, null, ct);
+            await Assert.That(await s.GitHub.GetConnectionRetryAsync(connection.Id, ct)).IsEqualTo(DataHost.Start.AddMinutes(3));
+            var now = DataHost.Start.AddMinutes(3);
+            foreach (var minutes in new[] { 4, 8, 16, 30, 30 })
+            {
+                await s.GitHub.RecordSyncOutcomeAsync(connection.Id, null, now, now, GitHubErrorKind.Network, null, ct);
+                await Assert.That(await s.GitHub.GetConnectionRetryAsync(connection.Id, ct)).IsEqualTo(now.AddMinutes(minutes));
+                now = now.AddMinutes(minutes);
+            }
+            await s.GitHub.RecordSyncOutcomeAsync(connection.Id, null, now, now, null, null, ct);
+            await Assert.That(await s.GitHub.GetConnectionRetryAsync(connection.Id, ct)).IsNull();
+            return true;
+        });
+    }
+
+    [Test]
+    public async Task ScheduledRetries_ExcludePausedRepositoriesAndIgnoredLinks()
+    {
+        using var host = await DataHost.StartAsync();
+        var seed = await host.SeedAsync();
+        var (connection, repository) = await SeedAsync(host);
+        await host.Store.ExecuteAsync(async (s, ct) =>
+        {
+            var link = new GitHubIssueLinkRecord { Id = Guid.NewGuid().ToString(), ConnectionId = connection.Id, RepositorySubscriptionId = repository.Id,
+                TaskId = seed.PaintTaskId, IssueId = 987, IssueNodeId = "node", IssueNumber = 1, HtmlUrl = "https://github.com/person/repo/issues/1",
+                BaseJson = "{}", BaseRemoteUpdatedUtc = DataHost.Start, CreatedAtUtc = DataHost.Start, UpdatedAtUtc = DataHost.Start,
+                LocalDirty = true, NextAttemptUtc = DataHost.Start.AddMinutes(1) };
+            await s.GitHub.AddIssueLinkAsync(link, ct);
+            await Assert.That((await s.GitHub.ListScheduledRetriesAsync(connection.Id, 10, ct)).Single().Id).IsEqualTo(link.Id);
+            var paused = await s.GitHub.UpdateRepositoryAsync(repository with { State = 1 }, repository.Version, ct);
+            await Assert.That((await s.GitHub.ListScheduledRetriesAsync(connection.Id, 10, ct)).Count).IsEqualTo(0);
+            await s.GitHub.UpdateRepositoryAsync(paused! with { State = 0 }, paused!.Version, ct);
+            await s.GitHub.UpdateIssueLinkAsync(link with { State = 3 }, link.Version, ct);
+            await Assert.That((await s.GitHub.ListScheduledRetriesAsync(connection.Id, 10, ct)).Count).IsEqualTo(0);
+            return true;
+        });
+    }
     private static async Task<(GitHubConnectionRecord Connection, GitHubRepositoryRecord Repository)> SeedAsync(DataHost host) =>
         await host.Store.ExecuteAsync(async (session, ct) =>
         {

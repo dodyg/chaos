@@ -20,6 +20,7 @@ public sealed record GitHubFilter(IReadOnlyList<string> Labels, string LabelMode
     }
 }
 public sealed record GitHubStatus(GitHubConnectionRecord? Connection, IReadOnlyList<GitHubRepositoryRecord> Repositories);
+public sealed record GitHubSchedule(GitHubStatus Status, DateTimeOffset? ConnectionRetryUtc, IReadOnlyList<GitHubIssueLinkRecord> LinkRetries);
 public sealed record GitHubRepositoryCandidate(GitHubRepository Repository, bool AlreadyAdded);
 public sealed record GitHubRepositoryCandidates(IReadOnlyList<GitHubRepositoryCandidate> Repositories, string? NextCursor);
 public sealed record ConnectGitHubCommand(string OperationId);
@@ -86,6 +87,16 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
         var (_, space) = await Context(s, token);
         var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token);
         return new GitHubStatus(connection, connection is null ? [] : await s.GitHub.ListSubscriptionsAsync(connection.Id, token));
+    }, ct);
+
+    public Task<GitHubSchedule> ScheduleAsync(CancellationToken ct = default) => store.QueryAsync(async (s, token) =>
+    {
+        var (_, space) = await Context(s, token);
+        var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token);
+        if (connection is null) return new GitHubSchedule(new(null, []), null, []);
+        var repositories = await s.GitHub.ListSubscriptionsAsync(connection.Id, token);
+        return new GitHubSchedule(new(connection, repositories), await s.GitHub.GetConnectionRetryAsync(connection.Id, token),
+            await s.GitHub.ListScheduledRetriesAsync(connection.Id, 200, token));
     }, ct);
 
     public async Task<GitHubConnectionRecord> ConnectAsync(ConnectGitHubCommand command, CancellationToken ct = default)

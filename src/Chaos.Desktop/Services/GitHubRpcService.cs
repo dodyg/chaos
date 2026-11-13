@@ -39,7 +39,7 @@ public sealed record GitHubSyncDto(bool Running, string? StartedAtUtc, string? F
 public sealed record GitHubSyncResponse(bool Ok, GitHubSyncDto? Sync, TaskErrorResponse? Error);
 
 [NeoRpcService("github", Version = 1)]
-public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplicationStore store, GitHubSyncEngine? sync = null, GitHubCliClient? attachments = null)
+public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplicationStore store, GitHubSyncEngine? sync = null, GitHubCliClient? attachments = null, GitHubSyncScheduler? scheduler = null)
 {
     [NeoRpcMethod("status")]
     public async ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct)
@@ -151,7 +151,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     private static string? Instant(DateTimeOffset? value) => value?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
     [NeoRpcMethod("connect")]
-    public async ValueTask<GitHubOperationResponse> ConnectAsync(GitHubConnectRequest request, CancellationToken ct) => await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); });
+    public async ValueTask<GitHubOperationResponse> ConnectAsync(GitHubConnectRequest request, CancellationToken ct) => await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); scheduler?.Wake(); });
     [NeoRpcMethod("listRepositories")]
     public async ValueTask<GitHubCandidatesResponse> ListRepositoriesAsync(GitHubCandidatesRequest request, CancellationToken ct)
     {
@@ -171,9 +171,9 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         catch (GitHubApiException e) { return new(false, [], null, Error(e)); }
     }
     [NeoRpcMethod("addRepository")]
-    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct) => await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); });
+    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct) => await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); scheduler?.Wake(); });
     [NeoRpcMethod("updateRepository")]
-    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); });
+    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); scheduler?.Wake(); });
     [NeoRpcMethod("pauseConnection")]
     public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); }, ct); });
     [NeoRpcMethod("pauseRepository")]
@@ -183,7 +183,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("setSelfAssignment")]
     public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct) => await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); sync?.RequestTaskSync(r.TaskId); });
     [NeoRpcMethod("retryTask")]
-    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); sync?.RequestTaskSync(r.TaskId); });
+    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); sync?.RequestTaskSync(r.TaskId, immediate: true); });
     [NeoRpcMethod("dismissConflict")]
     public async ValueTask<GitHubOperationResponse> DismissConflictAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.DismissConflictAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); });
     [NeoRpcMethod("keepAsOrdinaryTask")]
@@ -193,7 +193,11 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("disconnect")]
     public async ValueTask<GitHubOperationResponse> DisconnectAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(() => commands.DisconnectAsync(Change(r), ct), ct); });
 
-    private Task Quiesce(Func<Task> action, CancellationToken ct) => sync is null ? action() : sync.RunPausedAsync(action, ct);
+    private async Task Quiesce(Func<Task> action, CancellationToken ct)
+    {
+        try { if (sync is null) await action(); else await sync.RunPausedAsync(action, ct); }
+        finally { scheduler?.Wake(); }
+    }
 
     private static GitHubFilterDto ReadFilter(string json)
     {
