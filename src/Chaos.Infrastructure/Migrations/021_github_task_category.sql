@@ -1,0 +1,1 @@
+ALTER TABLE GitHubRepositories ADD COLUMN TaskCategory INTEGER NOT NULL DEFAULT 0 CHECK (TaskCategory IN (0,1));

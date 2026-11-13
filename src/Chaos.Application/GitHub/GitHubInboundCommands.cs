@@ -81,7 +81,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 if (task is null)
                 {
                     task = new TaskRecord { Id = ids.NewId().ToString(), SpaceId = space.Id, ContainerId = placement.ContainerId, SectionId = placement.SectionId,
-                        Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = remote.MilestoneDue,
+                        Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = remote.MilestoneDue, CapacityCategory = repo.TaskCategory,
                         CompletedAtUtc = status == TaskItemStatus.Done ? now : null, CancelledAtUtc = status == TaskItemStatus.Cancelled ? now : null,
                         Position = await s.Tasks.GetNextPositionAsync(placement.ContainerId, token), Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now };
                     await s.Tasks.AddAsync(task, token);

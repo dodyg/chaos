@@ -8,14 +8,15 @@ import { Banner, Field } from "@/components/common";
 
 type Api = typeof githubRpc;
 const emptyFilter: GitHubFilterDto = { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 };
-type Options = { targetContainerId: string; targetSectionId: string | null; filter: GitHubFilterDto; milestonesAsProjects: boolean };
+type Options = { targetContainerId: string; targetSectionId: string | null; filter: GitHubFilterDto; milestonesAsProjects: boolean; taskCategory: string };
 function RepositoryOptions({ targets, repository, busy, onSave, onCancel }: { targets: ReadonlyArray<GitHubTargetDto>; repository?: GitHubRepositoryDto; busy: boolean; onSave: (options: Options) => void; onCancel: () => void }) {
   const [container, setContainer] = React.useState(repository?.targetContainerId ?? targets[0]?.id ?? "");
   const [section, setSection] = React.useState(repository?.targetSectionId ?? "");
   const [filter, setFilter] = React.useState(() => repository?.filter ?? emptyFilter);
   const [labels, setLabels] = React.useState(filter.labels.join(", "));
   const [projects, setProjects] = React.useState(repository?.milestonesAsProjects ?? false);
-  return <form className="grid gap-3 rounded-lg border p-4" onSubmit={e => { e.preventDefault(); onSave({ targetContainerId: container, targetSectionId: section || null, filter: { ...filter, labels: labels.split(",").map(v => v.trim()).filter(Boolean) }, milestonesAsProjects: projects }); }}>
+  const [category, setCategory] = React.useState(repository?.taskCategory ?? "Personal");
+  return <form className="grid gap-3 rounded-lg border p-4" onSubmit={e => { e.preventDefault(); onSave({ targetContainerId: container, targetSectionId: section || null, filter: { ...filter, labels: labels.split(",").map(v => v.trim()).filter(Boolean) }, milestonesAsProjects: projects, taskCategory: category }); }}>
     <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
       <legend className="px-1 text-sm font-semibold">Sync filters</legend>
       <p className="text-sm text-muted-foreground">Choose which GitHub issues sync with Chaos. Linked tasks that no longer match stay in Chaos but stop syncing.</p>
@@ -31,10 +32,11 @@ function RepositoryOptions({ targets, repository, busy, onSave, onCancel }: { ta
     </fieldset>
     <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
       <legend className="px-1 text-sm font-semibold">Task destination</legend>
-      <p className="text-sm text-muted-foreground">Choose where newly imported issues become tasks. Changing this destination does not move existing tasks.</p>
+      <p className="text-sm text-muted-foreground">Choose where newly imported issues become tasks and how they count toward capacity. Changes apply to new imports; existing tasks keep their destination and category.</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Destination"><NativeSelect value={container} onChange={e => { setContainer(e.target.value); setSection(""); }}>{targets.map(t => <NativeSelectOption key={t.id} value={t.id}>{t.name}</NativeSelectOption>)}</NativeSelect></Field>
         <Field label="Section"><NativeSelect value={section} onChange={e => setSection(e.target.value)}><NativeSelectOption value="">No section</NativeSelectOption>{targets.find(t => t.id === container)?.sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>
+        <Field label="Task category"><NativeSelect value={category} onChange={e => setCategory(e.target.value)}><NativeSelectOption value="Personal">Personal</NativeSelectOption><NativeSelectOption value="Work">Work</NativeSelectOption></NativeSelect></Field>
       </div>
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={projects} onChange={e => setProjects(e.target.checked)}/>Use milestones as projects</label>
       <p className="text-xs text-muted-foreground">When enabled, issues with a milestone go to a project for that milestone; the destination above is used for issues without one. A milestone change can move a linked task whose placement is still managed by GitHub.</p>

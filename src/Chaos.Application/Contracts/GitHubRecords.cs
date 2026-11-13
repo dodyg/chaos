@@ -1,3 +1,5 @@
+using Chaos.Domain.Tasks;
+
 namespace Chaos.Application.Contracts;
 
 /// <summary>Device-local pagination/query progress. No issue text or credentials; omitted from archives.</summary>
@@ -41,6 +43,7 @@ public sealed record GitHubRepositoryRecord
     public string? TargetSectionId { get; init; }
     public required string FilterJson { get; init; }
     public bool MilestonesAsProjects { get; init; }
+    public CapacityCategory TaskCategory { get; init; } = CapacityCategory.Personal;
     public int State { get; init; }
     public DateTimeOffset? IssuesCursorUtc { get; init; }
     public DateTimeOffset? CommentsCursorUtc { get; init; }

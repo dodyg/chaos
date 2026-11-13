@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
+using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.GitHub;
 
@@ -24,8 +25,8 @@ public sealed record GitHubSchedule(GitHubStatus Status, DateTimeOffset? Connect
 public sealed record GitHubRepositoryCandidate(GitHubRepository Repository, bool AlreadyAdded);
 public sealed record GitHubRepositoryCandidates(IReadOnlyList<GitHubRepositoryCandidate> Repositories, string? NextCursor);
 public sealed record ConnectGitHubCommand(string OperationId);
-public sealed record AddGitHubRepositoryCommand(string OperationId, string ConnectionId, long ExpectedVersion, string Owner, string Name, long RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilter Filter, bool MilestonesAsProjects);
-public sealed record UpdateGitHubRepositoryCommand(string OperationId, string RepositoryId, long ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilter Filter, bool MilestonesAsProjects);
+public sealed record AddGitHubRepositoryCommand(string OperationId, string ConnectionId, long ExpectedVersion, string Owner, string Name, long RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilter Filter, bool MilestonesAsProjects, CapacityCategory TaskCategory = CapacityCategory.Personal);
+public sealed record UpdateGitHubRepositoryCommand(string OperationId, string RepositoryId, long ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilter Filter, bool MilestonesAsProjects, CapacityCategory TaskCategory = CapacityCategory.Personal);
 public sealed record ChangeGitHubCommand(string OperationId, string Id, long ExpectedVersion, bool Paused = false);
 public sealed record GitHubSettingsCommand(string OperationId, string Id, long ExpectedVersion, bool PostDiaryByDefault, bool CreateLabelsForTags);
 public sealed record GitHubSelfAssignmentCommand(string OperationId, string TaskId, bool Assigned);
@@ -144,6 +145,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
     {
         ValidateOperation(command.OperationId);
         var filter = command.Filter.ToJson();
+        var category = TaskFieldValidation.Category(command.TaskCategory, "taskCategory");
         if (!SegmentPattern().IsMatch(command.Owner) || !SegmentPattern().IsMatch(command.Name) || command.Owner is "." or ".." || command.Name is "." or ".." || command.RepositoryId <= 0)
             throw AppException.Validation("repository", "Enter a valid owner, repository and numeric repository ID.");
         var replay = await Replay<GitHubRepositoryRecord>(command.OperationId, "github.addRepository", command, ct);
@@ -163,7 +165,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             var row = new GitHubRepositoryRecord { Id = ids.NewId().ToString(), ConnectionId = current.Id, RepositoryId = remote.Id,
                 Owner = remote.Owner.Login, Name = remote.Name, FullName = remote.FullName, HtmlUrl = remote.HtmlUrl, IsPrivate = remote.Private,
                 TargetContainerId = command.TargetContainerId, TargetSectionId = command.TargetSectionId, FilterJson = filter,
-                MilestonesAsProjects = command.MilestonesAsProjects, CreatedAtUtc = now, UpdatedAtUtc = now };
+                MilestonesAsProjects = command.MilestonesAsProjects, TaskCategory = category, CreatedAtUtc = now, UpdatedAtUtc = now };
             await s.GitHub.AddRepositoryAsync(row, token);
             return row;
         }, ct);
@@ -172,6 +174,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
     public Task<GitHubRepositoryRecord> UpdateRepositoryAsync(UpdateGitHubRepositoryCommand command, CancellationToken ct = default)
     {
         var filter = command.Filter.ToJson();
+        var category = TaskFieldValidation.Category(command.TaskCategory, "taskCategory");
         return Mutate(command.OperationId, "github.updateRepository", command, async (s, _, space, now, token) =>
         {
             var row = await Repository(s, command.RepositoryId, token);
@@ -180,7 +183,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             var changed = filter != row.FilterJson || command.MilestonesAsProjects != row.MilestonesAsProjects;
             if (changed) await s.GitHub.ClearCheckpointsAsync(row.Id, token);
             return await s.GitHub.UpdateRepositoryAsync(row with { TargetContainerId = command.TargetContainerId, TargetSectionId = command.TargetSectionId,
-                FilterJson = filter, MilestonesAsProjects = command.MilestonesAsProjects, IssuesCursorUtc = changed ? null : row.IssuesCursorUtc,
+                FilterJson = filter, MilestonesAsProjects = command.MilestonesAsProjects, TaskCategory = category, IssuesCursorUtc = changed ? null : row.IssuesCursorUtc,
                 IssuesEtag = changed ? null : row.IssuesEtag, InitialImportDoneUtc = changed ? null : row.InitialImportDoneUtc, UpdatedAtUtc = now }, row.Version, token) ?? throw Conflict();
         }, ct);
     }

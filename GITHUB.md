@@ -105,6 +105,8 @@ A personal, opt-in GitHub Issues connection for the desktop app:
 Not mapped (app-only): planned date/time, estimate, capacity category, priority, container and
 section (except the milestone placement rule), order, My Day/My Week, reminders, waiting and
 follow-ups, recurrence (not allowed on connected tasks), pad links, templates.
+Each repository chooses the initial Personal or Work capacity category for newly imported tasks;
+changing it leaves existing tasks' categories unchanged.
 
 ---
 
@@ -290,6 +292,7 @@ package 13 note in `docs/decisions.md` and `StorageBootstrap`).
 | `TargetContainerId` TEXT FK Containers, `TargetSectionId` TEXT NULL | composite FK to Sections like Tasks |
 | `FilterJson` TEXT | versioned: `{ "v":1, "labels":[…], "labelMode":"any"|"all", "assignee":"any"|"me"|"none", "milestone":null|number|"none", "includeClosedDays":0..365 }` |
 | `MilestonesAsProjects` 0/1 | default 0 |
+| `TaskCategory` 0/1 | Personal by default; Work when selected for new imports |
 | `State` INTEGER | 0 Active, 1 Paused, 2 Unavailable |
 | `IssuesCursorUtc` TEXT NULL | newest `updated_at` fully processed |
 | `CommentsCursorUtc` TEXT NULL | newest comment `updated_at` processed |
@@ -1178,7 +1181,7 @@ Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
 ### [ ] G9 — Linked pull requests
 
-**Depends on:** G7. **Files:** `Migrations/021_github_pull_requests.sql`, store methods,
+**Depends on:** G7. **Files:** `Migrations/022_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
 plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 

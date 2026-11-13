@@ -7,7 +7,7 @@ namespace Chaos.Infrastructure.Tests.Migrations;
 
 public sealed class GitHubSchemaTests
 {
-    private static async Task<SqliteConnection> OpenAsync()
+    private static async Task<SqliteConnection> OpenAsync(long? targetVersion = null)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -17,7 +17,7 @@ public sealed class GitHubSchemaTests
         }.ToString());
         await connection.OpenAsync();
         await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 13);
-        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, targetVersion);
         await Execute(connection, """
             INSERT INTO Profiles(Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc) VALUES('p','Person','UTC','en','YMD',1,'now','now');
             INSERT INTO Spaces(Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES('s','p',1,'Personal','now','now');
@@ -48,6 +48,16 @@ public sealed class GitHubSchemaTests
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    [Test]
+    public async Task CategoryMigration_DefaultsExistingRepositoryToPersonal()
+    {
+        using var connection = await OpenAsync(20);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        await Assert.That(await Scalar(connection, "SELECT TaskCategory FROM GitHubRepositories WHERE Id='r';")).IsEqualTo(0L);
+        await Execute(connection, "UPDATE GitHubRepositories SET TaskCategory=1 WHERE Id='r';");
+        await Assert.That(await Scalar(connection, "SELECT TaskCategory FROM GitHubRepositories WHERE Id='r';")).IsEqualTo(1L);
     }
 
     [Test]
@@ -95,6 +105,7 @@ public sealed class GitHubSchemaTests
     [Arguments("UPDATE GitHubConnections SET State=3;")]
     [Arguments("UPDATE GitHubConnections SET WebBaseUrl='http://github.com';")]
     [Arguments("UPDATE GitHubRepositories SET IsPrivate=2;")]
+    [Arguments("UPDATE GitHubRepositories SET TaskCategory=2;")]
     [Arguments("UPDATE GitHubIssueLinks SET LocalAssigneeIntent=2;")]
     [Arguments("UPDATE GitHubIssueLinks SET ErrorAttempts=-1;")]
     [Arguments("UPDATE GitHubIssueLinks SET ConnectionId='missing';")]

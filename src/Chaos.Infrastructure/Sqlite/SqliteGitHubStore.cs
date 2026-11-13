@@ -1,5 +1,6 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Domain.Tasks;
 using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Sqlite;
@@ -129,6 +130,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         TargetSectionId = reader.IsDBNull(reader.GetOrdinal("TargetSectionId")) ? null : reader.GetString(reader.GetOrdinal("TargetSectionId")),
         FilterJson = reader.GetString(reader.GetOrdinal("FilterJson")),
         MilestonesAsProjects = reader.GetInt64(reader.GetOrdinal("MilestonesAsProjects")) != 0,
+        TaskCategory = (CapacityCategory)reader.GetInt32(reader.GetOrdinal("TaskCategory")),
         State = reader.GetInt32(reader.GetOrdinal("State")),
         IssuesCursorUtc = reader.IsDBNull(reader.GetOrdinal("IssuesCursorUtc")) ? null : StorageFormats.ParseInstant(reader.GetString(reader.GetOrdinal("IssuesCursorUtc"))),
         CommentsCursorUtc = reader.IsDBNull(reader.GetOrdinal("CommentsCursorUtc")) ? null : StorageFormats.ParseInstant(reader.GetString(reader.GetOrdinal("CommentsCursorUtc"))),
@@ -149,7 +151,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task AddRepositoryAsync(GitHubRepositoryRecord row, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO GitHubRepositories (Id, ConnectionId, RepositoryId, Owner, Name, FullName, HtmlUrl, IsPrivate, TargetContainerId, TargetSectionId, FilterJson, MilestonesAsProjects, State, IssuesCursorUtc, CommentsCursorUtc, IssuesEtag, CommentsEtag, LabelsEtag, MilestonesEtag, InitialImportDoneUtc, LastSyncedUtc, LastErrorKind, LastErrorMessage, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc) VALUES ($Id, $ConnectionId, $RepositoryId, $Owner, $Name, $FullName, $HtmlUrl, $IsPrivate, $TargetContainerId, $TargetSectionId, $FilterJson, $MilestonesAsProjects, $State, $IssuesCursorUtc, $CommentsCursorUtc, $IssuesEtag, $CommentsEtag, $LabelsEtag, $MilestonesEtag, $InitialImportDoneUtc, $LastSyncedUtc, $LastErrorKind, $LastErrorMessage, $Version, $CreatedAtUtc, $UpdatedAtUtc, $DeletedAtUtc);";
+        command.CommandText = "INSERT INTO GitHubRepositories (Id, ConnectionId, RepositoryId, Owner, Name, FullName, HtmlUrl, IsPrivate, TargetContainerId, TargetSectionId, FilterJson, MilestonesAsProjects, TaskCategory, State, IssuesCursorUtc, CommentsCursorUtc, IssuesEtag, CommentsEtag, LabelsEtag, MilestonesEtag, InitialImportDoneUtc, LastSyncedUtc, LastErrorKind, LastErrorMessage, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc) VALUES ($Id, $ConnectionId, $RepositoryId, $Owner, $Name, $FullName, $HtmlUrl, $IsPrivate, $TargetContainerId, $TargetSectionId, $FilterJson, $MilestonesAsProjects, $TaskCategory, $State, $IssuesCursorUtc, $CommentsCursorUtc, $IssuesEtag, $CommentsEtag, $LabelsEtag, $MilestonesEtag, $InitialImportDoneUtc, $LastSyncedUtc, $LastErrorKind, $LastErrorMessage, $Version, $CreatedAtUtc, $UpdatedAtUtc, $DeletedAtUtc);";
         command.Parameters.AddWithValue("$Id", row.Id);
         command.Parameters.AddWithValue("$ConnectionId", row.ConnectionId);
         command.Parameters.AddWithValue("$RepositoryId", row.RepositoryId);
@@ -162,6 +164,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$TargetSectionId", (object?)row.TargetSectionId ?? DBNull.Value);
         command.Parameters.AddWithValue("$FilterJson", row.FilterJson);
         command.Parameters.AddWithValue("$MilestonesAsProjects", row.MilestonesAsProjects);
+        command.Parameters.AddWithValue("$TaskCategory", (int)row.TaskCategory);
         command.Parameters.AddWithValue("$State", row.State);
         command.Parameters.AddWithValue("$IssuesCursorUtc", row.IssuesCursorUtc is { } IssuesCursorUtc ? StorageFormats.Instant(IssuesCursorUtc) : (object)DBNull.Value);
         command.Parameters.AddWithValue("$CommentsCursorUtc", row.CommentsCursorUtc is { } CommentsCursorUtc ? StorageFormats.Instant(CommentsCursorUtc) : (object)DBNull.Value);
@@ -189,7 +192,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task<GitHubRepositoryRecord?> UpdateRepositoryAsync(GitHubRepositoryRecord row, long expectedVersion, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE GitHubRepositories SET ConnectionId=$ConnectionId, RepositoryId=$RepositoryId, Owner=$Owner, Name=$Name, FullName=$FullName, HtmlUrl=$HtmlUrl, IsPrivate=$IsPrivate, TargetContainerId=$TargetContainerId, TargetSectionId=$TargetSectionId, FilterJson=$FilterJson, MilestonesAsProjects=$MilestonesAsProjects, State=$State, IssuesCursorUtc=$IssuesCursorUtc, CommentsCursorUtc=$CommentsCursorUtc, IssuesEtag=$IssuesEtag, CommentsEtag=$CommentsEtag, LabelsEtag=$LabelsEtag, MilestonesEtag=$MilestonesEtag, InitialImportDoneUtc=$InitialImportDoneUtc, LastSyncedUtc=$LastSyncedUtc, LastErrorKind=$LastErrorKind, LastErrorMessage=$LastErrorMessage, UpdatedAtUtc=$UpdatedAtUtc, DeletedAtUtc=$DeletedAtUtc, Version=Version+1 WHERE Id=$Id AND Version=$expected;";
+        command.CommandText = "UPDATE GitHubRepositories SET ConnectionId=$ConnectionId, RepositoryId=$RepositoryId, Owner=$Owner, Name=$Name, FullName=$FullName, HtmlUrl=$HtmlUrl, IsPrivate=$IsPrivate, TargetContainerId=$TargetContainerId, TargetSectionId=$TargetSectionId, FilterJson=$FilterJson, MilestonesAsProjects=$MilestonesAsProjects, TaskCategory=$TaskCategory, State=$State, IssuesCursorUtc=$IssuesCursorUtc, CommentsCursorUtc=$CommentsCursorUtc, IssuesEtag=$IssuesEtag, CommentsEtag=$CommentsEtag, LabelsEtag=$LabelsEtag, MilestonesEtag=$MilestonesEtag, InitialImportDoneUtc=$InitialImportDoneUtc, LastSyncedUtc=$LastSyncedUtc, LastErrorKind=$LastErrorKind, LastErrorMessage=$LastErrorMessage, UpdatedAtUtc=$UpdatedAtUtc, DeletedAtUtc=$DeletedAtUtc, Version=Version+1 WHERE Id=$Id AND Version=$expected;";
         command.Parameters.AddWithValue("$Id", row.Id);
         command.Parameters.AddWithValue("$ConnectionId", row.ConnectionId);
         command.Parameters.AddWithValue("$RepositoryId", row.RepositoryId);
@@ -202,6 +205,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$TargetSectionId", (object?)row.TargetSectionId ?? DBNull.Value);
         command.Parameters.AddWithValue("$FilterJson", row.FilterJson);
         command.Parameters.AddWithValue("$MilestonesAsProjects", row.MilestonesAsProjects);
+        command.Parameters.AddWithValue("$TaskCategory", (int)row.TaskCategory);
         command.Parameters.AddWithValue("$State", row.State);
         command.Parameters.AddWithValue("$IssuesCursorUtc", row.IssuesCursorUtc is { } IssuesCursorUtc ? StorageFormats.Instant(IssuesCursorUtc) : (object)DBNull.Value);
         command.Parameters.AddWithValue("$CommentsCursorUtc", row.CommentsCursorUtc is { } CommentsCursorUtc ? StorageFormats.Instant(CommentsCursorUtc) : (object)DBNull.Value);

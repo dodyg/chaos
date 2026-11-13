@@ -6,6 +6,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.GitHub;
 using NeoAstra.Rpc;
 using Chaos.Infrastructure.GitHub;
+using Chaos.Domain.Tasks;
 
 namespace Chaos.Desktop.Services;
 
@@ -23,10 +24,10 @@ public sealed record GitHubLookupRequest(string Owner, string Name);
 public sealed record GitHubChangeRequest(string OperationId, string Id, string ExpectedVersion, bool Paused);
 public sealed record GitHubSettingsRequest(string OperationId, string Id, string ExpectedVersion, bool PostDiaryByDefault, bool CreateLabelsForTags);
 public sealed record GitHubFilterDto(IReadOnlyList<string> Labels, string LabelMode, string Assignee, string? Milestone, bool NoMilestone, int IncludeClosedDays);
-public sealed record GitHubAddRequest(string OperationId, string ConnectionId, string ExpectedVersion, string Owner, string Name, string RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects);
-public sealed record GitHubUpdateRequest(string OperationId, string Id, string ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects);
+public sealed record GitHubAddRequest(string OperationId, string ConnectionId, string ExpectedVersion, string Owner, string Name, string RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
+public sealed record GitHubUpdateRequest(string OperationId, string Id, string ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
 public sealed record GitHubConnectionDto(string Id, string Version, string AccountId, string AccountLogin, string State, bool PostDiaryByDefault, bool CreateLabelsForTags);
-public sealed record GitHubRepositoryDto(string Id, string Version, string RepositoryId, string FullName, string State, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects);
+public sealed record GitHubRepositoryDto(string Id, string Version, string RepositoryId, string FullName, string State, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string TaskCategory);
 public sealed record GitHubCandidateDto(string RepositoryId, string Owner, string Name, string FullName, bool IsPrivate, bool HasIssues, bool AlreadyAdded);
 public sealed record GitHubSectionDto(string Id, string Title);
 public sealed record GitHubTargetDto(string Id, string Name, IReadOnlyList<GitHubSectionDto> Sections);
@@ -57,7 +58,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 return result;
             }, ct);
             return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags) : null,
-                status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects)).ToArray(), targets, null, SyncStatus(status.Connection));
+                status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString())).ToArray(), targets, null, SyncStatus(status.Connection));
         }
         catch (AppException e) { return new(false, null, [], [], TaskRpcService.ToErrorResponse(e)); }
     }
@@ -171,9 +172,9 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         catch (GitHubApiException e) { return new(false, [], null, Error(e)); }
     }
     [NeoRpcMethod("addRepository")]
-    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct) => await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); scheduler?.Wake(); });
+    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct) => await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
     [NeoRpcMethod("updateRepository")]
-    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects), ct); scheduler?.Wake(); });
+    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
     [NeoRpcMethod("pauseConnection")]
     public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); }, ct); });
     [NeoRpcMethod("pauseRepository")]
@@ -214,6 +215,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     private static GitHubCandidateDto Candidate(GitHubRepository r, bool added) => new(Number(r.Id), r.Owner.Login, r.Name, r.FullName, r.Private, r.HasIssues, added);
     private static ChangeGitHubCommand Change(GitHubChangeRequest r) => new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.Paused);
     private static GitHubFilter Filter(GitHubFilterDto f) => new(f.Labels, f.LabelMode, f.Assignee, f.Milestone is null ? null : Positive(f.Milestone), f.NoMilestone, f.IncludeClosedDays);
+    private static CapacityCategory Category(string? value) => value switch { null or "Personal" => CapacityCategory.Personal, "Work" => CapacityCategory.Work, _ => throw AppException.Validation("taskCategory", "Choose Personal or Work.") };
     private static long Positive(string value) => long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var result) && result > 0 ? result : throw AppException.Validation("id", "Use a positive numeric ID or version.");
     private static string Number(long value) => value.ToString(CultureInfo.InvariantCulture);
     private static async ValueTask<GitHubOperationResponse> Run(Func<Task> action)

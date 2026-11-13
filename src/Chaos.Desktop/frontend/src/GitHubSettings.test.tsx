@@ -44,12 +44,14 @@ test("browsing and adding a repository sends filters and string identity", async
     assert.ok(within(filters).getByLabelText("Only issues without a milestone"));
     assert.ok(within(destination).getByLabelText("Destination"));
     assert.ok(within(destination).getByLabelText("Section"));
+    assert.equal((within(destination).getByLabelText("Task category") as HTMLSelectElement).value, "Personal");
     assert.ok(within(destination).getByLabelText("Use milestones as projects"));
     await user.type(within(filters).getByLabelText("Labels (comma separated)"), "bug, urgent");
     await user.selectOptions(screen.getByLabelText("Assigned to"), "me");
+    await user.selectOptions(within(destination).getByLabelText("Task category"), "Work");
     await user.click(screen.getByRole("button", { name: "Save repository" }));
     await waitFor(() => assert.equal(added.length, 1));
-    assert.equal(added[0].repositoryId, "4000000000"); assert.equal(added[0].targetContainerId, "inbox"); assert.deepEqual(added[0].filter.labels, ["bug", "urgent"]); assert.equal(added[0].filter.assignee, "me");
+    assert.equal(added[0].repositoryId, "4000000000"); assert.equal(added[0].targetContainerId, "inbox"); assert.deepEqual(added[0].filter.labels, ["bug", "urgent"]); assert.equal(added[0].filter.assignee, "me"); assert.equal(added[0].taskCategory, "Work");
   } finally { cleanup(); }
 });
 
@@ -80,8 +82,22 @@ test("a lost connection response retries the same operation ID", async () => {
   } finally { cleanup(); }
 });
 
-const repository = { id: "r1", version: "1", repositoryId: "4000000000", fullName: "person/repo", state: "Active", targetContainerId: "inbox", targetSectionId: null, filter: { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 }, milestonesAsProjects: false };
+const repository = { id: "r1", version: "1", repositoryId: "4000000000", fullName: "person/repo", state: "Active", targetContainerId: "inbox", targetSectionId: null, filter: { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 }, milestonesAsProjects: false, taskCategory: "Work" };
 const idleSync = { running: false, startedAtUtc: null, finishedAtUtc: null, created: null, updated: null, commentChanges: null, conflicts: null, morePages: false, error: null };
+
+test("editing a repository shows its category and saves a new selection", async () => {
+  const updates: Array<{ taskCategory: string | null }> = [];
+  const api = { ...gitHubRpc, status: async () => ({ ...connected, repositories: [repository] }), updateRepository: async (request: { taskCategory: string | null }) => { updates.push(request); return { ok: true, error: null }; } };
+  render(<GitHubSettings api={api}/>); const user = userEvent.setup({ document: dom.window.document });
+  try {
+    await user.click(await screen.findByRole("button", { name: "Edit repository" }));
+    const category = screen.getByLabelText("Task category") as HTMLSelectElement;
+    assert.equal(category.value, "Work");
+    await user.selectOptions(category, "Personal");
+    await user.click(screen.getByRole("button", { name: "Save repository" }));
+    await waitFor(() => assert.equal(updates[0]?.taskCategory, "Personal"));
+  } finally { cleanup(); }
+});
 
 test("Sync now returns immediately, polls status and refreshes views after completion", async () => {
   let sync = idleSync as NonNullable<GitHubStatusResponse["sync"]>;

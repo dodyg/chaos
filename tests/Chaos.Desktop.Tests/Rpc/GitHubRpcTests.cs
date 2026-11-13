@@ -86,9 +86,13 @@ public sealed class GitHubRpcTests
         var status = await rpc.StatusAsync(new(), CancellationToken.None);
         var connection = status.Connection!;
         var list = await rpc.ListRepositoriesAsync(new(null), CancellationToken.None);
-        var request = new GitHubAddRequest(Op(), connection.Id, connection.Version, "person", "repo", list.Repositories.Single().RepositoryId, status.Targets.First().Id, null, new([], "any", "any", null, false, 0), false);
+        var request = new GitHubAddRequest(Op(), connection.Id, connection.Version, "person", "repo", list.Repositories.Single().RepositoryId, status.Targets.First().Id, null, new([], "any", "any", null, false, 0), false, "Work");
         await Assert.That((await rpc.AddRepositoryAsync(request, CancellationToken.None)).Ok).IsTrue();
         status = await rpc.StatusAsync(new(), CancellationToken.None);
+        await Assert.That(status.Repositories.Single().TaskCategory).IsEqualTo("Work");
+        var subscription = status.Repositories.Single();
+        var invalidCategory = await rpc.UpdateRepositoryAsync(new(Op(), subscription.Id, subscription.Version, subscription.TargetContainerId, subscription.TargetSectionId, subscription.Filter, subscription.MilestonesAsProjects, "invalid"), CancellationToken.None);
+        await Assert.That(invalidCategory.Error!.Kind).IsEqualTo("validation");
         var json = JsonSerializer.Serialize(status);
         await Assert.That(json.Contains("\"AccountId\":\"3000000000\"", StringComparison.Ordinal)).IsTrue();
         await Assert.That(json.Contains("\"RepositoryId\":\"4000000000\"", StringComparison.Ordinal)).IsTrue();

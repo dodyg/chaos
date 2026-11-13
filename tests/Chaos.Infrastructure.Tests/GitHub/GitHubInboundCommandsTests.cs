@@ -71,14 +71,36 @@ public sealed class GitHubInboundCommandsTests
         new(id, "I" + id, id, "https://github.com/person/repo/issues/" + id, title, body, state, null, new(1, "person"),
             [new(11, "work/bug", "abcdef")], [], null, null, DataHost.Start, updated ?? DataHost.Start, state == "closed" ? DataHost.Start : null, 0, null);
 
-    private static async Task<(GitHubRepositoryRecord Repository, GitHubConnectionRecord Connection, GitHubInboundCommands Inbound)> Setup(DataHost host, GitHubFilter? filter = null, bool projects = false)
+    private static async Task<(GitHubRepositoryRecord Repository, GitHubConnectionRecord Connection, GitHubInboundCommands Inbound)> Setup(DataHost host, GitHubFilter? filter = null, bool projects = false, CapacityCategory category = CapacityCategory.Personal)
     {
         var api = new FakeGitHub(); api.PutRepository(new(10, "R10", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", false, true));
         var commands = new GitHubConnectionCommands(host.Store, api, host.Ids, host.Clock);
         var connection = await commands.ConnectAsync(new(DataHost.Op()));
         var inbox = await host.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
-        var repo = await commands.AddRepositoryAsync(new(DataHost.Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, filter ?? GitHubFilter.Empty, projects));
+        var repo = await commands.AddRepositoryAsync(new(DataHost.Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, filter ?? GitHubFilter.Empty, projects, category));
         return (repo, connection, new(host.Store, host.Ids, host.Clock));
+    }
+
+    [Test]
+    public async Task RepositoryCategory_AppliesToNewIssuesAndPreservesExistingTasks()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host, projects: true, category: CapacityCategory.Work);
+        var issue = Issue() with { Milestone = new(22, 1, "Release", "open", null) };
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue]);
+        var commands = new GitHubConnectionCommands(host.Store, new FakeGitHub(), host.Ids, host.Clock);
+        repo = await commands.UpdateRepositoryAsync(new(DataHost.Op(), repo.Id, repo.Version, repo.TargetContainerId, repo.TargetSectionId, GitHubFilter.Empty, true, CapacityCategory.Personal));
+        await inbound.ApplyAsync(repo.Id, repo.Version, [issue with { Title = "Updated remotely", UpdatedAt = DataHost.Start.AddMinutes(1) }, Issue(2)]);
+        await host.Store.QueryAsync(async (s, ct) =>
+        {
+            var first = (await s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct))!;
+            var second = (await s.GitHub.FindLinkByIssueAsync(connection.Id, 2, ct))!;
+            await Assert.That((await s.Tasks.GetAsync(first.TaskId!, ct))!.CapacityCategory).IsEqualTo(CapacityCategory.Work);
+            await Assert.That((await s.Tasks.GetAsync(second.TaskId!, ct))!.CapacityCategory).IsEqualTo(CapacityCategory.Personal);
+            await Assert.That((await s.GitHub.GetRepositoryAsync(repo.Id, ct))!.TaskCategory).IsEqualTo(CapacityCategory.Personal);
+            return true;
+        });
+        await Assert.That(async () => await commands.UpdateRepositoryAsync(new(DataHost.Op(), repo.Id, repo.Version, repo.TargetContainerId, repo.TargetSectionId, GitHubFilter.Empty, true, (CapacityCategory)42))).Throws<AppException>();
     }
 
     [Test]
