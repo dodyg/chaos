@@ -133,3 +133,35 @@ test("a failed save survives leaving the pad and is offered for retry or copy on
   assert.ok(screen.getByRole("button", { name: "Copy text" }));
   cleanup();
 });
+
+test("a new note is stored only once something is typed; closed untouched it leaves nothing behind", async () => {
+  const notes: PadItemResponse[] = [note("n1", "Existing")];
+  const { api, saves } = padApi(notes);
+  const creates: string[] = [];
+  const withCreate = { ...api, create: async (request: { markdown: string }) => {
+    creates.push(request.markdown);
+    const created = note(`n${notes.length + 1}`, request.markdown, "0");
+    notes.push(created);
+    return { ok: true, items: [created], error: null };
+  } } as unknown as typeof padRpc;
+  const registry = new DraftRegistry();
+  renderPad(withCreate, registry);
+  await screen.findByRole("button", { name: /Open note: Existing/ });
+
+  fireEvent.click(screen.getByRole("button", { name: /New note/ }));
+  assert.ok(screen.getByText(/close it untouched and it is gone/));
+  fireEvent.click(screen.getByRole("button", { name: "Close note" }));
+  assert.deepEqual(creates, [], "an untouched new note is never stored");
+  assert.equal(notes.length, 1);
+
+  fireEvent.click(screen.getByRole("button", { name: /New note/ }));
+  const editor = dom.window.document.getElementById("pad-new") as HTMLTextAreaElement;
+  fireEvent.change(editor, { target: { value: "B" } });
+  await waitFor(() => assert.deepEqual(creates, ["B"]));
+  await waitFor(() => assert.ok(dom.window.document.getElementById("pad-new"), "the same editor stays open after the note is stored"));
+  fireEvent.change(dom.window.document.getElementById("pad-new") as HTMLTextAreaElement, { target: { value: "Buy bread" } });
+  fireEvent.click(screen.getByRole("button", { name: "Close note" }));
+  await waitFor(() => assert.equal(saves.at(-1)?.markdown, "Buy bread"));
+  assert.deepEqual(creates, ["B"], "later typing saves the stored note instead of creating another");
+  cleanup();
+});

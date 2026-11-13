@@ -5,7 +5,7 @@
  * with an empty, successful read so screens render instead of failing.
  */
 import type {
-  CaptureDraftDto, ContainerResponse, DaySummaryResponse, QueryRowResponse, SectionResponse, SubtaskResponse, TagResponse, TaskQueryRequest, TaskResponse,
+  CaptureDraftDto, ContainerResponse, PadItemResponse, DaySummaryResponse, QueryRowResponse, SectionResponse, SubtaskResponse, TagResponse, TaskQueryRequest, TaskResponse,
   UndoEntryResponse, WeekBoardDto, WeekOverviewDto,
 } from "#neoastra";
 
@@ -57,6 +57,9 @@ const subtasks: SubtaskResponse[] = [
 ];
 const dayPlans = new Map<string, string[]>([[today, ["task-1", "task-2", "task-3", "task-4"]]]);
 const undo: UndoEntryResponse[] = [];
+const padNotes: PadItemResponse[] = [
+  { id: "pad-1", markdown: "React Server Components\n\n- read the RFC\n- try it in a side project", version: "1", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [] },
+];
 
 const ok = <T extends object>(value: T) => ({ ok: true, error: null, ...value });
 const fail = (message: string) => ({ ok: false, error: { kind: "Validation", message, fields: [], correlationId: "preview" } });
@@ -220,6 +223,13 @@ const handlers: Record<string, Handler> = {
     return ok({ tasks: created });
   },
 
+  "pad.list": (r: { archived: boolean }) => ok({ items: padNotes.filter(n => n.archived === r.archived) }),
+  "pad.listDeleted": () => ok({ items: [] }),
+  "pad.reviewStatus": () => ok({ due: false, lastReviewedAtUtc: null, suggestions: [] }),
+  "pad.get": (r: { itemId: string }) => ok({ items: padNotes.filter(n => n.id === r.itemId) }),
+  "pad.search": (r: { text: string }) => ok({ items: padNotes.filter(n => n.markdown.toLowerCase().includes(r.text.toLowerCase())) }),
+  "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
+  "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),
   "pad.locate": () => ok({ anchor: null }),

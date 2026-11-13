@@ -39,6 +39,11 @@ export function titleFromSelection(text: string): string {
   return line === "Empty note" ? "" : line.replace(/…$/, "");
 }
 
+/** Stand-in for a new note that is not stored yet. */
+function newPlaceholder(markdown: string): PadItemResponse {
+  return { id: "new", markdown, version: "0", draftVersion: "0", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "", updatedAtUtc: "", tagIds: [], tasks: [] } as unknown as PadItemResponse;
+}
+
 /** Saver for one note, created from the stored state the first time it is opened. */
 function saverFor(registry: DraftRegistry, api: PadApi, item: PadItemResponse): DraftSaver {
   return registry.getOrCreate({
@@ -102,6 +107,17 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
   const [review, setReview] = React.useState<{ due: boolean; suggestions: PadItemResponse[] } | null>(null);
   const [reviewChoice, setReviewChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [newKey, setNewKey] = React.useState(0);
+  /**
+   * A new note exists only here until its first character is typed, so closing it untouched
+   * leaves nothing behind: no stored note, no deleted note, no undo step. `itemId` is set once
+   * the first text created the stored note; the same editor keeps going without a remount.
+   */
+  const [newNote, setNewNote] = React.useState<{ key: number; itemId: string | null } | null>(null);
+  const [draftText, setDraftText] = React.useState("");
+  const draftTextRef = React.useRef("");
+  const draftKeyRef = React.useRef<number | null>(null);
+  draftKeyRef.current = newNote?.key ?? null;
+  const creating = React.useRef(false);
   const pendingFocus = React.useRef<PadFocus | null>(null);
   const drag = useDragReorder();
 
@@ -152,7 +168,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
 
   React.useEffect(() => {
     if (!focus) return;
-    if (focus.itemId === null) { void createNote(); return; }
+    if (focus.itemId === null) { createNote(); return; }
     const itemId = focus.itemId;
     void (async () => {
       const result = await api.get({ itemId });
@@ -187,15 +203,47 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
     return current.snapshot.version;
   }
 
-  async function createNote() {
-    await run(() => api.create({ operationId: operationId(), markdown: "" }), "Could not add a note.", result => {
-      const created = result.items[0];
-      if (created) { setArchived(false); setTagFilter(""); setOpenId(created.id); setNewKey(key => key + 1); setMissingQuote(null); }
-    });
+  function createNote() {
+    if (saver) void saver.flush();
+    setArchived(false); setTagFilter(""); setOpenId(null); setMakeTask(null); setMissingQuote(null); setSelection({ start: 0, end: 0 });
+    draftTextRef.current = ""; setDraftText(""); creating.current = false;
+    setNewNote(current => ({ key: (current?.key ?? 0) + 1, itemId: null }));
+    setNewKey(key => key + 1);
+  }
+
+  /** The first typed text stores the note; later text goes through that note's autosave. */
+  function editDraft(value: string) {
+    draftTextRef.current = value;
+    setDraftText(value);
+    if (!newNote || newNote.itemId !== null || creating.current || !value.trim()) return;
+    creating.current = true;
+    const key = newNote.key;
+    void (async () => {
+      try {
+        const result = await api.create({ operationId: operationId(), markdown: value });
+        const created = result.ok ? result.items[0] : undefined;
+        if (!created) throw new Error(result.error?.fields.map(field => field.message).join("; ") || result.error?.message || "Could not add the note.");
+        const createdSaver = saverFor(registry, api, created);
+        if (draftTextRef.current !== created.markdown) createdSaver.edit(draftTextRef.current);
+        await load();
+        if (draftKeyRef.current === key) { setNewNote({ key, itemId: created.id }); setOpenId(created.id); }
+        onChanged();
+      } catch (e) {
+        creating.current = false;
+        onError(e instanceof Error ? e.message : "Could not add the note.");
+      }
+    })();
+  }
+
+  /** Closes the new note; untouched, it simply disappears. */
+  function closeDraft() {
+    if (newNote?.itemId) { void registry.get(newNote.itemId)?.flush(); setOpenId(null); }
+    setNewNote(null); setMakeTask(null);
   }
 
   async function select(item: PadItemResponse) {
     if (saver && saver.itemId !== item.id) void saver.flush(); // a failure keeps the draft in the registry and shows it
+    setNewNote(null);
     setOpenId(item.id); setMakeTask(null); setMissingQuote(null); setSelection({ start: 0, end: 0 });
   }
 
@@ -263,6 +311,67 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
     catch { onError("Could not copy the text. Select it in the editor and copy it by hand."); }
   }
 
+  /** One note card; the new note reuses it under a stable key so its editor survives being stored. */
+  function noteCard(item: PadItemResponse, index: number, options: { key: string; isNew: boolean }) {
+      const isNew = options.isNew;
+      const placeholder = isNew && newNote?.itemId === null;
+      const isOpen = isNew || item.id === openId;
+      const draft = registry.get(item.id)?.snapshot;
+      const text = draft?.text ?? item.markdown;
+      return <li key={options.key} className={cn("grid gap-2 rounded-xl border bg-card p-3 shadow-xs", isOpen && "border-primary ring-1 ring-primary")}
+        {...(!archived && !isNew ? drag.target(ordered.map(row => row.id), index, "pad", busy || isOpen, (id, insertionIndex) => { const moving = ordered.find(row => row.id === id); if (moving) void reorder(moving, insertionIndex); }) : {})}>
+        <div className="flex items-start gap-2">
+          {!archived && !isOpen && !isNew && drag.handle(item.id, "pad", busy)}
+          {placeholder
+            ? <div className="grid min-w-0 flex-1 gap-2">
+                <MarkdownEditor key={`new-${newNote?.key}`} id="pad-new" label="Note" value={draftText} onChange={editDraft}
+                  links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
+                <p className="text-xs text-muted-foreground" role="status">New note. It is kept once you type; close it untouched and it is gone.</p>
+              </div>
+            : isOpen && snapshot && saver
+            ? <div className="grid min-w-0 flex-1 gap-2">
+                {missingQuote !== null && <Banner tone="warning" onDismiss={() => setMissingQuote(null)}>The text this task came from was changed or removed. It said: “{missingQuote}”</Banner>}
+                <MarkdownEditor key={isNew ? `new-${newNote?.key}` : `${item.id}-${newKey}`} id={isNew ? "pad-new" : `pad-${item.id}`} label="Note" value={snapshot.text} onChange={value => saver.edit(value)}
+                  onBlur={() => void saver.flush()} onSelectionChange={(start, end) => setSelection({ start, end })} selectRange={selectRange}
+                  links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
+                <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>
+              </div>
+            : <button type="button" className="min-w-0 flex-1 rounded-md px-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${padExcerpt(text)}`} onClick={() => void select(item)}>
+                {text.trim() ? <MarkdownPreview source={text} links={links} compact className="pointer-events-none max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
+                {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — open the note to retry.</span>}
+              </button>}
+          <div className="flex shrink-0 gap-0.5">
+            {!archived && !isNew && <>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move note ${padExcerpt(text)} up`} title="Move up" onClick={() => void reorder(item, index - 1)}><ArrowUp/></Button>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === ordered.length - 1} aria-label={`Move note ${padExcerpt(text)} down`} title="Move down" onClick={() => void reorder(item, index + 1)}><ArrowDown/></Button>
+            </>}
+            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`${item.archived ? "Unarchive" : "Archive"} note ${padExcerpt(text)}`} title={item.archived ? "Unarchive" : "Archive"} onClick={() => void changeItems(item.archived ? "unarchive" : "archive", item)}>{item.archived ? <ArchiveRestore/> : <Archive/>}</Button>}
+            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete note ${padExcerpt(text)}`} title="Delete" onClick={() => void remove(item)}><Trash2/></Button>}
+            {isOpen && <Button variant="ghost" size="icon-sm" aria-label="Close note" title="Close" onClick={() => { if (isNew) closeDraft(); else { void saver?.flush(); setOpenId(null); setMakeTask(null); } }}><X/></Button>}
+          </div>
+        </div>
+
+        {item.tasks.length > 0 && <div className="flex flex-wrap items-center gap-1.5 pl-1 text-xs" aria-label="Tasks made from this note">
+          <span className="text-muted-foreground">Tasks:</span>
+          {item.tasks.map(task => <Button key={task.taskId} type="button" variant="outline" size="xs" disabled={task.deleted} className={cn(task.deleted && "line-through")} title={task.deleted ? "This task is deleted" : `From “${task.quote}”`} onClick={() => onOpenTask(task.taskId)}>{task.title}</Button>)}
+        </div>}
+
+        {isOpen && !placeholder && <div className="grid gap-3 border-t pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select text in the note first" onClick={startMakeTask}><ListPlus/>Make task</Button>
+            {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task from them.</span>}
+          </div>
+          {makeTask && <div className="grid gap-2 rounded-lg border p-3">
+            <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{(snapshot?.text ?? "").slice(makeTask.start, makeTask.end)}</blockquote>
+            <QuickAdd key={`${makeTask.start}-${makeTask.end}`} api={captureApi} containers={containers} defaultContainerId="" label="Make task from selection" initialText={makeTask.text}
+              allowBatch={false} submitLabel="Create task" autoFocus onSubmit={submitMakeTask} onCancel={() => setMakeTask(null)}/>
+            <p className="text-xs text-muted-foreground">Edit the text to change what quick add reads. The note stays as it is; the task links back to this spot.</p>
+          </div>}
+          <TagPicker targetKind="Pad" targetId={item.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={onChanged}/>
+        </div>}
+      </li>;
+  }
+
   const ordered = items;
   const showReview = !archived && review?.due && review.suggestions.length > 0;
   return <div className="grid gap-5">
@@ -273,8 +382,8 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
           <NativeSelectOption value="">All tags</NativeSelectOption>
           {tags.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>#{tag.path}</NativeSelectOption>)}
         </NativeSelect>
-        <Button type="button" variant={archived ? "secondary" : "outline"} aria-pressed={archived} onClick={() => { setArchived(value => !value); setOpenId(null); }}>{archived ? <ArchiveRestore/> : <Archive/>}{archived ? "Show pad" : "Archived"}</Button>
-        {!archived && <Button type="button" disabled={busy} onClick={() => void createNote()} title="New note (Ctrl+Shift+P)"><Plus/>New note</Button>}
+        <Button type="button" variant={archived ? "secondary" : "outline"} aria-pressed={archived} onClick={() => { setArchived(value => !value); setOpenId(null); setNewNote(null); }}>{archived ? <ArchiveRestore/> : <Archive/>}{archived ? "Show pad" : "Archived"}</Button>
+        {!archived && <Button type="button" disabled={busy} onClick={createNote} title="New note (Ctrl+Shift+P)"><Plus/>New note</Button>}
       </>}/>
 
     {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -297,59 +406,12 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
           </div>
         </section>)}
 
-    {loaded && ordered.length === 0 && <EmptyState title={archived ? "No archived notes." : tagFilter ? "No notes with this tag." : "The pad is empty."}>{archived ? "Notes you archive appear here." : "Choose New note and start typing. Nothing needs a title."}</EmptyState>}
+    {loaded && ordered.length === 0 && !newNote && <EmptyState title={archived ? "No archived notes." : tagFilter ? "No notes with this tag." : "The pad is empty."}>{archived ? "Notes you archive appear here." : "Choose New note and start typing. Nothing needs a title."}</EmptyState>}
 
-    <ol className="grid gap-2" aria-label={archived ? "Archived notes" : "Pad notes"}>{ordered.map((item, index) => {
-      const isOpen = item.id === openId;
-      const draft = registry.get(item.id)?.snapshot;
-      const text = draft?.text ?? item.markdown;
-      return <li key={item.id} className={cn("grid gap-2 rounded-xl border bg-card p-3 shadow-xs", isOpen && "border-primary ring-1 ring-primary")}
-        {...(!archived ? drag.target(ordered.map(row => row.id), index, "pad", busy || isOpen, (id, insertionIndex) => { const moving = ordered.find(row => row.id === id); if (moving) void reorder(moving, insertionIndex); }) : {})}>
-        <div className="flex items-start gap-2">
-          {!archived && !isOpen && drag.handle(item.id, "pad", busy)}
-          {isOpen && snapshot && saver
-            ? <div className="grid min-w-0 flex-1 gap-2">
-                {missingQuote !== null && <Banner tone="warning" onDismiss={() => setMissingQuote(null)}>The text this task came from was changed or removed. It said: “{missingQuote}”</Banner>}
-                <MarkdownEditor key={`${item.id}-${newKey}`} id={`pad-${item.id}`} label="Note" value={snapshot.text} onChange={value => saver.edit(value)}
-                  onBlur={() => void saver.flush()} onSelectionChange={(start, end) => setSelection({ start, end })} selectRange={selectRange}
-                  links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
-                <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>
-              </div>
-            : <button type="button" className="min-w-0 flex-1 rounded-md px-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${padExcerpt(text)}`} onClick={() => void select(item)}>
-                {text.trim() ? <MarkdownPreview source={text} links={links} compact className="pointer-events-none max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
-                {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — open the note to retry.</span>}
-              </button>}
-          <div className="flex shrink-0 gap-0.5">
-            {!archived && <>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move note ${padExcerpt(text)} up`} title="Move up" onClick={() => void reorder(item, index - 1)}><ArrowUp/></Button>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === ordered.length - 1} aria-label={`Move note ${padExcerpt(text)} down`} title="Move down" onClick={() => void reorder(item, index + 1)}><ArrowDown/></Button>
-            </>}
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`${item.archived ? "Unarchive" : "Archive"} note ${padExcerpt(text)}`} title={item.archived ? "Unarchive" : "Archive"} onClick={() => void changeItems(item.archived ? "unarchive" : "archive", item)}>{item.archived ? <ArchiveRestore/> : <Archive/>}</Button>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete note ${padExcerpt(text)}`} title="Delete" onClick={() => void remove(item)}><Trash2/></Button>
-            {isOpen && <Button variant="ghost" size="icon-sm" aria-label="Close note" title="Close" onClick={() => { void saver?.flush(); setOpenId(null); setMakeTask(null); }}><X/></Button>}
-          </div>
-        </div>
-
-        {item.tasks.length > 0 && <div className="flex flex-wrap items-center gap-1.5 pl-1 text-xs" aria-label="Tasks made from this note">
-          <span className="text-muted-foreground">Tasks:</span>
-          {item.tasks.map(task => <Button key={task.taskId} type="button" variant="outline" size="xs" disabled={task.deleted} className={cn(task.deleted && "line-through")} title={task.deleted ? "This task is deleted" : `From “${task.quote}”`} onClick={() => onOpenTask(task.taskId)}>{task.title}</Button>)}
-        </div>}
-
-        {isOpen && <div className="grid gap-3 border-t pt-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select text in the note first" onClick={startMakeTask}><ListPlus/>Make task</Button>
-            {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task from them.</span>}
-          </div>
-          {makeTask && <div className="grid gap-2 rounded-lg border p-3">
-            <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{(snapshot?.text ?? "").slice(makeTask.start, makeTask.end)}</blockquote>
-            <QuickAdd key={`${makeTask.start}-${makeTask.end}`} api={captureApi} containers={containers} defaultContainerId="" label="Make task from selection" initialText={makeTask.text}
-              allowBatch={false} submitLabel="Create task" autoFocus onSubmit={submitMakeTask} onCancel={() => setMakeTask(null)}/>
-            <p className="text-xs text-muted-foreground">Edit the text to change what quick add reads. The note stays as it is; the task links back to this spot.</p>
-          </div>}
-          <TagPicker targetKind="Pad" targetId={item.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={onChanged}/>
-        </div>}
-      </li>;
-    })}</ol>
+    <ol className="grid gap-2" aria-label={archived ? "Archived notes" : "Pad notes"}>
+      {ordered.filter(item => item.id !== newNote?.itemId).map((item, index) => noteCard(item, index, { key: item.id, isNew: false }))}
+      {newNote && !archived && noteCard(items.find(item => item.id === newNote.itemId) ?? newPlaceholder(draftText), ordered.length, { key: `new-${newNote.key}`, isNew: true })}
+    </ol>
 
     <DeletedItems noun="notes" items={deleted} name={item => padExcerpt(item.markdown)} busy={busy}
       onRestore={item => void run(() => api.restore({ operationId: operationId(), itemId: item.id, expectedVersion: item.version }), "Could not restore the note.")}/>
