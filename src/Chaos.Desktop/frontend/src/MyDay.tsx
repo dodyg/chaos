@@ -1,7 +1,7 @@
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { CalendarArrowUp, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
+import { AlertTriangle, CalendarArrowUp, ImagePlus, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -85,6 +85,15 @@ function minutes(total: number) {
 
 const categoryOf = (task: TaskResponse): Category => asCategory(task.category) ?? "Personal";
 
+/** "1 h 30 min of 6 h" against a limit from My Week; over the limit is flagged, never acted on. */
+function Against({ used, limit, label }: { used: number; limit: number | null; label: string }) {
+  if (limit === null) return null;
+  const over = used > limit;
+  return <span className={cn("inline-flex items-center gap-1 tabular-nums", over && "font-medium text-destructive")} title={`${label} from My Week`}>
+    of {minutes(limit)}{over && <><AlertTriangle className="size-3.5"/><span>{label === "Work time" ? "More work than planned" : "More than this day holds"}</span></>}
+  </span>;
+}
+
 /**
  * Maps an insertion index inside one lane to the day's single manual order: the moved task
  * lands just before the lane neighbour it was dropped above, or just after the lane's last task.
@@ -118,6 +127,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const [working, setWorking] = React.useState(false);
   const [local, setLocal] = React.useState(0);
   const [laneDrop, setLaneDrop] = React.useState<Category | null>(null);
+  const [showBackground, setShowBackground] = React.useState(false);
   const requests = React.useRef(createLatestRequest());
   const shownToday = React.useRef(today);
   const drag = useDragReorder();
@@ -218,26 +228,30 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       subtitle={day === today ? `Your chosen tasks for ${day}. Adding a task here never changes its planned or due date.`
         : editable ? `Planned ahead for ${day}.` : `A look back at ${day}. Earlier days are kept as they were.`}
       actions={<nav aria-label="Day" className="flex items-center gap-1">
+        {background && onBackgroundChange && <Button type="button" variant={showBackground ? "secondary" : "ghost"} size="icon-sm" className="mr-1 text-muted-foreground" aria-label="My Day background" title="Change the My Day background"
+          aria-expanded={showBackground} aria-controls="day-background-settings" onClick={() => setShowBackground(value => !value)}><ImagePlus/></Button>}
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Previous day" disabled={working} onClick={() => setDay(addDays(day, -1))}><ChevronLeft/></Button>
         <Button type="button" variant={day === today ? "secondary" : "outline"} size="sm" disabled={working || day === today} onClick={() => setDay(today)}>Today</Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Next day" disabled={working} onClick={() => setDay(addDays(day, 1))}><ChevronRight/></Button>
       </nav>}/>
 
-    {background && onBackgroundChange && <DayBackgroundSettings background={background} onSave={onBackgroundChange}/>}
+    {background && onBackgroundChange && showBackground && <DayBackgroundSettings background={background} onSave={onBackgroundChange} onClose={() => setShowBackground(false)}/>}
 
     {error && <InlineError>{error}</InlineError>}
     {summary && !lanes && <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground" role="status" aria-live="polite">
       {focus && <span className={cn("inline-flex items-center gap-1 font-medium [&_svg]:size-3.5", categoryTone[focus].text)}>{categoryIcon[focus]}{focus} only</span>}
       <span>{totals.open} open · {finished.length} finished</span>
-      <span className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{minutes(totals.minutes)} estimated{totals.unknown > 0 && ` · ${totals.unknown} without an estimate`}</span>
+      <span className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{minutes(totals.minutes)} estimated
+        {focus === "Work" ? <Against used={totals.minutes} limit={summary.workAllowanceMinutes} label="Work time"/> : focus === null && <Against used={totals.minutes} limit={summary.availableMinutes} label="Available time"/>}
+        {totals.unknown > 0 && ` · ${totals.unknown} without an estimate`}</span>
     </p>}
     {summary && lanes && <div className="grid grid-cols-2 gap-2" role="status" aria-live="polite" aria-label="Today by category">
       {lanes.map(lane => { const lt = laneTotals(lane.rows.map(row => row.task)); return <div key={lane.category} className={cn("grid gap-0.5 rounded-lg border border-l-4 bg-card/80 px-3 py-2 shadow-xs", categoryTone[lane.category].border)}>
         <span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold tracking-wider uppercase [&_svg]:size-3.5", categoryTone[lane.category].text)}>{categoryIcon[lane.category]}{lane.category}</span>
-        <span className="text-sm font-medium tabular-nums">{lt.open} open · {minutes(lt.minutes)}</span>
+        <span className="flex flex-wrap items-center gap-x-1 text-sm font-medium tabular-nums">{lt.open} open · {minutes(lt.minutes)}{lane.category === "Work" && <Against used={lt.minutes} limit={summary.workAllowanceMinutes} label="Work time"/>}</span>
         {lt.unknown > 0 && <span className="text-xs text-muted-foreground">{lt.unknown} without an estimate</span>}
       </div>; })}
-      <p className="col-span-2 text-xs text-muted-foreground">{finished.length} finished</p>
+      <p className="col-span-2 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">{finished.length} finished · {minutes(totals.minutes)} planned<Against used={totals.minutes} limit={summary.availableMinutes} label="Available time"/></p>
     </div>}
 
     {open.length === 0
@@ -267,15 +281,15 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       <ol className="grid gap-1 pt-1" aria-label="Finished tasks">{finished.map(row => <DayRow key={row.task.id} row={row} selected={selectedTaskId === row.task.id} busy={disabled} onOpen={onOpen} onView={onView} onSetStatus={editable ? onSetStatus : undefined} onSetCategory={onSetCategory}/>)}</ol>
     </details>}
 
-    {day === today && <section aria-labelledby="suggestions-heading" className="grid gap-1.5 rounded-xl border bg-muted/40 p-3">
+    {day === today && shownSuggestions.length === 0 && <p className="inline-flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
+      <Lightbulb className="size-3.5"/>{focus && suggestions.length > 0 ? `No ${focus.toLowerCase()} suggestions right now.` : "No suggestions right now."}</p>}
+    {day === today && shownSuggestions.length > 0 && <section aria-labelledby="suggestions-heading" className="grid gap-1.5 rounded-xl border bg-muted/40 p-3">
       <h3 id="suggestions-heading" className="flex items-center gap-1.5 font-semibold"><Lightbulb className="size-4 text-primary"/>Suggestions<Count>{shownSuggestions.length}</Count></h3>
       <p className="text-xs text-muted-foreground">Nothing is added by itself. Choose what fits today.</p>
-      {shownSuggestions.length === 0
-        ? <p className="py-2 text-sm text-muted-foreground">{focus && suggestions.length > 0 ? `No ${focus.toLowerCase()} suggestions right now.` : "No suggestions right now."}</p>
-        : <ol className="grid gap-1" aria-label="Suggested tasks">{shownSuggestions.map(item => <DayRow key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen} onView={onView}
+      <ol className="grid gap-1" aria-label="Suggested tasks">{shownSuggestions.map(item => <DayRow key={item.task.id} row={{ task: item.task, containerName: item.containerName }} selected={selectedTaskId === item.task.id} busy={disabled} onOpen={onOpen} onView={onView}
             badge={<Badge variant="outline">{reasonText[item.reason] ?? item.reason}</Badge>}>
             <Button type="button" variant="outline" size="sm" disabled={disabled} aria-label={`Add ${item.task.title} to My Day`} onClick={() => void add(item.task.id)}><Plus/>Add</Button>
-          </DayRow>)}</ol>}
+          </DayRow>)}</ol>
     </section>}
   </>;
 }

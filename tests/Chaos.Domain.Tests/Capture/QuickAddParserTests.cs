@@ -20,6 +20,29 @@ public sealed class QuickAddParserTests
 
     private static QuickAddResult Parse(string text, QuickAddContext? context = null) => QuickAddParser.Parse(text, context ?? Context());
 
+    [Test]
+    public async Task Parse_CategorySigil_SetsWorkOrPersonalAndLeavesTheTitle()
+    {
+        var work = Parse("Ship release ~work tomorrow");
+        await Assert.That(work.Draft.Title).IsEqualTo("Ship release");
+        await Assert.That(work.Draft.Category).IsEqualTo(CapacityCategory.Work);
+        await Assert.That(Parse("Water plants ~p").Draft.Category).IsEqualTo(CapacityCategory.Personal);
+        await Assert.That(Parse("Water plants").Draft.Category).IsNull();
+    }
+
+    [Test]
+    public async Task Parse_UnknownOrSecondCategory_StaysInTheTitleWithAWarning()
+    {
+        var unknown = Parse("Plan trip ~holiday");
+        await Assert.That(unknown.Draft.Title).IsEqualTo("Plan trip ~holiday");
+        await Assert.That(unknown.Draft.Category).IsNull();
+        await Assert.That(unknown.Warnings.Select(warning => warning.Code)).Contains("unknownCategory");
+
+        var twice = Parse("Review ~work ~personal");
+        await Assert.That(twice.Draft.Category).IsEqualTo(CapacityCategory.Work);
+        await Assert.That(twice.Draft.Title).IsEqualTo("Review ~personal");
+    }
+
     // ------------------------------------------------------------ SPEC.md examples
 
     [Test]

@@ -16,7 +16,7 @@ type Exclusion = { start: number; end: number; text: string };
 const languageNames: Record<string, string> = { en: "English", fr: "French", it: "Italian", es: "Spanish", id: "Indonesian", ar: "Arabic" };
 const kindNames: Record<string, string> = {
   PlannedDate: "planned", DueDate: "due", Time: "time", Recurrence: "repeat", Reminder: "reminder", Estimate: "estimate", Tag: "tag",
-  Priority: "priority", Container: "list", Space: "space", Waiting: "waiting", FollowUp: "follow-up", Delegation: "member",
+  Priority: "priority", Container: "list", Space: "space", Waiting: "waiting", FollowUp: "follow-up", Delegation: "member", Category: "category",
 };
 const PREVIEW_DELAY_MS = 150;
 
@@ -198,6 +198,11 @@ function SingleDraft({ item, draft, containers, exclusions, onToggle, onChange }
         {ordered.map(container => <NativeSelectOption key={container.id} value={container.kind === "Inbox" ? "" : container.id}>{container.name}</NativeSelectOption>)}
       </NativeSelect></Field>
       <Field label="Priority"><NativeSelect value={draft.priority} onChange={e => onChange({ priority: e.target.value })}>{priorities.map(value => <NativeSelectOption key={value}>{value}</NativeSelectOption>)}</NativeSelect></Field>
+      <Field label="Category"><NativeSelect value={draft.category ?? ""} onChange={e => onChange({ category: e.target.value || null })}>
+        <NativeSelectOption value="">List default or focus</NativeSelectOption>
+        <NativeSelectOption value="Work">Work</NativeSelectOption>
+        <NativeSelectOption value="Personal">Personal</NativeSelectOption>
+      </NativeSelect></Field>
       <Field label={<span className="inline-flex items-center gap-1"><CalendarDays className="size-3.5"/>Planned</span>}><div className="flex gap-1.5">
         <Input type="date" aria-label="Planned date" value={draft.plannedDate ?? ""} onChange={e => onChange({ plannedDate: e.target.value || null, plannedTime: e.target.value ? draft.plannedTime : null })}/>
         <Input type="time" aria-label="Planned time" value={time(draft.plannedTime)} disabled={!draft.plannedDate} onChange={e => onChange({ plannedTime: fromTime(e.target.value) })}/>

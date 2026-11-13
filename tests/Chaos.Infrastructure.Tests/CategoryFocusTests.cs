@@ -2,6 +2,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
+using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
@@ -26,6 +27,8 @@ public sealed class CategoryFocusTests
         public required ContainerCommands Containers { get; init; }
         public required CaptureCommands Capture { get; init; }
         public required TaskQueries Queries { get; init; }
+        public required MyDayCommands Days { get; init; }
+        public required MyWeekCommands Weeks { get; init; }
 
         public static async Task<Host> StartAsync()
         {
@@ -47,6 +50,8 @@ public sealed class CategoryFocusTests
                 Containers = new ContainerCommands(storage.Store, ids, clock),
                 Capture = new CaptureCommands(storage.Store, ids, clock),
                 Queries = new TaskQueries(storage.Store, clock),
+                Days = new MyDayCommands(storage.Store, ids, clock),
+                Weeks = new MyWeekCommands(storage.Store, ids, clock),
             };
         }
 
@@ -117,5 +122,24 @@ public sealed class CategoryFocusTests
             new CaptureTaskDraft { Title = "Inbox explicit work", Category = CapacityCategory.Work });
 
         await Assert.That(string.Join(",", tasks.Select(task => task.CapacityCategory))).IsEqualTo("Work,Personal,Personal,Work");
+    }
+
+    [Test]
+    public async Task DaySummary_CarriesAvailabilityAndWorkTimeFromMyWeek()
+    {
+        using var host = await Host.StartAsync();
+        var before = await host.Days.OpenAsync(Today);
+        await Assert.That(before.AvailableMinutes).IsEqualTo(480);
+        await Assert.That(before.WorkAllowanceMinutes).IsNull();
+
+        await host.Weeks.SetAvailabilityAsync(new WeekAvailabilityCommand(Op(), [new AvailabilityDay(Today.DayOfWeek, 360, 120)]));
+        var work = await host.TodayTaskAsync("Ship release", CapacityCategory.Work);
+        work = (await host.Tasks.UpdateDetailsAsync(new(Op(), work.Id, work.Version, work.Title, work.Notes, Today, null, null, null, null, null, TaskPriority.Normal, 90, CapacityCategory.Work))).Task;
+        await host.Days.AddAsync(new DayItemCommand(Op(), Today, work.Id));
+
+        var after = await host.Days.OpenAsync(Today);
+        await Assert.That(after.AvailableMinutes).IsEqualTo(360);
+        await Assert.That(after.WorkAllowanceMinutes).IsEqualTo(120);
+        await Assert.That(after.WorkMinutes).IsEqualTo(90);
     }
 }

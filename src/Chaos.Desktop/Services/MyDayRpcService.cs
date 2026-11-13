@@ -8,7 +8,8 @@ namespace Chaos.Desktop.Services;
 public sealed record DayClockResponse(string Today, string NextDayStartsAtUtc, string ZoneId);
 public sealed record DayClockRequest();
 public sealed record DayClockResult(bool Ok, DayClockResponse? Clock, TaskErrorResponse? Error);
-public sealed record DaySummaryResponse(string Date, DayClockResponse Clock, bool Exists, bool Editable, int OpenCount, int FinishedCount, int RemainingMinutes, int UnknownEstimates);
+public sealed record DaySummaryResponse(string Date, DayClockResponse Clock, bool Exists, bool Editable, int OpenCount, int FinishedCount, int RemainingMinutes, int UnknownEstimates,
+    int AvailableMinutes = 0, int? WorkAllowanceMinutes = null, int WorkMinutes = 0);
 /// <summary>A yyyy-MM-dd local date, or null for today.</summary>
 public sealed record DayOpenRequest(string? Date);
 public sealed record DayOpenResponse(bool Ok, DaySummaryResponse? Day, TaskErrorResponse? Error);
@@ -86,7 +87,10 @@ public sealed class MyDayRpcService(MyDayCommands days)
         day.OpenCount,
         day.FinishedCount,
         day.RemainingMinutes,
-        day.UnknownEstimates);
+        day.UnknownEstimates,
+        day.AvailableMinutes,
+        day.WorkAllowanceMinutes,
+        day.WorkMinutes);
 
     private static DateOnly Date(string? value, string field) =>
         OptionalDate(value, field) ?? throw AppException.Validation(field, "Choose a date.");

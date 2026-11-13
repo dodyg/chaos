@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, ImagePlus } from "lucide-react";
+import { Check, ImagePlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -50,7 +50,8 @@ export function useDayBackground() {
   return { background, save };
 }
 
-export function DayBackgroundSettings({ background, onSave }: { background: DayBackground; onSave: (background: DayBackground) => boolean }) {
+/** The background chooser panel; My Day opens it from a small header button, so it takes no room until asked for. */
+export function DayBackgroundSettings({ background, onSave, onClose }: { background: DayBackground; onSave: (background: DayBackground) => boolean; onClose?: () => void }) {
   const [error, setError] = React.useState("");
   const selection = React.useRef(0);
   function save(next: DayBackground) {
@@ -66,8 +67,9 @@ export function DayBackgroundSettings({ background, onSave }: { background: DayB
     reader.onerror = () => { if (current === selection.current) setError("Could not read this image."); };
     reader.readAsDataURL(file);
   }
-  return <details className="rounded-xl border bg-card p-3">
-    <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><ImagePlus className="size-4"/>My Day background</summary>
+  return <section id="day-background-settings" aria-label="My Day background" className="rounded-xl border bg-card p-3">
+    <div className="flex items-center gap-2 text-sm font-medium"><ImagePlus className="size-4"/>My Day background
+      {onClose && <Button type="button" variant="ghost" size="icon-xs" className="ml-auto text-muted-foreground" aria-label="Close background settings" onClick={onClose}><X/></Button>}</div>
     <div className="grid gap-3 pt-3 text-sm">
       <p className="text-muted-foreground">Choose a color, a scene, or an image from this computer. Your choice stays on this computer.</p>
       <fieldset className="grid gap-2"><legend className="font-medium">Colors</legend>
@@ -91,5 +93,5 @@ export function DayBackgroundSettings({ background, onSave }: { background: DayB
       <p className="text-xs text-muted-foreground">PNG, JPEG or WebP, up to 2 MB.</p>
       {error && <p role="alert" className="text-destructive">{error}</p>}
     </div>
-  </details>;
+  </section>;
 }

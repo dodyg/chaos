@@ -27,7 +27,7 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
 const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null });
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
 const summary = (date: string, today: string, open = 0): DaySummaryResponse =>
-  ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open });
+  ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open, availableMinutes: 480, workAllowanceMinutes: 60, workMinutes: 0 });
 
 /** A fake day service: one chosen task per date in `days`, suggestions for today, and a log of changes. */
 function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: TaskResponse[] = []) {
@@ -175,7 +175,9 @@ test("a day mixing work and personal shows lanes with their own totals; a focus 
   const work = await screen.findByRole("list", { name: "Work chosen tasks" });
   assert.ok(within(work).getByText("Ship release"));
   assert.ok(within(screen.getByRole("list", { name: "Personal chosen tasks" })).getByText("Water plants"));
-  assert.ok(within(screen.getByRole("status", { name: "Today by category" })).getByText("1 open · 1 h 30 min"));
+  const byCategory = screen.getByRole("status", { name: "Today by category" });
+  assert.ok(within(byCategory).getByText("More work than planned"));
+  assert.match(byCategory.textContent ?? "", /1 open · 1 h 30 minof 1 h 0 min/);
   assert.ok(queries.every(request => request.category === null));
 
   view.rerender(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} focus="Work"/>);

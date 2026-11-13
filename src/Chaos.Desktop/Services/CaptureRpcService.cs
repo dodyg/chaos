@@ -108,7 +108,8 @@ public sealed class CaptureRpcService(CaptureCommands capture)
         draft.WaitingOn,
         draft.FollowUpDate is { } follow ? StorageFormats.Date(follow) : null,
         draft.FollowUpTime?.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
-        [.. subtasks.Select(subtask => new CaptureSubtaskDto(subtask.Title, subtask.Done))]);
+        [.. subtasks.Select(subtask => new CaptureSubtaskDto(subtask.Title, subtask.Done))],
+        draft.Category?.ToString());
 
     internal static CaptureTaskDraft ToDraft(CaptureDraftDto dto, string path) => new()
     {

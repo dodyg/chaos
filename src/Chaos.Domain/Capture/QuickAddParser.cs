@@ -14,7 +14,7 @@ namespace Chaos.Domain.Capture;
 /// or tag creation. Matching runs over the folded comparison text with every language pack
 /// at once, so mixed-language input works; longer phrases claim text first in this order:
 /// recurrence, reminders, follow-up and waiting, due phrases, estimates, planned date/time,
-/// then the #tag !priority /list @space +person sigils.
+/// then the #tag !priority /list @space +person ~category sigils.
 /// </summary>
 public static class QuickAddParser
 {
@@ -24,6 +24,7 @@ public static class QuickAddParser
     private static readonly Regex ContainerSigil = new(@"(?<!\S)/(?:""(?<q>[^""]+)""|(?<v>[\p{L}\p{M}\p{N}_\-]+))", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex SpaceSigil = new(@"(?<!\S)@(?<v>[\p{L}\p{M}\p{N}_\-]+)", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex DelegationSigil = new(@"(?<!\S)\+(?<v>\p{L}[\p{L}\p{M}\p{N}_\-]*)", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
+    private static readonly Regex CategorySigil = new(@"(?<!\S)~(?<v>\p{L}+)(?![\p{L}\p{N}])", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex HourLetter = new(@"\d+h\d*", RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex AnyLetter = new(@"\p{L}", RegexOptions.CultureInvariant, MatchTimeout);
@@ -295,6 +296,15 @@ public static class QuickAddParser
             Keep(candidate, "delegationLater", $"Assigning “{Text(candidate)}” to a member arrives with shared spaces, so it stays in the title. For someone outside the app, write “waiting on” and their name.");
         }
 
+        CapacityCategory? category = null;
+        foreach (var candidate in Of(CaptureTokenKind.Category))
+        {
+            if (candidate.Payload is not CapacityCategory chosen) { Keep(candidate, "unknownCategory", $"Use ~work or ~personal for a category, so “{Text(candidate)}” stays in the title."); continue; }
+            if (category is not null) { Keep(candidate, "conflict", $"There is already a category, so “{Text(candidate)}” stays in the title."); continue; }
+            category = chosen;
+            summaries[candidate] = chosen == CapacityCategory.Work ? "Work" : "Personal";
+        }
+
         string? waitingOn = null;
         foreach (var candidate in Of(CaptureTokenKind.Waiting))
         {
@@ -339,6 +349,7 @@ public static class QuickAddParser
             WaitingOn = waitingOn,
             FollowUpDate = followUpDate,
             FollowUpTime = followUpTime,
+            Category = category,
         };
         var languages = tokens.Where(token => token.Language is not null).Select(token => token.Language!).Distinct().ToList();
         return new QuickAddResult(input, draft, tokens, warnings, languages, needsTitle);
@@ -433,6 +444,17 @@ public static class QuickAddParser
         foreach (Match match in DelegationSigil.Matches(input))
         {
             Add(new Candidate(CaptureTokenKind.Delegation, match.Index, match.Index + match.Length, null, match.Groups["v"].Value));
+        }
+
+        foreach (Match match in CategorySigil.Matches(input))
+        {
+            CapacityCategory? category = FoldedText.FoldWord(match.Groups["v"].Value) switch
+            {
+                "work" or "w" => CapacityCategory.Work,
+                "personal" or "p" or "home" => CapacityCategory.Personal,
+                _ => null,
+            };
+            Add(new Candidate(CaptureTokenKind.Category, match.Index, match.Index + match.Length, null, category ?? (object)match.Groups["v"].Value));
         }
     }
 

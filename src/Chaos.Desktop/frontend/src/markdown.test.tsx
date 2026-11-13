@@ -319,7 +319,7 @@ test("a connected journal offers explicit GitHub posting and deletion choices", 
   } finally { cleanup(); }
 });
 
-test("the task editor opens on a roomy Notes tab, keeps fields on Details and saves from any tab", async () => {
+test("the task editor opens on a roomy Notes tab, keeps fields on Details and saves changes by itself", async () => {
   const edits: { title: string; notes: string }[] = [];
   const item = task(taskId, "Write report", "Draft");
   const api = {
@@ -349,9 +349,11 @@ test("the task editor opens on a roomy Notes tab, keeps fields on Details and sa
   assert.ok(screen.getByLabelText("Status"));
   await user.click(screen.getByRole("tab", { name: /Subtasks/ }));
   assert.ok(screen.getByRole("heading", { name: "Subtasks" }));
-  await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.equal(edits.length, 1));
-  assert.deepEqual({ title: edits[0].title, notes: edits[0].notes }, { title: "Write report", notes: "Draft v2" });
+  await waitFor(() => assert.equal(edits.at(-1)?.notes, "Draft v2"), { timeout: 3000 });
+  assert.deepEqual({ title: edits.at(-1)!.title, notes: edits.at(-1)!.notes }, { title: "Write report", notes: "Draft v2" });
+  assert.ok(await screen.findByText("All changes saved"));
+  await user.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(screen.queryByRole("tab", { name: "Notes" }), null));
   cleanup();
 });
 

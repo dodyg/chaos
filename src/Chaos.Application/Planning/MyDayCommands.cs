@@ -2,6 +2,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
 using Chaos.Application.Tasks;
+using Chaos.Domain.Planning;
 using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.Planning;
@@ -33,7 +34,10 @@ public sealed record DaySummary(
     int OpenCount,
     int FinishedCount,
     int RemainingMinutes,
-    int UnknownEstimates);
+    int UnknownEstimates,
+    int AvailableMinutes = 0,
+    int? WorkAllowanceMinutes = null,
+    int WorkMinutes = 0);
 
 public sealed record DayItemCommand(string OperationId, DateOnly Date, string TaskId);
 public sealed record DayMoveCommand(string OperationId, DateOnly Date, string TaskId, int Index);
@@ -285,13 +289,14 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
 
     private static async Task<DaySummary> SummaryAsync(IDataSession session, TaskQueries.QueryContext context, DateOnly date, CancellationToken token)
     {
+        var availability = await AvailabilityAsync(session, context.Profile.Id, date, token);
         var plan = await session.DayPlans.FindAsync(context.Profile.Id, date, token);
         if (plan is null)
         {
-            return new DaySummary(date, ClockOf(context), false, 0, 0, 0, 0);
+            return new DaySummary(date, ClockOf(context), false, 0, 0, 0, 0, availability.TotalMinutes, availability.WorkMinutes);
         }
 
-        int open = 0, finished = 0, minutes = 0, unknown = 0;
+        int open = 0, finished = 0, minutes = 0, unknown = 0, work = 0;
         foreach (var item in await session.DayPlans.ListItemsAsync(plan.Id, includeRemoved: false, token))
         {
             var task = await session.Tasks.GetAsync(item.TaskId, token);
@@ -310,6 +315,10 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             if (task.EstimateMinutes is { } estimate)
             {
                 minutes += estimate;
+                if (task.CapacityCategory == CapacityCategory.Work)
+                {
+                    work += estimate;
+                }
             }
             else
             {
@@ -317,7 +326,20 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             }
         }
 
-        return new DaySummary(date, ClockOf(context), true, open, finished, minutes, unknown);
+        return new DaySummary(date, ClockOf(context), true, open, finished, minutes, unknown, availability.TotalMinutes, availability.WorkMinutes, work);
+    }
+
+    /// <summary>The day's available and work time from My Week: a confirmed override, else the weekday rule, else the default.</summary>
+    private static async Task<DayAvailability> AvailabilityAsync(IDataSession session, string profileId, DateOnly date, CancellationToken token)
+    {
+        if ((await session.Weeks.ListOverridesAsync(profileId, date, date, token)).FirstOrDefault() is { } chosen)
+        {
+            return new DayAvailability(chosen.TotalMinutes, chosen.WorkMinutes);
+        }
+
+        return (await session.Weeks.ListRulesAsync(profileId, token)).FirstOrDefault(rule => rule.Weekday == date.DayOfWeek) is { } rule
+            ? new DayAvailability(rule.TotalMinutes, rule.WorkMinutes)
+            : DayAvailability.DefaultFor(date.DayOfWeek);
     }
 
     private static DayClock ClockOf(TaskQueries.QueryContext context) =>

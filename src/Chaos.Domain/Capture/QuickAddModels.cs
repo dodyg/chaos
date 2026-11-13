@@ -18,6 +18,8 @@ public enum CaptureTokenKind
     Waiting,
     FollowUp,
     Delegation,
+    /// <summary>~work or ~personal: the task's Work/Personal capacity category.</summary>
+    Category,
 }
 
 /// <summary>
@@ -94,6 +96,8 @@ public sealed record QuickAddDraft
     public string? WaitingOn { get; init; }
     public DateOnly? FollowUpDate { get; init; }
     public TimeOnly? FollowUpTime { get; init; }
+    /// <summary>Set by ~work/~personal; null leaves the choice to the list default or focus.</summary>
+    public CapacityCategory? Category { get; init; }
 }
 
 public sealed record QuickAddResult(

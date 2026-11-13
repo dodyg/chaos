@@ -626,3 +626,31 @@ NULL = none). The Inbox has none. A captured task takes an explicit category fir
 destination list's default, then the current focus, then Personal. Existing tasks never change
 when a default changes. The CSV/archive merge import carries list names only, so it does not
 carry list defaults (as with project deadlines).
+
+## 2026-11-13 (Focus follow-ups, autosave and App split)
+
+My Day's summary now carries the day's available time and work allowance from My Week (a
+confirmed override, else the weekday rule, else the default) plus the work estimate. The Work
+lane and the Work focus compare against the allowance, and the whole day against available
+time. Over is flagged, never acted on, matching My Week.
+
+Quick add accepts `~work`/`~w` and `~personal`/`~p`/`~home` for the category. `@` was already the
+space sigil (`@personal` means the Personal space), so it was not reused. An unknown `~word`
+stays in the title with a warning, like other kept tokens. The preview also has a Category
+select. The precedence is unchanged: explicit, then list default, then focus.
+
+My Week's confirmed board follows the focus: other-category tasks are hidden and counted, and
+day headings show work or personal time. Planning (the ritual) always shows the whole week.
+
+The My Day background chooser moved behind a header icon. An empty Suggestions box collapses
+to one line.
+
+Task fields now save themselves 600 ms after the last change, one save at a time, through the
+same task edit (so each save is undoable). Closing the editor or switching tasks saves at once.
+A failure keeps the draft and offers Retry. The Save/Cancel footer became a save status and a
+Done button, so there is no discard; Undo replaces it.
+
+`App.tsx` was split: the side panel is `TaskEditor.tsx` (it now owns subtask, checklist,
+GitHub-notice and pad-anchor state), the list page is `ListPage.tsx`, and the shared row style
+is `taskRow.ts`. Subtasks reload when the shared subtask revision changes, instead of each
+caller setting them directly.

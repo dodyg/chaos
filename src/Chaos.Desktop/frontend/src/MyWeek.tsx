@@ -1,4 +1,5 @@
 import { TaskViewAction } from "./TaskViewAction";
+import { asCategory, categoryIcon, categoryTone, type Focus } from "./category";
 import React from "react";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
 import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
@@ -65,9 +66,11 @@ export function decideLeftover(draft: WeekDraftDto, taskId: string, decision: st
  * confirmed plan, so cancelling leaves the confirmed week exactly as it was. Nothing here
  * changes a task's planned or due date, except an explicit "schedule later" date.
  */
-export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onOpen, onChanged }: {
+export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onOpen, onChanged, focus = null }: {
   clock: DayClockResponse | null; revision: number; busy: boolean; containers: ContainerResponse[];
   api?: typeof myWeekRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void;
+  /** Work/Personal focus for the confirmed board; planning always shows the whole week. */
+  focus?: Focus;
 }) {
   const [date, setDate] = React.useState<string | null>(null);
   const [week, setWeek] = React.useState<WeekOverviewDto | null>(null);
@@ -145,7 +148,7 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
       ? <>
           <Goals goals={week.confirmed.goals} disabled={disabled}
             onOutcome={(goal, outcome) => void run(() => api.setGoalOutcome({ operationId: operationId(), goalId: goal.id, expectedVersion: goal.version, outcome }), "Could not save the outcome.")}/>
-          <Board board={week.confirmed} tasks={tasks} today={today} onOpen={onOpen}/>
+          <Board board={week.confirmed} tasks={tasks} today={today} onOpen={onOpen} focus={focus}/>
         </>
       : <EmptyState title={week.editable ? "No plan for this week yet." : "No plan was made for this week."}>
           {week.editable ? "Plan the week to choose goals and spread tasks across the days." : "Earlier weeks are kept for review."}
@@ -185,27 +188,38 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
   </li>;
 }
 
-function DayHeading({ day }: { day: WeekDayDto }) {
-  const warn = day.overTotal || day.overWork;
+function DayHeading({ day, focus = null }: { day: WeekDayDto; focus?: Focus }) {
+  const warn = focus === "Personal" ? day.overTotal : focus === "Work" ? day.overWork : day.overTotal || day.overWork;
+  if (focus === "Work") return <div className="grid gap-0.5 text-xs">
+    <span className="text-sm font-semibold">{dayLabel(day.date)}</span>
+    <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)}{day.workAllowanceMinutes !== null ? ` of ${minutesText(day.workAllowanceMinutes)}` : ""}</span>
+    {warn && <span className="inline-flex items-center gap-1 text-destructive" role="status"><AlertTriangle className="size-3"/>More work than planned</span>}
+  </div>;
   return <div className="grid gap-0.5 text-xs">
     <span className="text-sm font-semibold">{dayLabel(day.date)}</span>
+    {focus === "Personal" && <span className="tabular-nums text-muted-foreground">Personal {minutesText(Math.max(0, day.plannedMinutes - day.workMinutes))}</span>}
     <span className={cn("tabular-nums text-muted-foreground", warn && "font-medium text-destructive")}>
       {minutesText(day.plannedMinutes)} of {minutesText(day.availableMinutes)}{day.unknownEstimates > 0 && ` · ${day.unknownEstimates} unestimated`}
     </span>
-    {day.workAllowanceMinutes !== null && <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)} of {minutesText(day.workAllowanceMinutes)}</span>}
+    {focus === null && day.workAllowanceMinutes !== null && <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)} of {minutesText(day.workAllowanceMinutes)}</span>}
     {warn && <span className="inline-flex items-center gap-1 text-destructive" role="status"><AlertTriangle className="size-3"/>{day.overTotal ? "More than this day holds" : "More work than planned"}</span>}
   </div>;
 }
 
 /** The confirmed week read-only: seven day columns and the unassigned pool. */
-function Board({ board, tasks, today, onOpen }: { board: WeekBoardDto; tasks: Map<string, WeekTaskDto>; today: string; onOpen: (task: TaskResponse) => void }) {
-  const pool = board.placements.filter(item => item.day === null);
+function Board({ board, tasks, today, onOpen, focus = null }: { board: WeekBoardDto; tasks: Map<string, WeekTaskDto>; today: string; onOpen: (task: TaskResponse) => void; focus?: Focus }) {
+  // A placement whose task is gone stays visible so the plan never hides a broken link.
+  const inFocus = (taskId: string) => { const item = tasks.get(taskId); return !focus || !item || (asCategory(item.task.category) ?? "Personal") === focus; };
+  const placements = board.placements.filter(item => inFocus(item.taskId));
+  const hidden = board.placements.length - placements.length;
+  const pool = placements.filter(item => item.day === null);
   return <section aria-label="Week plan" className="@container grid min-w-0 gap-3">
+    {focus && <p className={cn("inline-flex flex-wrap items-center gap-1 text-sm [&_svg]:size-3.5", categoryTone[focus].text)} role="status">{categoryIcon[focus]}{focus} only{hidden > 0 && <span className="text-muted-foreground">· {hidden} other {hidden === 1 ? "task" : "tasks"} hidden by focus</span>}</p>}
     <div className="grid min-w-0 grid-cols-1 gap-2 @min-[36rem]:grid-cols-2 @min-[54rem]:grid-cols-3">
       {board.days.map(day => <div key={day.date} className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1.5 rounded-xl border p-2", day.date === today && "border-primary", day.date < today && "opacity-75")}>
-        <DayHeading day={day}/>
+        <DayHeading day={day} focus={focus}/>
         <ol className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" aria-label={`Tasks for ${dayLabel(day.date)}`}>
-          {board.placements.filter(item => item.day === day.date).map(item => <TaskLine key={item.taskId} item={tasks.get(item.taskId)} onOpen={onOpen}/>)}
+          {placements.filter(item => item.day === day.date).map(item => <TaskLine key={item.taskId} item={tasks.get(item.taskId)} onOpen={onOpen}/>)}
         </ol>
       </div>)}
     </div>

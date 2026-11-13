@@ -183,3 +183,16 @@ test("week tabs separate the plan, updates and availability", async () => {
   await user.click(screen.getByRole("tab", { name: "Plan" }));
   assert.ok(screen.getByRole("button", { name: "Plan this week" }));
 });
+
+test("a work focus shows only work tasks on the confirmed board and says how many are hidden", async () => {
+  const work = task("w", "Ship release", { category: "Work" });
+  const home = task("h", "Water plants");
+  const { api } = fakes(overview({ state: "Confirmed", confirmedRevision: "1", planId: "plan", confirmed: board([{ taskId: "w", day: today }, { taskId: "h", day: today }]),
+    tasks: [{ task: work, containerName: "Inbox", containerArchived: false }, { task: home, containerName: "Inbox", containerArchived: false }] }));
+  render(<MyWeek clock={clock} revision={0} busy={false} containers={[]} api={api} onOpen={() => {}} onChanged={() => {}} focus="Work"/>);
+  const list = await screen.findByRole("list", { name: "Tasks for Tue 10" });
+  assert.ok(within(list).getByText("Ship release"));
+  assert.equal(within(list).queryByText("Water plants"), null);
+  assert.ok(screen.getByText("· 1 other task hidden by focus"));
+  cleanup();
+});
