@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Transfer;
 
-public sealed record ExportContainer(string Id, string Name, int Kind, bool Archived, string? DeadlineDate);
+public sealed record ExportContainer(string Id, string Name, int Kind, bool Archived, string? DeadlineDate, int? DefaultCategory = null);
 
 public sealed record ExportSubtask(string Id, string Title, string Notes, int Status, IReadOnlyList<string> Tags);
 
@@ -56,9 +56,9 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             r => (TaskId: r.GetString(0), Url: r.GetString(1)), ct))
             .ToDictionary(row => row.TaskId, row => row.Url, StringComparer.Ordinal);
         var containers = await ListAsync(connection, """
-            SELECT Id, Name, Kind, ArchivedAtUtc, DeadlineDate FROM Containers
+            SELECT Id, Name, Kind, ArchivedAtUtc, DeadlineDate, DefaultCategory FROM Containers
             WHERE DeletedAtUtc IS NULL ORDER BY IsInbox DESC, Position, Id;
-            """, r => new ExportContainer(r.GetString(0), r.GetString(1), r.GetInt32(2), !r.IsDBNull(3), r.IsDBNull(4) ? null : r.GetString(4)), ct);
+            """, r => new ExportContainer(r.GetString(0), r.GetString(1), r.GetInt32(2), !r.IsDBNull(3), r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetInt32(5)), ct);
 
         var taskTags = await GroupAsync(connection, "SELECT TaskId, TagId FROM TaskTags;", tagPaths, ct);
         var subtaskTags = await GroupAsync(connection, "SELECT SubtaskId, TagId FROM SubtaskTags;", tagPaths, ct);

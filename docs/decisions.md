@@ -654,3 +654,30 @@ Done button, so there is no discard; Undo replaces it.
 GitHub-notice and pad-anchor state), the list page is `ListPage.tsx`, and the shared row style
 is `taskRow.ts`. Subtasks reload when the shared subtask revision changes, instead of each
 caller setting them directly.
+
+## 2026-11-13 (Browser preview, undo merging, subtask autosave, import metadata)
+
+`npm run preview:ui` (in `src/Chaos.Desktop/frontend`, port 5174; also the `ui-preview` entry in
+`.claude/launch.json`) serves the real UI in a browser without the desktop host.
+`vite.preview.config.ts` swaps `@neoastra/client` for `src/preview/client.ts`, so the generated
+RPC objects stay unchanged and every call goes to an in-memory backend (`src/preview/backend.ts`)
+seeded with sample tasks and lists. It models tasks, lists, sections, queries, counts, My Day,
+My Week, subtasks, quick add and undo; any other command answers with an empty successful read.
+It is a development aid only: the production build never imports it.
+
+Back-to-back detail edits of one task share one undo entry. The merge happens when the newest
+open entry is a detail edit of that task, nothing else changed it in between (the version is
+consecutive), and that entry is under two minutes old. The merged entry keeps the first
+before-image, so one undo restores the task as it was before the burst. Task history still
+records every save.
+
+Subtask editing saves itself like task fields. Both now use one hook (`autosave.ts`): one save
+at a time, the newest known version, the draft kept on failure, and a save on switch or close.
+
+Ctrl+1, Ctrl+2 and Ctrl+3 set the focus to All, Work and Personal. The list quick-add
+placeholder shows `~personal`.
+
+Imports now create lists with their original kind, project deadline and default category. This
+covers Chaos JSON archives (from the Containers row; older archives have no default-category
+column) and Org files (`CHAOS_KIND`, `CHAOS_DEADLINE`, and the new `CHAOS_DEFAULT_CATEGORY` that
+plain-text export now writes). A list that already exists keeps its own settings.

@@ -177,6 +177,11 @@ public static class PlainTextExport
                 text.Append(":CHAOS_DEADLINE: ").Append(container.DeadlineDate).Append('\n');
             }
 
+            if (container.DefaultCategory is { } defaultCategory)
+            {
+                text.Append(":CHAOS_DEFAULT_CATEGORY: ").Append(defaultCategory == 1 ? "work" : "personal").Append('\n');
+            }
+
             text.Append(":END:\n");
             foreach (var task in byContainer[container.Id])
             {

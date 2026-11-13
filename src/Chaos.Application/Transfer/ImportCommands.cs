@@ -287,12 +287,15 @@ public sealed class ImportCommands(IApplicationStore store, IIdGenerator ids, Ti
             var id = item.PreservedListId is { } preserved && await session.Containers.GetIncludingDeletedAsync(preserved, token) is null
                 ? preserved
                 : ids.NewId().ToString();
+            var kind = item.ListKind == ContainerKind.Project ? ContainerKind.Project : ContainerKind.List;
             resolved = new ContainerRecord
             {
                 Id = id,
                 SpaceId = space.Id,
-                Kind = ContainerKind.List,
+                Kind = kind,
                 Name = newName,
+                DeadlineDate = kind == ContainerKind.Project ? item.ListDeadline : null,
+                DefaultCategory = item.ListDefaultCategory is { } category && Enum.IsDefined(category) ? category : null,
                 Position = await session.Containers.GetNextPositionAsync(space.Id, token),
                 Version = 1,
                 CreatedAtUtc = now,

@@ -101,6 +101,30 @@ public sealed class ImportParserTests
     }
 
     [Test]
+    public async Task OrgParse_ListProperties_CarryKindDeadlineAndDefaultCategory()
+    {
+        const string org = """
+            * Sprint 21
+            :PROPERTIES:
+            :CHAOS_KIND: project
+            :CHAOS_DEADLINE: 2026-11-30
+            :CHAOS_DEFAULT_CATEGORY: work
+            :END:
+            ** TODO Ship it
+            * Errands
+            ** TODO Buy milk
+            """;
+
+        var draft = OrgImport.Parse("lists.org", new string('0', 64), org);
+
+        await Assert.That(draft.Errors).IsEmpty();
+        var ship = draft.Tasks.Single(task => task.Title == "Ship it");
+        await Assert.That((ship.ListKind, ship.ListDeadline, ship.ListDefaultCategory)).IsEqualTo((ContainerKind.Project, (DateOnly?)new DateOnly(2026, 11, 30), (CapacityCategory?)CapacityCategory.Work));
+        var milk = draft.Tasks.Single(task => task.Title == "Buy milk");
+        await Assert.That((milk.ListKind, milk.ListDeadline, milk.ListDefaultCategory)).IsEqualTo((ContainerKind.List, (DateOnly?)null, (CapacityCategory?)null));
+    }
+
+    [Test]
     public async Task OrgParse_UnclosedSourceBlock_IsAnError()
     {
         var draft = OrgImport.Parse("x.org", new string('0', 64), "* TODO A\n#+BEGIN_SRC markdown\nnever closed\n");

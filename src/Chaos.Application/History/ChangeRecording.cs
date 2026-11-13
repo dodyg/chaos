@@ -386,6 +386,11 @@ public sealed class RecordingDataSession : IDataSession
 
         var subject = (PreferredSubjectKind(CommandKind) is { } preferred ? await SubjectAsync(changes, preferred, ct) : null)
             ?? taskSubject ?? await SubjectAsync(changes, null, ct);
+        if (CommandKind == EditDetailsKind && await MergeIntoPreviousEditAsync(profile, changes, now, ct))
+        {
+            return;
+        }
+
         await _inner.Undo.AddAsync(new UndoEntryRecord
         {
             Id = ids.NewId().ToString(),
@@ -399,6 +404,40 @@ public sealed class RecordingDataSession : IDataSession
             AppliedAtUtc = now,
         }, ct);
         await _inner.Undo.PruneAsync(profile.Id, UndoLimit, ct);
+    }
+
+    private const string EditDetailsKind = "task.update-details";
+
+    /// <summary>Back-to-back detail edits of one task within this window share one undo entry.</summary>
+    public static readonly TimeSpan EditMergeWindow = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// The editor saves fields as the person types, so consecutive detail edits of the same task
+    /// fold into the newest open undo entry when it is such an edit of that task, nothing else
+    /// changed the task in between, and it started less than <see cref="EditMergeWindow"/> ago.
+    /// The merged entry keeps the first edit's before-image, so one undo restores the task as it
+    /// was before the burst; history still records every save.
+    /// </summary>
+    private async Task<bool> MergeIntoPreviousEditAsync(ProfileRecord profile, ChangeSet changes, DateTimeOffset now, CancellationToken ct)
+    {
+        if (changes.Links.Count != 0 || changes.Entities is not [{ Kind: ChangeKind.Task } current])
+        {
+            return false;
+        }
+
+        var previous = (await _inner.Undo.ListOpenAsync(profile.Id, 1, ct)).FirstOrDefault();
+        if (previous is null || now - previous.AppliedAtUtc > EditMergeWindow
+            || !previous.Label.StartsWith(UndoLabels.For(EditDetailsKind, null), StringComparison.Ordinal)
+            || StoredJsonFormats.ReadSnapshot<ChangeSet>(previous.InversePayload) is not { Links.Count: 0, Entities: [{ Kind: ChangeKind.Task } earlier] } previousChanges
+            || earlier.Id != current.Id || earlier.AfterVersion != current.AfterVersion - 1)
+        {
+            return false;
+        }
+
+        var merged = previousChanges with { Entities = [earlier with { AfterVersion = current.AfterVersion }] };
+        await _inner.Undo.ReplacePayloadAsync(previous.Id, StoredJsonFormats.Snapshot(merged),
+            JsonSerializer.Serialize(new Dictionary<string, long> { [$"{ChangeKind.Task}:{current.Id}"] = current.AfterVersion }, StoredJsonFormats.Options), ct);
+        return true;
     }
 
     /// <summary>The entity an operation is "about": a list command names its list even when tasks moved too.</summary>

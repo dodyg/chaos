@@ -311,7 +311,7 @@ public sealed class HistoryUndoTests
             taskId = task.Id;
             for (var index = 0; index < 105; index++)
             {
-                clock.Advance();
+                clock.Advance(3); // past the edit-merge window, so every edit keeps its own undo entry
                 var current = (await host.Tasks.GetAsync(task.Id))!;
                 await host.Tasks.UpdateDetailsAsync(new(Op(), task.Id, current.Version, $"Keep me {index}", "", null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
             }
@@ -326,6 +326,31 @@ public sealed class HistoryUndoTests
             await host.UndoLatestAsync();
             await Assert.That((await host.Tasks.GetAsync(taskId))!.Title).IsEqualTo("Keep me 104");
         }
+    }
+
+    [Test]
+    public async Task DetailEdits_MergeOnlyWithinTheWindow()
+    {
+        var clock = new ManualClock(Start);
+        using var host = await Host.StartAsync(TestPaths.NewDataRoot(), clock);
+        var task = (await host.Tasks.CaptureAsync(new(Op(), "", "Draft", null))).Task;
+        var start = (await host.Undo.ListAsync(500)).Count;
+        async Task EditAsync(string title)
+        {
+            var current = (await host.Tasks.GetAsync(task.Id))!;
+            await host.Tasks.UpdateDetailsAsync(new(Op(), task.Id, current.Version, title, "", null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        }
+
+        clock.Advance(); await EditAsync("Draft 1");
+        clock.Advance(); await EditAsync("Draft 2");
+        await Assert.That((await host.Undo.ListAsync(500)).Count).IsEqualTo(start + 1);
+        clock.Advance(5); await EditAsync("Draft 3");
+        await Assert.That((await host.Undo.ListAsync(500)).Count).IsEqualTo(start + 2);
+
+        await host.UndoLatestAsync();
+        await Assert.That((await host.Tasks.GetAsync(task.Id))!.Title).IsEqualTo("Draft 2");
+        await host.UndoLatestAsync();
+        await Assert.That((await host.Tasks.GetAsync(task.Id))!.Title).IsEqualTo("Draft");
     }
 
     [Test]

@@ -108,6 +108,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [focus, setFocus] = useFocus();
   const focusRef = React.useRef(focus);
   focusRef.current = focus;
+  const setFocusRef = React.useRef(setFocus);
+  setFocusRef.current = setFocus;
   const listRequests = React.useRef(createLatestRequest());
   const selectedContainer = React.useRef("");
   const drag = useDragReorder();
@@ -208,6 +210,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openPadRef.current({ itemId: null });
+      }
+      // Work/Personal focus from anywhere: Ctrl+1 all, Ctrl+2 work, Ctrl+3 personal.
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && ["1", "2", "3"].includes(event.key)) {
+        event.preventDefault();
+        setFocusRef.current(event.key === "2" ? "Work" : event.key === "3" ? "Personal" : null);
       }
       // Quick add from anywhere in the app (PLAN §13 Ctrl+N).
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {

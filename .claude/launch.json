@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview:ui", "--prefix", "src/Chaos.Desktop/frontend"],
+      "port": 5174
+    }
+  ]
+}

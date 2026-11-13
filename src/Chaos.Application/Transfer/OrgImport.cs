@@ -328,6 +328,12 @@ public static partial class OrgImport
                 Title = title,
                 Notes = heading.Notes.ToString().Trim('\n'),
                 ListName = list is null ? null : TitleOf(list),
+                ListKind = list is not null && list.Properties.TryGetValue("CHAOS_KIND", out var listKind) && listKind.Trim().Equals("project", StringComparison.OrdinalIgnoreCase) ? ContainerKind.Project : ContainerKind.List,
+                ListDeadline = list is not null && list.Properties.TryGetValue("CHAOS_DEADLINE", out var listDeadline)
+                    && DateOnly.TryParseExact(listDeadline.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDeadline) ? parsedDeadline : null,
+                ListDefaultCategory = list is not null && list.Properties.TryGetValue("CHAOS_DEFAULT_CATEGORY", out var listCategory)
+                    ? listCategory.Trim().ToLowerInvariant() switch { "work" => CapacityCategory.Work, "personal" => CapacityCategory.Personal, _ => null }
+                    : null,
                 Status = Status(heading),
                 Priority = heading.Priority,
                 EstimateMinutes = heading.Properties.TryGetValue("CHAOS_ESTIMATE", out var estimate) && int.TryParse(estimate, CultureInfo.InvariantCulture, out var minutes) ? minutes : null,

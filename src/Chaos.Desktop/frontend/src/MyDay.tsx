@@ -80,7 +80,7 @@ function dayRequest(day: string, finished: boolean, focus: Focus): TaskQueryRequ
 
 function minutes(total: number) {
   const hours = Math.floor(total / 60);
-  return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
+  return hours > 0 ? (total % 60 ? `${hours} h ${total % 60} min` : `${hours} h`) : `${total} min`;
 }
 
 const categoryOf = (task: TaskResponse): Category => asCategory(task.category) ?? "Personal";

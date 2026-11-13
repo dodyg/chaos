@@ -1,6 +1,7 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
+using Chaos.Application.History;
 using Chaos.Application.Contracts;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
@@ -29,6 +30,7 @@ public sealed class CategoryFocusTests
         public required TaskQueries Queries { get; init; }
         public required MyDayCommands Days { get; init; }
         public required MyWeekCommands Weeks { get; init; }
+        public required UndoCommands Undo { get; init; }
 
         public static async Task<Host> StartAsync()
         {
@@ -52,6 +54,7 @@ public sealed class CategoryFocusTests
                 Queries = new TaskQueries(storage.Store, clock),
                 Days = new MyDayCommands(storage.Store, ids, clock),
                 Weeks = new MyWeekCommands(storage.Store, ids, clock),
+                Undo = new UndoCommands(storage.Store, ids, clock),
             };
         }
 
@@ -141,5 +144,39 @@ public sealed class CategoryFocusTests
         await Assert.That(after.AvailableMinutes).IsEqualTo(360);
         await Assert.That(after.WorkAllowanceMinutes).IsEqualTo(120);
         await Assert.That(after.WorkMinutes).IsEqualTo(90);
+    }
+
+    private static Task<TaskRecord> EditAsync(Host host, TaskRecord task, string title, string notes) =>
+        host.Tasks.UpdateDetailsAsync(new(Op(), task.Id, task.Version, title, notes, task.PlannedDate, null, null, null, null, null, task.Priority, task.EstimateMinutes, task.CapacityCategory))
+            .ContinueWith(result => result.Result.Task);
+
+    [Test]
+    public async Task ConsecutiveDetailEdits_ShareOneUndoEntry_ThatRestoresTheFirstBefore()
+    {
+        using var host = await Host.StartAsync();
+        var task = (await host.Tasks.CaptureAsync(new(Op(), string.Empty, "Draft", null))).Task;
+        var before = (await host.Undo.ListAsync(10)).Count;
+        task = await EditAsync(host, task, "Draft r", "a");
+        task = await EditAsync(host, task, "Draft re", "ab");
+        task = await EditAsync(host, task, "Draft report", "abc");
+
+        var entries = await host.Undo.ListAsync(10);
+        await Assert.That(entries.Count).IsEqualTo(before + 1);
+        await host.Undo.UndoAsync(new UndoOperationCommand(Op(), entries[0].OperationId));
+        var restored = (await host.Queries.RunAsync(new TaskQuerySpec { View = TaskView.Search, Text = "Draft" })).Rows.Single().Task;
+        await Assert.That(restored.Title).IsEqualTo("Draft");
+        await Assert.That(restored.Notes).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task AnotherChangeBetweenEdits_KeepsSeparateUndoEntries()
+    {
+        using var host = await Host.StartAsync();
+        var task = (await host.Tasks.CaptureAsync(new(Op(), string.Empty, "Draft", null))).Task;
+        var before = (await host.Undo.ListAsync(10)).Count;
+        task = await EditAsync(host, task, "Draft one", "");
+        task = (await host.Tasks.SetStatusAsync(new(Op(), task.Id, task.Version, TaskItemStatus.InProgress, null))).Task;
+        await EditAsync(host, task, "Draft two", "");
+        await Assert.That((await host.Undo.ListAsync(10)).Count).IsEqualTo(before + 3);
     }
 }

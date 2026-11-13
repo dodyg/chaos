@@ -35,6 +35,12 @@ public sealed record ImportTask
     public string Notes { get; init; } = string.Empty;
     public string? ListName { get; init; }
     public string? PreservedListId { get; init; }
+    /// <summary>How to create the list when the import has to (an existing list keeps its own settings).</summary>
+    public ContainerKind ListKind { get; init; } = ContainerKind.List;
+    /// <summary>The project deadline for a created project.</summary>
+    public DateOnly? ListDeadline { get; init; }
+    /// <summary>The default category for a created list or project.</summary>
+    public CapacityCategory? ListDefaultCategory { get; init; }
     public TaskItemStatus Status { get; init; } = TaskItemStatus.NotStarted;
     public TaskPriority Priority { get; init; } = TaskPriority.Normal;
     public int? EstimateMinutes { get; init; }

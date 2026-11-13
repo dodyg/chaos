@@ -67,6 +67,10 @@ public static class ArchiveMerge
                 Notes = row.Text("Notes") ?? "",
                 ListName = isInbox ? null : container.Text("Name"),
                 PreservedListId = isInbox ? null : container.Text("Id"),
+                ListKind = (ContainerKind)container.Long("Kind"),
+                ListDeadline = DateOnly.TryParseExact(container.Text("DeadlineDate"), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var deadline) ? deadline : null,
+                // Archives made before default categories existed have no such column.
+                ListDefaultCategory = container.Text("DefaultCategory") is null ? null : (CapacityCategory)container.Long("DefaultCategory"),
                 Status = status,
                 Priority = (TaskPriority)row.Long("Priority"),
                 EstimateMinutes = row.Text("EstimateMinutes") is null ? null : (int)row.Long("EstimateMinutes"),

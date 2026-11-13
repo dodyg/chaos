@@ -21,77 +21,10 @@ import { TagPicker } from "./tags";
 import { ZoneSelect, type useTimeZones } from "./ZoneSelect";
 import { useDragReorder } from "./dragReorder";
 import { rowClass } from "./taskRow";
+import { useAutosave } from "./autosave";
 import type { PadFocus } from "./ScratchPad";
 
 const operationId = () => crypto.randomUUID();
-/** Quiet time after the last keystroke before a task edit is saved. */
-export const autosaveDelayMs = 600;
-
-type SaveState = "saved" | "pending" | "saving" | "error";
-
-/**
- * Saves the open task's fields shortly after each change, one save at a time, so nothing is
- * lost by closing the editor or switching tasks. Every save is an ordinary task edit (undoable).
- * A failure keeps the draft and offers a retry; the next change tries again too.
- */
-function useTaskAutosave({ editing, api, onSaved, onError, onWarning }: {
-  editing: TaskResponse; api: typeof TaskRpc;
-  onSaved: (saved: TaskResponse) => void; onError: (message: string) => void; onWarning: (warning: string | null) => void;
-}) {
-  const [state, setState] = React.useState<SaveState>("saved");
-  const pending = React.useRef<TaskResponse | null>(null);
-  const versions = React.useRef(new Map<string, number>());
-  const timer = React.useRef<number | undefined>(undefined);
-  const inFlight = React.useRef<Promise<void> | null>(null);
-  const callbacks = React.useRef({ onSaved, onError, onWarning });
-  callbacks.current = { onSaved, onError, onWarning };
-
-  const flush = React.useCallback(async (): Promise<void> => {
-    window.clearTimeout(timer.current);
-    if (inFlight.current) { await inFlight.current; }
-    const draft = pending.current;
-    if (!draft) return;
-    if (!draft.title.trim()) { setState("error"); callbacks.current.onError("A task needs a title before it can be saved."); return; }
-    pending.current = null;
-    setState("saving");
-    const version = Math.max(Number(draft.version), versions.current.get(draft.id) ?? 0);
-    const work = (async () => {
-      try {
-        const result = await api.edit({ operationId: operationId(), taskId: draft.id, expectedVersion: String(version), title: draft.title, notes: draft.notes,
-          plannedDate: draft.plannedDate || null, plannedTime: draft.plannedTime || null, plannedZoneId: draft.plannedZoneId || null,
-          dueDate: draft.dueDate || null, dueTime: draft.dueTime || null, dueZoneId: draft.dueZoneId || null,
-          priority: draft.priority, estimateMinutes: draft.estimateMinutes, category: draft.category });
-        if (!result.ok || !result.task) throw new Error(result.error?.fields.map(f => f.message).join("; ") || result.error?.message || "The change could not be saved.");
-        versions.current.set(result.task.id, Number(result.task.version));
-        if (pending.current?.id === result.task.id) pending.current = { ...pending.current, version: result.task.version };
-        callbacks.current.onWarning(result.warning);
-        callbacks.current.onSaved(result.task);
-        setState(pending.current ? "pending" : "saved");
-      } catch (e) {
-        // Keep the newest draft: a later change already replaced this one, otherwise retry this one.
-        pending.current ??= draft;
-        setState("error");
-        callbacks.current.onError(e instanceof Error ? e.message : "The change could not be saved.");
-      }
-    })();
-    inFlight.current = work;
-    try { await work; } finally { if (inFlight.current === work) inFlight.current = null; }
-  }, [api]);
-
-  const schedule = React.useCallback((draft: TaskResponse) => {
-    pending.current = draft;
-    setState("pending");
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => void flush(), autosaveDelayMs);
-  }, [flush]);
-
-  // Switching tasks or closing the editor saves what is waiting at once.
-  React.useEffect(() => () => { if (pending.current?.id === editing.id) void flush(); }, [editing.id, flush]);
-
-  const labelText = state === "saving" ? "Saving…" : state === "pending" ? "Unsaved changes" : state === "error" ? "Not saved" : "All changes saved";
-  return { state, label: labelText, flush, schedule, dirty: () => pending.current !== null || inFlight.current !== null };
-}
-
 export type TaskEditorApi = {
   taskRpc: typeof TaskRpc; containerRpc: typeof ContainerRpc; tagApi: typeof TagRpc; markdownApi: typeof MarkdownRpc; padApi: typeof PadRpc;
   journalApi: { diaryRpc: typeof DiaryRpc; historyRpc: typeof HistoryRpc }; reminderApi: typeof ReminderRpc; waitingApi: typeof WaitingRpc; recurrenceApi: typeof RecurrenceRpc;
@@ -131,14 +64,46 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
   const taskGitHub = githubTask?.taskId === editing.id ? githubTask?.info : null;
   const currentEditorTaskId = React.useRef(editing.id); currentEditorTaskId.current = editing.id;
 
-  const autosave = useTaskAutosave({
-    editing, api: taskRpc, onError: setError, onWarning: setWarning,
+  const autosave = useAutosave<TaskResponse>({
+    currentId: editing.id, onError: setError,
+    validate: draft => draft.title.trim() ? null : "A task needs a title before it can be saved.",
+    save: async draft => {
+      const result = await taskRpc.edit({ operationId: operationId(), taskId: draft.id, expectedVersion: draft.version, title: draft.title, notes: draft.notes,
+        plannedDate: draft.plannedDate || null, plannedTime: draft.plannedTime || null, plannedZoneId: draft.plannedZoneId || null,
+        dueDate: draft.dueDate || null, dueTime: draft.dueTime || null, dueZoneId: draft.dueZoneId || null,
+        priority: draft.priority, estimateMinutes: draft.estimateMinutes, category: draft.category });
+      if (!result.ok || !result.task) return { error: result.error?.fields.map(f => f.message).join("; ") || result.error?.message || "The change could not be saved." };
+      setWarning(result.warning);
+      return { saved: result.task };
+    },
     onSaved: saved => {
       setEditing(current => current?.id === saved.id ? { ...current, version: saved.version, updatedAtUtc: saved.updatedAtUtc } : current);
       void refresh().catch((e: unknown) => setError(String(e)));
       changed();
     },
   });
+  const subtaskAutosave = useAutosave<SubtaskResponse>({
+    currentId: subtaskEdit?.id ?? null, onError: setError,
+    validate: draft => draft.title.trim() ? null : "A subtask needs a title before it can be saved.",
+    save: async draft => {
+      const result = await subtaskRpc.edit({ operationId: operationId(), subtaskId: draft.id, expectedVersion: draft.version, title: draft.title, notes: draft.notes });
+      return result.ok && result.subtask ? { saved: result.subtask } : { error: result.error?.fields.map(f => f.message).join("; ") || result.error?.message || "The subtask could not be saved." };
+    },
+    onSaved: saved => {
+      setSubtaskEdit(current => current?.id === saved.id ? { ...current, version: saved.version } : current);
+      setSubtaskRevision(value => value + 1);
+      changed();
+    },
+  });
+  function changeSubtask(patch: Partial<SubtaskResponse>) {
+    setSubtaskEdit(current => {
+      if (!current) return null;
+      const next = { ...current, ...patch };
+      subtaskAutosave.schedule(next);
+      return next;
+    });
+  }
+  function closeSubtask() { void subtaskAutosave.flush(); setSubtaskEdit(null); }
   function change(patch: Partial<TaskResponse>) {
     setEditing(current => {
       if (!current) return null;
@@ -315,12 +280,16 @@ function checklistPanel() {
             <Input id="new-subtask" className="border-dashed bg-transparent focus-visible:border-solid" value={subtaskTitle} onChange={e => setSubtaskTitle(e.target.value)} placeholder="Add a subtask" autoComplete="off"/>
             <Button variant="outline" disabled={busy || !subtaskTitle.trim()}>Add subtask</Button>
           </form>
-          {subtaskEdit && <Card className="gap-4 py-4"><CardContent className="px-4"><form className="grid gap-4" onSubmit={e => { e.preventDefault(); void runSubtask(() => subtaskRpc.edit({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, title: subtaskEdit.title, notes: subtaskEdit.notes }), () => setSubtaskEdit(null)); }}>
+          {subtaskEdit && <Card className="gap-4 py-4"><CardContent className="px-4"><form className="grid gap-4" onSubmit={e => { e.preventDefault(); void subtaskAutosave.flush(); }}>
             <h4 className="font-semibold">Edit subtask</h4>
-            <Field label="Title"><Input required value={subtaskEdit.title} onChange={e => setSubtaskEdit({ ...subtaskEdit, title: e.target.value })}/></Field>
-            <MarkdownEditor id="subtask-notes" label="Subtask notes" rows={3} value={subtaskEdit.notes} onChange={notes => setSubtaskEdit({ ...subtaskEdit, notes })} links={links} searchLinks={searchLinks}/>
-            <Field label="Status"><NativeSelect value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null)); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
-            <div className="flex gap-2"><Button disabled={busy}>Save subtask</Button><Button type="button" variant="outline" onClick={() => setSubtaskEdit(null)}>Cancel</Button></div>
+            <Field label="Title"><Input required value={subtaskEdit.title} onChange={e => changeSubtask({ title: e.target.value })}/></Field>
+            <MarkdownEditor id="subtask-notes" label="Subtask notes" rows={3} value={subtaskEdit.notes} onChange={notes => changeSubtask({ notes })} links={links} searchLinks={searchLinks}/>
+            <Field label="Status"><NativeSelect value={subtaskEdit.status} disabled={busy} onChange={e => { const status = e.target.value; void subtaskAutosave.flush().then(() => runSubtask(() => subtaskRpc.setStatus({ operationId: operationId(), subtaskId: subtaskEdit.id, expectedVersion: subtaskEdit.version, status }), saved => setSubtaskEdit(current => current ? { ...current, status: saved.status, version: saved.version } : null))); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
+            <div className="flex items-center gap-2">
+              <p role="status" aria-live="polite" className={cn("text-xs text-muted-foreground", subtaskAutosave.state === "error" && "text-destructive")}>{subtaskAutosave.label}</p>
+              {subtaskAutosave.state === "error" && <Button type="button" size="sm" variant="outline" onClick={() => void subtaskAutosave.flush()}>Retry</Button>}
+              <Button type="button" variant="outline" className="ml-auto" onClick={closeSubtask}>Done</Button>
+            </div>
           </form></CardContent></Card>}
           {subtaskEdit && <TagPicker targetKind="Subtask" targetId={subtaskEdit.id} label={`Tags on “${subtaskEdit.title}”`} tags={tags} api={tagApi} revision={revision} onChanged={changed}/>}
           <DeletedItems noun="subtasks" items={deletedSubtasks} name={subtask => subtask.title} busy={busy} onRestore={subtask => void runSubtask(() => subtaskRpc.restore({ operationId: operationId(), taskId: editing.id, subtaskId: subtask.id, expectedVersion: subtask.version }))}/>

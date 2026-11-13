@@ -177,7 +177,7 @@ test("a day mixing work and personal shows lanes with their own totals; a focus 
   assert.ok(within(screen.getByRole("list", { name: "Personal chosen tasks" })).getByText("Water plants"));
   const byCategory = screen.getByRole("status", { name: "Today by category" });
   assert.ok(within(byCategory).getByText("More work than planned"));
-  assert.match(byCategory.textContent ?? "", /1 open · 1 h 30 minof 1 h 0 min/);
+  assert.match(byCategory.textContent ?? "", /1 open · 1 h 30 minof 1 h/);
   assert.ok(queries.every(request => request.category === null));
 
   view.rerender(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} focus="Work"/>);

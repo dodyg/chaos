@@ -38,16 +38,17 @@ export const categoryTone: Record<Category, { solid: string; text: string; soft:
 
 /** The sidebar switch: All, Work or Personal. It filters every task view and sets the category of new tasks. */
 export function FocusSwitch({ focus, onChange }: { focus: Focus; onChange: (focus: Focus) => void }) {
-  const options: { value: Focus; label: string; icon: React.ReactNode }[] = [
-    { value: null, label: "All", icon: <Layers/> },
-    { value: "Work", label: "Work", icon: categoryIcon.Work },
-    { value: "Personal", label: "Personal", icon: categoryIcon.Personal },
+  const options: { value: Focus; label: string; icon: React.ReactNode; shortcut: string }[] = [
+    { value: null, label: "All", icon: <Layers/>, shortcut: "Ctrl+1" },
+    { value: "Work", label: "Work", icon: categoryIcon.Work, shortcut: "Ctrl+2" },
+    { value: "Personal", label: "Personal", icon: categoryIcon.Personal, shortcut: "Ctrl+3" },
   ];
-  return <div role="radiogroup" aria-label="Focus" title="Focus: show Work, Personal or all tasks in every view"
+  return <div role="radiogroup" aria-label="Focus"
     className="mb-2 grid grid-cols-3 gap-0.5 rounded-md border border-sidebar-border bg-background/40 p-0.5 text-xs">
     {options.map(option => {
       const checked = focus === option.value;
-      return <button key={option.label} type="button" role="radio" aria-checked={checked}
+      return <button key={option.label} type="button" role="radio" aria-checked={checked} aria-keyshortcuts={option.shortcut.replace("Ctrl", "Control")}
+        title={`${option.value ? `Show only ${option.label.toLowerCase()} tasks` : "Show all tasks"} in every view (${option.shortcut}). New tasks take this category unless the list has its own.`}
         className={cn("inline-flex h-7 items-center justify-center gap-1 rounded-[5px] px-1 font-medium text-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 [&_svg]:size-3.5",
           checked && "bg-sidebar-accent text-sidebar-foreground shadow-xs", checked && option.value && categoryTone[option.value].text)}
         onClick={() => onChange(option.value)}>{option.icon}{option.label}</button>;

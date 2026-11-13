@@ -145,7 +145,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
         {selected && showSettings && <div id="list-settings" className="rounded-xl border bg-muted/50 p-4"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={onDeleted} onChanged={async () => { await refreshContainers(); const result = await containerApi.sections({ containerId }); if (!isStillSelected(containerId)) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
 
         <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
-          placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home`} onSubmit={onCapture}/>
+          placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home ~personal`} onSubmit={onCapture}/>
         {newTaskCategory && <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>{categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}{listDefault ? " (list default)" : " (focus)"}</p>}
 
         <div className="flex flex-wrap items-center gap-3">
