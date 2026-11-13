@@ -67,6 +67,8 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
     setGitHubTask(current => info ? { taskId, info } : current?.taskId === taskId ? current : { taskId, info: null });
   }, []);
   const taskGitHub = githubTask?.taskId === editing.id ? githubTask?.info : null;
+  // A task that turns out to be GitHub-linked leaves the Repeat tab it can no longer show.
+  React.useEffect(() => { if (taskGitHub?.connected && editorTab === "recurrence") setEditorTab("notes"); }, [taskGitHub?.connected, editorTab]);
   const currentEditorTaskId = React.useRef(editing.id); currentEditorTaskId.current = editing.id;
 
   const autosave = useAutosave<TaskResponse>({
@@ -235,7 +237,8 @@ function checklistPanel() {
             <TabsTrigger value="dates" title="Dates"><CalendarDays/><span data-slot="tab-label">Dates</span></TabsTrigger>
             <TabsTrigger value="subtasks" title="Subtasks"><ListTodo/><span data-slot="tab-label">Subtasks</span>{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
             <TabsTrigger value="diary" title="Diary"><History/><span data-slot="tab-label">Diary</span></TabsTrigger>
-            <TabsTrigger value="recurrence" title="Repeat"><Repeat/><span data-slot="tab-label">Repeat</span></TabsTrigger>
+            {/* GitHub tasks cannot repeat, so their editor has no Repeat tab. */}
+            {!taskGitHub?.connected && <TabsTrigger value="recurrence" title="Repeat"><Repeat/><span data-slot="tab-label">Repeat</span></TabsTrigger>}
             <TabsTrigger value="remind" title="Remind"><Bell/><span data-slot="tab-label">Remind</span></TabsTrigger>
           </TabsList>
         </div>
