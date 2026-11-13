@@ -375,3 +375,28 @@ test("pad-note links resolve by ID, open the note, and show a deleted note as a 
   assert.deepEqual(opened, [live]);
   cleanup();
 });
+
+test("the editor expands to fill the window, keeps the caret and text, and Esc brings it back", async () => {
+  function Host() {
+    const [value, setValue] = React.useState("First line\nSecond line");
+    return <div data-testid="panel"><MarkdownEditor id="expand-notes" label="Notes" value={value} onChange={setValue}/></div>;
+  }
+  render(<Host/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  try {
+    const area = () => dom.window.document.getElementById("expand-notes") as HTMLTextAreaElement;
+    area().focus();
+    area().setSelectionRange(5, 5);
+    fireEvent.click(screen.getByRole("button", { name: "Expand editor" }));
+    const expanded = await screen.findByRole("dialog", { name: "Notes (expanded)" });
+    assert.equal(expanded.parentElement, dom.window.document.body, "drawn above every panel");
+    assert.equal(within(screen.getByTestId("panel")).queryByRole("textbox"), null, "the panel keeps only a placeholder");
+    await waitFor(() => assert.equal(dom.window.document.activeElement, area()));
+    assert.equal(area().selectionStart, 5);
+    fireEvent.change(area(), { target: { value: "First line\nSecond line\nThird" } });
+
+    fireEvent.keyDown(dom.window as unknown as Window, { key: "Escape" });
+    await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Notes (expanded)" }), null));
+    assert.ok(within(screen.getByTestId("panel")).getByRole("textbox"));
+    assert.equal(area().value, "First line\nSecond line\nThird");
+  } finally { cleanup(); }
+});

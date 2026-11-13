@@ -1,5 +1,6 @@
 import React from "react";
-import { Bold, Code, Eye, Heading, Italic, Link, List, ListChecks, ListOrdered, PenLine, Quote, SquareCode, Strikethrough, Table } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Bold, Code, Eye, Heading, Italic, Link, List, ListChecks, ListOrdered, Maximize2, Minimize2, PenLine, Quote, SquareCode, Strikethrough, Table } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,7 +60,36 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
   const [linkQuery, setLinkQuery] = React.useState<{ start: number; query: string } | null>(null);
   const [candidates, setCandidates] = React.useState<LinkCandidate[]>([]);
   const [active, setActive] = React.useState(0);
+  const [expanded, setExpanded] = React.useState(false);
   const listId = `${id}-links`;
+
+  /**
+   * Expanded, the editor fills the whole content area right of the sidebar. It is drawn in a
+   * portal so no transformed panel (the task panel slides in) can trap it; the move remounts
+   * the text area, so the caret and selection are carried over and focus returns to it.
+   */
+  function toggleExpanded() {
+    const element = area.current;
+    if (element) pendingSelection.current = [element.selectionStart, element.selectionEnd];
+    setLinkQuery(null);
+    setExpanded(value => !value);
+  }
+  const toggled = React.useRef(false);
+  React.useEffect(() => {
+    if (!toggled.current) { toggled.current = true; return; } // not on first render
+    const element = area.current;
+    if (!element) return;
+    const selection = pendingSelection.current;
+    element.focus();
+    if (selection) { element.setSelectionRange(selection[0], selection[1]); pendingSelection.current = null; }
+  }, [expanded]);
+  // Esc collapses the expanded editor (unless the link list already used it). Closing the task or note unmounts it with the portal.
+  React.useEffect(() => {
+    if (!expanded) return;
+    function escape(event: KeyboardEvent) { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); toggleExpanded(); } }
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [expanded]);
 
   React.useLayoutEffect(() => {
     const selection = pendingSelection.current;
@@ -144,12 +174,18 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
   }
 
   const showList = mode === "source" && linkQuery !== null && candidates.length > 0;
-  return <div className="grid min-w-0 gap-1.5" data-slot="markdown-editor">
+  const editor = <div data-slot="markdown-editor" data-expanded={expanded || undefined} role={expanded ? "dialog" : undefined} aria-label={expanded ? `${label} (expanded)` : undefined}
+    className={cn("grid min-w-0 gap-1.5", expanded && "fixed top-[40px] right-0 bottom-0 left-0 z-40 grid-rows-[auto_auto_minmax(0,1fr)_auto] border-l bg-card px-[clamp(1rem,4vw,3rem)] py-6 shadow-2xl md:left-[15.5rem]")}>
     <div className="flex items-center justify-between gap-2">
-      <label htmlFor={id} className="text-xs font-medium text-muted-foreground">{label}</label>
+      <label htmlFor={id} className={cn("text-xs font-medium text-muted-foreground", expanded && "text-sm")}>{label}</label>
+      <div className="flex items-center gap-1">
+      <Button type="button" variant={expanded ? "secondary" : "ghost"} size="icon-xs" className="text-muted-foreground" aria-pressed={expanded}
+        aria-label={expanded ? "Collapse editor" : "Expand editor"} title={expanded ? "Collapse editor (Esc)" : "Expand editor to fill the window"}
+        onMouseDown={event => event.preventDefault()} onClick={toggleExpanded}>{expanded ? <Minimize2/> : <Maximize2/>}</Button>
       <div className="flex rounded-md border p-0.5" role="group" aria-label={`${label} view`}>
         <Button type="button" variant={mode === "source" ? "secondary" : "ghost"} size="xs" aria-pressed={mode === "source"} onClick={() => setMode("source")}><PenLine/>Write</Button>
         <Button type="button" variant={mode === "preview" ? "secondary" : "ghost"} size="xs" aria-pressed={mode === "preview"} onClick={() => { setLinkQuery(null); setMode("preview"); }}><Eye/>Preview</Button>
+      </div>
       </div>
     </div>
     {mode === "source" ? <>
@@ -158,9 +194,9 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
           aria-label={tool.label} title={tool.shortcut ? `${tool.label} (${tool.shortcut})` : tool.label}
           onMouseDown={event => event.preventDefault()} onClick={() => format(tool.action)}>{tool.icon}</Button>)}
       </div>
-      <div className="relative">
+      <div className={cn("relative", expanded && "min-h-0")}>
         <Textarea ref={area} id={id} rows={rows} value={value} disabled={disabled} placeholder={placeholder} spellCheck
-          className={cn("font-mono text-sm leading-relaxed", areaClassName)} dir="auto"
+          className={cn("font-mono text-sm leading-relaxed", expanded ? "h-full min-h-0 resize-none [field-sizing:fixed]" : areaClassName)} dir="auto"
           role={searchLinks ? "combobox" : undefined} aria-expanded={searchLinks ? showList : undefined} aria-controls={showList ? listId : undefined}
           aria-autocomplete={searchLinks ? "list" : undefined} aria-activedescendant={showList ? `${listId}-${active}` : undefined}
           onChange={event => { onChange(event.target.value); trackLinkQuery(event.target.value, event.target.selectionStart); }}
@@ -174,6 +210,14 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
         </ul>}
       </div>
       <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task or note.</p>
-    </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
+    </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", expanded ? "row-span-2 min-h-0 overflow-y-auto" : areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
   </div>;
+
+  if (!expanded) return editor;
+  return <>
+    <div className="grid min-h-24 place-items-center rounded-md border border-dashed text-sm text-muted-foreground">
+      <Button type="button" variant="ghost" size="sm" onClick={toggleExpanded}><Minimize2/>Editing in the expanded view. Collapse</Button>
+    </div>
+    {createPortal(editor, document.body)}
+  </>;
 }
