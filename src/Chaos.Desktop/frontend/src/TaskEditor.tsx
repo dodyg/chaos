@@ -5,7 +5,7 @@ import { gitHubRpc, subtaskRpc, type taskRpc as TaskRpc, type containerRpc as Co
   type diaryRpc as DiaryRpc, type historyRpc as HistoryRpc, type reminderRpc as ReminderRpc, type waitingRpc as WaitingRpc, type recurrenceRpc as RecurrenceRpc,
   type ContainerResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
   type TaskOperationResponse, type TaskResponse } from "#neoastra";
-import { ArrowDown, ArrowUp, Bell, CalendarRange, History, ListChecks, ListTodo, NotebookPen, SlidersHorizontal, StickyNote, SunMedium, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarDays, Repeat, History, ListChecks, ListTodo, NotebookPen, SlidersHorizontal, StickyNote, SunMedium, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -232,9 +232,10 @@ function checklistPanel() {
           <TabsList className="w-full [&_[data-state=inactive]_[data-slot=tab-label]]:sr-only">
             <TabsTrigger value="notes" title="Notes"><NotebookPen/><span data-slot="tab-label">Notes</span></TabsTrigger>
             <TabsTrigger value="details" title="Details"><SlidersHorizontal/><span data-slot="tab-label">Details</span></TabsTrigger>
+            <TabsTrigger value="dates" title="Dates"><CalendarDays/><span data-slot="tab-label">Dates</span></TabsTrigger>
             <TabsTrigger value="subtasks" title="Subtasks"><ListTodo/><span data-slot="tab-label">Subtasks</span>{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
             <TabsTrigger value="diary" title="Diary"><History/><span data-slot="tab-label">Diary</span></TabsTrigger>
-            <TabsTrigger value="recurrence" title="Repeat"><CalendarRange/><span data-slot="tab-label">Repeat</span></TabsTrigger>
+            <TabsTrigger value="recurrence" title="Repeat"><Repeat/><span data-slot="tab-label">Repeat</span></TabsTrigger>
             <TabsTrigger value="remind" title="Remind"><Bell/><span data-slot="tab-label">Remind</span></TabsTrigger>
           </TabsList>
         </div>
@@ -256,6 +257,14 @@ function checklistPanel() {
             <Field label="Category"><NativeSelect value={editing.category} onChange={e => change({ category: e.target.value })}><NativeSelectOption>Personal</NativeSelectOption><NativeSelectOption>Work</NativeSelectOption></NativeSelect></Field>
             <Field label="Estimate (minutes)"><Input type="number" min="0" value={editing.estimateMinutes ?? ""} onChange={e => change({ estimateMinutes: e.target.value === "" ? null : Number(e.target.value) })}/></Field>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Move to list or project"><NativeSelect value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <NativeSelectOption key={c.id} value={c.id}>{c.name}</NativeSelectOption>)}</NativeSelect></Field>
+            {editing.containerId === containerId && sections.length > 0 && <Field label="Section"><NativeSelect value={editing.sectionId ?? ""} disabled={busy} onChange={e => { const sectionId = e.target.value || null; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: editing.containerId, sectionId }), saved => setEditing(current => current ? { ...current, sectionId: saved.sectionId, version: saved.version } : null)); }}><NativeSelectOption value="">No section</NativeSelectOption>{sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>}
+          </div>
+          <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
+          </TabsContent>
+
+        <TabsContent value="dates" className="grid gap-4">
           {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
             <fieldset disabled={kind === "due" && taskGitHub?.dueDateManaged} className="grid grid-cols-2 gap-3">
               <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change(e.target.value ? { [`${kind}Date`]: e.target.value } : { [`${kind}Date`]: null, [`${kind}Time`]: null, [`${kind}ZoneId`]: null })}/></Field>
@@ -268,12 +277,7 @@ function checklistPanel() {
             </fieldset>
             {kind === "due" && taskGitHub?.dueDateManaged && <p className="text-xs text-muted-foreground">This due date comes from the GitHub milestone. Change it on GitHub.</p>}
           </FieldGroup>)}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Move to list or project"><NativeSelect value={editing.containerId} disabled={busy} onChange={e => { const target = e.target.value; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: target, sectionId: null }), saved => { setEditing(current => current ? { ...current, containerId: saved.containerId, sectionId: null, version: saved.version } : null); }); }}>{containers.map(c => <NativeSelectOption key={c.id} value={c.id}>{c.name}</NativeSelectOption>)}</NativeSelect></Field>
-            {editing.containerId === containerId && sections.length > 0 && <Field label="Section"><NativeSelect value={editing.sectionId ?? ""} disabled={busy} onChange={e => { const sectionId = e.target.value || null; void run(() => containerRpc.moveTask({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, containerId: editing.containerId, sectionId }), saved => setEditing(current => current ? { ...current, sectionId: saved.sectionId, version: saved.version } : null)); }}><NativeSelectOption value="">No section</NativeSelectOption>{sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>}
-          </div>
-          <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
-          </TabsContent>
+        </TabsContent>
 
         <TabsContent value="subtasks">
         <section className="grid gap-3" aria-labelledby="subtasks-heading">
