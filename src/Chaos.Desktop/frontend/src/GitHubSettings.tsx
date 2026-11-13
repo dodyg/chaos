@@ -16,18 +16,29 @@ function RepositoryOptions({ targets, repository, busy, onSave, onCancel }: { ta
   const [labels, setLabels] = React.useState(filter.labels.join(", "));
   const [projects, setProjects] = React.useState(repository?.milestonesAsProjects ?? false);
   return <form className="grid gap-3 rounded-lg border p-4" onSubmit={e => { e.preventDefault(); onSave({ targetContainerId: container, targetSectionId: section || null, filter: { ...filter, labels: labels.split(",").map(v => v.trim()).filter(Boolean) }, milestonesAsProjects: projects }); }}>
-    <p className="text-sm text-muted-foreground">The destination applies to newly imported tasks. Existing tasks keep their location.</p>
-    <div className="grid gap-3 sm:grid-cols-2">
-      <Field label="Destination"><NativeSelect value={container} onChange={e => { setContainer(e.target.value); setSection(""); }}>{targets.map(t => <NativeSelectOption key={t.id} value={t.id}>{t.name}</NativeSelectOption>)}</NativeSelect></Field>
-      <Field label="Section"><NativeSelect value={section} onChange={e => setSection(e.target.value)}><NativeSelectOption value="">No section</NativeSelectOption>{targets.find(t => t.id === container)?.sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>
-      <Field label="Labels (comma separated)"><Input value={labels} onChange={e => setLabels(e.target.value)}/></Field>
-      <Field label="Label matching"><NativeSelect value={filter.labelMode} onChange={e => setFilter({ ...filter, labelMode: e.target.value })}><NativeSelectOption value="any">Any label</NativeSelectOption><NativeSelectOption value="all">All labels</NativeSelectOption></NativeSelect></Field>
-      <Field label="Assigned to"><NativeSelect value={filter.assignee} onChange={e => setFilter({ ...filter, assignee: e.target.value })}><NativeSelectOption value="any">Anyone</NativeSelectOption><NativeSelectOption value="me">Me</NativeSelectOption><NativeSelectOption value="none">Unassigned</NativeSelectOption></NativeSelect></Field>
-      <Field label="Milestone number (optional)"><Input type="number" min="1" step="1" disabled={filter.noMilestone} value={filter.milestone ?? ""} onChange={e => setFilter({ ...filter, milestone: e.target.value || null })}/></Field>
-      <Field label="Include issues closed in the last days"><Input type="number" min="0" max="365" value={filter.includeClosedDays} onChange={e => setFilter({ ...filter, includeClosedDays: Number(e.target.value) })}/></Field>
-    </div>
-    <label className="flex gap-2 text-sm"><input type="checkbox" checked={filter.noMilestone} onChange={e => setFilter({ ...filter, noMilestone: e.target.checked, milestone: null })}/>Only issues without a milestone</label>
-    <label className="flex gap-2 text-sm"><input type="checkbox" checked={projects} onChange={e => setProjects(e.target.checked)}/>Use milestones as projects</label>
+    <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
+      <legend className="px-1 text-sm font-semibold">Sync filters</legend>
+      <p className="text-sm text-muted-foreground">Choose which GitHub issues sync with Chaos. Linked tasks that no longer match stay in Chaos but stop syncing.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Labels (comma separated)"><Input value={labels} onChange={e => setLabels(e.target.value)}/></Field>
+        <Field label="Label matching"><NativeSelect value={filter.labelMode} onChange={e => setFilter({ ...filter, labelMode: e.target.value })}><NativeSelectOption value="any">Any label</NativeSelectOption><NativeSelectOption value="all">All labels</NativeSelectOption></NativeSelect></Field>
+        <Field label="Assigned to"><NativeSelect value={filter.assignee} onChange={e => setFilter({ ...filter, assignee: e.target.value })}><NativeSelectOption value="any">Anyone</NativeSelectOption><NativeSelectOption value="me">Me</NativeSelectOption><NativeSelectOption value="none">Unassigned</NativeSelectOption></NativeSelect></Field>
+        <Field label="Milestone number (optional)"><Input type="number" min="1" step="1" disabled={filter.noMilestone} value={filter.milestone ?? ""} onChange={e => setFilter({ ...filter, milestone: e.target.value || null })}/></Field>
+        <Field label="Include issues closed in the last days"><Input type="number" min="0" max="365" value={filter.includeClosedDays} onChange={e => setFilter({ ...filter, includeClosedDays: Number(e.target.value) })}/></Field>
+      </div>
+      <p className="text-xs text-muted-foreground">Use 0 to import only open issues; linked issues can still sync when closed.</p>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={filter.noMilestone} onChange={e => setFilter({ ...filter, noMilestone: e.target.checked, milestone: null })}/>Only issues without a milestone</label>
+    </fieldset>
+    <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
+      <legend className="px-1 text-sm font-semibold">Task destination</legend>
+      <p className="text-sm text-muted-foreground">Choose where newly imported issues become tasks. Changing this destination does not move existing tasks.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Destination"><NativeSelect value={container} onChange={e => { setContainer(e.target.value); setSection(""); }}>{targets.map(t => <NativeSelectOption key={t.id} value={t.id}>{t.name}</NativeSelectOption>)}</NativeSelect></Field>
+        <Field label="Section"><NativeSelect value={section} onChange={e => setSection(e.target.value)}><NativeSelectOption value="">No section</NativeSelectOption>{targets.find(t => t.id === container)?.sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>
+      </div>
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={projects} onChange={e => setProjects(e.target.checked)}/>Use milestones as projects</label>
+      <p className="text-xs text-muted-foreground">When enabled, issues with a milestone go to a project for that milestone; the destination above is used for issues without one. A milestone change can move a linked task whose placement is still managed by GitHub.</p>
+    </fieldset>
     <div className="flex gap-2"><Button disabled={busy || !container}>Save repository</Button><Button type="button" variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button></div>
   </form>;
 }

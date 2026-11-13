@@ -1,7 +1,7 @@
 import { TaskViewContext } from "./TaskViewAction";
 import { GitHubTaskNotice } from "./GitHubTaskNotice";
 import { GitHubTaskMark } from "./GitHubTaskMark";
-import type { GitHubTaskSyncResponse } from "#neoastra";
+import { gitHubRpc, type GitHubTaskSyncResponse } from "#neoastra";
 import React from "react";
 import { ContextMenu } from "radix-ui";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadAnchorResponse, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type SubtaskResponse, type SubtaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
@@ -361,6 +361,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     resolvePads: async (itemIds: string[]) => { const result = await padApi.resolveLinks({ itemIds }); return result.ok ? [...result.targets] : []; },
     onOpenPad: (itemId: string) => openPadRef.current({ itemId }),
   }), [markdownApi, padApi]);
+  const taskViewLinks: MarkdownLinks = React.useMemo(() => ({ ...links,
+    loadGitHubImage: async (url: string) => {
+      if (!editing?.id) return { error: "Task is unavailable." };
+      const result = await gitHubRpc.attachment({ taskId: editing.id, url });
+      return result.ok && result.contentType && result.base64
+        ? { dataUrl: `data:${result.contentType};base64,${result.base64}` }
+        : { error: result.error?.message ?? "Could not load this GitHub attachment.", issueUrl: result.issueUrl ?? undefined };
+    },
+  }), [links, editing?.id]);
   const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
     if (!text.trim()) return [];
     const [result, notes] = await Promise.all([
@@ -820,7 +829,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <h3 className="text-xl font-semibold [overflow-wrap:anywhere]">{editing.title}</h3>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"><StatusBadge status={editing.status}/><PriorityBadge priority={editing.priority}/><span>{editing.category}</span>{editing.estimateMinutes != null && <span>{editing.estimateMinutes} min</span>}</div>
         {(editing.plannedDate || editing.dueDate) && <div className="mt-3 grid gap-1 text-sm text-muted-foreground">{editing.plannedDate && <p>Planned {editing.plannedDate}{editing.plannedTime ? ` ${editing.plannedTime}` : ""}</p>}{editing.dueDate && <p>Due {editing.dueDate}{editing.dueTime ? ` ${editing.dueTime}` : ""}</p>}</div>}
-        <section className="mt-6"><h4 className="mb-2 font-semibold">Notes</h4>{editing.notes ? <MarkdownPreview source={editing.notes} links={links}/> : <p className="text-sm text-muted-foreground">No notes.</p>}</section>
+        <section className="mt-6"><h4 className="mb-2 font-semibold">Notes</h4>{editing.notes ? <MarkdownPreview key={editing.id} source={editing.notes} links={taskViewLinks}/> : <p className="text-sm text-muted-foreground">No notes.</p>}</section>
         {subtasks.length > 0 && <section className="mt-6"><h4 className="mb-2 font-semibold">Subtasks</h4><ul className="grid gap-3">{subtasks.map(subtask => <li key={subtask.id}><div className="flex items-center gap-2"><StatusBadge status={subtask.status}/><span className="font-medium">{subtask.title}</span></div>{subtask.notes && <MarkdownPreview source={subtask.notes} links={links} className="mt-2"/>}</li>)}</ul></section>}
         <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>Edit task</Button>
       </div> : <><Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">

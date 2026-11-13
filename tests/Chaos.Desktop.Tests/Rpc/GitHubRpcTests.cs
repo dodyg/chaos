@@ -1,4 +1,8 @@
 using System.Text.Json;
+using System.Net;
+using Chaos.Application.Contracts;
+using Chaos.Application.Tasks;
+using Chaos.Infrastructure.GitHub;
 using Chaos.Application.Abstractions;
 using Chaos.Application.GitHub;
 using Chaos.Desktop.Services;
@@ -10,6 +14,62 @@ namespace Chaos.Desktop.Tests.Rpc;
 
 public sealed class GitHubRpcTests
 {
+    private sealed class AttachmentRunner : IGitHubCliRunner
+    {
+        public Task<string> RunAsync(IReadOnlyList<string> arguments, CancellationToken ct) => Task.FromResult(arguments[0] == "--version" ? "gh version 2.103.3" : "fixture-token");
+    }
+    private sealed class AttachmentHandler : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls++;
+            if (request.RequestUri!.Host == "api.github.com") return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"id\":1,\"login\":\"person\"}") });
+            if (request.RequestUri.Host == "github.com")
+            {
+                var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                redirect.Headers.Location = new Uri("https://github-production-user-asset-6210df.s3.amazonaws.com/file");
+                return Task.FromResult(redirect);
+            }
+            var content = new ByteArrayContent([1, 2, 3]); content.Headers.ContentType = new("image/png");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
+    }
+
+    [Test]
+    public async Task AttachmentAsync_RequiresSavedUrlOnLinkedTask()
+    {
+        const string url = "https://github.com/user-attachments/assets/36da6f97-9797-4896-a07d-a5f92975d8e8";
+        var clock = new FixedTimeProvider(new(2026, 11, 12, 8, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var api = new FakeGitHub { Account = new(1, "person") };
+        api.PutRepository(new(9, "R9", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", true, true));
+        var commands = new GitHubConnectionCommands(storage.Store, api, ids, clock);
+        var connection = await commands.ConnectAsync(new(Op()));
+        var inbox = await storage.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
+        var repo = await commands.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 9, inbox, null, GitHubFilter.Empty, false));
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var linked = (await tasks.CaptureAsync(new(Op(), inbox, "Linked", $"<img src=\"{url}\"/>"))).Task;
+        var unrelated = (await tasks.CaptureAsync(new(Op(), inbox, "Other", "No attachment"))).Task;
+        await storage.Store.ExecuteAsync(async (s, ct) => {
+            await s.GitHub.AddIssueLinkAsync(new GitHubIssueLinkRecord { Id = Guid.NewGuid().ToString(), ConnectionId = connection.Id, RepositorySubscriptionId = repo.Id,
+                TaskId = linked.Id, IssueId = 12, IssueNodeId = "I12", IssueNumber = 12, HtmlUrl = "https://github.com/person/repo/issues/12", BaseJson = "{}",
+                BaseRemoteUpdatedUtc = clock.GetUtcNow(), CreatedAtUtc = clock.GetUtcNow(), UpdatedAtUtc = clock.GetUtcNow() }, ct);
+            return true;
+        });
+        var handler = new AttachmentHandler();
+        using var client = new GitHubCliClient(new AttachmentRunner(), handler, clock);
+        var rpc = new GitHubRpcService(commands, storage.Store, attachments: client);
+        var denied = await rpc.AttachmentAsync(new(unrelated.Id, url), CancellationToken.None);
+        await Assert.That(denied.Ok).IsFalse();
+        await Assert.That(handler.Calls).IsEqualTo(0);
+        var allowed = await rpc.AttachmentAsync(new(linked.Id, url), CancellationToken.None);
+        await Assert.That(allowed.Ok).IsTrue();
+        await Assert.That(allowed.ContentType).IsEqualTo("image/png");
+        await Assert.That(allowed.Base64).IsEqualTo("AQID");
+    }
+
     private static string Op() => Guid.NewGuid().ToString();
     [Test]
     public async Task ConnectionAndRepository_RpcRoundTrip_UsesStringIdsAndLocalStatus()

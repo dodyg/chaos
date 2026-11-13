@@ -5,11 +5,14 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.GitHub;
 using NeoAstra.Rpc;
+using Chaos.Infrastructure.GitHub;
 
 namespace Chaos.Desktop.Services;
 
 public sealed record GitHubStatusRequest();
 public sealed record GitHubTaskSyncRequest(string TaskId);
+public sealed record GitHubAttachmentRequest(string TaskId, string Url);
+public sealed record GitHubAttachmentResponse(bool Ok, string? ContentType, string? Base64, string? IssueUrl, TaskErrorResponse? Error);
 public sealed record GitHubSelfAssignmentRequest(string OperationId, string TaskId, bool Assigned);
 public sealed record GitHubTaskActionRequest(string OperationId, string TaskId, string ExpectedVersion);
 public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error, bool? AssignedToMe = null, bool PostDiaryByDefault = false,
@@ -36,7 +39,7 @@ public sealed record GitHubSyncDto(bool Running, string? StartedAtUtc, string? F
 public sealed record GitHubSyncResponse(bool Ok, GitHubSyncDto? Sync, TaskErrorResponse? Error);
 
 [NeoRpcService("github", Version = 1)]
-public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplicationStore store, GitHubSyncEngine? sync = null)
+public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplicationStore store, GitHubSyncEngine? sync = null, GitHubCliClient? attachments = null)
 {
     [NeoRpcMethod("status")]
     public async ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct)
@@ -87,6 +90,37 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             }, ct);
         }
         catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
+    }
+
+    [NeoRpcMethod("attachment")]
+    public async ValueTask<GitHubAttachmentResponse> AttachmentAsync(GitHubAttachmentRequest request, CancellationToken ct)
+    {
+        string? issueUrl = null;
+        try
+        {
+            if (attachments is null) throw new AppException(AppErrorKind.UnsupportedCapability, "GitHub attachments are unavailable.");
+            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var url) || request.Url.Length > 512)
+                throw AppException.Validation("url", "Invalid attachment URL.");
+            var context = await store.QueryAsync(async (s, token) =>
+            {
+                var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
+                var space = await s.Spaces.GetPersonalByOwnerAsync(profile.Id, token) ?? throw AppException.NotFound("Personal space is unavailable.");
+                var task = await s.Tasks.GetIncludingDeletedAsync(request.TaskId, token);
+                if (task is null || task.DeletedAtUtc is not null || task.SpaceId != space.Id || !task.Notes.Contains(request.Url, StringComparison.Ordinal))
+                    throw AppException.NotFound("Attachment was not found in this task.");
+                var link = await s.GitHub.FindLinkByTaskAsync(task.Id, token);
+                if (link is null || link.State == 4) throw AppException.NotFound("Task is not connected to GitHub.");
+                var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
+                if (connection is null || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id)
+                    throw AppException.NotFound("GitHub connection is unavailable.");
+                return (Account: new GitHubAccount(connection.AccountId, connection.AccountLogin), IssueUrl: GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null);
+            }, ct);
+            issueUrl = context.IssueUrl;
+            var image = await attachments.ReadAttachmentAsync(context.Account, url, ct);
+            return new(true, image.ContentType, Convert.ToBase64String(image.Data), issueUrl, null);
+        }
+        catch (AppException e) { return new(false, null, null, issueUrl, TaskRpcService.ToErrorResponse(e)); }
+        catch (GitHubApiException e) { return new(false, null, null, issueUrl, Error(e)); }
     }
 
     [NeoRpcMethod("syncNow")]

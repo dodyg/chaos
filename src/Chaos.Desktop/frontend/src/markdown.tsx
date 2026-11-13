@@ -1,4 +1,5 @@
 import React from "react";
+import { Dialog } from "radix-ui";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -7,14 +8,14 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import type { Root, RootContent, PhrasingContent, ListItem, TableCell } from "mdast";
 import type { Root as HastRoot, ElementContent } from "hast";
-import { ImageOff, Link2Off } from "lucide-react";
+import { ImageOff, Link2Off, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
  * Markdown for notes, diary entries and (later) pad items (PLAN §9). Source stays raw GFM.
  * Rendering walks the mdast tree into React elements: there is no HTML string anywhere, raw
- * HTML in the source is shown as text, images never load (a placeholder stands in until
- * attachments arrive), and only http/https/mailto links are clickable — through the host
+ * HTML in the source is shown as text except for isolated image tags with web URLs. Markdown
+ * images remain placeholders, and only http/https/mailto links are clickable — through the host
  * opener, after a click. Internal links are `[label](chaos:task/<id>)`: they resolve by ID,
  * so a rename keeps working and a deleted target shows a recoverable broken-link state.
  */
@@ -106,6 +107,7 @@ export type MarkdownLinks = {
   resolve?: (taskIds: string[]) => Promise<LinkTarget[]>;
   onOpenTask?: (taskId: string) => void;
   onOpenExternal?: (url: string) => void;
+  loadGitHubImage?: (url: string) => Promise<{ dataUrl?: string; issueUrl?: string; error?: string }>;
   /** Resolved pad-note link targets, keyed by lowercase note ID. */
   padTargets?: ReadonlyMap<string, LinkTarget>;
   resolvePads?: (itemIds: string[]) => Promise<LinkTarget[]>;
@@ -136,6 +138,63 @@ export function MarkdownPreview({ source, links = {}, compact = false, className
   const effective = { ...links, ...(resolved ? { targets: resolved } : {}), ...(resolvedPads ? { padTargets: resolvedPads } : {}) };
   if (!source.trim()) return <p className="text-muted-foreground italic">Nothing written yet.</p>;
   return <div data-slot="markdown" className={cn("markdown grid min-w-0 [overflow-wrap:anywhere]", compact ? "gap-1.5" : "gap-3", className)}>{renderBlocks(tree.children, effective)}</div>;
+}
+
+
+/** Extract only an isolated image element; never insert source HTML into the document. */
+function htmlImage(source: string, links: MarkdownLinks, key: number): React.ReactNode | null {
+  if (!/^\s*<img\b[\s\S]*>\s*$/i.test(source)) return null;
+  const template = document.createElement("template");
+  template.innerHTML = source.trim();
+  const nodes = template.content.childNodes;
+  if (nodes.length !== 1 || !(nodes[0] instanceof HTMLElement) || nodes[0].tagName !== "IMG") return null;
+  const image = nodes[0];
+  const src = image.getAttribute("src") ?? "";
+  try {
+    const url = new URL(src);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  } catch { return null; }
+  const dimension = (name: string) => {
+    const value = image.getAttribute(name);
+    return value && /^[1-9]\d{0,3}$/.test(value) ? Number(value) : undefined;
+  };
+  return <PreviewImage key={key} src={src} alt={image.getAttribute("alt") ?? ""} width={dimension("width")} height={dimension("height")} links={links}/>;
+}
+
+function PreviewImage({ src, alt, width, height, links }: { src: string; alt: string; width?: number; height?: number; links: MarkdownLinks }) {
+  const [image, setImage] = React.useState(src);
+  const [failed, setFailed] = React.useState<{ error: string; issueUrl?: string } | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  React.useEffect(() => { setImage(src); setFailed(null); setLoading(false); }, [src]);
+  const active = React.useRef(0);
+  React.useEffect(() => () => { active.current++; }, [src]);
+  async function onError() {
+    if (image === src && links.loadGitHubImage && /^https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]{36}$/i.test(src)) {
+      const request = ++active.current;
+      setLoading(true);
+      try {
+        const result = await links.loadGitHubImage(src);
+        if (request !== active.current) return;
+        if (result.dataUrl) { setImage(result.dataUrl); setLoading(false); return; }
+        setFailed({ error: result.error ?? "Could not load this GitHub attachment.", issueUrl: result.issueUrl });
+      } catch { if (request === active.current) setFailed({ error: "Could not load this GitHub attachment." }); }
+      if (request === active.current) setLoading(false);
+    } else setFailed({ error: "Could not load this image." });
+  }
+  if (failed) return <span className="grid gap-1 text-sm text-muted-foreground" role="status">{failed.error}{failed.issueUrl && <button type="button" className="w-fit text-primary underline" onClick={() => links.onOpenExternal?.(failed.issueUrl!)}>Open issue on GitHub</button>}</span>;
+  if (loading) return <span className="text-sm text-muted-foreground" role="status">Loading image…</span>;
+  return <Dialog.Root>
+    <Dialog.Trigger asChild><button type="button" className="inline-block max-w-full cursor-zoom-in rounded-sm text-left focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Enlarge ${alt || "image"}`}>
+      <img src={image} alt={alt} width={width} height={height} loading="lazy" referrerPolicy="no-referrer" className="h-auto max-w-full" onError={() => void onError()}/>
+    </button></Dialog.Trigger>
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 z-50 bg-black/80"/>
+      <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 flex h-[min(94vh,1000px)] w-[min(96vw,1400px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border bg-background p-3 shadow-xl focus:outline-none">
+        <div className="flex shrink-0 items-center justify-between gap-3 pb-2"><Dialog.Title className="truncate text-sm font-medium">{alt || "Image"}</Dialog.Title><Dialog.Close asChild><button type="button" className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="Close image"><X className="size-5"/></button></Dialog.Close></div>
+        <div className="flex min-h-0 flex-1 overflow-auto"><img src={image} alt={alt} referrerPolicy="no-referrer" className="m-auto h-auto max-w-none shrink-0"/></div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>;
 }
 
 function renderBlocks(nodes: RootContent[], links: MarkdownLinks): React.ReactNode[] {
@@ -171,7 +230,7 @@ function renderBlock(node: RootContent, links: MarkdownLinks, key: number): Reac
         <tbody>{body.map((row, index) => <tr key={index}>{row.children.map((value, column) => cell(value, column, false))}</tr>)}</tbody>
       </table></div>;
     }
-    case "html": return <pre key={key} className="rounded-md bg-muted px-2 py-1 text-xs whitespace-pre-wrap" title="HTML is shown as text">{node.value}</pre>;
+    case "html": return htmlImage(node.value, links, key) ?? <pre key={key} className="rounded-md bg-muted px-2 py-1 text-xs whitespace-pre-wrap" title="HTML is shown as text">{node.value}</pre>;
     case "definition": return null;
     case "footnoteDefinition": return <div key={key} className="text-xs text-muted-foreground">[{node.identifier}] {renderBlocks(node.children, links)}</div>;
     default: return "children" in node ? <div key={key}>{renderInline(node.children as PhrasingContent[], links)}</div> : null;
@@ -201,7 +260,7 @@ function renderPhrasing(node: PhrasingContent, links: MarkdownLinks, key: number
     case "delete": return <del key={key}>{renderInline(node.children, links)}</del>;
     case "inlineCode": return <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{node.value}</code>;
     case "break": return <br key={key}/>;
-    case "html": return <code key={key} className="rounded bg-muted px-1 font-mono text-[0.85em]" title="HTML is shown as text">{node.value}</code>;
+    case "html": return htmlImage(node.value, links, key) ?? <code key={key} className="rounded bg-muted px-1 font-mono text-[0.85em]" title="HTML is shown as text">{node.value}</code>;
     case "image": case "imageReference": {
       const alt = node.alt || "image";
       return <span key={key} role="img" aria-label={`Image not loaded: ${alt}`} className="inline-flex items-center gap-1 rounded border border-dashed px-1.5 py-0.5 text-xs text-muted-foreground">

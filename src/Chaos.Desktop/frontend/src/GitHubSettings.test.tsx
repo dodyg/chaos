@@ -9,7 +9,7 @@ Object.defineProperties(globalThis, {
   navigator: { value: dom.window.navigator, configurable: true }, HTMLElement: { value: dom.window.HTMLElement, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
 });
-const { render, screen, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, waitFor, cleanup, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { GitHubSettings } = await import("./GitHubSettings");
 const disconnected: GitHubStatusResponse = { ok: true, connection: null, sync: null, repositories: [], targets: [{ id: "inbox", name: "Inbox", sections: [] }], error: null };
@@ -38,7 +38,14 @@ test("browsing and adding a repository sends filters and string identity", async
   render(<GitHubSettings api={api}/>); const user = userEvent.setup({ document: dom.window.document });
   try {
     await user.click(await screen.findByRole("button", { name: "Browse repositories" })); await user.click(await screen.findByRole("button", { name: "Choose" }));
-    await user.type(screen.getByLabelText("Labels (comma separated)"), "bug, urgent");
+    const filters = screen.getByRole("group", { name: "Sync filters" });
+    const destination = screen.getByRole("group", { name: "Task destination" });
+    assert.ok(within(filters).getByLabelText("Labels (comma separated)"));
+    assert.ok(within(filters).getByLabelText("Only issues without a milestone"));
+    assert.ok(within(destination).getByLabelText("Destination"));
+    assert.ok(within(destination).getByLabelText("Section"));
+    assert.ok(within(destination).getByLabelText("Use milestones as projects"));
+    await user.type(within(filters).getByLabelText("Labels (comma separated)"), "bug, urgent");
     await user.selectOptions(screen.getByLabelText("Assigned to"), "me");
     await user.click(screen.getByRole("button", { name: "Save repository" }));
     await waitFor(() => assert.equal(added.length, 1));

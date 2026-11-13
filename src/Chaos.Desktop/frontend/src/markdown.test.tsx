@@ -10,6 +10,9 @@ Object.defineProperties(globalThis, {
   document: { value: dom.window.document, configurable: true },
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
+  MutationObserver: { value: dom.window.MutationObserver, configurable: true },
+  CustomEvent: { value: dom.window.CustomEvent, configurable: true },
+  NodeFilter: { value: dom.window.NodeFilter, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
   requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
   cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
@@ -66,6 +69,51 @@ test("scripts, raw HTML, unsafe links and images never become live elements", as
   assert.equal(screen.queryByRole("button", { name: "file" }), null);
   fireEvent.click(screen.getByRole("button", { name: "web" }));
   assert.deepEqual(opened, ["https://example.org/page"]);
+  cleanup();
+});
+
+test("HTML image tags render safely and fit the preview", () => {
+  const source = '<img width="447" height="624" alt="Screenshot" src="https://github.com/user-attachments/assets/example" onerror="alert(1)" />';
+  const { container } = render(<MarkdownPreview source={source}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  const image = screen.getByRole("img", { name: "Screenshot" }) as HTMLImageElement;
+  assert.equal(image.getAttribute("src"), "https://github.com/user-attachments/assets/example");
+  assert.equal(image.width, 447);
+  assert.equal(image.height, 624);
+  assert.ok(image.classList.contains("max-w-full"));
+  assert.equal(container.querySelector("[onerror]"), null);
+  cleanup();
+
+  const blocked = render(<MarkdownPreview source={'<img src="file:///C:/secret" alt="Private" />'}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  assert.equal(blocked.container.querySelector("img"), null);
+  cleanup();
+});
+
+test("an image opens in a centered viewer and closes with Escape", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<MarkdownPreview source={'<img src="https://example.org/image.png" alt="Screenshot" />'}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  await user.click(screen.getByRole("button", { name: "Enlarge Screenshot" }));
+  const viewer = screen.getByRole("dialog", { name: "Screenshot" });
+  assert.equal((within(viewer).getByRole("img", { name: "Screenshot" }) as HTMLImageElement).getAttribute("src"), "https://example.org/image.png");
+  await user.keyboard("{Escape}");
+  await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Screenshot" }), null));
+  cleanup();
+});
+
+test("a private GitHub image retries through the task loader and reports failures", async () => {
+  const url = "https://github.com/user-attachments/assets/36da6f97-9797-4896-a07d-a5f92975d8e8";
+  const requested: string[] = [];
+  const links = { loadGitHubImage: async (value: string) => { requested.push(value); return { dataUrl: "data:image/png;base64,AQID" }; } };
+  render(<MarkdownPreview source={`<img src="${url}" alt="Screenshot" />`} links={links}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  fireEvent.error(screen.getByRole("img", { name: "Screenshot" }));
+  await waitFor(() => assert.equal((screen.getByRole("img", { name: "Screenshot" }) as HTMLImageElement).getAttribute("src"), "data:image/png;base64,AQID"));
+  assert.deepEqual(requested, [url]);
+  cleanup();
+  const opened: string[] = [];
+  render(<MarkdownPreview source={`<img src="${url}" alt="Screenshot" />`} links={{ loadGitHubImage: async () => ({ error: "Access denied", issueUrl: "https://github.com/a/b/issues/1" }), onOpenExternal: value => opened.push(value) }}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  fireEvent.error(screen.getByRole("img", { name: "Screenshot" }));
+  await screen.findByText("Access denied");
+  fireEvent.click(screen.getByRole("button", { name: "Open issue on GitHub" }));
+  assert.deepEqual(opened, ["https://github.com/a/b/issues/1"]);
   cleanup();
 });
 

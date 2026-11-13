@@ -30,6 +30,8 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
         _rateLimiter = new(clock);
     }
 
+    public Task<(string ContentType, byte[] Data)> ReadAttachmentAsync(GitHubAccount account, Uri endpoint, CancellationToken ct) => _transport.ReadAttachmentAsync(account, endpoint, ct);
+
     public async Task<GitHubAccount> GetSetupAccountAsync(CancellationToken ct) =>
         await _transport.GetAccountAsync(await _credentials.GetActiveLoginAsync(ct), ct);
 

@@ -25,6 +25,52 @@ public sealed class GitHubCliClientTests
     }
 
     [Test]
+    public async Task ReadAttachmentAsync_UsesCredentialOnlyForGitHub_AndDownloadsImage()
+    {
+        var handler = new Handler((request, _) =>
+        {
+            if (request.RequestUri!.Host == "github.com")
+            {
+                if (request.Headers.Authorization?.Parameter != "fixture-a") throw new InvalidOperationException("Missing GitHub credential.");
+                var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+                redirect.Headers.Location = new Uri("https://github-production-user-asset-6210df.s3.amazonaws.com/image?signature=test");
+                return redirect;
+            }
+            if (request.Headers.Authorization is not null) throw new InvalidOperationException("Credential reached storage.");
+            var content = new ByteArrayContent([1, 2, 3]);
+            content.Headers.ContentType = new("image/png");
+            return new(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        var image = await client.ReadAttachmentAsync(new(1, "person"), new Uri("https://github.com/user-attachments/assets/36da6f97-9797-4896-a07d-a5f92975d8e8"), CancellationToken.None);
+        await Assert.That(image.ContentType).IsEqualTo("image/png");
+        await Assert.That(image.Data).IsEquivalentTo(new byte[] { 1, 2, 3 });
+    }
+
+    [Test]
+    public async Task ReadAttachmentAsync_RejectsUntrustedRedirect()
+    {
+        var handler = new Handler((_, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Redirect);
+            response.Headers.Location = new Uri("https://example.com/steal");
+            return response;
+        });
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        await Assert.That(async () => await client.ReadAttachmentAsync(new(1, "person"), new Uri("https://github.com/user-attachments/assets/36da6f97-9797-4896-a07d-a5f92975d8e8"), CancellationToken.None)).Throws<GitHubApiException>();
+        await Assert.That(handler.Paths.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ReadAttachmentAsync_RejectsOtherHostsBeforeReadingCredential()
+    {
+        var handler = new Handler((_, _) => throw new InvalidOperationException("Unexpected request."));
+        using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
+        await Assert.That(async () => await client.ReadAttachmentAsync(new(1, "person"), new Uri("https://example.com/user-attachments/assets/36da6f97-9797-4896-a07d-a5f92975d8e8"), CancellationToken.None)).Throws<GitHubApiException>();
+        await Assert.That(handler.Paths.Count).IsEqualTo(0);
+    }
+
+    [Test]
     [Arguments("open")]
     [Arguments("closed")]
     public async Task InitialIssueQueriesUseTheRequestedState(string state)

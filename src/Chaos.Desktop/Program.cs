@@ -148,7 +148,7 @@ internal static class Program
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddJournalRpcService(new JournalRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
-                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine));
+                rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine, githubApi));
             });
         });
     }
@@ -171,6 +171,8 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(GitHubAttachmentRequest))]
+[JsonSerializable(typeof(GitHubAttachmentResponse))]
 [JsonSerializable(typeof(GitHubTaskSyncRequest))]
 [JsonSerializable(typeof(GitHubTaskSyncResponse))]
 [JsonSerializable(typeof(GitHubSyncRequest))]

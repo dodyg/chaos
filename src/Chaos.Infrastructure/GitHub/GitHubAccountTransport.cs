@@ -83,6 +83,39 @@ public sealed class GitHubAccountTransport : IDisposable
         catch (FormatException) { throw new GitHubApiException(GitHubErrorKind.Validation); }
     }
 
+    /// <summary>Reads a GitHub user attachment without sending credentials to its storage redirect.</summary>
+    public async Task<(string ContentType, byte[] Data)> ReadAttachmentAsync(GitHubAccount account, Uri endpoint, CancellationToken ct)
+    {
+        if (endpoint.Scheme != "https" || endpoint.Host != "github.com" || !endpoint.IsDefaultPort || endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(endpoint.AbsolutePath, @"^/user-attachments/assets/[0-9a-fA-F-]{36}$") ||
+            !Guid.TryParseExact(endpoint.AbsolutePath[25..], "D", out _))
+            throw new GitHubApiException(GitHubErrorKind.Validation);
+        try
+        {
+            var credential = await ReadCredentialAsync(account.Login, ct);
+            var identity = await ReadIdentityAsync(credential, ct);
+            if (identity?.Id != account.Id || account.Id <= 0) throw new GitHubApiException(GitHubErrorKind.AccountMismatch);
+            using var request = Create(HttpMethod.Get, endpoint, credential);
+            using var redirect = await SendBoundedAsync(request, ct);
+            var target = redirect.Headers.Location;
+            if (redirect.StatusCode != HttpStatusCode.Redirect || target is null || !target.IsAbsoluteUri || target.Scheme != "https" ||
+                target.Host != "github-production-user-asset-6210df.s3.amazonaws.com" || !target.IsDefaultPort || target.UserInfo.Length != 0 || target.Fragment.Length != 0)
+                throw new GitHubApiException(redirect.StatusCode == HttpStatusCode.NotFound ? GitHubErrorKind.NotFound : GitHubErrorKind.Server);
+            using var download = new HttpRequestMessage(HttpMethod.Get, target);
+            download.Headers.UserAgent.ParseAdd("Chaos-GitHub/1.0");
+            using var response = await SendBoundedAsync(download, ct);
+            if (!response.IsSuccessStatusCode) throw new GitHubApiException(GitHubErrorKind.Server);
+            var contentType = response.Content.Headers.ContentType?.MediaType;
+            if (contentType is not ("image/png" or "image/jpeg" or "image/gif" or "image/webp")) throw new GitHubApiException(GitHubErrorKind.Validation);
+            return (contentType, await response.Content.ReadAsByteArrayAsync(ct));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new GitHubApiException(GitHubErrorKind.Network); }
+        catch (HttpRequestException) { throw new GitHubApiException(GitHubErrorKind.Network); }
+        catch (IOException) { throw new GitHubApiException(GitHubErrorKind.Network); }
+        catch (JsonException) { throw new GitHubApiException(GitHubErrorKind.Server); }
+        catch (FormatException) { throw new GitHubApiException(GitHubErrorKind.Validation); }
+    }
+
     private async Task<string> ReadCredentialAsync(string login, CancellationToken ct)
     {
         var credential = await _credentials.ReadAsync(login, ct);
