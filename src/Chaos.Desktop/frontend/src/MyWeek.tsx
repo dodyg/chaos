@@ -1,6 +1,7 @@
 import { TaskViewAction } from "./TaskViewAction";
 import { asCategory, categoryIcon, categoryTone, type Focus } from "./category";
 import React from "react";
+import { DateText } from "./dates";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
 import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -178,7 +179,7 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
         {badge}
         {task.estimateMinutes !== null ? <span className="inline-flex items-center gap-1"><Clock className="size-3"/>{minutesText(task.estimateMinutes)}</span> : <span>No estimate</span>}
         {task.category === "Work" && <Badge variant="outline">Work</Badge>}
-        {task.dueDate && <span>Due {task.dueDate}</span>}
+        {task.dueDate && <DateText kind="due" date={task.dueDate}/>}
         <StatusBadge status={task.status}/>
         <PriorityBadge priority={task.priority}/>
       </div>

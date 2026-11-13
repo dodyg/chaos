@@ -68,7 +68,7 @@ function api(overrides: { tagRpc?: Partial<typeof tagRpc>; queryRpc?: Partial<ty
       suggest: async () => ({ ok: true, tags: [], error: null }),
       ...overrides.tagRpc },
     queryRpc: { ...queryRpc,
-      counts: async () => ({ ok: true, views: [{ view: "Today", count: 3 }], tags: [{ tagId: "home", count: 2 }], error: null }),
+      counts: async () => ({ ok: true, views: [{ view: "Today", count: 3 }], tags: [{ tagId: "home", count: 2 }], containers: [], error: null }),
       run: async () => ({ ok: true, rows: [], totalCount: 0, nextCursor: null, error: null }),
       ...overrides.queryRpc },
   };

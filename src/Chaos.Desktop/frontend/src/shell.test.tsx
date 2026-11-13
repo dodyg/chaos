@@ -100,6 +100,8 @@ test("the sidebar quit button asks the host to end Chaos", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   render(<App initialView="settings" api={{ taskRpc, containerRpc, shellRpc: api }} templates={<></>}/>, { container: dom.window.document.body });
   await user.click(await screen.findByRole("button", { name: /Quit Chaos/ }));
+  assert.equal(quits, 0, "the first click only asks");
+  await user.click(screen.getByRole("button", { name: "Confirm quit" }));
 
   assert.equal(quits, 1);
   cleanup();

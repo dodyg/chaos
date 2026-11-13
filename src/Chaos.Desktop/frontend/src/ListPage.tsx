@@ -1,10 +1,12 @@
 import React from "react";
+import { DateText, friendlyDate, relativeDays, useToday } from "./dates";
 import { ContextMenu } from "radix-ui";
 import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
-import { Archive, ArchiveRestore, CalendarDays, Clock, Eye, Settings2, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, Settings2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Count, DeletedItems, EmptyState, Field, PageHeader, PriorityBadge, StatusBadge, isFinished, label, statuses } from "@/components/common";
 import { ContainerManagement } from "./ContainerManagement";
@@ -42,6 +44,16 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const drag = useDragReorder();
+  const today = useToday();
+  const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
+  const isProject = selected?.kind === "Project";
+  const taskVersions = tasks.map(task => `${task.id}:${task.version}`).join("|");
+  React.useEffect(() => {
+    let active = true;
+    setProgress(null);
+    if (isProject) void containerApi.progress({ containerId }).then(result => { if (active && result.ok) setProgress({ done: result.doneCount, total: result.totalCount }); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [containerApi, containerId, isProject, taskVersions]);
   const listName = selected?.name ?? "Inbox";
   const openCount = tasks.filter(t => !isFinished(t.status)).length;
   const listDefault = asCategory(selected?.defaultCategory);
@@ -49,9 +61,12 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   const focusedTasks = focus ? tasks.filter(task => (asCategory(task.category) ?? "Personal") === focus) : tasks;
   const hiddenByFocus = tasks.length - focusedTasks.length;
   const visibleTasks = focusedTasks.filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)));
-  const unsectioned = visibleTasks.filter(task => task.sectionId === null);
+  // "All" keeps finished tasks out of the sections, in one folded Finished group at the end.
+  const sectionedTasks = completionFilter === "all" ? visibleTasks.filter(task => !isFinished(task.status)) : visibleTasks;
+  const finishedTasks = completionFilter === "all" ? visibleTasks.filter(task => isFinished(task.status)) : [];
+  const unsectioned = sectionedTasks.filter(task => task.sectionId === null);
   const knownSectionIds = new Set(sections.map(section => section.id));
-  const unknownSections = [...new Set(visibleTasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
+  const unknownSections = [...new Set(sectionedTasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
   function reorderTask(task: TaskResponse, insertionIndex: number) {
     void run(() => taskApi.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex }));
   }
@@ -92,8 +107,8 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   function taskMeta(task: TaskResponse) {
     const parts: React.ReactNode[] = [];
     if (task.status !== "NotStarted") parts.push(<StatusBadge key="status" status={task.status}/>);
-    if (task.dueDate) parts.push(<span key="due" className="inline-flex items-center gap-1"><CalendarDays className="size-3.5"/>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime}` : ""}</span>);
-    else if (task.plannedDate) parts.push(<span key="planned" className="inline-flex items-center gap-1"><CalendarDays className="size-3.5"/>Planned {task.plannedDate}</span>);
+    if (task.dueDate) parts.push(<DateText key="due" kind="due" date={task.dueDate} time={task.dueTime}><CalendarDays className="size-3.5"/></DateText>);
+    else if (task.plannedDate) parts.push(<DateText key="planned" kind="planned" date={task.plannedDate} time={task.plannedTime}><CalendarDays className="size-3.5"/></DateText>);
     if (task.estimateMinutes) parts.push(<span key="estimate" className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{task.estimateMinutes} min</span>);
     if (task.priority === "High" || task.priority === "Urgent") parts.push(<PriorityBadge key="priority" priority={task.priority}/>);
     return parts;
@@ -107,7 +122,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
       const siblings = tasks.filter(row => row.containerId === task.containerId && row.sectionId === task.sectionId);
       reorderTask(task, siblings.findIndex(row => row.id === target.id));
     }
-    return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div className={rowClass(editingId === task.id, task.status)}
+    return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id} data-task-row={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div className={rowClass(editingId === task.id, task.status)}
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => move(byId(id), insertionIndex))}>
       <CategoryEdge category={task.category}/>
@@ -135,34 +150,45 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   }
 
   return <>
-        <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
-          subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished${listDefault ? ` · new tasks are ${listDefault}` : ""}`}
+        <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${friendlyDate(selected.deadlineDate, today)} (${relativeDays(selected.deadlineDate, today)})` : ""}`} title={listName}
+          subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
           actions={selected && <>
             <Button type="button" variant="outline" disabled={busy} onClick={() => { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; void runContainer(() => selected.archived ? containerApi.unarchive(request) : containerApi.archive(request), "Could not update archive state."); }}>{selected.archived ? <ArchiveRestore/> : <Archive/>}{selected.archived ? "Unarchive" : "Archive"}</Button>
             <Button type="button" variant={showSettings ? "secondary" : "outline"} aria-expanded={showSettings} aria-controls="list-settings" onClick={() => setShowSettings(v => !v)}><Settings2/>{showSettings ? "Hide settings" : "Settings"}</Button>
           </>}/>
 
+        {progress && progress.total > 0 && <div className="-mt-2 flex items-center gap-3 text-xs text-muted-foreground" aria-label="Project progress">
+          <Progress value={Math.round(progress.done / progress.total * 100)} className="h-1.5 max-w-64" aria-label={`${progress.done} of ${progress.total} tasks done`}/>
+          <span className="tabular-nums">{progress.done} of {progress.total} done</span>
+        </div>}
+
         {selected && showSettings && <div id="list-settings" className="rounded-xl border bg-muted/50 p-4"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={onDeleted} onChanged={async () => { await refreshContainers(); const result = await containerApi.sections({ containerId }); if (!isStillSelected(containerId)) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
 
         <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
-          placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home ~personal`} onSubmit={onCapture}/>
+          placeholder="Add a task — try “Call Sam tomorrow 3pm #home ~personal”" onSubmit={onCapture}/>
         {newTaskCategory && <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>{categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}{listDefault ? " (list default)" : " (focus)"}</p>}
 
         <div className="flex flex-wrap items-center gap-3">
-          <Field label="Completion"><NativeSelect value={completionFilter} onChange={e => setCompletionFilter(e.target.value)}>
-            <NativeSelectOption value="all">All tasks</NativeSelectOption>
-            <NativeSelectOption value="open">Open tasks</NativeSelectOption>
-            <NativeSelectOption value="finished">Finished tasks</NativeSelectOption>
-          </NativeSelect></Field>
+          <div role="radiogroup" aria-label="Completion" className="inline-flex rounded-md border bg-muted/40 p-0.5 text-xs">
+            {([["all", "All"], ["open", "Open"], ["finished", "Finished"]] as const).map(([value, name]) => <button key={value} type="button" role="radio" aria-checked={completionFilter === value}
+              className={cn("rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50", completionFilter === value && "bg-background text-foreground shadow-xs")}
+              onClick={() => setCompletionFilter(value)}>{name}</button>)}
+          </div>
           <p role="status" className="text-xs text-muted-foreground">Showing {visibleTasks.length} of {tasks.length} tasks{hiddenByFocus > 0 && ` · ${hiddenByFocus} ${focus === "Work" ? "personal" : "work"} hidden by focus`}</p>
           {hiddenByFocus > 0 && <Button type="button" variant="ghost" size="sm" onClick={() => setFocus(null)}>Show all</Button>}
         </div>
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
-        {focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All tasks to see everything in this list.</EmptyState>}
+        {focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>}
         {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
-        {sections.map(section => { const rows = visibleTasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">{completionFilter === "all" ? "No tasks in this section." : `No ${completionFilter} tasks in this section.`}</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
-        {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(visibleTasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
+        {sections.map(section => { const rows = sectionedTasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">{completionFilter === "all" ? "No tasks in this section." : `No ${completionFilter} tasks in this section.`}</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
+        {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(sectionedTasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
+        {finishedTasks.length > 0 && <details className="group/done grid gap-1">
+          <summary className="flex cursor-pointer list-none items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none [&::-webkit-details-marker]:hidden">
+            <ChevronRight className="mr-1 size-3.5 transition-transform group-open/done:rotate-90"/>Finished<Count>{finishedTasks.length}</Count>
+          </summary>
+          <div className="pt-1">{taskList(finishedTasks, "Finished tasks")}</div>
+        </details>}
 
         {containerId && <form className="flex gap-2" onSubmit={createSection}>
           <label htmlFor="new-section" className="sr-only">New section</label>

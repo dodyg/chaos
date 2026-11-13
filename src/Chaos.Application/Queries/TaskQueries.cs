@@ -58,7 +58,13 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
                 tags[tag.Id] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = TaskView.Tag, TagId = tag.Id, Category = category }, token), token);
             }
 
-            return new ViewCounts(views, tags);
+            var containers = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var container in await session.Containers.ListBySpaceAsync(context.Space.Id, token))
+            {
+                containers[container.Id] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = TaskView.Container, ContainerId = container.Id, Category = category }, token), token);
+            }
+
+            return new ViewCounts(views, tags) { Containers = containers };
         }, ct);
 
     /// <summary>Rebuilds the full-text index from the source tables (recovery command; PLAN §5).</summary>

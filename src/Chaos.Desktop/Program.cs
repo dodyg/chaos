@@ -302,6 +302,7 @@ internal static class Program
 [JsonSerializable(typeof(ViewCountsRequest))]
 [JsonSerializable(typeof(ViewCountResponse))]
 [JsonSerializable(typeof(TagCountResponse))]
+[JsonSerializable(typeof(ContainerCountResponse))]
 [JsonSerializable(typeof(ViewCountsResponse))]
 [JsonSerializable(typeof(RebuildSearchRequest))]
 [JsonSerializable(typeof(RebuildSearchResponse))]

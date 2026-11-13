@@ -1,4 +1,5 @@
 import React from "react";
+import { DateText } from "./dates";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { AlertTriangle, CalendarArrowUp, ImagePlus, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
@@ -82,6 +83,10 @@ function minutes(total: number) {
   const hours = Math.floor(total / 60);
   return hours > 0 ? (total % 60 ? `${hours} h ${total % 60} min` : `${hours} h`) : `${total} min`;
 }
+
+const longDateFormat = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+/** "Friday, 13 November 2026" for a yyyy-MM-dd local date. */
+const longDate = (date: string) => longDateFormat.format(new Date(`${date}T00:00:00Z`));
 
 const categoryOf = (task: TaskResponse): Category => asCategory(task.category) ?? "Personal";
 
@@ -225,8 +230,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
 
   return <>
     <PageHeader eyebrow={day === today ? "Today" : "My Day"} title={title}
-      subtitle={day === today ? `Your chosen tasks for ${day}. Adding a task here never changes its planned or due date.`
-        : editable ? `Planned ahead for ${day}.` : `A look back at ${day}. Earlier days are kept as they were.`}
+      subtitle={day === today ? `Your chosen tasks for ${longDate(day)}. Adding a task here never changes its planned or due date.`
+        : editable ? `Planned ahead for ${longDate(day)}.` : `A look back at ${longDate(day)}. Earlier days are kept as they were.`}
       actions={<nav aria-label="Day" className="flex items-center gap-1">
         {background && onBackgroundChange && <Button type="button" variant={showBackground ? "secondary" : "ghost"} size="icon-sm" className="mr-1 text-muted-foreground" aria-label="My Day background" title="Change the My Day background"
           aria-expanded={showBackground} aria-controls="day-background-settings" onClick={() => setShowBackground(value => !value)}><ImagePlus/></Button>}
@@ -300,7 +305,7 @@ function DayRow({ row, selected, busy, onOpen, onView, onSetStatus, onSetCategor
 }) {
   const task = row.task;
   const done = task.status === "Done" || task.status === "Cancelled";
-  return <li><ContextMenu.Root><ContextMenu.Trigger asChild><div {...reorderTarget} draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
+  return <li data-task-row={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div {...reorderTarget} draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
     className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card py-1.5 pr-2 pl-1.5 shadow-xs hover:border-input", selected && "border-primary ring-1 ring-primary", done && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
     <CategoryEdge category={task.category}/>
     {onSetStatus && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}/>}
@@ -310,8 +315,8 @@ function DayRow({ row, selected, busy, onOpen, onView, onSetStatus, onSetCategor
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">
         {badge}
         <span className="inline-flex items-center gap-1"><FolderKanban className="size-3.5"/>{row.containerName}</span>
-        {task.dueDate && <span>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime.slice(0, 5)}` : ""}</span>}
-        {task.plannedDate && <span>Planned {task.plannedDate}</span>}
+        {task.dueDate && <DateText kind="due" date={task.dueDate} time={task.dueTime}/>}
+        {task.plannedDate && <DateText kind="planned" date={task.plannedDate} time={task.plannedTime}/>}
         {task.estimateMinutes !== null && <span className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{task.estimateMinutes} min</span>}
         <StatusBadge status={task.status}/>
         <PriorityBadge priority={task.priority}/>

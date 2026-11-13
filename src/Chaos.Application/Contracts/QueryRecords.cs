@@ -124,4 +124,8 @@ public sealed record TaskQueryRow(
 public sealed record TaskQueryPage(IReadOnlyList<TaskQueryRow> Rows, long TotalCount, string? NextCursor);
 
 /// <summary>Sidebar counts computed with the same specification as each view (PLAN §10).</summary>
-public sealed record ViewCounts(IReadOnlyDictionary<TaskView, long> Views, IReadOnlyDictionary<string, long> Tags);
+public sealed record ViewCounts(IReadOnlyDictionary<TaskView, long> Views, IReadOnlyDictionary<string, long> Tags)
+{
+    /// <summary>Open tasks per list or project (the Inbox included), under the same focus.</summary>
+    public IReadOnlyDictionary<string, long> Containers { get; init; } = new Dictionary<string, long>(StringComparer.Ordinal);
+}

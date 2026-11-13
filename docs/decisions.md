@@ -681,3 +681,31 @@ Imports now create lists with their original kind, project deadline and default 
 covers Chaos JSON archives (from the Containers row; older archives have no default-category
 column) and Org files (`CHAOS_KIND`, `CHAOS_DEADLINE`, and the new `CHAOS_DEFAULT_CATEGORY` that
 plain-text export now writes). A list that already exists keeps its own settings.
+
+## 2026-11-13 (UX polish: dates, editor, list page, sidebar, keyboard, palette)
+
+Dates read as people say them (`dates.ts`): Today, Tomorrow, Yesterday, a weekday within the
+coming week, otherwise "Mon 30 Nov", adding the year only when it is not this year. The exact
+date and "in N days" go in the tooltip. Due dates before today are red and due today or tomorrow
+amber; planned dates are never coloured. The profile's today comes from `TodayContext`, set by
+the shell from the day clock.
+
+Editor: planned and due show a time zone only once a time is set; clearing a date clears its
+time and zone; Today, Tomorrow and Next week (Monday) are quick buttons. Inactive tabs show only
+their icon (the name stays in the tooltip and accessible name) so all six fit. Below the xl
+breakpoint the panel lays over the list instead of squeezing it.
+
+List page: the category hint appears once, under quick add. The completion filter is an
+All/Open/Finished switch. In All, finished tasks sit in one folded Finished group after the
+sections. Projects show done-of-total progress under the title.
+
+Sidebar: lists and the Inbox show open counts under the current focus. These come from a new
+`containers` part of the view counts, built from the same Container view query. The bottom bar
+icons have short labels. Quit asks once ("Sure?") before ending the app, since that also stops
+reminders.
+
+Keyboard: in any task list, J/K or the arrow keys move between rows (folded rows are skipped),
+Enter opens, V views, X toggles done and M adds to My Day. Ctrl+K opens a command palette
+(views, lists, projects, tags, actions, focus, and task search from two characters). Inside a
+text field Ctrl+K stays the editor's link shortcut, and the palette also opens from the
+"Ctrl K" button in the sidebar search box.

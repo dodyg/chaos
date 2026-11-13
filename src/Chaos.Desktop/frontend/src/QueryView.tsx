@@ -1,5 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
+import { DateText, friendlyDate, useToday } from "./dates";
 import { queryRpc, recurrenceRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
     finally { if (isCurrent()) setLoading(false); }
   }
 
+  const today = useToday();
   const byId = new Map(tags.map(tag => [tag.id, tag]));
   const change = (patch: Partial<Filters>) => setFilters(current => ({ ...current, ...patch }));
   const grouped = query.view === "Upcoming" || query.view === "Overdue";
@@ -128,9 +130,9 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
       const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== rows[index - 1]?.waitingPerson);
       const task = row.task;
       return <React.Fragment key={task.id}>
-        {heading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><CalendarDays className="size-3.5"/>{row.groupDate}</li>}
+        {heading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><CalendarDays className="size-3.5"/>{friendlyDate(row.groupDate, today)}<span className="font-normal normal-case tracking-normal">· {row.groupDate}</span></li>}
         {personHeading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><UserRound className="size-3.5"/><bdi>{row.waitingPerson ?? "No person named"}</bdi></li>}
-        <li><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
+        <li data-task-row={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
           className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card py-1.5 pr-2 pl-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
           <CategoryEdge category={task.category}/>
           <div className="grid min-w-0 flex-1 gap-1">
@@ -140,8 +142,8 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1"><FolderKanban className="size-3.5"/>{row.containerName}{row.containerArchived && " · archived"}</span>
-              {task.dueDate && <span>Due {task.dueDate}{task.dueTime ? ` ${task.dueTime.slice(0, 5)}` : ""}</span>}
-              {task.plannedDate && <span>Planned {task.plannedDate}</span>}
+              {task.dueDate && <DateText kind="due" date={task.dueDate} time={task.dueTime}/>}
+              {task.plannedDate && <DateText kind="planned" date={task.plannedDate} time={task.plannedTime}/>}
               {query.view === "Overdue" && !task.dueDate && <Badge variant="outline">Missed recurrence</Badge>}
               {row.waitingPerson && query.view !== "Waiting" && <span className="inline-flex items-center gap-1"><UserRound className="size-3.5"/>Waiting on <bdi>{row.waitingPerson}</bdi></span>}
               {row.nextFollowUpAtUtc && <Badge variant="outline">Follow up {new Date(row.nextFollowUpAtUtc).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</Badge>}

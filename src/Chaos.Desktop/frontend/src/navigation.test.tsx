@@ -47,7 +47,7 @@ test("completion filtering covers sections and preserves full ordering when hidd
   try {
     await user.click(await screen.findByRole("button", { name: "Sprint" }));
     await screen.findByRole("button", { name: "Completed task" });
-    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "open");
+    await user.click(within(screen.getByRole("radiogroup", { name: "Completion" })).getByRole("radio", { name: "Open" }));
     assert.equal(screen.queryByRole("button", { name: "Completed task" }) === null, true);
     assert.equal(screen.queryByRole("button", { name: "Cancelled task" }) === null, true);
     assert.ok(screen.getByRole("button", { name: "Last open task" }));
@@ -67,12 +67,12 @@ test("completion filtering covers sections and preserves full ordering when hidd
     Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
     fireEvent(target, drop);
     await waitFor(() => assert.deepEqual(moves, [2]));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "finished");
+    await user.click(within(screen.getByRole("radiogroup", { name: "Completion" })).getByRole("radio", { name: "Finished" }));
     assert.ok(screen.getByRole("button", { name: "Completed task" }));
     assert.ok(screen.getByRole("button", { name: "Cancelled task" }));
     assert.equal(screen.queryByRole("button", { name: "First open task" }) === null, true);
     assert.ok(screen.getByText("Showing 2 of 4 tasks"));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Completion" }), "all");
+    await user.click(within(screen.getByRole("radiogroup", { name: "Completion" })).getByRole("radio", { name: "All" }));
     assert.ok(screen.getByRole("button", { name: "First open task" }));
     assert.ok(screen.getByText("Showing 4 of 4 tasks"));
   } finally { cleanup(); }

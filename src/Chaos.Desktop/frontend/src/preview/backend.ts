@@ -180,6 +180,7 @@ const handlers: Record<string, Handler> = {
   "queries.counts": (r: { category: string | null }) => ok({
     views: ["MyDay", "Today", "Upcoming", "Overdue", "Waiting", "RecentlyCompleted", "AssignedToMe"].map(view => ({ view, count: runQuery({ view, category: r.category, statuses: [], includeCompleted: false, day: null } as unknown as TaskQueryRequest).filter(t => view === "MyDay" ? !isFinished(t) : true).length })),
     tags: tags.map(tag => ({ tagId: tag.id, count: tasks.filter(t => (taskTags.get(t.id) ?? []).includes(tag.id) && (!r.category || t.category === r.category)).length })),
+    containers: containers.map(c => ({ containerId: c.id, count: tasks.filter(t => t.containerId === c.id && !isFinished(t) && (!r.category || t.category === r.category)).length })),
   }),
 
   "myDay.clock": () => ok({ clock: clock() }),

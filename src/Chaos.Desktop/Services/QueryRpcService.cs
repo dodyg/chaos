@@ -35,7 +35,8 @@ public sealed record TaskQueryResponse(bool Ok, IReadOnlyList<QueryRowResponse> 
 public sealed record ViewCountsRequest(string? Category = null);
 public sealed record ViewCountResponse(string View, int Count);
 public sealed record TagCountResponse(string TagId, int Count);
-public sealed record ViewCountsResponse(bool Ok, IReadOnlyList<ViewCountResponse> Views, IReadOnlyList<TagCountResponse> Tags, TaskErrorResponse? Error);
+public sealed record ContainerCountResponse(string ContainerId, int Count);
+public sealed record ViewCountsResponse(bool Ok, IReadOnlyList<ViewCountResponse> Views, IReadOnlyList<TagCountResponse> Tags, IReadOnlyList<ContainerCountResponse> Containers, TaskErrorResponse? Error);
 public sealed record RebuildSearchRequest();
 public sealed record RebuildSearchResponse(bool Ok, int Documents, TaskErrorResponse? Error);
 
@@ -63,9 +64,10 @@ public sealed class QueryRpcService(TaskQueries queries)
             return new(true,
                 [.. counts.Views.Select(entry => new ViewCountResponse(entry.Key.ToString(), TagRpcService.Count(entry.Value)))],
                 [.. counts.Tags.Select(entry => new TagCountResponse(entry.Key, TagRpcService.Count(entry.Value)))],
+                [.. counts.Containers.Select(entry => new ContainerCountResponse(entry.Key, TagRpcService.Count(entry.Value)))],
                 null);
         }
-        catch (AppException error) { return new(false, [], [], TaskRpcService.ToErrorResponse(error)); }
+        catch (AppException error) { return new(false, [], [], [], TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("rebuildSearch")]

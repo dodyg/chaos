@@ -1,4 +1,6 @@
 import React from "react";
+import { DateText, useToday } from "./dates";
+import { addDays } from "./MyDay";
 import { gitHubRpc, subtaskRpc, type taskRpc as TaskRpc, type containerRpc as ContainerRpc, type tagRpc as TagRpc, type markdownRpc as MarkdownRpc, type padRpc as PadRpc,
   type diaryRpc as DiaryRpc, type historyRpc as HistoryRpc, type reminderRpc as ReminderRpc, type waitingRpc as WaitingRpc, type recurrenceRpc as RecurrenceRpc,
   type ContainerResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
@@ -50,6 +52,9 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
 }) {
   const { taskRpc, containerRpc, tagApi, markdownApi, padApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
   const drag = useDragReorder();
+  const today = useToday();
+  const nextMonday = addDays(today, ((8 - new Date(`${today}T00:00:00Z`).getUTCDay()) % 7) || 7);
+  const quickDates: [string, string][] = [["Today", today], ["Tomorrow", addDays(today, 1)], ["Next week", nextMonday]];
   const [editorTab, setEditorTab] = React.useState("notes");
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
@@ -203,7 +208,8 @@ function checklistPanel() {
   </details>;
 }
 
-  return <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] min-w-0 animate-in flex-col border-l bg-card duration-150 fade-in slide-in-from-right-4" aria-labelledby="editor-heading">
+  // Wide windows dock the panel beside the list; narrower ones lay it over the list so the list keeps its width.
+  return <aside className="fixed top-[40px] right-0 z-30 flex h-[calc(100vh-40px)] w-[min(26rem,100vw)] min-w-0 animate-in flex-col border-l bg-card shadow-2xl duration-150 fade-in slide-in-from-right-4 xl:sticky xl:z-auto xl:w-auto xl:shadow-none" aria-labelledby="editor-heading">
       <div className="flex items-center justify-between border-b py-3 pr-3 pl-5">
         <h2 id="editor-heading" className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">{viewingTask ? "View task" : "Edit task"}</h2>
         <div className="flex items-center gap-1">
@@ -214,7 +220,7 @@ function checklistPanel() {
       {viewingTask ? <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <h3 className="text-xl font-semibold [overflow-wrap:anywhere]">{editing.title}</h3>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"><StatusBadge status={editing.status}/><PriorityBadge priority={editing.priority}/><span>{editing.category}</span>{editing.estimateMinutes != null && <span>{editing.estimateMinutes} min</span>}</div>
-        {(editing.plannedDate || editing.dueDate) && <div className="mt-3 grid gap-1 text-sm text-muted-foreground">{editing.plannedDate && <p>Planned {editing.plannedDate}{editing.plannedTime ? ` ${editing.plannedTime}` : ""}</p>}{editing.dueDate && <p>Due {editing.dueDate}{editing.dueTime ? ` ${editing.dueTime}` : ""}</p>}</div>}
+        {(editing.plannedDate || editing.dueDate) && <div className="mt-3 grid gap-1 text-sm text-muted-foreground">{editing.plannedDate && <p><DateText kind="planned" date={editing.plannedDate} time={editing.plannedTime}/></p>}{editing.dueDate && <p><DateText kind="due" date={editing.dueDate} time={editing.dueTime}/></p>}</div>}
         <section className="mt-6"><h4 className="mb-2 font-semibold">Notes</h4>{editing.notes ? <MarkdownPreview key={editing.id} source={editing.notes} links={taskViewLinks}/> : <p className="text-sm text-muted-foreground">No notes.</p>}</section>
         {subtasks.length > 0 && <section className="mt-6"><h4 className="mb-2 font-semibold">Subtasks</h4><ul className="grid gap-3">{subtasks.map(subtask => <li key={subtask.id}><div className="flex items-center gap-2"><StatusBadge status={subtask.status}/><span className="font-medium">{subtask.title}</span></div>{subtask.notes && <MarkdownPreview source={subtask.notes} links={links} className="mt-2"/>}</li>)}</ul></section>}
         <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>Edit task</Button>
@@ -222,13 +228,14 @@ function checklistPanel() {
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
           <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed} onSynced={() => issueSyncFinished(editing.id)}/>
           <Field label="Title"><Input required maxLength={taskGitHub?.connected ? 256 : undefined} form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
-          <TabsList className="w-full">
-            <TabsTrigger value="notes"><NotebookPen/>Notes</TabsTrigger>
-            <TabsTrigger value="details"><SlidersHorizontal/>Details</TabsTrigger>
-            <TabsTrigger value="subtasks"><ListTodo/>Subtasks{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
-            <TabsTrigger value="diary"><History/>Diary</TabsTrigger>
-            <TabsTrigger value="recurrence"><CalendarRange/>Repeat</TabsTrigger>
-            <TabsTrigger value="remind"><Bell/>Remind</TabsTrigger>
+          {/* Inactive tabs show only their icon (name in the tooltip and to screen readers), so all six fit the panel. */}
+          <TabsList className="w-full [&_[data-state=inactive]_[data-slot=tab-label]]:sr-only">
+            <TabsTrigger value="notes" title="Notes"><NotebookPen/><span data-slot="tab-label">Notes</span></TabsTrigger>
+            <TabsTrigger value="details" title="Details"><SlidersHorizontal/><span data-slot="tab-label">Details</span></TabsTrigger>
+            <TabsTrigger value="subtasks" title="Subtasks"><ListTodo/><span data-slot="tab-label">Subtasks</span>{subtasks.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{subtasks.filter(s => s.status === "Done").length}/{subtasks.length}</span>}</TabsTrigger>
+            <TabsTrigger value="diary" title="Diary"><History/><span data-slot="tab-label">Diary</span></TabsTrigger>
+            <TabsTrigger value="recurrence" title="Repeat"><CalendarRange/><span data-slot="tab-label">Repeat</span></TabsTrigger>
+            <TabsTrigger value="remind" title="Remind"><Bell/><span data-slot="tab-label">Remind</span></TabsTrigger>
           </TabsList>
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
@@ -251,9 +258,13 @@ function checklistPanel() {
           </div>
           {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
             <fieldset disabled={kind === "due" && taskGitHub?.dueDateManaged} className="grid grid-cols-2 gap-3">
-              <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change({ [`${kind}Date`]: e.target.value || null })}/></Field>
-              <Field label="Time"><Input type="time" value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null, ...(e.target.value && !editing[`${kind}ZoneId`] ? { [`${kind}ZoneId`]: timeZones.preferred } : {}) })}/></Field>
-              <Field label="Time zone" className="col-span-2"><ZoneSelect value={editing[`${kind}ZoneId`]} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zone => change({ [`${kind}ZoneId`]: zone })}/></Field>
+              <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change(e.target.value ? { [`${kind}Date`]: e.target.value } : { [`${kind}Date`]: null, [`${kind}Time`]: null, [`${kind}ZoneId`]: null })}/></Field>
+              <Field label="Time"><Input type="time" disabled={!editing[`${kind}Date`]} value={editing[`${kind}Time`] ?? ""} onChange={e => change({ [`${kind}Time`]: e.target.value || null, ...(e.target.value && !editing[`${kind}ZoneId`] ? { [`${kind}ZoneId`]: timeZones.preferred } : {}) })}/></Field>
+              {editing[`${kind}Time`] && <Field label="Time zone" className="col-span-2"><ZoneSelect value={editing[`${kind}ZoneId`]} preferred={timeZones.preferred} zones={timeZones.zones} onChange={zone => change({ [`${kind}ZoneId`]: zone })}/></Field>}
+              <div className="col-span-2 flex flex-wrap gap-1" role="group" aria-label={`Quick ${kind} dates`}>
+                {quickDates.map(([name, date]) => <Button key={name} type="button" size="xs" variant={editing[`${kind}Date`] === date ? "secondary" : "outline"} onClick={() => change({ [`${kind}Date`]: date })}>{name}</Button>)}
+                {editing[`${kind}Date`] && <Button type="button" size="xs" variant="ghost" className="text-muted-foreground" onClick={() => change({ [`${kind}Date`]: null, [`${kind}Time`]: null, [`${kind}ZoneId`]: null })}>Clear</Button>}
+              </div>
             </fieldset>
             {kind === "due" && taskGitHub?.dueDateManaged && <p className="text-xs text-muted-foreground">This due date comes from the GitHub milestone. Change it on GitHub.</p>}
           </FieldGroup>)}

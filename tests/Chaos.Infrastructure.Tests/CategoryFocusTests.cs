@@ -179,4 +179,19 @@ public sealed class CategoryFocusTests
         await EditAsync(host, task, "Draft two", "");
         await Assert.That((await host.Undo.ListAsync(10)).Count).IsEqualTo(before + 3);
     }
+
+    [Test]
+    public async Task Counts_IncludeOpenTasksPerListUnderTheFocus()
+    {
+        using var host = await Host.StartAsync();
+        var work = await host.TodayTaskAsync("Ship release", CapacityCategory.Work);
+        await host.TodayTaskAsync("Water plants", CapacityCategory.Personal);
+        var done = await host.TodayTaskAsync("Old thing", CapacityCategory.Work);
+        await host.Tasks.SetStatusAsync(new(Op(), done.Id, done.Version, TaskItemStatus.Done, null));
+
+        var all = await host.Queries.CountsAsync();
+        var focused = await host.Queries.CountsAsync(CapacityCategory.Work);
+        await Assert.That(all.Containers[work.ContainerId]).IsEqualTo(2);
+        await Assert.That(focused.Containers[work.ContainerId]).IsEqualTo(1);
+    }
 }

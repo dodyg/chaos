@@ -2,6 +2,9 @@ import { TaskViewContext } from "./TaskViewAction";
 import { TaskEditor } from "./TaskEditor";
 import { ListPage } from "./ListPage";
 import React from "react";
+import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
+import { handleListKeys } from "./listKeyboard";
+import { TodayContext } from "./dates";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
@@ -102,12 +105,21 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [deletedTags, setDeletedTags] = React.useState<TagResponse[]>([]);
   const [viewCounts, setViewCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
   const [tagCounts, setTagCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  const [containerCounts, setContainerCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  const [confirmQuit, setConfirmQuit] = React.useState(false);
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (!confirmQuit) return;
+    const timer = window.setTimeout(() => setConfirmQuit(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmQuit]);
   const [revision, setRevision] = React.useState(0);
   const [showTagSettings, setShowTagSettings] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
   const [focus, setFocus] = useFocus();
   const focusRef = React.useRef(focus);
   focusRef.current = focus;
+  const setPaletteOpenRef = React.useRef(setPaletteOpen);
   const setFocusRef = React.useRef(setFocus);
   setFocusRef.current = setFocus;
   const listRequests = React.useRef(createLatestRequest());
@@ -147,6 +159,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     if (counts.ok) {
       setViewCounts(new Map(counts.views.map(entry => [entry.view, entry.count])));
       setTagCounts(new Map(counts.tags.map(entry => [entry.tagId, entry.count])));
+      setContainerCounts(new Map((counts.containers ?? []).map(entry => [entry.containerId, entry.count])));
     }
   }
   /** After any committed change: reload the open query view, the sidebar counts and the undo offer. */
@@ -215,6 +228,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && ["1", "2", "3"].includes(event.key)) {
         event.preventDefault();
         setFocusRef.current(event.key === "2" ? "Work" : event.key === "3" ? "Personal" : null);
+      }
+      // Command palette; inside a text field Ctrl+K stays the editor's link shortcut.
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k" && !isTextEditing(event.target)) {
+        event.preventDefault();
+        setPaletteOpenRef.current(true);
       }
       // Quick add from anywhere in the app (PLAN §13 Ctrl+N).
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
@@ -482,6 +500,36 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const navItem = "h-8 min-w-0 flex-1 justify-start gap-2.5 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 [&_svg]:text-muted-foreground aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary aria-[current=page]:[&_svg]:text-primary";
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? tags.find(tag => tag.id === query.tagId) ?? null : null;
+  /** Everything the command palette can jump to or run, built from the current lists, tags and focus. */
+  function paletteCommands(): PaletteCommand[] {
+    const go = (next: View) => () => { setEditing(null); setShowTagSettings(false); setView(next); };
+    return [
+      { id: "view:myday", group: "Go to", label: "My Day", icon: <Sun/>, run: go("myday"), keywords: "today plan" },
+      { id: "view:myweek", group: "Go to", label: "My Week", icon: <CalendarDays/>, run: go("myweek"), keywords: "plan week" },
+      { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
+      ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
+      { id: "view:pad", group: "Go to", label: "Personal pad", icon: <StickyNote/>, run: () => { setShowTagSettings(false); setView("pad"); }, keywords: "notes" },
+      { id: "view:journal", group: "Go to", label: "Journal", icon: <BookOpen/>, run: go("journal"), keywords: "summary" },
+      { id: "view:notifications", group: "Go to", label: "Notifications", icon: <Bell/>, run: go("notifications"), keywords: "alerts reminders" },
+      { id: "view:templates", group: "Go to", label: "Templates", icon: <LayoutTemplate/>, run: go("templates") },
+      { id: "view:data", group: "Go to", label: "Data & backups", icon: <Database/>, run: go("data"), keywords: "export import backup" },
+      { id: "view:settings", group: "Go to", label: "Settings", icon: <Cog/>, run: go("settings"), keywords: "preferences github" },
+      ...containers.filter(c => c.kind !== "Inbox").map(c => ({ id: `list:${c.id}`, group: c.kind === "Project" ? "Projects" : "Lists", label: c.name,
+        icon: c.kind === "Project" ? <FolderKanban/> : <ListTodo/>, hint: c.archived ? "archived" : undefined, run: () => openContainer(c.id), keywords: c.kind })),
+      ...tags.map(tag => ({ id: `tag:${tag.id}`, group: "Tags", label: `#${tag.path}`, run: () => openQuery({ view: "Tag", tagId: tag.id }) })),
+      { id: "do:new-task", group: "Actions", label: "New task", icon: <Plus/>, hint: "Ctrl+N", run: () => focusQuickAdd(), keywords: "add create capture" },
+      { id: "do:new-note", group: "Actions", label: "New pad note", icon: <StickyNote/>, hint: "Ctrl+Shift+P", run: () => openPad({ itemId: null }), keywords: "add create" },
+      { id: "do:undo", group: "Actions", label: "Undo the last change", icon: <Undo2/>, hint: "Ctrl+Z", run: () => void undoLatest() },
+      { id: "do:focus-all", group: "Focus", label: "Show all tasks", hint: "Ctrl+1", run: () => setFocus(null), keywords: "focus all" },
+      { id: "do:focus-work", group: "Focus", label: "Focus on work", hint: "Ctrl+2", run: () => setFocus("Work"), keywords: "focus work category" },
+      { id: "do:focus-personal", group: "Focus", label: "Focus on personal", hint: "Ctrl+3", run: () => setFocus("Personal"), keywords: "focus personal home category" },
+    ];
+  }
+  const paletteSearch = React.useCallback(async (text: string): Promise<PaletteTask[]> => {
+    const result = await queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null, day: null, category: null });
+    return result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title, detail: row.containerName })) : [];
+  }, [queryApi]);
+
   const builtIn = builtInViews.find(item => item.view === query.view);
   const queryHeader = query.view === "Search"
     ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries and pad notes. Completed tasks and archived lists need a filter."/>
@@ -507,7 +555,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     }).catch((error: unknown) => setError(String(error)));
   }
 
-  return <TaskViewContext.Provider value={viewTask}><div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]", showDetail && "grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
+  return <TodayContext.Provider value={dayClock?.today ?? null}><TaskViewContext.Provider value={viewTask}><div className={cn("grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]", showDetail && "xl:grid-cols-[15.5rem_minmax(0,1fr)_minmax(21rem,26rem)]")} aria-busy={busy}>
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
@@ -516,6 +564,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
         <input id="search" type="search" dir="auto" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
+        <button type="button" className="shrink-0 rounded border border-sidebar-border px-1 py-0.5 text-[0.65rem] text-muted-foreground hover:text-sidebar-foreground" aria-label="Open the command palette" title="Jump anywhere or run a command (Ctrl+K)" onClick={() => setPaletteOpen(true)}>Ctrl K</button>
       </form>
       <FocusSwitch focus={focus} onChange={setFocus}/>
       <nav aria-label="Views" className="grid gap-px">
@@ -523,7 +572,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           <Sun/>My Day{(viewCounts.get("MyDay") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>}
         </Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myweek" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myweek"); }}><CalendarDays/>My Week</Button>
-        <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox{(containerCounts.get(containers.find(c => c.kind === "Inbox")?.id ?? "") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{containerCounts.get(containers.find(c => c.kind === "Inbox")!.id)}</span>}</Button>
         <SidebarSection id="views" title="Views">
           {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
             {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
@@ -548,7 +597,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           ? <nav aria-label="Lists and projects"><ol className="grid gap-px">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className="group/row flex items-center rounded-md"
               {...drag.target(containers.map(row => row.id), index, "containers", busy, (id, insertionIndex) => { const moving = containers.find(row => row.id === id)!; void runContainer(() => containerRpc.reorder({ operationId: operationId(), containerId: moving.id, expectedVersion: moving.version, insertionIndex }), "Could not reorder lists."); })}>
               {drag.handle(c.id, "containers", busy, "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5")}
-              <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground", focus && asCategory(c.defaultCategory) && asCategory(c.defaultCategory) !== focus && "opacity-50 hover:opacity-100 aria-[current=page]:opacity-100")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span>{asCategory(c.defaultCategory) && <CategoryDot category={asCategory(c.defaultCategory)!} className="mr-1 ml-auto"/>}</Button>
+              <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground", focus && asCategory(c.defaultCategory) && asCategory(c.defaultCategory) !== focus && "opacity-50 hover:opacity-100 aria-[current=page]:opacity-100")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span>
+                <span className="ml-auto flex items-center gap-1.5">{(containerCounts.get(c.id) ?? 0) > 0 && <span className="text-xs text-muted-foreground tabular-nums">{containerCounts.get(c.id)}</span>}{asCategory(c.defaultCategory) && <CategoryDot category={asCategory(c.defaultCategory)!} className="mr-1"/>}</span></Button>
               {c.archived && <span className="pr-2 text-[0.7rem] text-muted-foreground">archived</span>}
             </li>)}</ol></nav>
           : <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>}
@@ -559,17 +609,21 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <DeletedItems className="pt-2" noun="tags" items={deletedTags} name={tag => tag.name} busy={busy} onRestore={tag => void restoreTag(tag)}/>
       </SidebarSection>
       <DeletedItems className="pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
-      <nav aria-label="App" className="sticky -bottom-4 mt-auto -mx-3 -mb-4 flex items-center justify-between gap-1 border-t border-sidebar-border bg-sidebar px-3 py-2">
+      <nav aria-label="App" className="sticky -bottom-4 mt-auto -mx-3 -mb-4 flex items-stretch gap-0.5 border-t border-sidebar-border bg-sidebar px-2 py-1.5">
         {([
-          ["notifications", "Notifications", <Bell/>],
-          ["templates", "Templates", <LayoutTemplate/>],
-          ["data", "Data & backups", <Database/>],
-          ["settings", "Settings", <Cog/>],
-        ] as const).map(([target, name, icon]) => <Button key={target} type="button" variant="ghost" size="icon-sm" aria-label={name} title={name}
-          className="text-muted-foreground hover:bg-sidebar-accent aria-[current=page]:bg-brand-soft aria-[current=page]:text-primary"
+          ["notifications", "Notifications", "Alerts", <Bell/>],
+          ["templates", "Templates", "Templates", <LayoutTemplate/>],
+          ["data", "Data & backups", "Data", <Database/>],
+          ["settings", "Settings", "Settings", <Cog/>],
+        ] as const).map(([target, name, short, icon]) => <button key={target} type="button" aria-label={name} title={name}
+          className="flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-1 py-1 text-[0.65rem] text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-brand-soft aria-[current=page]:text-primary [&_svg]:size-4"
           aria-current={view === target ? "page" : undefined}
-          onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); setView(target); }}>{icon}</Button>)}
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Quit Chaos" title="Quit Chaos" className="text-muted-foreground hover:bg-sidebar-accent" onClick={() => void shellApi.quit({})}><LogOut/></Button>
+          onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); setView(target); }}>{icon}<span className="truncate">{short}</span></button>)}
+        <span aria-hidden="true" className="my-1 w-px bg-sidebar-border"/>
+        {/* Quitting ends background reminders too, so it asks once before it acts. */}
+        <button type="button" aria-label={confirmQuit ? "Confirm quit" : "Quit Chaos"} title={confirmQuit ? "Click again to quit Chaos" : "Quit Chaos"}
+          className={cn("flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-1 py-1 text-[0.65rem] text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 [&_svg]:size-4", confirmQuit && "bg-destructive/10 text-destructive hover:text-destructive")}
+          onClick={() => { if (confirmQuit) { setConfirmQuit(false); void shellApi.quit({}); } else setConfirmQuit(true); }}><LogOut/><span className="truncate">{confirmQuit ? "Sure?" : "Quit"}</span></button>
       </nav>
     </aside>
 
@@ -578,7 +632,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -617,12 +671,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     {recurrenceConflict && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-conflict-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-conflict-title" className="font-semibold">Review the later occurrence</h2><p className="text-sm">{recurrenceConflict.message}</p><p className="text-sm">The completion and the later work are unchanged. Open the later task to review its edits and diary before deciding how to reconcile them.</p><div className="flex gap-2"><Button type="button" onClick={() => { const id = recurrenceConflict.taskId; setRecurrenceConflict(null); void taskRpc.get({ taskId: id }).then(result => { if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task."); }).catch((error: unknown) => setError(String(error))); }}>Open later task</Button><Button type="button" variant="outline" onClick={() => setRecurrenceConflict(null)}>Keep current state</Button></div></div></div>}
     {recurrenceDelete && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-delete-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-delete-title" className="font-semibold">Delete repeating task?</h2><p className="text-sm">Skip this occurrence and continue the series, or end the series and delete this task. Earlier history stays available.</p><div className="flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.skip({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>Skip this occurrence</Button><Button type="button" variant="outline" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.endAndDelete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>End and delete</Button><Button type="button" variant="ghost" onClick={() => setRecurrenceDelete(null)}>Cancel</Button></div></div></div>}
     <AlertStack api={reminderApi} onOpen={id => void openTaskById(id)} onChanged={changed}/>
+    {paletteOpen && <CommandPalette commands={paletteCommands()} searchTasks={paletteSearch} onOpenTask={taskId => void openTaskById(taskId)} onClose={() => setPaletteOpen(false)}/>}
     {lastUndo && <div role="status" aria-label="Undo" className="fixed bottom-4 left-1/2 z-30 flex max-w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border bg-popover py-1.5 pr-1.5 pl-4 text-sm shadow-lg">
       <span className="truncate">{lastUndo.label}</span>
       <Button type="button" size="sm" variant="outline" disabled={busy} title="Undo (Ctrl+Z outside text fields)" onClick={() => void undoLatest()}><Undo2/>Undo</Button>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss undo" onClick={() => setLastUndo(null)}><X/></Button>
     </div>}
-  </div></TaskViewContext.Provider>;
+  </div></TaskViewContext.Provider></TodayContext.Provider>;
 }
 
 /**
