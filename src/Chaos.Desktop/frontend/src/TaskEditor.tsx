@@ -244,16 +244,16 @@ function checklistPanel() {
         </div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
         <form id="task-editor-form" className="hidden" onSubmit={event => { event.preventDefault(); void autosave.flush(); }}/>
-          <TabsContent value="notes" className="grid gap-4">
+          <TabsContent value="notes" className="grid grid-cols-[minmax(0,1fr)] gap-4">
             <MarkdownEditor id="task-notes" label="Notes" value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}
               areaClassName="min-h-[max(16rem,calc(100vh-24rem))]"/>
             {checklistPanel()}
             {padAnchor && <p className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              <StickyNote className="size-3.5"/>Made from a pad note{padAnchor.deleted ? " (deleted)" : padAnchor.archived ? " (archived)" : ""}: <q className="max-w-full truncate">{padAnchor.quote}</q>
+              <StickyNote className="size-3.5"/>Made from a pad note{padAnchor.deleted ? " (deleted)" : padAnchor.archived ? " (archived)" : ""}: <q className="block min-w-0 max-w-full flex-1 truncate" title={padAnchor.quote}>{padAnchor.quote}</q>
               {!padAnchor.deleted && <Button type="button" size="xs" variant="outline" onClick={() => openPad({ itemId: padAnchor.padItemId, anchor: padAnchor })}>Open in pad</Button>}
             </p>}
           </TabsContent>
-          <TabsContent value="details" className="grid gap-4">
+          <TabsContent value="details" className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Status"><NativeSelect value={editing.status} disabled={busy} onChange={e => { const status = e.target.value; const hasOpen = subtasks.some(s => !isFinished(s.status)); const choice = status === "Done" && hasOpen ? (window.confirm("Complete open subtasks too? Choose Cancel to keep them open.") ? "CompleteAll" : "KeepOpen") : null; void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: editing.id, expectedVersion: editing.version, status, subtaskChoice: choice }), saved => { setEditing(current => current ? { ...current, status: saved.status, version: saved.version } : null); void refreshSubtasks(saved.id).then(setSubtasks).catch((e: unknown) => setError(String(e))); }); }}>{statuses.map(s => <NativeSelectOption key={s} value={s}>{label(s)}</NativeSelectOption>)}</NativeSelect></Field>
             <Field label="Priority"><NativeSelect value={editing.priority} onChange={e => change({ priority: e.target.value })}>{priorities.map(s => <NativeSelectOption key={s}>{s}</NativeSelectOption>)}</NativeSelect></Field>
@@ -267,7 +267,7 @@ function checklistPanel() {
           <TagPicker targetKind="Task" targetId={editing.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={changed}/>
           </TabsContent>
 
-        <TabsContent value="dates" className="grid gap-4">
+        <TabsContent value="dates" className="grid grid-cols-[minmax(0,1fr)] gap-4">
           {(["planned", "due"] as const).map(kind => <FieldGroup key={kind} legend={label(kind)}>
             <fieldset disabled={kind === "due" && taskGitHub?.dueDateManaged} className="grid grid-cols-2 gap-3">
               <Field label="Date"><Input type="date" value={editing[`${kind}Date`] ?? ""} onChange={e => change(e.target.value ? { [`${kind}Date`]: e.target.value } : { [`${kind}Date`]: null, [`${kind}Time`]: null, [`${kind}ZoneId`]: null })}/></Field>
@@ -319,7 +319,7 @@ function checklistPanel() {
           onError={setError}
           onChanged={saved => { if (saved) { setEditing(saved); void refresh().catch((e: unknown) => setError(String(e))); } changed(); }}/>
         </TabsContent>
-        <TabsContent value="remind" className="grid gap-6">
+        <TabsContent value="remind" className="grid grid-cols-[minmax(0,1fr)] gap-6">
           <TaskReminders task={editing} revision={revision} busy={busy} api={reminderApi} onChanged={changed}/>
           <TaskWaiting task={editing} revision={revision} busy={busy} api={waitingApi}
             onChanged={saved => { if (saved) setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current); changed(); }}/>

@@ -232,7 +232,9 @@ const handlers: Record<string, Handler> = {
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),
-  "pad.locate": () => ok({ anchor: null }),
+  // One sample task was made from a pad note whose quote is a long link, like real ones often are.
+  "pad.locate": (r: { taskId: string }) => ok({ anchor: r.taskId !== "task-1" ? null : { padItemId: "pad-1", taskId: "task-1", state: "Exact", start: 0, end: 80, archived: false, deleted: false,
+    quote: "https://x.com/OpenAI/status/2120216592395174382?a=ryqqhK9R05Hs5Zv4HK0&s=20" } }),
   "github.taskSync": (r: { taskId: string }) => ({ ok: true, error: null, connected: r.taskId === "task-2", // one sample task is linked to a GitHub issue
     assignedToMe: null, dueDateManaged: false, hasConflict: false, issueUrl: null, linkVersion: null, pending: false, postDiaryByDefault: false, repository: null, state: null, syncError: null, syncing: false }),
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
