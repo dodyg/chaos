@@ -157,6 +157,19 @@ test("a confirmed week shows capacity warnings and lets the person choose a day 
   cleanup();
 });
 
+test("a long task title stays available on the weekly board", async () => {
+  const title = "Investigate " + "VeryLongUnbrokenTaskTitle".repeat(8);
+  const item = task("long", title, { status: "WaitingOnSomeone", priority: "High" });
+  const { api } = fakes(overview({ state: "Confirmed", confirmedRevision: "2", planId: "plan", confirmed: board([{ taskId: item.id, day: today }]), tasks: [{ task: item, containerName: "Inbox", containerArchived: false }] }));
+  const opened: string[] = [];
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<MyWeek clock={clock} revision={0} busy={false} containers={[]} api={api} onOpen={task => opened.push(task.id)} onChanged={() => {}}/>);
+  const list = await screen.findByRole("list", { name: "Tasks for Tue 10" });
+  await user.click(within(list).getByRole("button", { name: title }));
+  assert.deepEqual(opened, ["long"]);
+  assert.ok(within(list).getByText("Waiting On Someone"));
+});
+
 test("week tabs separate the plan, updates and availability", async () => {
   const { api } = fakes(overview({ availabilityConfigured: false }));
   const user = userEvent.setup({ document: dom.window.document });

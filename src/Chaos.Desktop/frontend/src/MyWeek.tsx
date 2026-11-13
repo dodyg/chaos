@@ -168,10 +168,10 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
 function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undefined; onOpen: (task: TaskResponse) => void; children?: React.ReactNode; badge?: React.ReactNode }) {
   if (!item) return <li className="rounded-md border border-dashed px-2 py-1 text-xs text-muted-foreground">A task that no longer exists</li>;
   const task = item.task;
-  return <li className={cn("flex min-h-9 items-center gap-2 rounded-md border bg-card px-2 py-1 text-sm shadow-xs", isFinished(task.status) && "text-muted-foreground [&_[data-slot=title]]:line-through")}>
-    <div className="grid min-w-0 flex-1 gap-0.5">
-      <button type="button" data-slot="title" className="w-fit rounded-sm text-left font-medium [overflow-wrap:anywhere] hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none" onClick={() => onOpen(task)}>{task.title}</button>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+  return <li className={cn("flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-card px-2 py-1 text-sm shadow-xs", isFinished(task.status) && "text-muted-foreground [&_[data-slot=title]]:line-through")}>
+    <div className="grid min-w-0 flex-[1_1_8rem] grid-cols-[minmax(0,1fr)] gap-0.5">
+      <button type="button" data-slot="title" className="w-fit max-w-full min-w-0 rounded-sm text-left font-medium [overflow-wrap:anywhere] hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none" onClick={() => onOpen(task)}>{task.title}</button>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground [&_[data-slot=badge]]:max-w-full [&_[data-slot=badge]]:whitespace-normal [&_[data-slot=badge]]:[overflow-wrap:anywhere]">
         {badge}
         {task.estimateMinutes !== null ? <span className="inline-flex items-center gap-1"><Clock className="size-3"/>{minutesText(task.estimateMinutes)}</span> : <span>No estimate</span>}
         {task.category === "Work" && <Badge variant="outline">Work</Badge>}
@@ -200,11 +200,11 @@ function DayHeading({ day }: { day: WeekDayDto }) {
 /** The confirmed week read-only: seven day columns and the unassigned pool. */
 function Board({ board, tasks, today, onOpen }: { board: WeekBoardDto; tasks: Map<string, WeekTaskDto>; today: string; onOpen: (task: TaskResponse) => void }) {
   const pool = board.placements.filter(item => item.day === null);
-  return <section aria-label="Week plan" className="grid gap-3">
-    <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr))]">
-      {board.days.map(day => <div key={day.date} className={cn("grid content-start gap-1.5 rounded-xl border p-2", day.date === today && "border-primary", day.date < today && "opacity-75")}>
+  return <section aria-label="Week plan" className="@container grid min-w-0 gap-3">
+    <div className="grid min-w-0 grid-cols-1 gap-2 @min-[36rem]:grid-cols-2 @min-[54rem]:grid-cols-3">
+      {board.days.map(day => <div key={day.date} className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1.5 rounded-xl border p-2", day.date === today && "border-primary", day.date < today && "opacity-75")}>
         <DayHeading day={day}/>
-        <ol className="grid gap-1" aria-label={`Tasks for ${dayLabel(day.date)}`}>
+        <ol className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" aria-label={`Tasks for ${dayLabel(day.date)}`}>
           {board.placements.filter(item => item.day === day.date).map(item => <TaskLine key={item.taskId} item={tasks.get(item.taskId)} onOpen={onOpen}/>)}
         </ol>
       </div>)}
@@ -481,7 +481,7 @@ function PlanDays({ week, draft, tasks, today, onOpen, onEdit }: { week: WeekOve
     const load = day ? loads.get(day) : undefined;
     const override = day ? draft.overrides.find(item => item.date === day) : undefined;
     return <div key={day ?? "pool"} onDragOver={event => { if (day === null || day >= today) event.preventDefault(); }} onDrop={drop(day)}
-      className={cn("grid content-start gap-1.5 rounded-xl border p-2", day === today && "border-primary", day !== null && day < today && "opacity-75")} aria-label={day ? dayLabel(day) : "No day yet"}>
+      className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1.5 rounded-xl border p-2", day === today && "border-primary", day !== null && day < today && "opacity-75")} aria-label={day ? dayLabel(day) : "No day yet"}>
       {day ? (fresh && load ? <DayHeading day={load}/> : <span className="text-sm font-semibold">{dayLabel(day)}</span>) : <span className="text-sm font-semibold">This week, no day yet</span>}
       {day && day >= today && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">{override ? "Custom time" : "Change time"}</summary>
         <div className="grid gap-1 pt-1">
@@ -492,12 +492,12 @@ function PlanDays({ week, draft, tasks, today, onOpen, onEdit }: { week: WeekOve
           {override && <Button type="button" variant="link" size="xs" onClick={() => setOverride(day, null, null)}>Use the usual time</Button>}
         </div>
       </details>}
-      <ol className="grid gap-1">{items.map(item => {
+      <ol className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1">{items.map(item => {
         const title = tasks.get(item.taskId)?.task.title ?? "task";
         const keptPast = (date: string) => date < today && confirmedDay.get(item.taskId) !== date;
-        return <li key={item.taskId} draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(weekDragType, item.taskId); }} className="list-none">
-          <ul><TaskLine item={tasks.get(item.taskId)} onOpen={onOpen}>
-            <div className="flex items-center gap-0.5">
+        return <li key={item.taskId} draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData(weekDragType, item.taskId); }} className="min-w-0 list-none">
+          <ul className="min-w-0"><TaskLine item={tasks.get(item.taskId)} onOpen={onOpen}>
+            <div className="flex min-w-0 flex-wrap items-center gap-0.5">
               <NativeSelect size="sm" aria-label={`Day for ${title}`} value={item.day ?? ""} onChange={event => onEdit(placeTask(draft, item.taskId, event.target.value || null))}>
                 <NativeSelectOption value="">No day</NativeSelectOption>
                 {dates.map(date => <NativeSelectOption key={date} value={date} disabled={keptPast(date)}>{dayLabel(date)}</NativeSelectOption>)}
@@ -509,9 +509,9 @@ function PlanDays({ week, draft, tasks, today, onOpen, onEdit }: { week: WeekOve
       })}</ol>
     </div>;
   };
-  return <div className="grid gap-3">
+  return <div className="@container grid min-w-0 gap-3">
     <p className="text-sm text-muted-foreground">Drag tasks between days, or choose a day from each task's menu. Warnings are advice only; nothing is moved for you.{!fresh && " Totals update when the draft is saved."}</p>
-    <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))]">{dates.map(column)}</div>
+    <div className="grid min-w-0 grid-cols-1 gap-2 @min-[36rem]:grid-cols-2 @min-[54rem]:grid-cols-3">{dates.map(column)}</div>
     {column(null)}
     {week.candidates.length > 0 && <section aria-labelledby="week-candidates" className="grid gap-1 rounded-xl border bg-muted/40 p-3">
       <h4 id="week-candidates" className="flex items-center gap-1.5 text-sm font-semibold"><Lightbulb className="size-4 text-primary"/>Worth planning<Count>{week.candidates.length}</Count></h4>
