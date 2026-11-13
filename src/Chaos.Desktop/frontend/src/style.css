@@ -1,8 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* Dark mode follows the operating system, as the desktop shell has no in-app theme switch. */
-@custom-variant dark (@media (prefers-color-scheme: dark));
+/*
+ * Dark mode is a class on <html> set by appearance.ts: it follows the operating system unless the
+ * active theme pins light or dark. The media query below covers the moment before the script runs.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
 
 /*
  * shadcn/ui theme tokens (stone base) with the Chaos orange as the primary/brand colour.
@@ -25,7 +28,7 @@
   --muted-foreground: oklch(0.52 0.013 58.071);
   --accent: oklch(0.945 0.003 106.424);
   --accent-foreground: oklch(0.216 0.006 56.043);
-  --brand-soft: oklch(0.95 0.03 40);
+  --brand-soft: color-mix(in oklch, var(--primary) 12%, var(--background));
   --destructive: oklch(0.577 0.245 27.325);
   --warning: oklch(0.97 0.05 90);
   --warning-foreground: oklch(0.45 0.09 75);
@@ -42,8 +45,40 @@
   --sidebar-ring: oklch(0.6 0.17 38);
 }
 
+:root.dark {
+  --background: oklch(0.17 0.004 49.25);
+  --foreground: oklch(0.95 0.002 106.423);
+  --card: oklch(0.215 0.005 56.043);
+  --card-foreground: oklch(0.95 0.002 106.423);
+  --popover: oklch(0.215 0.005 56.043);
+  --popover-foreground: oklch(0.95 0.002 106.423);
+  --primary: oklch(0.7 0.17 40);
+  --primary-foreground: oklch(0.2 0.03 40);
+  --secondary: oklch(0.27 0.007 34.298);
+  --secondary-foreground: oklch(0.95 0.002 106.423);
+  --muted: oklch(0.27 0.007 34.298);
+  --muted-foreground: oklch(0.7 0.01 56.259);
+  --accent: oklch(0.29 0.007 34.298);
+  --accent-foreground: oklch(0.95 0.002 106.423);
+  --brand-soft: color-mix(in oklch, var(--primary) 22%, var(--background));
+  --destructive: oklch(0.704 0.191 22.216);
+  --warning: oklch(0.3 0.05 85);
+  --warning-foreground: oklch(0.86 0.11 90);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.7 0.17 40);
+  --sidebar: oklch(0.195 0.004 49.25);
+  --sidebar-foreground: oklch(0.95 0.002 106.423);
+  --sidebar-primary: oklch(0.7 0.17 40);
+  --sidebar-primary-foreground: oklch(0.2 0.03 40);
+  --sidebar-accent: oklch(0.27 0.007 34.298);
+  --sidebar-accent-foreground: oklch(0.95 0.002 106.423);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.7 0.17 40);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light, .dark) {
     --background: oklch(0.17 0.004 49.25);
     --foreground: oklch(0.95 0.002 106.423);
     --card: oklch(0.215 0.005 56.043);
@@ -58,7 +93,7 @@
     --muted-foreground: oklch(0.7 0.01 56.259);
     --accent: oklch(0.29 0.007 34.298);
     --accent-foreground: oklch(0.95 0.002 106.423);
-    --brand-soft: oklch(0.28 0.05 40);
+    --brand-soft: color-mix(in oklch, var(--primary) 22%, var(--background));
     --destructive: oklch(0.704 0.191 22.216);
     --warning: oklch(0.3 0.05 85);
     --warning-foreground: oklch(0.86 0.11 90);
@@ -78,6 +113,7 @@
 
 @theme inline {
   --font-sans: var(--appearance-font, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif);
+  --font-mono: var(--appearance-code-font, Consolas, ui-monospace, monospace);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -133,10 +169,8 @@
   [data-slot="markdown"] .hljs-number, [data-slot="markdown"] .hljs-literal, [data-slot="markdown"] .hljs-type { color: oklch(0.55 0.15 50); }
   [data-slot="markdown"] .hljs-comment, [data-slot="markdown"] .hljs-quote { color: var(--muted-foreground); font-style: italic; }
   [data-slot="markdown"] .hljs-title, [data-slot="markdown"] .hljs-function, [data-slot="markdown"] .hljs-section { color: oklch(0.5 0.15 250); }
-  @media (prefers-color-scheme: dark) {
-    [data-slot="markdown"] .hljs-keyword, [data-slot="markdown"] .hljs-built_in, [data-slot="markdown"] .hljs-selector-tag { color: oklch(0.78 0.13 300); }
-    [data-slot="markdown"] .hljs-string, [data-slot="markdown"] .hljs-attr, [data-slot="markdown"] .hljs-regexp { color: oklch(0.8 0.12 150); }
-    [data-slot="markdown"] .hljs-number, [data-slot="markdown"] .hljs-literal, [data-slot="markdown"] .hljs-type { color: oklch(0.8 0.12 60); }
-    [data-slot="markdown"] .hljs-title, [data-slot="markdown"] .hljs-function, [data-slot="markdown"] .hljs-section { color: oklch(0.8 0.11 250); }
-  }
+  .dark [data-slot="markdown"] :is(.hljs-keyword, .hljs-built_in, .hljs-selector-tag) { color: oklch(0.78 0.13 300); }
+  .dark [data-slot="markdown"] :is(.hljs-string, .hljs-attr, .hljs-regexp) { color: oklch(0.8 0.12 150); }
+  .dark [data-slot="markdown"] :is(.hljs-number, .hljs-literal, .hljs-type) { color: oklch(0.8 0.12 60); }
+  .dark [data-slot="markdown"] :is(.hljs-title, .hljs-function, .hljs-section) { color: oklch(0.8 0.11 250); }
 }
