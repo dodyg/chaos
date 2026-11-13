@@ -27,7 +27,7 @@ test("background color and image persist locally and reset to default", async ()
   assert.deepEqual(loadDayBackground(), { kind: "color", value: "#245e77" });
   fireEvent.click(screen.getByLabelText("Mountain sunset"));
   assert.deepEqual(loadDayBackground(), { kind: "scene", value: "sunset" });
-  assert.equal(backgroundScenes.length, 6);
+  assert.equal(backgroundScenes.length, 18);
   const image = new dom.window.File(["test image"], "background.png", { type: "image/png" });
   fireEvent.change(screen.getByLabelText("Background image"), { target: { files: [image] } });
   await waitFor(() => assert.equal(loadDayBackground().kind, "image"));

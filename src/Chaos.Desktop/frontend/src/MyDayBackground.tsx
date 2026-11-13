@@ -16,6 +16,18 @@ export const backgroundScenes = [
   { id: "constellation", name: "Night sky", url: new URL("./assets/day-backgrounds/constellation.svg", import.meta.url).href },
   { id: "dunes", name: "Desert dunes", url: new URL("./assets/day-backgrounds/dunes.svg", import.meta.url).href },
   { id: "orbit", name: "Orbit", url: new URL("./assets/day-backgrounds/orbit.svg", import.meta.url).href },
+  { id: "aurora", name: "Northern lights", url: new URL("./assets/day-backgrounds/aurora.svg", import.meta.url).href },
+  { id: "pines", name: "Misty pines", url: new URL("./assets/day-backgrounds/pines.svg", import.meta.url).href },
+  { id: "hills", name: "Rolling hills", url: new URL("./assets/day-backgrounds/hills.svg", import.meta.url).href },
+  { id: "lake", name: "Mountain lake", url: new URL("./assets/day-backgrounds/lake.svg", import.meta.url).href },
+  { id: "lavender", name: "Lavender field", url: new URL("./assets/day-backgrounds/lavender.svg", import.meta.url).href },
+  { id: "snowpeaks", name: "Snowy peaks", url: new URL("./assets/day-backgrounds/snowpeaks.svg", import.meta.url).href },
+  { id: "skyline", name: "City dusk", url: new URL("./assets/day-backgrounds/skyline.svg", import.meta.url).href },
+  { id: "bamboo", name: "Bamboo grove", url: new URL("./assets/day-backgrounds/bamboo.svg", import.meta.url).href },
+  { id: "clouds", name: "Cloudscape", url: new URL("./assets/day-backgrounds/clouds.svg", import.meta.url).href },
+  { id: "autumn", name: "Autumn leaves", url: new URL("./assets/day-backgrounds/autumn.svg", import.meta.url).href },
+  { id: "canyon", name: "Red canyon", url: new URL("./assets/day-backgrounds/canyon.svg", import.meta.url).href },
+  { id: "lighthouse", name: "Lighthouse", url: new URL("./assets/day-backgrounds/lighthouse.svg", import.meta.url).href },
 ];
 export type DayBackground = { kind: "default" } | { kind: "color"; value: string } | { kind: "image"; value: string } | { kind: "scene"; value: string };
 export function backgroundImage(background: DayBackground) {
