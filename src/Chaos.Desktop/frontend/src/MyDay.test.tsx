@@ -19,7 +19,7 @@ Object.defineProperties(globalThis, {
 });
 const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
-const { MyDay, addDays, nextCheckDelay } = await import("./MyDay");
+const { MyDay, addDays, nextCheckDelay, laneToDayIndex } = await import("./MyDay");
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
   return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
@@ -154,5 +154,35 @@ test("chosen tasks offer completion and a status menu while earlier days remain 
   await screen.findByRole("heading", { name: "Yesterday" });
   await screen.findByRole("button", { name: "Plan the meeting" });
   assert.equal(screen.queryByRole("checkbox", { name: "Mark Plan the meeting as done" }), null);
+  cleanup();
+});
+
+test("a lane insertion index maps onto the day's single manual order", () => {
+  const day = ["w1", "p1", "w2", "p2", "w3"];
+  const work = ["w1", "w2", "w3"];
+  assert.equal(laneToDayIndex(day, work, "w3", 0), 0);
+  assert.equal(laneToDayIndex(day, work, "w1", 1), 3);
+  assert.equal(laneToDayIndex(day, work, "w1", 2), 4);
+  assert.equal(laneToDayIndex(day, ["p1"], "p1", 0), 1);
+});
+
+test("a day mixing work and personal shows lanes with their own totals; a focus shows one category and asks the server for it", async () => {
+  const items = [task("w1", "Ship release", { category: "Work", estimateMinutes: 90 }), task("p1", "Water plants", { estimateMinutes: 15 })];
+  const { api, query, queries } = fakes("2026-11-10", { "2026-11-10": items }, [task("s1", "Gym", { dueDate: "2026-11-08" })]);
+  const changed: string[] = [];
+  const view = render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}
+    onSetCategory={(item, category) => changed.push(`${item.id}:${category}`)}/>, { container: dom.window.document.body });
+  const work = await screen.findByRole("list", { name: "Work chosen tasks" });
+  assert.ok(within(work).getByText("Ship release"));
+  assert.ok(within(screen.getByRole("list", { name: "Personal chosen tasks" })).getByText("Water plants"));
+  assert.ok(within(screen.getByRole("status", { name: "Today by category" })).getByText("1 open · 1 h 30 min"));
+  assert.ok(queries.every(request => request.category === null));
+
+  view.rerender(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} focus="Work"/>);
+  await waitFor(() => assert.equal(queries.at(-1)?.category, "Work"));
+  await screen.findByText("Work only");
+  assert.equal(screen.queryByRole("list", { name: "Work chosen tasks" }), null);
+  assert.ok(await screen.findByText("No work suggestions right now."));
+  assert.deepEqual(changed, []);
   cleanup();
 });

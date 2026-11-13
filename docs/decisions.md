@@ -605,3 +605,24 @@ tests and 96 frontend tests passed, with zero Slopwatch findings. Final desktop 
 passed all 76 tests. A frontend run under concurrent build/test load timed out on the unchanged
 initial Settings loading assertion; its focused run and the complete isolated rerun passed.
 No test timeout was increased and no assertion was disabled. Live GitHub requests were not used.
+
+## 2026-11-13 (Work/Personal focus)
+
+The capacity category now organizes the UI instead of only feeding My Week capacity. A sidebar
+Focus switch (All, Work, Personal) filters My Day, lists, built-in views, tag views and search,
+and every sidebar count. The filter is a server-side `Category` on the task query spec, so counts
+and rows still come from the same criteria. The focus is a per-viewer preference kept in local
+storage, not profile data. Projected repetitions in Upcoming are hidden under a focus because
+they carry no category.
+
+When a day mixes both categories, My Day splits into Work and Personal lanes, each with open
+count and estimate totals. The day keeps one manual order, and reordering inside a lane maps
+back onto it. Dragging a row onto the other lane, or using the row context menu, switches its
+category through the ordinary task edit, so it is undoable. Task rows show a coloured category
+edge.
+
+Lists and projects have an optional default category (migration 022, `Containers.DefaultCategory`,
+NULL = none). The Inbox has none. A captured task takes an explicit category first, then the
+destination list's default, then the current focus, then Personal. Existing tasks never change
+when a default changes. The CSV/archive merge import carries list names only, so it does not
+carry list defaults (as with project deadlines).

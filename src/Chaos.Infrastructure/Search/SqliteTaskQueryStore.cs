@@ -306,6 +306,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             if (criteria.Statuses.Count > 0) where.Add($"t.Status IN ({string.Join(", ", criteria.Statuses.Select(status => builder.P((long)status)))})");
             else if (criteria.OpenOnly) where.Add("t.Status NOT IN (4,5)");
             if (criteria.DoneOnly) where.Add("t.Status = 4");
+            if (criteria.Category is { } category) where.Add($"t.CapacityCategory = {builder.P((long)category)}");
             if (criteria.Priorities.Count > 0) where.Add($"t.Priority IN ({string.Join(", ", criteria.Priorities.Select(priority => builder.P((long)priority)))})");
 
             if (criteria.PlannedFrom is { } plannedFrom) where.Add($"t.PlannedDate >= {builder.P(StorageFormats.Date(plannedFrom))}");

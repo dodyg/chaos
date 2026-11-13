@@ -19,12 +19,12 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { QuickAdd, keepExclusions } = await import("./QuickAdd");
 
 const containers: ContainerResponse[] = [
-  { id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null },
-  { id: "home", name: "Home", kind: "List", version: "1", archived: false, deadlineDate: null },
+  { id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null, defaultCategory: null },
+  { id: "home", name: "Home", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null },
 ];
 
 const blank: CaptureDraftDto = { title: "", notes: null, containerId: null, priority: "Normal", estimateMinutes: null, plannedDate: null, plannedTime: null, dueDate: null, dueTime: null,
-  zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [] };
+  zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [], category: null };
 
 function item(text: string, draft: Partial<CaptureDraftDto>, tokens: CaptureTokenDto[] = [], lineNumber = 1, sourceStart = 0): CaptureItemDto {
   return { lineNumber, sourceStart, text, draft: { ...blank, ...draft }, tokens, warnings: [], languages: tokens.some(t => t.language) ? ["en"] : [], needsTitle: !draft.title, tags: [], containerCandidates: [], firstOccurrence: null };

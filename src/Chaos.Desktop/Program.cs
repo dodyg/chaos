@@ -266,6 +266,7 @@ internal static class Program
 [JsonSerializable(typeof(ContainerOrderRequest))]
 [JsonSerializable(typeof(SectionChangeRequest))]
 [JsonSerializable(typeof(DeadlineRequest))]
+[JsonSerializable(typeof(ContainerCategoryRequest))]
 [JsonSerializable(typeof(ProgressResponse))]
 [JsonSerializable(typeof(ContainerDeleteRequest))]
 [JsonSerializable(typeof(TemplateListRequest))]

@@ -11,6 +11,8 @@ import { EmptyState, Field, InlineError, PriorityBadge, StatusBadge, isFinished,
 import { createLatestRequest } from "./latestRequest";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagChip, taskDragType } from "./tags";
+import { CategoryEdge, CategoryMenuItems, type Category, type Focus } from "./category";
+import { ContextMenu } from "radix-ui";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
 export type QueryState = { view: string; tagId?: string; text?: string; day?: string };
@@ -27,12 +29,12 @@ export const builtInViews = [
 type Filters = { status: string; priority: string; includeCompleted: boolean; includeArchived: boolean; dueFrom: string; dueTo: string };
 const noFilters: Filters = { status: "", priority: "", includeCompleted: false, includeArchived: false, dueFrom: "", dueTo: "" };
 
-function request(query: QueryState, filters: Filters, cursor: string | null): TaskQueryRequest {
+function request(query: QueryState, filters: Filters, cursor: string | null, focus: Focus): TaskQueryRequest {
   return {
     view: query.view, containerId: null, tagId: query.tagId ?? null, text: query.text?.trim() || null,
     statuses: filters.status ? [filters.status] : [], priorities: filters.priority ? [filters.priority] : [],
     plannedFrom: null, plannedTo: null, dueFrom: filters.dueFrom || null, dueTo: filters.dueTo || null, completedFrom: null, completedTo: null,
-    includeCompleted: filters.includeCompleted, includeArchived: filters.includeArchived, upcomingDays: null, limit: null, cursor, day: query.day ?? null,
+    includeCompleted: filters.includeCompleted, includeArchived: filters.includeArchived, upcomingDays: null, limit: null, cursor, day: query.day ?? null, category: focus,
   };
 }
 
@@ -41,9 +43,11 @@ function request(query: QueryState, filters: Filters, cursor: string | null): Ta
  * (nothing is saved). Pages are fetched with the server's cursor; the total comes from the
  * same query, so it matches the sidebar count for the unfiltered view.
  */
-export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, onOpen, header }: {
+export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, onOpen, header, focus = null, onSetCategory }: {
   query: QueryState; tags: TagResponse[]; revision: number; selectedTaskId: string | null; busy: boolean;
   api?: typeof queryRpc; recurrenceApi?: typeof recurrenceRpc; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
+  /** Work/Personal focus; null shows both. */
+  focus?: Focus; onSetCategory?: (task: TaskResponse, category: Category) => void;
 }) {
   const [filters, setFilters] = React.useState<Filters>(noFilters);
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
@@ -53,13 +57,13 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   const [error, setError] = React.useState<string | null>(null);
   const [projected, setProjected] = React.useState<readonly UpcomingRecurrenceDto[]>([]);
   const requests = React.useRef(createLatestRequest());
-  const key = `${query.view}|${query.tagId ?? ""}|${query.text ?? ""}`;
+  const key = `${query.view}|${query.tagId ?? ""}|${query.text ?? ""}|${focus ?? ""}`;
 
   React.useEffect(() => { setFilters(noFilters); }, [key]);
   React.useEffect(() => {
     let current = true;
     setProjected([]);
-    if (query.view === "Upcoming" && JSON.stringify(filters) === JSON.stringify(noFilters)) {
+    if (query.view === "Upcoming" && focus === null && JSON.stringify(filters) === JSON.stringify(noFilters)) {
       void recurrenceApi.upcoming({ days: 14, limit: 100 }).then(result => {
         if (!current) return;
         if (result.ok) setProjected(result.items); else setError(result.error?.message ?? "Could not load projected repetitions.");
@@ -70,7 +74,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   React.useEffect(() => {
     const isCurrent = requests.current.begin();
     setLoading(true); setError(null);
-    void api.run(request(query, filters, null)).then(result => {
+    void api.run(request(query, filters, null, focus)).then(result => {
       if (!isCurrent()) return;
       if (!result.ok) { setError(result.error?.message ?? "Could not load this view."); setRows([]); setTotal(0); setCursor(null); return; }
       setRows([...result.rows]); setTotal(result.totalCount); setCursor(result.nextCursor);
@@ -82,7 +86,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
     const isCurrent = requests.current.begin();
     setLoading(true);
     try {
-      const result = await api.run(request(query, filters, cursor));
+      const result = await api.run(request(query, filters, cursor, focus));
       if (!isCurrent()) return;
       if (!result.ok) throw new Error(result.error?.message ?? "Could not load more tasks.");
       setRows(current => [...current, ...result.rows]); setTotal(result.totalCount); setCursor(result.nextCursor);
@@ -126,8 +130,9 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
       return <React.Fragment key={task.id}>
         {heading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><CalendarDays className="size-3.5"/>{row.groupDate}</li>}
         {personHeading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><UserRound className="size-3.5"/><bdi>{row.waitingPerson ?? "No person named"}</bdi></li>}
-        <li draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
-          className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card px-2 py-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
+        <li><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
+          className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card py-1.5 pr-2 pl-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
+          <CategoryEdge category={task.category}/>
           <div className="grid min-w-0 flex-1 gap-1">
             <div className="flex items-center gap-1">
               <button type="button" data-slot="row-title" className="w-fit min-w-0 rounded-sm px-1 py-0.5 text-left font-medium [overflow-wrap:anywhere] outline-none hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50" disabled={busy} onClick={() => onOpen(task)}>{task.title}</button>
@@ -147,7 +152,9 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
             </div>
           </div>
           <TaskViewAction task={task} title={task.title} disabled={busy}/>
-        </li>
+        </div></ContextMenu.Trigger>{onSetCategory && <ContextMenu.Portal><ContextMenu.Content aria-label={`Category for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
+          <CategoryMenuItems category={task.category} busy={busy} separator={false} onSelect={category => onSetCategory(task, category)}/>
+        </ContextMenu.Content></ContextMenu.Portal>}</ContextMenu.Root></li>
       </React.Fragment>;
     })}</ol>}
     {cursor && <Button type="button" variant="outline" className="justify-self-center" disabled={loading} onClick={() => void loadMore()}>Load more ({total - rows.length} more)</Button>}

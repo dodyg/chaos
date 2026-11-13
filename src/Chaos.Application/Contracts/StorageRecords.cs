@@ -55,6 +55,8 @@ public sealed record ContainerRecord : AggregateRecord
     public required long Position { get; init; }
     public DateOnly? DeadlineDate { get; init; }
     public DateTimeOffset? ArchivedAtUtc { get; init; }
+    /// <summary>Category new tasks captured into this container take; null means no default.</summary>
+    public CapacityCategory? DefaultCategory { get; init; }
 }
 
 /// <summary>A task row (PLAN §5 Tasks). Planned/due keep local date/time/zone as task data; My Day membership etc. are profile-owned elsewhere.</summary>

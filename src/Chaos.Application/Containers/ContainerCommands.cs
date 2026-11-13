@@ -12,6 +12,8 @@ public sealed record RenameContainerCommand(string OperationId, string Container
 
 public sealed record ReorderContainerCommand(string OperationId, string ContainerId, long ExpectedVersion, int InsertionIndex);
 public sealed record SetProjectDeadlineCommand(string OperationId, string ContainerId, long ExpectedVersion, DateOnly? DeadlineDate);
+/// <summary>Sets the category new tasks captured into a list or project take; null clears it. Existing tasks keep their category.</summary>
+public sealed record SetContainerCategoryCommand(string OperationId, string ContainerId, long ExpectedVersion, CapacityCategory? DefaultCategory);
 
 public sealed record ArchiveContainerCommand(string OperationId, string ContainerId, long ExpectedVersion);
 
@@ -193,6 +195,25 @@ public sealed class ContainerCommands(IApplicationStore store, IIdGenerator ids,
                 if (container.Kind != ContainerKind.Project) throw AppException.Validation("containerId", "Only projects have deadlines.");
                 if (container.DeadlineDate == command.DeadlineDate) return new ContainerMutationResult(container, false);
                 var updated = container with { DeadlineDate = command.DeadlineDate, Version = container.Version + 1, UpdatedAtUtc = now };
+                return new ContainerMutationResult(await ApplyUpdateAsync(session, updated, container.Version, inner), false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
+
+    public async Task<ContainerMutationResult> SetDefaultCategoryAsync(SetContainerCategoryCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId, "container.category", command, now, async inner =>
+            {
+                var category = command.DefaultCategory is { } value ? TaskFieldValidation.Category(value, "defaultCategory") : (CapacityCategory?)null;
+                var container = await RequireContainerAsync(session, command.ContainerId, inner);
+                RequireCurrentVersion(container, command.ExpectedVersion);
+                if (container.IsInbox) throw AppException.Validation("containerId", "The Inbox has no default category.");
+                if (container.DefaultCategory == category) return new ContainerMutationResult(container, false);
+                var updated = container with { DefaultCategory = category, Version = container.Version + 1, UpdatedAtUtc = now };
                 return new ContainerMutationResult(await ApplyUpdateAsync(session, updated, container.Version, inner), false);
             }, token);
             return replayed ? result with { Replayed = true } : result;

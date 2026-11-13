@@ -79,7 +79,7 @@ test("a CSV import previews, lets the user map a column and choose a list, then 
     },
     importCommit: async (request: ImportCommitRequest) => { commits.push(request); return { ok: true, batchId: "b", created: 2, duplicates: 1, conflicts: 0, createdLists: [], backupFileName: "chaos-pre.db", restore: null, error: null }; },
   } as unknown as typeof dataRpc;
-  const containers = [{ id: "c1", name: "Paperwork", kind: "List", archived: false, deadlineDate: null, version: "1" }];
+  const containers = [{ id: "c1", name: "Paperwork", kind: "List", archived: false, deadlineDate: null, defaultCategory: null, version: "1" }];
   render(<DataSettings api={api} containers={containers} onImported={() => { imported++; }} onReplaced={() => {}}/>);
   await screen.findByText(/Latest backup:/);
 

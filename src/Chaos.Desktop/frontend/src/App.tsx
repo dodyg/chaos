@@ -26,6 +26,7 @@ import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
 import { useTimeZones, ZoneSelect } from "./ZoneSelect";
+import { CategoryDot, CategoryEdge, CategoryMenuItems, FocusSwitch, asCategory, categoryIcon, categoryTone, useFocus, type Category } from "./category";
 import { AlarmClock, Archive, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Eye, Sun, SunMedium, ArchiveRestore, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, Clock, FolderKanban, History, Hourglass, Inbox, LayoutTemplate, ListChecks, ListTodo, LogOut, NotebookPen, Search, Settings2, SlidersHorizontal, StickyNote, Trash2, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -130,6 +131,9 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [revision, setRevision] = React.useState(0);
   const [showTagSettings, setShowTagSettings] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
+  const [focus, setFocus] = useFocus();
+  const focusRef = React.useRef(focus);
+  focusRef.current = focus;
   const listRequests = React.useRef(createLatestRequest());
   const selectedContainer = React.useRef("");
   const drag = useDragReorder();
@@ -160,7 +164,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   }
   /** Tags, deleted tags and sidebar counts; counts use the same query as each view (PLAN §10). */
   async function refreshMeta() {
-    const [list, removed, counts] = await Promise.all([tagApi.list({}), tagApi.listDeleted({}), queryApi.counts({})]);
+    const [list, removed, counts] = await Promise.all([tagApi.list({}), tagApi.listDeleted({}), queryApi.counts({ category: focusRef.current })]);
     if (!list.ok) throw new Error(list.error?.message ?? "Could not load tags.");
     setTags([...list.tags]);
     if (removed.ok) setDeletedTags([...removed.tags]);
@@ -257,8 +261,17 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const focusQuickAddRef = React.useRef(focusQuickAdd);
   focusQuickAddRef.current = focusQuickAdd;
   /** Saves confirmed quick-add drafts as one operation; the list and counts reload after commit. */
+  /**
+   * The category a captured task takes: an explicit choice wins, then the destination list's
+   * default (applied by the server), then the current focus; otherwise the server's Personal.
+   */
+  function withCategory(draft: CaptureDraftDto): CaptureDraftDto {
+    if (draft.category) return draft;
+    const destination = containers.find(c => c.id === (draft.containerId ?? containerId)) ?? (draft.containerId ? undefined : containers.find(c => c.kind === "Inbox"));
+    return destination?.defaultCategory || !focus ? draft : { ...draft, category: focus };
+  }
   async function saveCaptured(captured: CaptureDraftDto[], operation: string): Promise<string | null> {
-    const result = await captureApi.create({ operationId: operation, drafts: captured });
+    const result = await captureApi.create({ operationId: operation, drafts: captured.map(withCategory) });
     if (!result.ok) return result.error?.fields.map(field => field.message).join("; ") || result.error?.message || "The tasks could not be saved.";
     setNotice(result.tasks.length === 1 ? null : `Added ${result.tasks.length} tasks.`);
     await refresh();
@@ -373,7 +386,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
     if (!text.trim()) return [];
     const [result, notes] = await Promise.all([
-      queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null, day: null }),
+      queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null, day: null, category: null }),
       padApi.search({ text, limit: 4 }).catch(() => null),
     ]);
     const tasks: LinkCandidate[] = result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
@@ -396,7 +409,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     finally { setBusy(false); }
   }
   React.useEffect(() => { void refreshContainers().catch((e: unknown) => setError(String(e))); }, []);
-  React.useEffect(() => { void refreshMeta().catch((e: unknown) => setError(String(e))); }, []);
+  React.useEffect(() => { void refreshMeta().catch((e: unknown) => setError(String(e))); }, [focus]);
   React.useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [containerId]);
   React.useEffect(() => {
     let active = true;
@@ -618,6 +631,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete ${name}`} title="Delete" onClick={onDelete}><Trash2/></Button>
     </div>;
   }
+  /** Switches a task between Work and Personal, keeping every other field as saved. */
+  function setTaskCategory(task: TaskResponse, category: Category) {
+    if (task.category === category) return;
+    void run(() => taskRpc.edit({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, title: task.title, notes: task.notes,
+      plannedDate: task.plannedDate || null, plannedTime: task.plannedTime || null, plannedZoneId: task.plannedZoneId || null,
+      dueDate: task.dueDate || null, dueTime: task.dueTime || null, dueZoneId: task.dueZoneId || null,
+      priority: task.priority, estimateMinutes: task.estimateMinutes, category }),
+      saved => setEditing(current => current?.id === saved.id ? { ...current, category: saved.category, version: saved.version } : current));
+  }
   function setTaskStatus(task: TaskResponse, status: string) {
     void run(async () => {
       const open = status === "Done" && (await refreshSubtasks(task.id)).some(subtask => !isFinished(subtask.status));
@@ -637,6 +659,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     return <ol className="grid gap-1" aria-label={name}>{rows.map((task, index) => <li key={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div className={rowClass(editing?.id === task.id, task.status)}
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => move(byId(id), insertionIndex))}>
+      <CategoryEdge category={task.category}/>
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
       <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => setTaskStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
@@ -653,12 +676,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content aria-label={`Status for ${task.title}`} className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg">
       <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
       {(isFinished(task.status) ? ["NotStarted"] : statuses.filter(status => status !== "Done")).map(status => <ContextMenu.Item key={status} disabled={busy || status === task.status} className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50" onSelect={() => void run(() => taskRpc.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status, subtaskChoice: null }), saved => setEditing(current => current?.id === saved.id ? { ...current, status: saved.status, version: saved.version } : current))}>{isFinished(task.status) ? "Reopen (previous status)" : label(status)}</ContextMenu.Item>)}
+      <CategoryMenuItems category={task.category} busy={busy} onSelect={category => setTaskCategory(task, category)}/>
     </ContextMenu.Content></ContextMenu.Portal></ContextMenu.Root></li>)}</ol>;
   }
   function groupHeading(text: string, count?: number) {
     return <h3 className="flex items-center border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{text}{count !== undefined && <Count>{count}</Count>}</h3>;
   }
-  const visibleTasks = tasks.filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)));
+  const focusedTasks = focus ? tasks.filter(task => (asCategory(task.category) ?? "Personal") === focus) : tasks;
+  const hiddenByFocus = tasks.length - focusedTasks.length;
+  const visibleTasks = focusedTasks.filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)));
   const unsectioned = visibleTasks.filter(task => task.sectionId === null);
   const knownSectionIds = new Set(sections.map(section => section.id));
   const unknownSections = [...new Set(visibleTasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
@@ -666,6 +692,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const listName = selected?.name ?? "Inbox";
   const openCount = tasks.filter(t => !isFinished(t.status)).length;
   const userContainers = containers.filter(c => c.kind !== "Inbox");
+  const listDefault = asCategory(selected?.defaultCategory);
+  const newTaskCategory: Category | null = listDefault ?? focus;
   const navItem = "h-8 min-w-0 flex-1 justify-start gap-2.5 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 [&_svg]:text-muted-foreground aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary aria-[current=page]:[&_svg]:text-primary";
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? tags.find(tag => tag.id === query.tagId) ?? null : null;
@@ -704,6 +732,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <label htmlFor="search" className="sr-only">Search tasks</label>
         <input id="search" type="search" dir="auto" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
       </form>
+      <FocusSwitch focus={focus} onChange={setFocus}/>
       <nav aria-label="Views" className="grid gap-px">
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myday" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myday"); }}>
           <Sun/>My Day{(viewCounts.get("MyDay") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>}
@@ -734,7 +763,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           ? <nav aria-label="Lists and projects"><ol className="grid gap-px">{containers.map((c, index) => c.kind === "Inbox" ? null : <li key={c.id} className="group/row flex items-center rounded-md"
               {...drag.target(containers.map(row => row.id), index, "containers", busy, (id, insertionIndex) => { const moving = containers.find(row => row.id === id)!; void runContainer(() => containerRpc.reorder({ operationId: operationId(), containerId: moving.id, expectedVersion: moving.version, insertionIndex }), "Could not reorder lists."); })}>
               {drag.handle(c.id, "containers", busy, "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5")}
-              <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span></Button>
+              <Button type="button" variant="ghost" className={cn(navItem, c.archived && "text-muted-foreground", focus && asCategory(c.defaultCategory) && asCategory(c.defaultCategory) !== focus && "opacity-50 hover:opacity-100 aria-[current=page]:opacity-100")} disabled={busy} aria-current={view === "tasks" && c.id === containerId ? "page" : undefined} onClick={() => openContainer(c.id)}>{c.kind === "Project" ? <FolderKanban/> : <ListTodo/>}<span className="truncate">{c.name}</span>{asCategory(c.defaultCategory) && <CategoryDot category={asCategory(c.defaultCategory)!} className="mr-1 ml-auto"/>}</Button>
               {c.archived && <span className="pr-2 text-[0.7rem] text-muted-foreground">archived</span>}
             </li>)}</ol></nav>
           : <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>}
@@ -773,15 +802,15 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed}/>
-      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory}/>
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
-      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <PageHeader eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${selected.deadlineDate}` : ""}`} title={listName}
-          subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished`}
+          subtitle={tasks.length === 0 ? "Nothing here yet" : `${openCount} open · ${tasks.length - openCount} finished${listDefault ? ` · new tasks are ${listDefault}` : ""}`}
           actions={selected && <>
             <Button type="button" variant="outline" disabled={busy} onClick={() => { const request = { operationId: operationId(), containerId: selected.id, expectedVersion: selected.version, name: selected.name }; void runContainer(() => selected.archived ? containerRpc.unarchive(request) : containerRpc.archive(request), "Could not update archive state."); }}>{selected.archived ? <ArchiveRestore/> : <Archive/>}{selected.archived ? "Unarchive" : "Archive"}</Button>
             <Button type="button" variant={showSettings ? "secondary" : "outline"} aria-expanded={showSettings} aria-controls="list-settings" onClick={() => setShowSettings(v => !v)}><Settings2/>{showSettings ? "Hide settings" : "Settings"}</Button>
@@ -791,6 +820,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
         <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
           placeholder={`Add a task to ${listName} — e.g. Call plumber tomorrow 3pm #home`} onSubmit={saveCaptured}/>
+        {newTaskCategory && <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>{categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}{listDefault ? " (list default)" : " (focus)"}</p>}
 
         <div className="flex flex-wrap items-center gap-3">
           <Field label="Completion"><NativeSelect value={completionFilter} onChange={e => setCompletionFilter(e.target.value)}>
@@ -798,10 +828,12 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
             <NativeSelectOption value="open">Open tasks</NativeSelectOption>
             <NativeSelectOption value="finished">Finished tasks</NativeSelectOption>
           </NativeSelect></Field>
-          <p role="status" className="text-xs text-muted-foreground">Showing {visibleTasks.length} of {tasks.length} tasks</p>
+          <p role="status" className="text-xs text-muted-foreground">Showing {visibleTasks.length} of {tasks.length} tasks{hiddenByFocus > 0 && ` · ${hiddenByFocus} ${focus === "Work" ? "personal" : "work"} hidden by focus`}</p>
+          {hiddenByFocus > 0 && <Button type="button" variant="ghost" size="sm" onClick={() => setFocus(null)}>Show all</Button>}
         </div>
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
-        {tasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All tasks to see everything in this list.</EmptyState>}
+        {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
+        {focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All tasks to see everything in this list.</EmptyState>}
         {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
         {sections.map(section => { const rows = visibleTasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">{completionFilter === "all" ? "No tasks in this section." : `No ${completionFilter} tasks in this section.`}</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
         {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(visibleTasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}

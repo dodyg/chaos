@@ -25,12 +25,14 @@ public sealed record TaskQueryRequest(
     int? UpcomingDays,
     int? Limit,
     string? Cursor,
-    string? Day = null);
+    string? Day = null,
+    string? Category = null);
 
 public sealed record QueryRowResponse(TaskResponse Task, string ContainerName, bool ContainerArchived, IReadOnlyList<string> TagIds, IReadOnlyList<string> Matches, string? GroupDate,
     string? WaitingPerson, string? NextFollowUpAtUtc);
 public sealed record TaskQueryResponse(bool Ok, IReadOnlyList<QueryRowResponse> Rows, int TotalCount, string? NextCursor, TaskErrorResponse? Error);
-public sealed record ViewCountsRequest();
+/// <summary>Category (Work or Personal) limits every count to that focus; null counts both.</summary>
+public sealed record ViewCountsRequest(string? Category = null);
 public sealed record ViewCountResponse(string View, int Count);
 public sealed record TagCountResponse(string TagId, int Count);
 public sealed record ViewCountsResponse(bool Ok, IReadOnlyList<ViewCountResponse> Views, IReadOnlyList<TagCountResponse> Tags, TaskErrorResponse? Error);
@@ -57,7 +59,7 @@ public sealed class QueryRpcService(TaskQueries queries)
     {
         try
         {
-            var counts = await queries.CountsAsync(ct);
+            var counts = await queries.CountsAsync(Category(request.Category), ct);
             return new(true,
                 [.. counts.Views.Select(entry => new ViewCountResponse(entry.Key.ToString(), TagRpcService.Count(entry.Value)))],
                 [.. counts.Tags.Select(entry => new TagCountResponse(entry.Key, TagRpcService.Count(entry.Value)))],
@@ -88,6 +90,7 @@ public sealed class QueryRpcService(TaskQueries queries)
         IncludeArchived = request.IncludeArchived,
         UpcomingDays = request.UpcomingDays ?? 14,
         Day = Date(request.Day, "day"),
+        Category = Category(request.Category),
         Limit = request.Limit ?? TaskQueries.MaxLimit,
         Cursor = request.Cursor,
     };
@@ -101,6 +104,9 @@ public sealed class QueryRpcService(TaskQueries queries)
         row.GroupDate is { } date ? StorageFormats.Date(date) : null,
         row.WaitingPerson,
         row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null);
+
+    private static CapacityCategory? Category(string? value) =>
+        string.IsNullOrEmpty(value) ? null : ParseEnum<CapacityCategory>(value, "category");
 
     private static LocalDateRange? Range(string? from, string? to, string field)
     {

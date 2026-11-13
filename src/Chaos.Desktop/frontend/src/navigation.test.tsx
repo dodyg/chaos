@@ -23,7 +23,7 @@ function row(id: string, title: string): TaskResponse {
 }
 
 test("completion filtering covers sections and preserves full ordering when hidden tasks intervene", async () => {
-  const container: ContainerResponse = { id: "project", name: "Sprint", kind: "Project", version: "1", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Sprint", kind: "Project", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
   const items = [
     { ...row("first", "First open task"), containerId: "project", sectionId: "phase", notes: "## Full details\n\nA **rendered** description." },
     { ...row("done", "Completed task"), containerId: "project", sectionId: "phase", status: "Done" },
@@ -105,7 +105,7 @@ test("a delayed previous list cannot replace the selected list", async () => {
   const slowA = new Promise<ListTasksResponse>(resolve => { finishA = resolve; });
   let requestedA = false;
   let finishedA = false;
-  const containers: ContainerResponse[] = ["a", "b"].map(id => ({ id, name: id.toUpperCase(), kind: "List", version: "1", archived: false, deadlineDate: null }));
+  const containers: ContainerResponse[] = ["a", "b"].map(id => ({ id, name: id.toUpperCase(), kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null }));
   const api = {
     taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async (request: { containerId: string | null }) => { if (request.containerId === "a") finishedA = true; return { ok: true, tasks: [], error: null }; } },
     containerRpc: { ...containerRpc,
@@ -131,7 +131,7 @@ test("a delayed previous list cannot replace the selected list", async () => {
 });
 
 test("tasks are grouped under their section and ordered within that group", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
   const api = {
     taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
     containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
@@ -177,7 +177,7 @@ test("dragging a task below a sibling sends the corresponding reorder", async ()
 });
 
 test("dragging onto a different section does not reorder the wrong sibling set", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
   let reordered = false;
   const api = {
     taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }),
@@ -203,7 +203,7 @@ test("dragging onto a different section does not reorder the wrong sibling set",
 });
 
 test("dragging moves a task into an empty section and back to unsectioned", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
   let current = { ...row("one", "Outside"), containerId: "project" };
   const moves: Parameters<typeof containerRpc.moveTask>[0][] = [];
   const api = {
@@ -239,9 +239,9 @@ test("dragging moves a task into an empty section and back to unsectioned", asyn
 
 test("dragging a list in the list navigation reorders it and keeps the Inbox first", async () => {
   const containers: ContainerResponse[] = [
-    { id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null },
-    { id: "a", name: "Alpha", kind: "List", version: "2", archived: false, deadlineDate: null },
-    { id: "b", name: "Beta", kind: "Project", version: "5", archived: false, deadlineDate: null },
+    { id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null, defaultCategory: null },
+    { id: "a", name: "Alpha", kind: "List", version: "2", archived: false, deadlineDate: null, defaultCategory: null },
+    { id: "b", name: "Beta", kind: "Project", version: "5", archived: false, deadlineDate: null, defaultCategory: null },
   ];
   const calls: Parameters<typeof containerRpc.reorder>[0][] = [];
   let listCalls = 0;

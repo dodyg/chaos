@@ -8,7 +8,7 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record ContainerListRequest();
-public sealed record ContainerResponse(string Id, string Name, string Kind, string Version, bool Archived, string? DeadlineDate);
+public sealed record ContainerResponse(string Id, string Name, string Kind, string Version, bool Archived, string? DeadlineDate, string? DefaultCategory = null);
 public sealed record ContainerListResponse(bool Ok, IReadOnlyList<ContainerResponse> Containers, TaskErrorResponse? Error);
 public sealed record ContainerCreateRequest(string OperationId, string Name, string Kind);
 public sealed record ContainerChangeRequest(string OperationId, string ContainerId, string ExpectedVersion, string Name);
@@ -21,6 +21,7 @@ public sealed record SectionCreateRequest(string OperationId, string ContainerId
 public sealed record SectionOperationResponse(bool Ok, SectionResponse? Section, TaskErrorResponse? Error);
 public sealed record ContainerOrderRequest(string OperationId, string ContainerId, string ExpectedVersion, int InsertionIndex);
 public sealed record SectionChangeRequest(string OperationId, string SectionId, string ExpectedVersion, string Title, int InsertionIndex);
+public sealed record ContainerCategoryRequest(string OperationId, string ContainerId, string ExpectedVersion, string? DefaultCategory);
 public sealed record DeadlineRequest(string OperationId, string ContainerId, string ExpectedVersion, string? DeadlineDate);
 public sealed record ProgressResponse(bool Ok, int DoneCount, int TotalCount, int DoneSubtaskCount, int TotalSubtaskCount, TaskErrorResponse? Error);
 public sealed record ContainerDeleteRequest(string OperationId, string ContainerId, string ExpectedVersion, string ContentsChoice);
@@ -70,6 +71,9 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     [NeoRpcMethod("setDeadline")]
     public async ValueTask<ContainerOperationResponse> SetDeadlineAsync(DeadlineRequest request, CancellationToken ct) =>
         await RunAsync(() => containers.SetDeadlineAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Date(request.DeadlineDate)), ct));
+    [NeoRpcMethod("setDefaultCategory")]
+    public async ValueTask<ContainerOperationResponse> SetDefaultCategoryAsync(ContainerCategoryRequest request, CancellationToken ct) =>
+        await RunAsync(() => containers.SetDefaultCategoryAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Category(request.DefaultCategory)), ct));
     [NeoRpcMethod("progress")]
     public async ValueTask<ProgressResponse> ProgressAsync(ContainerTasksRequest request, CancellationToken ct)
     {
@@ -125,7 +129,8 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     private static DateOnly? Date(string? value) => string.IsNullOrEmpty(value) ? null : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result) ? result : throw AppException.Validation("deadlineDate", "Enter a valid date.");
     private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
     private static ContainerKind Kind(string value) => Enum.TryParse<ContainerKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("kind", "Choose a list or project.");
+    private static CapacityCategory? Category(string? value) => string.IsNullOrEmpty(value) ? null : Enum.TryParse<CapacityCategory>(value, out var category) && Enum.IsDefined(category) ? category : throw AppException.Validation("defaultCategory", "Choose Work or Personal.");
     private static ContainerContentsChoice Choice(string value) => Enum.TryParse<ContainerContentsChoice>(value, out var choice) && Enum.IsDefined(choice) ? choice : throw AppException.Validation("contentsChoice", "Choose what to do with the tasks.");
-    private static ContainerResponse Map(ContainerRecord row) => new(row.Id, row.Name, row.Kind.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), row.ArchivedAtUtc is not null, row.DeadlineDate?.ToString("yyyy-MM-dd"));
+    private static ContainerResponse Map(ContainerRecord row) => new(row.Id, row.Name, row.Kind.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), row.ArchivedAtUtc is not null, row.DeadlineDate?.ToString("yyyy-MM-dd"), row.DefaultCategory?.ToString());
     private static SectionResponse MapSection(SectionRecord row) => new(row.Id, row.Title, row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }

@@ -543,6 +543,7 @@ internal static class UndoLabels
         ["container.delete"] = "Delete",
         ["container.restore"] = "Restore",
         ["project.deadline"] = "Change deadline of",
+        ["container.category"] = "Change default category of",
         ["section.create"] = "Add section",
         ["section.rename"] = "Rename section",
         ["section.reorder"] = "Reorder section",

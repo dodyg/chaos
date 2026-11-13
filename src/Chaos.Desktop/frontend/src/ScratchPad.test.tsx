@@ -55,7 +55,7 @@ const captureApi = {
     const at = request.text.indexOf("today");
     const title = at < 0 ? request.text : request.text.slice(0, at).trim();
     const draft: CaptureDraftDto = { title, notes: null, containerId: null, priority: "Normal", estimateMinutes: null, plannedDate: at < 0 ? null : "2026-11-10", plannedTime: null,
-      dueDate: null, dueTime: null, zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [] };
+      dueDate: null, dueTime: null, zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [], category: null };
     const tokens = at < 0 ? [] : [{ kind: "PlannedDate", start: at, end: at + 5, text: "today", language: "en", state: "Applied", summary: "Planned today" }];
     return { ok: true, isBatch: false, errors: [], capturedAtUtc: null, error: null,
       items: [{ lineNumber: 1, sourceStart: 0, text: request.text, draft, tokens, warnings: [], languages: [], needsTitle: !title, tags: [], containerCandidates: [], firstOccurrence: null }] };
@@ -63,7 +63,7 @@ const captureApi = {
 };
 
 function renderPad(api: typeof padRpc, registry: InstanceType<typeof DraftRegistry>, errors: string[] = []) {
-  return render(<ScratchPad api={api} tagApi={tagApi} captureApi={captureApi} registry={registry} containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null }]}
+  return render(<ScratchPad api={api} tagApi={tagApi} captureApi={captureApi} registry={registry} containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null, defaultCategory: null }]}
     tags={[]} revision={0} focus={null} links={{}} onChanged={() => {}} onOpenTask={() => {}} onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
 }
 

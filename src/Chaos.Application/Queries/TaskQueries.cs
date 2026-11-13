@@ -36,21 +36,26 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             return await session.Queries.CountAsync(await ResolveAsync(session, context, spec, token), token);
         }, ct);
 
-    /// <summary>Counts for the built-in views and for every active tag (descendants included), from one read snapshot.</summary>
-    public async Task<ViewCounts> CountsAsync(CancellationToken ct = default) =>
+    /// <summary>
+    /// Counts for the built-in views and for every active tag (descendants included), from one
+    /// read snapshot. A category limits every count to that Work/Personal focus.
+    /// </summary>
+    public async Task<ViewCounts> CountsAsync(CancellationToken ct = default) => await CountsAsync(null, ct);
+
+    public async Task<ViewCounts> CountsAsync(CapacityCategory? category, CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) =>
         {
             var context = await ContextAsync(session, token);
             var views = new Dictionary<TaskView, long>();
             foreach (var view in CountedViews)
             {
-                views[view] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = view }, token), token);
+                views[view] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = view, Category = category }, token), token);
             }
 
             var tags = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (var tag in await session.Tags.ListByOwnerAsync(context.Profile.Id, token))
             {
-                tags[tag.Id] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = TaskView.Tag, TagId = tag.Id }, token), token);
+                tags[tag.Id] = await session.Queries.CountAsync(await ResolveAsync(session, context, new TaskQuerySpec { View = TaskView.Tag, TagId = tag.Id, Category = category }, token), token);
             }
 
             return new ViewCounts(views, tags);
@@ -112,6 +117,11 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             throw AppException.Validation("recentDays", "Recently completed can look back from 1 to 3660 days.");
         }
 
+        if (spec.Category is { } category && !Enum.IsDefined(category))
+        {
+            throw AppException.Validation("category", "Choose Work or Personal.");
+        }
+
         RequireOrdered(spec.Planned, "planned");
         RequireOrdered(spec.Due, "due");
         RequireOrdered(spec.Completed, "completed");
@@ -154,6 +164,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             Text = string.IsNullOrWhiteSpace(spec.Text) ? null : spec.Text.Trim(),
             Statuses = spec.View == TaskView.Waiting ? [TaskItemStatus.WaitingOnSomeone] : [.. spec.Statuses.Distinct()],
             Priorities = [.. spec.Priorities.Distinct()],
+            Category = spec.Category,
             OpenOnly = openOnly,
             DoneOnly = spec.View == TaskView.RecentlyCompleted,
             // Opening one archived list shows its tasks, and a task chosen for My Day stays visible there.

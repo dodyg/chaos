@@ -38,6 +38,8 @@ public sealed record TaskQuerySpec
     public string? Text { get; init; }
     public IReadOnlyList<TaskItemStatus> Statuses { get; init; } = [];
     public IReadOnlyList<TaskPriority> Priorities { get; init; } = [];
+    /// <summary>Work/Personal focus: only tasks of this capacity category; null shows both.</summary>
+    public CapacityCategory? Category { get; init; }
     public LocalDateRange? Planned { get; init; }
     public LocalDateRange? Due { get; init; }
     public LocalDateRange? Completed { get; init; }
@@ -72,6 +74,7 @@ public sealed record TaskQueryCriteria
     public string? Text { get; init; }
     public IReadOnlyList<TaskItemStatus> Statuses { get; init; } = [];
     public IReadOnlyList<TaskPriority> Priorities { get; init; } = [];
+    public CapacityCategory? Category { get; init; }
     public bool OpenOnly { get; init; }
     public bool DoneOnly { get; init; }
     public bool IncludeArchived { get; init; }

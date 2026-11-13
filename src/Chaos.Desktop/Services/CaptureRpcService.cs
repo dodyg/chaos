@@ -35,7 +35,8 @@ public sealed record CaptureDraftDto(
     string? WaitingOn,
     string? FollowUpDate,
     string? FollowUpTime,
-    IReadOnlyList<CaptureSubtaskDto> Subtasks);
+    IReadOnlyList<CaptureSubtaskDto> Subtasks,
+    string? Category = null);
 
 /// <summary>One task line of the preview. Token offsets are relative to <see cref="Text"/>, which starts at <see cref="SourceStart"/> in the typed input.</summary>
 public sealed record CaptureItemDto(
@@ -132,6 +133,8 @@ public sealed class CaptureRpcService(CaptureCommands capture)
         FollowUpDate = Date(dto.FollowUpDate, $"{path}.followUpDate"),
         FollowUpTime = Time(dto.FollowUpTime, $"{path}.followUpTime"),
         Subtasks = [.. (dto.Subtasks ?? []).Select(subtask => new CaptureSubtask(subtask.Title, subtask.Done))],
+        Category = string.IsNullOrEmpty(dto.Category) ? null
+            : Enum.TryParse<CapacityCategory>(dto.Category, out var category) && Enum.IsDefined(category) ? category : throw AppException.Validation($"{path}.category", "Choose Work or Personal."),
     };
 
     private static CaptureItemDto Map(CaptureItemPreview item)

@@ -19,7 +19,7 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { ContainerManagement } = await import("./ContainerManagement");
 
 test("deletion sends the selected contents choice and a conflict stays visible", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "3", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "3", archived: false, deadlineDate: null, defaultCategory: null };
   let choice = "";
   let deletedCallback = false;
   const api: typeof containerRpc = {
@@ -38,7 +38,7 @@ test("deletion sends the selected contents choice and a conflict stays visible",
 });
 
 test("dragging a section above another sends the dragged section's reorder", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "Project", version: "1", archived: false, deadlineDate: null };
+  const container: ContainerResponse = { id: "project", name: "Project", kind: "Project", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
   const sections = [{ id: "s1", title: "Plan", version: "4" }, { id: "s2", title: "Build", version: "7" }];
   const calls: Parameters<typeof containerRpc.reorderSection>[0][] = [];
   let changed = false;

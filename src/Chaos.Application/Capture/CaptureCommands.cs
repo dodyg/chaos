@@ -37,6 +37,8 @@ public sealed record CaptureTaskDraft
     public DateOnly? FollowUpDate { get; init; }
     public TimeOnly? FollowUpTime { get; init; }
     public IReadOnlyList<CaptureSubtask> Subtasks { get; init; } = [];
+    /// <summary>Explicit Work/Personal choice; null takes the container's default category, else Personal.</summary>
+    public CapacityCategory? Category { get; init; }
 }
 
 /// <summary>Creates every confirmed draft in one transaction: one receipt, one undo entry, nothing saved if any draft is invalid.</summary>
@@ -182,6 +184,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             ContainerId = string.IsNullOrWhiteSpace(draft.ContainerId) ? null : draft.ContainerId,
             Priority = TaskFieldValidation.Priority(draft.Priority, $"{path}.priority"),
             EstimateMinutes = TaskFieldValidation.Estimate(draft.EstimateMinutes, $"{path}.estimateMinutes"),
+            Category = draft.Category is { } category ? TaskFieldValidation.Category(category, $"{path}.category") : null,
             PlannedDate = planned.Date,
             PlannedTime = planned.Time,
             DueDate = due.Date,
@@ -213,6 +216,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             Status = draft.WaitingOn is null ? TaskItemStatus.NotStarted : TaskItemStatus.WaitingOnSomeone,
             Priority = draft.Priority,
             EstimateMinutes = draft.EstimateMinutes,
+            CapacityCategory = draft.Category ?? container.DefaultCategory ?? CapacityCategory.Personal,
             PlannedDate = draft.PlannedDate,
             PlannedTime = draft.PlannedTime,
             PlannedZoneId = draft.PlannedTime is null ? null : draft.ZoneId,

@@ -314,7 +314,7 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         command.CommandText = """
             UPDATE Containers SET
                 Name = $name, NormalizedName = $normalizedName, Position = $position,
-                DeadlineDate = $deadline, ArchivedAtUtc = $archived,
+                DeadlineDate = $deadline, ArchivedAtUtc = $archived, DefaultCategory = $defaultCategory,
                 Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
             WHERE Id = $id AND Version = $expectedVersion;
             """;
@@ -323,6 +323,7 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         command.Parameters.AddWithValue("$position", updated.Position);
         command.Parameters.AddWithValue("$deadline", SqliteProfileStore.OptionalDate(updated.DeadlineDate));
         command.Parameters.AddWithValue("$archived", SqliteProfileStore.OptionalInstant(updated.ArchivedAtUtc));
+        command.Parameters.AddWithValue("$defaultCategory", updated.DefaultCategory is { } updatedCategory ? (long)updatedCategory : DBNull.Value);
         command.Parameters.AddWithValue("$newVersion", updated.Version);
         command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
@@ -358,9 +359,9 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO Containers (Id, SpaceId, Kind, Name, NormalizedName, IsInbox, Position,
-                DeadlineDate, ArchivedAtUtc, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+                DeadlineDate, ArchivedAtUtc, DefaultCategory, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
             VALUES ($id, $space, $kind, $name, $normalizedName, $isInbox, $position,
-                $deadline, $archived, $version, $created, $updated, $deleted);
+                $deadline, $archived, $defaultCategory, $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", container.Id);
         command.Parameters.AddWithValue("$space", container.SpaceId);
@@ -371,6 +372,7 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         command.Parameters.AddWithValue("$position", container.Position);
         command.Parameters.AddWithValue("$deadline", SqliteProfileStore.OptionalDate(container.DeadlineDate));
         command.Parameters.AddWithValue("$archived", SqliteProfileStore.OptionalInstant(container.ArchivedAtUtc));
+        command.Parameters.AddWithValue("$defaultCategory", container.DefaultCategory is { } category ? (long)category : DBNull.Value);
         command.Parameters.AddWithValue("$version", container.Version);
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(container.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(container.UpdatedAtUtc));
@@ -390,6 +392,7 @@ public sealed class SqliteContainerStore(SqliteConnection connection) : IContain
         Position = r.L("Position"),
         DeadlineDate = r.Dn("DeadlineDate"),
         ArchivedAtUtc = r.In("ArchivedAtUtc"),
+        DefaultCategory = r.Ln("DefaultCategory") is { } defaultCategory ? (CapacityCategory)(int)defaultCategory : null,
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),
