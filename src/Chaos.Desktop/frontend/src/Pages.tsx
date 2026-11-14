@@ -294,7 +294,7 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   const dailyShown = allDaily ? daily : daily.slice(0, 7);
   const todayWritten = daily.some(page => page.dailyDate === today);
 
-  return <div className={cn("grid gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]", sharedBackground && "rounded-xl p-3 sm:p-5")} style={sharedBackground}>
+  return <div className="grid min-h-[calc(100vh-40px)] content-start items-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 lg:grid-cols-[14rem_minmax(0,1fr)]" style={sharedBackground}>
     <nav aria-label={isDailyMode ? "Daily pages" : "Pages"} className={cn("grid content-start gap-4 lg:sticky lg:top-[56px] lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto", sharedBackground && "rounded-xl bg-background/92 p-4 shadow-lg backdrop-blur-sm")}>
       {isDailyMode && <section className="grid gap-1">
         <h2 className="flex items-center justify-between px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">

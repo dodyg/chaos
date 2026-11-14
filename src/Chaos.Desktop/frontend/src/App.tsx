@@ -721,7 +721,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "max-w-6xl" : "max-w-4xl", " px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
