@@ -172,6 +172,37 @@ Pages are for writing you keep: meeting notes, a project write-up, a recipe coll
 - **Outline as you type:** in any list, Tab and Shift+Tab indent and outdent an item, Alt+Up and Alt+Down move it with everything beneath it, and items with children can be folded. Headings fold the same way. A page can be written as an outline, as prose, or as a mix.
 - **Saved as you go:** pages save while you type, and every page keeps its earlier versions, which you can compare and restore.
 
+**Front matter**
+
+A page can start with front matter: a short block of settings between two `---` lines, written in YAML, the same convention used by the app's Markdown export and by tools such as Obsidian, Jekyll and Hugo. It lets a page carry settings beyond its text, such as its own background.
+
+```markdown
+---
+background: lighthouse
+icon: 🛠️
+tags: [home/renovation]
+aliases: [Kitchen]
+---
+
+# Kitchen renovation
+```
+
+- **Shown as properties:** the block appears as a small properties panel at the top of the page, not as raw text. Each property can be edited there, and a switch shows the raw YAML for anyone who prefers typing it. Typing `---` on the first line of a page opens the panel.
+- **Properties the app understands:**
+
+  | Key | What it does | Example |
+  | --- | --- | --- |
+  | `background` | The page's background: one of the My Day scenes, a colour, or an image attached to the page | `lighthouse`, `"#2f6f4e"`, `attachments/plan.jpg` |
+  | `icon` | An emoji shown beside the title in the page tree, links and search | `🛠️` |
+  | `tags` | The page's tags, the same tags tasks use | `[home/renovation]` |
+  | `aliases` | Other names that `[[` links find the page by | `[Kitchen]` |
+
+- **Room for more:** any other key is kept exactly as written, in its place, and shown in the panel as plain text. The app never drops or rewrites keys it does not understand, so other tools, agents and later features can store their own settings on a page.
+- **Safe by design:** front matter is data and is never run. A background image must be a file attached to the page, never a web address, so opening a page loads nothing from the internet.
+- **Mistakes don't lock you out:** if the YAML cannot be read, the page still opens, the panel shows the raw text with the problem, and the app ignores the block until it is fixed. Nothing is lost.
+- **Daily pages too:** a daily page can have its own front matter, and Settings can give new daily pages a starting background.
+- **Search and export:** search covers property values, and `tags` work in every tag filter. Export writes the front matter unchanged at the top of each page's file, and adds the app's own keys under a single `chaos` key, such as the page's ID and parent, so an import can rebuild the tree.
+
 **Organising**
 
 - **A tree of pages:** any page can sit under another, such as Kitchen renovation › Quotes › Plumbers. Nesting is optional; a page with no parent sits at the top of its space.
@@ -200,7 +231,7 @@ Pages are for writing you keep: meeting notes, a project write-up, a recipe coll
 
 **What pages leave out.** Pages are not a block database. There are no references to single paragraphs or list items, no embedding one page inside another, no queries inside pages and no graph view. Keeping pages as plain Markdown is what lets them export cleanly, sync simply and move to other tools.
 
-Pages, daily pages, links, backlinks, outline editing and version history are part of phase 1. Shared pages that members edit together arrive with sharing in phase 3, along with agents reading and writing pages within their permissions.
+Pages, daily pages, links, backlinks, outline editing, version history and front matter are part of phase 1, with scene and colour backgrounds. Image backgrounds arrive with attachments in phase 2. Shared pages that members edit together arrive with sharing in phase 3, along with agents reading and writing pages within their permissions.
 
 ### Updates and diary
 
@@ -678,6 +709,7 @@ Phase 1 follows the guiding principle: it holds exactly what one person needs to
 - [ ] Should dashboard visitors be able to leave comments or subscribe to email updates?
 - [ ] Google reviews apps before the public can grant them calendar access, which can take weeks. When does that review start so phase 2 is not held up?
 - [ ] When two members edit the same shared page at once, do they see each other's changes live, as on shared pads, or does the page merge on save?
+- [ ] Should a page's front matter, such as its background, pass down to the pages under it unless they set their own?
 - [ ] Should a daily page start from a template, for example today's My Day list and a few prompts, or always start empty?
 - [ ] Should the app also offer a built-in AI option, for example in a paid plan, for people who don't have their own key?
 
