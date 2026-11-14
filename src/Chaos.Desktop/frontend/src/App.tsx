@@ -22,9 +22,10 @@ import { AlertStack, NotificationCenter } from "./Reminders";
 import { Journal, SummaryPrompts } from "./Journal";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
+import { Help } from "./Help";
 import { useTimeZones } from "./ZoneSelect";
 import { CategoryDot, FocusSwitch, asCategory, useFocus, type Category } from "./category";
-import { AlarmClock, ChevronRight, Plus, Bell, Cog, Database, BookOpen, Sun, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, LogOut, Search, Settings2, StickyNote, Undo2, UserRound, X } from "lucide-react";
+import { AlarmClock, ChevronRight, Plus, Bell, Cog, Database, BookOpen, CircleHelp, Sun, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, LogOut, Search, Settings2, StickyNote, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +35,7 @@ import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities,
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
 type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; journalRpc?: typeof journalRpc; shellRpc?: typeof shellRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data" | "settings";
+type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data" | "settings" | "help";
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -234,6 +235,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         event.preventDefault();
         setPaletteOpenRef.current(true);
       }
+      // Help from anywhere.
+      if (event.key === "F1" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        openHelpRef.current();
+      }
       // Quick add from anywhere in the app (PLAN §13 Ctrl+N).
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
@@ -258,6 +264,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   }
   const focusQuickAddRef = React.useRef(focusQuickAdd);
   focusQuickAddRef.current = focusQuickAdd;
+  const openHelpRef = React.useRef(() => {});
+  openHelpRef.current = () => { setEditing(null); setShowTagSettings(false); setView("help"); };
   /** Saves confirmed quick-add drafts as one operation; the list and counts reload after commit. */
   /**
    * The category a captured task takes: an explicit choice wins, then the destination list's
@@ -514,6 +522,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       { id: "view:templates", group: "Go to", label: "Templates", icon: <LayoutTemplate/>, run: go("templates") },
       { id: "view:data", group: "Go to", label: "Data & backups", icon: <Database/>, run: go("data"), keywords: "export import backup" },
       { id: "view:settings", group: "Go to", label: "Settings", icon: <Cog/>, run: go("settings"), keywords: "preferences github" },
+      { id: "view:help", group: "Go to", label: "Help", icon: <CircleHelp/>, hint: "F1", run: go("help"), keywords: "guide how shortcuts keyboard tips" },
       ...containers.filter(c => c.kind !== "Inbox").map(c => ({ id: `list:${c.id}`, group: c.kind === "Project" ? "Projects" : "Lists", label: c.name,
         icon: c.kind === "Project" ? <FolderKanban/> : <ListTodo/>, hint: c.archived ? "archived" : undefined, run: () => openContainer(c.id), keywords: c.kind })),
       ...tags.map(tag => ({ id: `tag:${tag.id}`, group: "Tags", label: `#${tag.path}`, run: () => openQuery({ view: "Tag", tagId: tag.id }) })),
@@ -565,6 +574,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <label htmlFor="search" className="sr-only">Search tasks</label>
         <input id="search" type="search" dir="auto" className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" value={searchText} onChange={e => setSearchText(e.target.value)} placeholder="Search tasks" autoComplete="off"/>
         <button type="button" className="shrink-0 rounded border border-sidebar-border px-1 py-0.5 text-[0.65rem] text-muted-foreground hover:text-sidebar-foreground" aria-label="Open the command palette" title="Jump anywhere or run a command (Ctrl+K)" onClick={() => setPaletteOpen(true)}>Ctrl K</button>
+        <button type="button" className="-mr-1 shrink-0 rounded p-0.5 text-muted-foreground hover:text-sidebar-foreground aria-[current=page]:text-primary [&_svg]:size-4" aria-label="Help (F1)" title="Help and keyboard shortcuts (F1)" aria-current={view === "help" ? "page" : undefined} onClick={() => openHelpRef.current()}><CircleHelp/></button>
       </form>
       <FocusSwitch focus={focus} onChange={setFocus}/>
       <nav aria-label="Views" className="grid gap-px">
@@ -645,6 +655,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
+      : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>

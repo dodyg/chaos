@@ -4,8 +4,28 @@
     {
       "name": "ui-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview:ui", "--prefix", "src/Chaos.Desktop/frontend"],
+      "runtimeArgs": [
+        "run",
+        "preview:ui",
+        "--prefix",
+        "src/Chaos.Desktop/frontend"
+      ],
       "port": 5174
+    },
+    {
+      "name": "ui-preview-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "preview:ui",
+        "--prefix",
+        "src/Chaos.Desktop/frontend",
+        "--",
+        "--port",
+        "5175",
+        "--strictPort"
+      ],
+      "port": 5175
     }
   ]
 }
