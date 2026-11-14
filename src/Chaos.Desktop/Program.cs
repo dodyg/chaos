@@ -7,6 +7,7 @@ using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
+using Chaos.Application.Pages;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
@@ -149,6 +150,7 @@ internal static class Program
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks, sync: githubEngine));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -366,6 +368,43 @@ internal static class Program
 [JsonSerializable(typeof(PadReviewStatusRequest))]
 [JsonSerializable(typeof(PadReviewStatusResponse))]
 [JsonSerializable(typeof(PadReviewRequest))]
+[JsonSerializable(typeof(PageSummaryResponse))]
+[JsonSerializable(typeof(PageTaskLinkResponse))]
+[JsonSerializable(typeof(PageBacklinkResponse))]
+[JsonSerializable(typeof(PageResponse))]
+[JsonSerializable(typeof(PageListRequest))]
+[JsonSerializable(typeof(PageListResponse))]
+[JsonSerializable(typeof(PageDailyListRequest))]
+[JsonSerializable(typeof(PageGetRequest))]
+[JsonSerializable(typeof(PageGetDailyRequest))]
+[JsonSerializable(typeof(PageGetResponse))]
+[JsonSerializable(typeof(PageCreateRequest))]
+[JsonSerializable(typeof(PageCreateDailyRequest))]
+[JsonSerializable(typeof(PageSaveRequest))]
+[JsonSerializable(typeof(PageSaveResponse))]
+[JsonSerializable(typeof(PageMoveRequest))]
+[JsonSerializable(typeof(PageItemRequest))]
+[JsonSerializable(typeof(PageOperationResponse))]
+[JsonSerializable(typeof(PageRevisionsRequest))]
+[JsonSerializable(typeof(PageRevisionResponse))]
+[JsonSerializable(typeof(PageRevisionsResponse))]
+[JsonSerializable(typeof(PageRestoreVersionRequest))]
+[JsonSerializable(typeof(PageMakeTaskRequest))]
+[JsonSerializable(typeof(PageMakeTaskResponse))]
+[JsonSerializable(typeof(PageLocateRequest))]
+[JsonSerializable(typeof(PageAnchorResponse))]
+[JsonSerializable(typeof(PageLocateResponse))]
+[JsonSerializable(typeof(PageMentionsRequest))]
+[JsonSerializable(typeof(PageMentionsResponse))]
+[JsonSerializable(typeof(PageSearchRequest))]
+[JsonSerializable(typeof(PageByTagRequest))]
+[JsonSerializable(typeof(PageResolveRequest))]
+[JsonSerializable(typeof(PageResolveNamesRequest))]
+[JsonSerializable(typeof(PageLinkTargetResponse))]
+[JsonSerializable(typeof(PageResolveResponse))]
+[JsonSerializable(typeof(PageAppendRequest))]
+[JsonSerializable(typeof(PageFromPadRequest))]
+[JsonSerializable(typeof(PageAppendPadRequest))]
 [JsonSerializable(typeof(CaptureSpanDto))]
 [JsonSerializable(typeof(CapturePreviewRequest))]
 [JsonSerializable(typeof(CaptureTokenDto))]

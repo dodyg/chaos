@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Field } from "@/components/common";
 import { cn } from "@/lib/utils";
+import { backgroundColors, backgroundScenes } from "./MyDayBackground";
+import { loadDailyBackground, saveDailyBackground } from "./Pages";
 import {
   applyTheme, codeFonts, colorKeys, colorLabels, defaultTheme, densities, effectiveScheme, fontNames, loadActiveTheme, loadThemes,
   parseTheme, presetThemes, radii, readableOn, sameTheme, saveActiveTheme, saveThemes, themeColor, type ColorKey, type Mode, type Scheme, type Theme,
@@ -236,5 +238,27 @@ export function AppearanceSettings() {
       </div>
       {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
     </section>
+    <DailyPageBackground/>
   </div>;
+}
+
+/** The background a new daily page starts with (SPEC Pages); written into its front matter, so each day can change it. */
+function DailyPageBackground() {
+  const [value, setValue] = React.useState(() => loadDailyBackground() ?? "");
+  function change(next: string) { setValue(next); saveDailyBackground(next || null); }
+  const isColor = /^#/.test(value);
+  return <section aria-label="Daily pages" className="grid gap-3 rounded-xl border bg-card p-4">
+    <div><h3 className="text-base font-semibold">Daily pages</h3><p className="text-sm text-muted-foreground">New daily pages start with this background. It is written into the page's properties, so any day can change it.</p></div>
+    <Field label="Starting background">
+      <NativeSelect value={isColor ? "color" : value} onChange={e => change(e.target.value === "color" ? backgroundColors[0].value : e.target.value)}>
+        <NativeSelectOption value="">None</NativeSelectOption>
+        {backgroundScenes.map(scene => <NativeSelectOption key={scene.id} value={scene.id}>{scene.name}</NativeSelectOption>)}
+        <NativeSelectOption value="color">A colour</NativeSelectOption>
+      </NativeSelect>
+    </Field>
+    {isColor && <div className="flex flex-wrap gap-1.5" role="group" aria-label="Daily page colour">
+      {backgroundColors.map(color => <button key={color.value} type="button" className={cn("size-6 rounded-full border", value.toLowerCase() === color.value && "ring-2 ring-ring ring-offset-1")}
+        style={{ backgroundColor: color.value }} aria-label={color.name} title={color.name} onClick={() => change(color.value)}/>)}
+    </div>}
+  </section>;
 }

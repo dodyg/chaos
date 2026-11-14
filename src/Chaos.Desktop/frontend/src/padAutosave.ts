@@ -90,6 +90,14 @@ export class DraftSaver {
     this.notify();
   }
 
+  /** Saves the current text again as a new revision, so the store refreshes what it derives from it. */
+  resave(): Promise<boolean> {
+    this.revision += 1;
+    if (this.status !== "saving" && this.status !== "failed") this.status = "pending";
+    this.notify();
+    return this.flush();
+  }
+
   /** The row version changed through another command (archive, tag, …). */
   updateVersion(version: string): void {
     this.version = version;

@@ -5,7 +5,7 @@ import React from "react";
 import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
 import { handleListKeys } from "./listKeyboard";
 import { TodayContext } from "./dates";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
@@ -15,6 +15,7 @@ import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { NewTagForm, TagSettings, TagTree } from "./tags";
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
+import { Pages, type PageFocus, type PageRequest } from "./Pages";
 import { MyDay, useDayClock } from "./MyDay";
 import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
@@ -25,7 +26,7 @@ import { Settings } from "./Settings";
 import { Help } from "./Help";
 import { useTimeZones } from "./ZoneSelect";
 import { CategoryDot, FocusSwitch, asCategory, useFocus, type Category } from "./category";
-import { AlarmClock, ChevronRight, Plus, Bell, Cog, Database, BookOpen, CircleHelp, Sun, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, LogOut, Search, Settings2, StickyNote, Undo2, UserRound, X } from "lucide-react";
+import { AlarmClock, ChevronRight, FileText, NotebookPen, Plus, Bell, Cog, Database, BookOpen, CircleHelp, Sun, CalendarCheck, CalendarDays, CalendarRange, CircleCheckBig, FolderKanban, Hourglass, Inbox, LayoutTemplate, ListTodo, LogOut, Search, Settings2, StickyNote, Undo2, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +35,8 @@ import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; pageRpc?: typeof pageRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc };
+type View = "tasks" | "templates" | "query" | "pad" | "pages" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -52,6 +53,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const markdownApi = api.markdownRpc ?? markdownRpc;
   const journalApi = { diaryRpc: api.diaryRpc ?? diaryRpc, historyRpc: api.historyRpc ?? historyRpc };
   const padApi = api.padRpc ?? padRpc;
+  const pageApi = api.pageRpc ?? pageRpc;
   const recurrenceApi = api.recurrenceRpc ?? recurrenceRpc;
   const captureApi = api.captureRpc ?? captureRpc;
   const myDayApi = api.myDayRpc ?? myDayRpc;
@@ -65,6 +67,10 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const timeZones = useTimeZones(shellApi, dayClock?.zoneId);
   const quickAddInput = React.useRef<HTMLTextAreaElement>(null);
   const drafts = React.useRef(new DraftRegistry()).current;
+  const pageDrafts = React.useRef(new DraftRegistry()).current;
+  const [pageFocus, setPageFocus] = React.useState<PageFocus | null>(null);
+  const [pageMatches, setPageMatches] = React.useState<PageSummaryResponse[]>([]);
+  const [tagPages, setTagPages] = React.useState<PageSummaryResponse[]>([]);
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
   const [padMatches, setPadMatches] = React.useState<PadItemResponse[]>([]);
   const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
@@ -257,6 +263,18 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   }
   const openPadRef = React.useRef(openPad);
   openPadRef.current = openPad;
+  /** Shows Pages: a page (optionally at a Make task anchor), a day's page, or the page a `[[Name]]` link names. */
+  function openPages(request: PageRequest | null) {
+    setShowTagSettings(false);
+    setView("pages");
+    if (request) setPageFocus(current => ({ ...request, key: (current?.key ?? 0) + 1 }));
+  }
+  const openPagesRef = React.useRef(openPages);
+  openPagesRef.current = openPages;
+  const dailyPageDates = React.useCallback(async (from: string, to: string) => {
+    const result = await pageApi.listDaily({ from, to });
+    return result.ok ? result.pages.map(page => page.dailyDate!).filter(Boolean) : [];
+  }, [pageApi]);
   function focusQuickAdd() {
     setShowTagSettings(false);
     if (view !== "tasks") { setEditing(null); setView("tasks"); }
@@ -290,21 +308,25 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     if (previousView.current === "pad" && view !== "pad") {
       void drafts.flushAll().then(ok => { if (!ok) setError("A pad note could not be saved. Its text is kept: open the Personal pad to retry or copy it."); });
     }
+    if (previousView.current === "pages" && view !== "pages") {
+      void pageDrafts.flushAll().then(ok => { if (!ok) setError("A page could not be saved. Its text is kept: open Pages to retry or copy it."); });
+    }
     previousView.current = view;
   }, [view]);
   // Closing or hiding the window saves unsaved pad text now instead of after the idle delay.
   React.useEffect(() => {
-    function hidden() { if (document.visibilityState === "hidden" && drafts.dirty) void drafts.flushAll(); }
+    function hidden() { if (document.visibilityState === "hidden") { if (drafts.dirty) void drafts.flushAll(); if (pageDrafts.dirty) void pageDrafts.flushAll(); } }
     function closing(event: BeforeUnloadEvent) {
-      if (!drafts.dirty) return;
+      if (!drafts.dirty && !pageDrafts.dirty) return;
       void drafts.flushAll();
+      void pageDrafts.flushAll();
       event.preventDefault();
       event.returnValue = "";
     }
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("beforeunload", closing);
     return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("beforeunload", closing); };
-  }, [drafts]);
+  }, [drafts, pageDrafts]);
   // Search also covers typed pad text (PLAN §9).
   React.useEffect(() => {
     let current = true;
@@ -314,6 +336,18 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     }
     return () => { current = false; };
   }, [view, query.view, query.text, revision, padApi]);
+  // Search covers page titles and text; a tag view lists the pages tagged in their front matter.
+  React.useEffect(() => {
+    let current = true;
+    setPageMatches([]); setTagPages([]);
+    if (view === "query" && query.view === "Search" && query.text?.trim()) {
+      void pageApi.search({ text: query.text, limit: 20 }).then(result => { if (current && result.ok) setPageMatches([...result.pages]); }).catch(() => { if (current) setPageMatches([]); });
+    }
+    if (view === "query" && query.view === "Tag" && query.tagId) {
+      void pageApi.byTag({ tagId: query.tagId }).then(result => { if (current && result.ok) setTagPages([...result.pages]); }).catch(() => { if (current) setTagPages([]); });
+    }
+    return () => { current = false; };
+  }, [view, query.view, query.text, query.tagId, revision, pageApi]);
   async function openTaskById(taskId: string) {
     try {
       const result = await taskRpc.get({ taskId });
@@ -372,17 +406,30 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     onOpenExternal: (url: string) => void markdownApi.openExternal({ url }).then(result => { if (!result.ok) setError(result.error?.message ?? "Could not open that link."); }),
     resolvePads: async (itemIds: string[]) => { const result = await padApi.resolveLinks({ itemIds }); return result.ok ? [...result.targets] : []; },
     onOpenPad: (itemId: string) => openPadRef.current({ itemId }),
-  }), [markdownApi, padApi]);
+    resolvePages: async (pageIds: string[]) => { const result = await pageApi.resolveLinks({ pageIds }); return result.ok ? [...result.targets] : []; },
+    onOpenPage: (pageId: string) => openPagesRef.current({ kind: "page", pageId }),
+    resolvePageNames: async (names: string[]) => { const result = await pageApi.resolveNames({ names }); return result.ok ? [...result.targets] : []; },
+    onOpenPageName: (name: string) => openPagesRef.current({ kind: "name", name }),
+    lists: new Map(containers.map(c => [c.id.toLowerCase(), { name: c.kind === "Inbox" ? "Inbox" : c.name, deleted: false }])),
+    onOpenList: (containerId: string) => openContainerRef.current(containerId),
+  }), [markdownApi, padApi, pageApi, containers]);
   const searchLinks = React.useCallback(async (text: string): Promise<LinkCandidate[]> => {
     if (!text.trim()) return [];
-    const [result, notes] = await Promise.all([
+    const [result, notes, pages] = await Promise.all([
       queryApi.run({ view: "Search", text, containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: true, includeArchived: false, upcomingDays: null, limit: 8, cursor: null, day: null, category: null }),
       padApi.search({ text, limit: 4 }).catch(() => null),
+      pageApi.search({ text, limit: 5 }).catch(() => null),
     ]);
     const tasks: LinkCandidate[] = result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
     const pads: LinkCandidate[] = notes?.ok ? notes.items.map(item => ({ id: item.id, title: padExcerpt(item.markdown), kind: "pad" as const })) : [];
-    return [...tasks.slice(0, 6), ...pads];
-  }, [queryApi, padApi]);
+    const pageRows: LinkCandidate[] = pages?.ok ? pages.pages.map(page => ({ id: page.id, title: page.title, kind: "page" as const, icon: page.icon })) : [];
+    const key = text.trim().toLowerCase();
+    const listRows: LinkCandidate[] = containers.filter(c => c.kind !== "Inbox" && c.name.toLowerCase().includes(key)).slice(0, 3)
+      .map(c => ({ id: c.id, title: c.name, kind: "list" as const, detail: c.kind === "Project" ? "project" : undefined }));
+    const exact = !!pages?.ok && pages.pages.some(page => page.title.toLowerCase() === key || page.aliases.some(alias => alias.toLowerCase() === key));
+    const create: LinkCandidate[] = exact ? [] : [{ id: `new:${text.trim()}`, title: text.trim(), kind: "newPage" }];
+    return [...pageRows, ...tasks.slice(0, 5), ...listRows, ...pads, ...create];
+  }, [queryApi, padApi, pageApi, containers]);
   React.useEffect(() => { void refreshContainers().catch((e: unknown) => setError(String(e))); }, []);
   React.useEffect(() => { void refreshMeta().catch((e: unknown) => setError(String(e))); }, [focus]);
   React.useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [containerId]);
@@ -430,6 +477,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     catch (e) { setError(e instanceof Error ? e.message : failure); }
     finally { setBusy(false); }
   }
+  const openContainerRef = React.useRef((id: string) => openContainer(id));
+  openContainerRef.current = (id: string) => openContainer(id);
   function openContainer(id: string) {
     if (view === "query") setEditing(null);
     setView("tasks");
@@ -509,6 +558,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? tags.find(tag => tag.id === query.tagId) ?? null : null;
   /** Everything the command palette can jump to or run, built from the current lists, tags and focus. */
+  const [paletteTreePages, setPaletteTreePages] = React.useState<PageSummaryResponse[]>([]);
+  React.useEffect(() => {
+    if (!paletteOpen) return;
+    let current = true;
+    void pageApi.list({}).then(result => { if (current && result.ok) setPaletteTreePages([...result.pages]); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [paletteOpen, pageApi]);
   function paletteCommands(): PaletteCommand[] {
     const go = (next: View) => () => { setEditing(null); setShowTagSettings(false); setView(next); };
     return [
@@ -516,6 +572,9 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       { id: "view:myweek", group: "Go to", label: "My Week", icon: <CalendarDays/>, run: go("myweek"), keywords: "plan week" },
       { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
       ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
+      { id: "view:pages", group: "Go to", label: "Pages", icon: <FileText/>, run: () => openPages(null), keywords: "notes writing wiki documents" },
+      { id: "view:today-page", group: "Go to", label: "Today's page", icon: <NotebookPen/>, run: () => openPages(dayClock ? { kind: "daily", date: dayClock.today } : null), keywords: "daily journal diary day page" },
+      ...paletteTreePages.map(page => ({ id: `page:${page.id}`, group: "Pages", label: page.title, icon: page.icon ? <span aria-hidden="true">{page.icon}</span> : <FileText/>, run: () => openPages({ kind: "page", pageId: page.id }), keywords: page.aliases.join(" ") })),
       { id: "view:pad", group: "Go to", label: "Personal pad", icon: <StickyNote/>, run: () => { setShowTagSettings(false); setView("pad"); }, keywords: "notes" },
       { id: "view:summaries", group: "Go to", label: "Summaries", icon: <BookOpen/>, run: go("summaries"), keywords: "summary review evening morning plan journal" },
       { id: "view:notifications", group: "Go to", label: "Notifications", icon: <Bell/>, run: go("notifications"), keywords: "alerts reminders" },
@@ -541,7 +600,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
   const builtIn = builtInViews.find(item => item.view === query.view);
   const queryHeader = query.view === "Search"
-    ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries and pad notes. Completed tasks and archived lists need a filter."/>
+    ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries, pages and pad notes. Completed tasks and archived lists need a filter."/>
+      {pageMatches.length > 0 && <PageList label="Matching pages" pages={pageMatches} onOpen={page => openPages(page.dailyDate ? { kind: "daily", date: page.dailyDate } : { kind: "page", pageId: page.id })}/>}
       {padMatches.length > 0 && <section aria-label="Matching pad notes" className="grid gap-1.5">
         <h3 className="flex items-center border-b px-1 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">Pad notes<Count>{padMatches.length}</Count></h3>
         <ul className="grid gap-1">{padMatches.map(item => <li key={item.id}><button type="button" className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-left text-sm hover:border-input" onClick={() => openPad({ itemId: item.id })}>
@@ -553,7 +613,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           actions={activeTag && <Button type="button" variant={showTagSettings ? "secondary" : "outline"} aria-expanded={showTagSettings} onClick={() => setShowTagSettings(v => !v)}><Settings2/>{showTagSettings ? "Hide settings" : "Settings"}</Button>}/>
         {activeTag && showTagSettings && <div className="rounded-xl border bg-muted/50 p-4"><TagSettings tag={activeTag} tags={tags} api={tagApi}
           onChanged={async () => { await refreshMeta(); setRevision(current => current + 1); }}
-          onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}</>
+          onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}
+        {tagPages.length > 0 && <PageList label="Pages with this tag" pages={tagPages} onOpen={page => openPages(page.dailyDate ? { kind: "daily", date: page.dailyDate } : { kind: "page", pageId: page.id })}/>}</>
       : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
   function viewTask(task: TaskResponse | string) {
@@ -590,6 +651,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         </SidebarSection>
         <SidebarSection id="notes" title="Notes">
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
+          <Button type="button" variant="ghost" className={navItem} aria-current={view === "pages" ? "page" : undefined} onClick={() => { setEditing(null); openPages(null); }}><FileText/>Pages</Button>
+          <Button type="button" variant="ghost" className={navItem} title="Open today's daily page" onClick={() => { setEditing(null); openPages(dayClock ? { kind: "daily", date: dayClock.today } : null); }}><NotebookPen/>Daily page</Button>
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "summaries" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("summaries"); }}><BookOpen/>Summaries</Button>
         </SidebarSection>
       </nav>
@@ -642,20 +705,25 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full max-w-4xl min-w-0 content-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" ? "max-w-6xl" : "max-w-4xl", " px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
       <SummaryPrompts api={summaryApi} onOpen={id => { setSummaryOpenId(id); setShowTagSettings(false); setView("summaries"); }}/>
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
-          links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
-      : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}/>
-      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory}/>
-      : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
+          links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}
+          pageApi={pageApi} today={dayClock?.today ?? null} onOpenPage={openPages}/>
+      : view === "pages" ? <Pages api={pageApi} summaryApi={summaryApi} captureApi={captureApi} registry={pageDrafts} containers={containers} tags={tags} revision={revision}
+          today={dayClock?.today ?? new Date().toISOString().slice(0, 10)} focus={pageFocus} links={links} searchLinks={searchLinks} onChanged={changed}
+          onOpenTask={taskId => void openLinkedTask(taskId)} onOpenSummary={id => { setSummaryOpenId(id); setView("summaries"); }} onCreateTag={async path => { const created = await createTag(path); if (created) changed(); return created; }} onError={setError}/>
+      : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}
+          dailyPages={dailyPageDates} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
+      : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
+      : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
-      : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else setView(next); }}/>
+      : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else if (next === "pages") openPages(null); else setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
@@ -676,8 +744,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       busy={busy} setBusy={setBusy} setError={setError} setNotice={setNotice} setWarning={setWarning} run={run} changed={changed} refresh={refresh}
       revision={revision} subtaskRevision={subtaskRevision} setSubtaskRevision={setSubtaskRevision}
       canAddToMyDay={!!dayClock} onAddToMyDay={task => void addToMyDay(task)} links={links} searchLinks={searchLinks} timeZones={timeZones}
-      containers={containers} containerId={containerId} sections={sections} tags={tags} openPad={openPad}
-      api={{ taskRpc, containerRpc, tagApi, markdownApi, padApi, journalApi, reminderApi, waitingApi, recurrenceApi }}/>}
+      containers={containers} containerId={containerId} sections={sections} tags={tags} openPad={openPad} openPage={openPages}
+      api={{ taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi }}/>}
 
     {recurrenceConflict && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-conflict-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-conflict-title" className="font-semibold">Review the later occurrence</h2><p className="text-sm">{recurrenceConflict.message}</p><p className="text-sm">The completion and the later work are unchanged. Open the later task to review its edits and diary before deciding how to reconcile them.</p><div className="flex gap-2"><Button type="button" onClick={() => { const id = recurrenceConflict.taskId; setRecurrenceConflict(null); void taskRpc.get({ taskId: id }).then(result => { if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task."); }).catch((error: unknown) => setError(String(error))); }}>Open later task</Button><Button type="button" variant="outline" onClick={() => setRecurrenceConflict(null)}>Keep current state</Button></div></div></div>}
     {recurrenceDelete && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-delete-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-delete-title" className="font-semibold">Delete repeating task?</h2><p className="text-sm">Skip this occurrence and continue the series, or end the series and delete this task. Earlier history stays available.</p><div className="flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.skip({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>Skip this occurrence</Button><Button type="button" variant="outline" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.endAndDelete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>End and delete</Button><Button type="button" variant="ghost" onClick={() => setRecurrenceDelete(null)}>Cancel</Button></div></div></div>}
@@ -717,5 +785,15 @@ function SidebarSection({ id, title, children, addLabel, adding = false, onAdd, 
       {children}
       {adding && form}
     </div>
+  </section>;
+}
+
+/** Pages found by search or by tag, shown above the matching tasks. */
+function PageList({ label, pages, onOpen }: { label: string; pages: PageSummaryResponse[]; onOpen: (page: PageSummaryResponse) => void }) {
+  return <section aria-label={label} className="grid gap-1.5">
+    <h3 className="flex items-center border-b px-1 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">Pages<Count>{pages.length}</Count></h3>
+    <ul className="grid gap-1">{pages.map(page => <li key={page.id}><button type="button" className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-left text-sm hover:border-input" onClick={() => onOpen(page)}>
+      {page.icon ? <span aria-hidden="true">{page.icon}</span> : <FileText className="size-4 shrink-0 text-muted-foreground"/>}<span className="truncate">{page.dailyDate ? `Daily page · ${page.dailyDate}` : page.title}</span>
+    </button></li>)}</ul>
   </section>;
 }

@@ -98,3 +98,15 @@ export function padLinkMarkdown(label: string, itemId: string): string {
   const text = label.replace(/[[\]\\]/g, character => `\\${character}`);
   return `[${text}](chaos:pad/${itemId})`;
 }
+
+/** Markdown for an internal page link: a readable label plus the stable page ID, so renames and moves keep it working. */
+export function pageLinkMarkdown(title: string, pageId: string): string {
+  const label = title.replace(/[[\]\\]/g, character => `\\${character}`);
+  return `[${label}](chaos:page/${pageId})`;
+}
+
+/** Markdown for an internal list or project link. */
+export function listLinkMarkdown(name: string, containerId: string): string {
+  const label = name.replace(/[[\]\\]/g, character => `\\${character}`);
+  return `[${label}](chaos:list/${containerId})`;
+}

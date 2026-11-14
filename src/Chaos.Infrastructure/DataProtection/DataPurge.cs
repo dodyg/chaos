@@ -7,9 +7,9 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.DataProtection;
 
 /// <summary>What a purge would remove (or removed): deleted items only, never active ones.</summary>
-public sealed record PurgeCounts(long Tasks, long Subtasks, long DiaryEntries, long PadItems, long Lists, long Sections, long Tags, long Templates)
+public sealed record PurgeCounts(long Tasks, long Subtasks, long DiaryEntries, long PadItems, long Lists, long Sections, long Tags, long Templates, long Pages = 0)
 {
-    public long Total => Tasks + Subtasks + DiaryEntries + PadItems + Lists + Sections + Tags + Templates;
+    public long Total => Tasks + Subtasks + DiaryEntries + PadItems + Lists + Sections + Tags + Templates + Pages;
 }
 
 public sealed record PurgeOutcome(PurgeCounts Removed, IReadOnlyList<string> OsNotificationIds);
@@ -99,7 +99,8 @@ public sealed class DataPurge(SqliteApplicationStore store)
             CREATE TEMP TABLE IF NOT EXISTS PurgeSubtasks (Id TEXT PRIMARY KEY);
             CREATE TEMP TABLE IF NOT EXISTS PurgeDiary (Id TEXT PRIMARY KEY);
             CREATE TEMP TABLE IF NOT EXISTS PurgePad (Id TEXT PRIMARY KEY);
-            DELETE FROM temp.PurgeTasks; DELETE FROM temp.PurgeSubtasks; DELETE FROM temp.PurgeDiary; DELETE FROM temp.PurgePad;
+            CREATE TEMP TABLE IF NOT EXISTS PurgePages (Id TEXT PRIMARY KEY);
+            DELETE FROM temp.PurgeTasks; DELETE FROM temp.PurgeSubtasks; DELETE FROM temp.PurgeDiary; DELETE FROM temp.PurgePad; DELETE FROM temp.PurgePages;
             """);
 
         using var tasks = connection.CreateCommand();
@@ -113,6 +114,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
             INSERT INTO temp.PurgeSubtasks SELECT Id FROM Subtasks WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR ($all = 1 AND DeletedAtUtc IS NOT NULL);
             INSERT INTO temp.PurgeDiary SELECT Id FROM DiaryEntries WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR ($all = 1 AND DeletedAtUtc IS NOT NULL);
             INSERT INTO temp.PurgePad SELECT Id FROM ScratchPadItems WHERE $all = 1 AND DeletedAtUtc IS NOT NULL;
+            INSERT INTO temp.PurgePages SELECT Id FROM Pages WHERE $all = 1 AND DeletedAtUtc IS NOT NULL;
             """;
         rest.Parameters.AddWithValue("$all", all);
         rest.ExecuteNonQuery();
@@ -126,12 +128,13 @@ public sealed class DataPurge(SqliteApplicationStore store)
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Containers WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.ContainerId = Containers.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks)) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetContainerId = Containers.Id) AND NOT EXISTS (SELECT 1 FROM GitHubMilestoneProjects m WHERE m.ContainerId = Containers.Id);"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks)) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetSectionId = Sections.Id);"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Tags WHERE DeletedAtUtc IS NOT NULL;"),
-        !all ? 0 : Scalar(connection, "SELECT count(*) FROM TaskTemplates WHERE DeletedAtUtc IS NOT NULL;"));
+        !all ? 0 : Scalar(connection, "SELECT count(*) FROM TaskTemplates WHERE DeletedAtUtc IS NOT NULL;"),
+        Scalar(connection, "SELECT count(*) FROM temp.PurgePages;"));
 
     private static void DeleteSelected(SqliteConnection connection)
     {
         // Undo entries that mention any purged item can no longer be applied.
-        var ids = Strings(connection, "SELECT Id FROM temp.PurgeTasks UNION ALL SELECT Id FROM temp.PurgeSubtasks UNION ALL SELECT Id FROM temp.PurgeDiary UNION ALL SELECT Id FROM temp.PurgePad;");
+        var ids = Strings(connection, "SELECT Id FROM temp.PurgeTasks UNION ALL SELECT Id FROM temp.PurgeSubtasks UNION ALL SELECT Id FROM temp.PurgeDiary UNION ALL SELECT Id FROM temp.PurgePad UNION ALL SELECT Id FROM temp.PurgePages;");
         foreach (var id in ids)
         {
             using var undo = connection.CreateCommand();
@@ -146,12 +149,14 @@ public sealed class DataPurge(SqliteApplicationStore store)
                 WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks)
                    OR (TargetKind = 2 AND TargetId IN (SELECT Id FROM temp.PurgeSubtasks))
                    OR (TargetKind = 3 AND TargetId IN (SELECT Id FROM temp.PurgeDiary))
-                   OR (TargetKind = 4 AND TargetId IN (SELECT Id FROM temp.PurgePad)));
+                   OR (TargetKind = 4 AND TargetId IN (SELECT Id FROM temp.PurgePad))
+                   OR (TargetKind = 5 AND TargetId IN (SELECT Id FROM temp.PurgePages)));
             DELETE FROM SearchDocuments
                 WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks)
                    OR (TargetKind = 2 AND TargetId IN (SELECT Id FROM temp.PurgeSubtasks))
                    OR (TargetKind = 3 AND TargetId IN (SELECT Id FROM temp.PurgeDiary))
-                   OR (TargetKind = 4 AND TargetId IN (SELECT Id FROM temp.PurgePad));
+                   OR (TargetKind = 4 AND TargetId IN (SELECT Id FROM temp.PurgePad))
+                   OR (TargetKind = 5 AND TargetId IN (SELECT Id FROM temp.PurgePages));
             DELETE FROM SubtaskTags WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM GitHubChecklistItems WHERE SubtaskId IN (SELECT Id FROM temp.PurgeSubtasks);
             DELETE FROM GitHubCommentLinks WHERE DiaryEntryId IN (SELECT Id FROM temp.PurgeDiary);
@@ -166,6 +171,11 @@ public sealed class DataPurge(SqliteApplicationStore store)
             DELETE FROM ScratchTaskLinks WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR PadItemId IN (SELECT Id FROM temp.PurgePad);
             DELETE FROM ScratchPadTags WHERE PadItemId IN (SELECT Id FROM temp.PurgePad);
             DELETE FROM ScratchPadItems WHERE Id IN (SELECT Id FROM temp.PurgePad);
+            DELETE FROM PageTaskLinks WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR PageId IN (SELECT Id FROM temp.PurgePages);
+            DELETE FROM PageTags WHERE PageId IN (SELECT Id FROM temp.PurgePages);
+            DELETE FROM PageRevisions WHERE PageId IN (SELECT Id FROM temp.PurgePages);
+            UPDATE Pages SET ParentPageId = NULL WHERE ParentPageId IN (SELECT Id FROM temp.PurgePages) AND Id NOT IN (SELECT Id FROM temp.PurgePages);
+            DELETE FROM Pages WHERE Id IN (SELECT Id FROM temp.PurgePages);
             UPDATE RecurrenceOccurrences SET TaskId = NULL WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM NotificationJobs WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ReminderRules WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
@@ -210,7 +220,8 @@ public sealed class DataPurge(SqliteApplicationStore store)
                     AND NOT EXISTS (SELECT 1 FROM Tags c WHERE c.ParentTagId = Tags.Id)
                     AND NOT EXISTS (SELECT 1 FROM TaskTags l WHERE l.TagId = Tags.Id)
                     AND NOT EXISTS (SELECT 1 FROM SubtaskTags l WHERE l.TagId = Tags.Id)
-                    AND NOT EXISTS (SELECT 1 FROM ScratchPadTags l WHERE l.TagId = Tags.Id);
+                    AND NOT EXISTS (SELECT 1 FROM ScratchPadTags l WHERE l.TagId = Tags.Id)
+                    AND NOT EXISTS (SELECT 1 FROM PageTags l WHERE l.TagId = Tags.Id);
                 """;
             if (tags.ExecuteNonQuery() == 0)
             {

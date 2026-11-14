@@ -131,6 +131,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.Tag => await session.Tags.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.DisplayName) : (null, null),
         ChangeKind.Diary => await session.Diary.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, "diary entry") : (null, null),
         ChangeKind.Pad => await session.Pad.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, PadExcerpt.Of(row.RawMarkdown)) : (null, null),
+        ChangeKind.Page => await session.Pages.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Title) : (null, null),
         ChangeKind.RecurrenceSeries => await session.Recurrence.GetSeriesAsync(change.Id, ct) is { } row ? (row.Version, "recurrence series") : (null, null),
         ChangeKind.RecurrenceOccurrence => await session.Recurrence.GetOccurrenceAsync(change.Id, ct) is { } row ? (row.Version, "recurrence occurrence") : (null, null),
         ChangeKind.ReminderRule => await session.ReminderRules.GetAsync(change.Id, ct) is { } row ? (row.Version, "reminder rule") : (null, null),
@@ -237,6 +238,11 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                     id => session.Pad.GetIncludingDeletedAsync(id, ct),
                     (current, before) => (before ?? current with { DeletedAtUtc = now }) with { DraftVersion = current.DraftVersion, Version = current.Version + 1, UpdatedAtUtc = now },
                     (row, expected) => session.Pad.UpdateAsync(row, expected, ct));
+            case ChangeKind.Page:
+                return await RevertAsync(change, label, row => row.Title,
+                    id => session.Pages.GetIncludingDeletedAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { DraftVersion = current.DraftVersion, Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Pages.UpdateAsync(row, expected, ct));
             default:
                 throw new AppException(AppErrorKind.StorageUnavailable, "The saved undo information names an unknown kind of item. Nothing was changed.");
         }

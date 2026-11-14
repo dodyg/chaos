@@ -1,10 +1,10 @@
 import React from "react";
-import { ArrowRight, BookOpen, Database, Keyboard, ListTodo, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
+import { ArrowRight, BookOpen, Database, FileText, Keyboard, ListTodo, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common";
 import { listShortcuts } from "./listKeyboard";
 
-export type HelpLink = "myday" | "myweek" | "tasks" | "pad" | "summaries" | "notifications" | "templates" | "data" | "settings";
+export type HelpLink = "myday" | "myweek" | "tasks" | "pad" | "pages" | "summaries" | "notifications" | "templates" | "data" | "settings";
 
 /** Shortcuts that work anywhere in the main window (App's keydown handler). */
 export const appShortcuts: readonly [string, string][] = [
@@ -19,7 +19,9 @@ export const appShortcuts: readonly [string, string][] = [
 const editorShortcuts: readonly [string, string][] = [
   ["Ctrl+B / Ctrl+I", "Bold and italic in notes"],
   ["Ctrl+K", "Insert a link while typing in a note"],
-  ["[[", "Link to another task or pad note"],
+  ["[[", "Link to a page, task, list or pad note"],
+  ["Tab / Shift+Tab", "In a page's list: indent or outdent an item with its children"],
+  ["Alt+↑ / Alt+↓", "In a page's list: move an item with its children"],
 ];
 
 /** Quick-add examples; each part shown here is recognised by the English language pack. */
@@ -96,10 +98,17 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       <div className="flex flex-wrap gap-2"><Go to="tasks" onNavigate={onNavigate}>Open the Inbox</Go><Go to="templates" onNavigate={onNavigate}>Open Templates</Go></div>
     </> },
     { id: "find", title: "Finding things", icon: <Search/>, keywords: "search find palette jump command", body: <>
-      <p>The sidebar search box matches words in titles, notes, subtasks, diary entries and pad notes. <kbd>Ctrl+K</kbd> opens the command palette: type a few letters to jump to any view, list, tag or task, or to run an action.</p>
+      <p>The sidebar search box matches words in titles, notes, subtasks, diary entries, pages and pad notes. <kbd>Ctrl+K</kbd> opens the command palette: type a few letters to jump to any view, list, tag or task, or to run an action.</p>
+    </> },
+    { id: "pages", title: "Pages and daily pages", icon: <FileText/>, keywords: "pages page wiki writing notes daily journal diary today outline backlinks links versions history front matter properties background icon focus", body: <>
+      <p><strong>Pages</strong> are for writing you keep: meeting notes, a project write-up, a recipe collection. Put a page under another to build a tree, and type <kbd>[[</kbd> to link a page, a task or a list. Every page shows what links to it, and links keep working when a page is renamed or moved. Linking to a page that does not exist yet creates it when you follow the link.</p>
+      <p>Pages save as you type and keep earlier <strong>versions</strong> you can compare and restore. In lists, <kbd>Tab</kbd>, <kbd>Shift+Tab</kbd> and <kbd>Alt+↑/↓</kbd> work as an outline, and read mode folds headings and list items. <em>Focus</em> hides everything else; <em>Contents</em> lists the headings.</p>
+      <p>A page can start with <strong>properties</strong> between two <code>---</code> lines: an icon, a background (a My Day scene or a colour), tags and aliases. Other keys are kept as written.</p>
+      <p><strong>Today's page</strong> is one step from My Day and the command palette. It is only kept once you write in it, and it shows that day's evening summary beside it. Select lines on any page and choose <em>Make task</em>; lines indented under the first become subtasks.</p>
+      <Go to="pages" onNavigate={onNavigate}>Open Pages</Go>
     </> },
     { id: "pad", title: "Personal pad and summaries", icon: <StickyNote/>, keywords: "pad notes scratch summaries summary review morning evening journal diary make task", body: <>
-      <p>The <strong>Personal pad</strong> is for thoughts that are not tasks yet. Notes save as you type. Select some text and choose <em>Make task</em> to turn it into a task that links back to its spot on the pad.</p>
+      <p>The <strong>Personal pad</strong> is for thoughts that are not tasks yet. Notes save as you type. Select some text and choose <em>Make task</em> to turn it into a task that links back to its spot on the pad. When a note grows into something to keep, move it to a page or add it to today's page.</p>
       <p><strong>Summaries</strong> are built from your own lists and history: a morning plan, an evening summary and a weekly look back. From an evening summary you can carry unfinished tasks over to tomorrow.</p>
       <div className="flex flex-wrap gap-2"><Go to="pad" onNavigate={onNavigate}>Open the pad</Go><Go to="summaries" onNavigate={onNavigate}>Open Summaries</Go></div>
     </> },

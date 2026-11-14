@@ -1,7 +1,7 @@
 import React from "react";
-import { padRpc, tagRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
+import { padRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Copy, ListPlus, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Copy, FileText, ListPlus, NotebookPen, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { MarkdownPreview, type MarkdownLinks } from "./markdown";
 import { TagPicker } from "./tags";
 import { useDragReorder } from "./dragReorder";
 import { DraftRegistry, type DraftSaver, type DraftSnapshot } from "./padAutosave";
+import type { PageRequest } from "./Pages";
 
 export type PadApi = typeof padRpc;
 
@@ -84,6 +85,10 @@ type Props = {
   onChanged: () => void;
   onOpenTask: (taskId: string) => void;
   onError: (message: string | null) => void;
+  /** Pages: a note can become a page, or be added to a day's page. */
+  pageApi?: typeof pageRpc;
+  today?: string | null;
+  onOpenPage?: (request: PageRequest) => void;
 };
 
 /**
@@ -91,7 +96,7 @@ type Props = {
  * type, ordered by hand, tagged and archived; "Make task" on a selection with a backlink;
  * and a weekly review that suggests archiving old notes.
  */
-export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError }: Props) {
+export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError, pageApi, today, onOpenPage }: Props) {
   const [archived, setArchived] = React.useState(false);
   const [tagFilter, setTagFilter] = React.useState("");
   const [items, setItems] = React.useState<PadItemResponse[]>([]);
@@ -266,6 +271,25 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
     await run(() => api.reorder({ operationId: operationId(), itemId: item.id, expectedVersion: version, insertionIndex }), "Could not move the note.");
   }
 
+  /** Turns the note into a page (its first line names it) or adds it to today's page; one undoable change either way. */
+  async function toPage(item: PadItemResponse, where: "page" | "today") {
+    if (!pageApi || !onOpenPage) return;
+    const version = await settled(item);
+    if (version === null) return;
+    if (where === "page") {
+      await run(() => pageApi.fromPad({ operationId: operationId(), padItemId: item.id, expectedVersion: version, parentPageId: null, title: null }), "Could not move the note to a page.", result => {
+        setOpenId(null); registry.forget(item.id);
+        const page = result.pages[0];
+        if (page) onOpenPage({ kind: "page", pageId: page.id });
+      });
+    } else if (today) {
+      await run(() => pageApi.appendPad({ operationId: operationId(), padItemId: item.id, expectedVersion: version, date: today }), "Could not add the note to today's page.", () => {
+        setOpenId(null);
+        setNotice("Added the note to today's page and archived it here.");
+      });
+    }
+  }
+
   function startMakeTask() {
     if (!snapshot || selection.end <= selection.start) return;
     const text = snapshot.text.slice(selection.start, selection.end);
@@ -360,6 +384,10 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select text in the note first" onClick={startMakeTask}><ListPlus/>Make task</Button>
             {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task from them.</span>}
+            {pageApi && onOpenPage && <span className="ml-auto flex flex-wrap gap-1">
+              <Button type="button" size="sm" variant="ghost" disabled={busy || !(registry.get(item.id)?.snapshot.text ?? item.markdown).trim()} title="Make a page from this note; its first line becomes the title" onClick={() => void toPage(item, "page")}><FileText/>Move to a page</Button>
+              {today && <Button type="button" size="sm" variant="ghost" disabled={busy || !(registry.get(item.id)?.snapshot.text ?? item.markdown).trim()} title="Add this note to the end of today's page and archive it" onClick={() => void toPage(item, "today")}><NotebookPen/>Add to today's page</Button>}
+            </span>}
           </div>
           {makeTask && <div className="grid gap-2 rounded-lg border p-3">
             <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{(snapshot?.text ?? "").slice(makeTask.start, makeTask.end)}</blockquote>

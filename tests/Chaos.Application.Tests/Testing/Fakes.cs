@@ -76,6 +76,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IUndoStore Undo { get; } = new FakeUndoStore(owner.Undo);
         public IChecklistConversionStore ChecklistConversions { get; } = new FakeChecklistConversionStore(owner.ChecklistConversions);
         public IPadStore Pad { get; } = new FakePadStore(owner.PadItems, owner.PadTaskLinks);
+        public IPageStore Pages { get; } = new UnsupportedPageStore();
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
         public IWaitingStore Waiting { get; } = new FakeWaitingStore(owner.Waiting, owner.FollowUps);
@@ -458,4 +459,30 @@ public sealed class UnsupportedQueryStore : ITaskQueryStore
     public Task<long> CountAsync(TaskQueryCriteria criteria, CancellationToken ct) => throw Refuse();
     public Task<IReadOnlyList<string>> ListOpenDueZoneIdsAsync(string spaceId, CancellationToken ct) => throw Refuse();
     public Task<long> RebuildSearchIndexAsync(DateTimeOffset now, CancellationToken ct) => throw Refuse();
+}
+
+/// <summary>Pages are tested against SQLite; this store only lets the recorder wrap a session.</summary>
+public sealed class UnsupportedPageStore : IPageStore
+{
+    private static NotSupportedException No() => new("This test store does not implement pages; pages are tested against SQLite.");
+    public Task<PageRecord?> GetAsync(string pageId, CancellationToken ct) => throw No();
+    public Task<PageRecord?> GetIncludingDeletedAsync(string pageId, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct) => throw No();
+    public Task<PageRecord?> FindDailyAsync(string spaceId, DateOnly date, CancellationToken ct) => throw No();
+    public Task AddAsync(PageRecord page, CancellationToken ct) => throw No();
+    public Task<PageRecord?> UpdateAsync(PageRecord updated, long expectedVersion, CancellationToken ct) => throw No();
+    public Task<long> GetNextPositionAsync(string spaceId, string? parentPageId, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageRevisionRecord>> ListRevisionsAsync(string pageId, CancellationToken ct) => throw No();
+    public Task<PageRevisionRecord?> GetRevisionAsync(string pageId, long number, CancellationToken ct) => throw No();
+    public Task AddRevisionAsync(PageRevisionRecord revision, CancellationToken ct) => throw No();
+    public Task UpdateRevisionAsync(PageRevisionRecord revision, CancellationToken ct) => throw No();
+    public Task AddTaskLinkAsync(PageTaskLinkRecord link, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageTaskLinkRecord>> ListTaskLinksAsync(string pageId, CancellationToken ct) => throw No();
+    public Task<PageTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageRecord>> ListContainingAsync(string spaceId, IReadOnlyList<string> needles, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<(string Id, string Title, string Notes)>> ListTasksContainingAsync(IReadOnlyList<string> needles, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<string>> ListTagIdsAsync(string pageId, CancellationToken ct) => throw No();
+    public Task<IReadOnlyList<PageRecord>> ListByTagsAsync(IReadOnlyCollection<string> tagIds, CancellationToken ct) => throw No();
 }

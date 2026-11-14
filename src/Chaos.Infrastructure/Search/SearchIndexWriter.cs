@@ -10,6 +10,7 @@ public enum SearchTargetKind
     Subtask = 2,
     Diary = 3,
     Pad = 4,
+    Page = 5,
 }
 
 /// <summary>
@@ -63,7 +64,7 @@ public static class SearchIndexWriter
 
     /// <summary>
     /// Drops every document and indexes all active tasks, subtasks of active tasks, diary
-    /// entries and pad items again, then records the normalization version. Runs on the
+    /// entries, pad items and pages again, then records the normalization version. Runs on the
     /// caller's transaction. Returns the number of documents written.
     /// </summary>
     public static async Task<long> RebuildAsync(SqliteConnection connection, DateTimeOffset now, CancellationToken ct)
@@ -96,6 +97,7 @@ public static class SearchIndexWriter
             WHERE d.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL;
             """);
         await ReadAsync(SearchTargetKind.Pad, "SELECT Id, NULL, '', RawMarkdown FROM ScratchPadItems WHERE DeletedAtUtc IS NULL;");
+        await ReadAsync(SearchTargetKind.Page, "SELECT Id, NULL, Title, RawMarkdown FROM Pages WHERE DeletedAtUtc IS NULL;");
 
         foreach (var source in sources)
         {

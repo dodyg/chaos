@@ -360,6 +360,7 @@ public sealed class TransferTests
             public IUndoStore Undo => inner.Undo;
             public IChecklistConversionStore ChecklistConversions => inner.ChecklistConversions;
             public IPadStore Pad => inner.Pad;
+            public IPageStore Pages => inner.Pages;
             public IRecurrenceStore Recurrence => inner.Recurrence;
             public IReminderRuleStore ReminderRules => inner.ReminderRules;
             public IWaitingStore Waiting => inner.Waiting;

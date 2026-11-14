@@ -8,7 +8,7 @@ import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import type { Root, RootContent, PhrasingContent, ListItem, TableCell } from "mdast";
 import type { Root as HastRoot, ElementContent } from "hast";
-import { ImageOff, Link2Off, X } from "lucide-react";
+import { ChevronRight, ImageOff, Link2Off, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,6 +29,31 @@ export function parseMarkdown(source: string): Root {
 
 export const internalLinkPattern = /^chaos:task\/([0-9a-fA-F-]{36})$/;
 export const padLinkPattern = /^chaos:pad\/([0-9a-fA-F-]{36})$/;
+export const pageLinkPattern = /^chaos:page\/([0-9a-fA-F-]{36})$/;
+export const listLinkPattern = /^chaos:list\/([0-9a-fA-F-]{36})$/;
+/** `[[Name]]` or `[[Name|label]]`: a page link by title or alias (SPEC Pages). */
+export const wikiLinkPattern = /\[\[([^\]\n|[]{1,200})(?:\|([^\]\n[]{1,200}))?\]\]/g;
+
+/** The ID of an internal page link, or null. */
+export function internalPageId(url: string): string | null {
+  return pageLinkPattern.exec(url)?.[1] ?? null;
+}
+
+/** The ID of an internal list or project link, or null. */
+export function internalListId(url: string): string | null {
+  return listLinkPattern.exec(url)?.[1] ?? null;
+}
+
+/** The names of every `[[Name]]` link in a document, outside code. */
+export function wikiLinkNames(source: string): string[] {
+  const names = new Set<string>();
+  const visit = (node: Root | RootContent) => {
+    if (node.type === "text") for (const match of node.value.matchAll(wikiLinkPattern)) names.add(match[1].trim());
+    if ("children" in node) for (const child of node.children) visit(child as RootContent);
+  };
+  visit(parseMarkdown(source));
+  return [...names];
+}
 
 /** The ID of an internal task link, or null. */
 export function internalTaskId(url: string): string | null {
@@ -112,7 +137,26 @@ export type MarkdownLinks = {
   padTargets?: ReadonlyMap<string, LinkTarget>;
   resolvePads?: (itemIds: string[]) => Promise<LinkTarget[]>;
   onOpenPad?: (itemId: string) => void;
+  /** Resolved page link targets, keyed by lowercase page ID. */
+  pageTargets?: ReadonlyMap<string, PageLinkTarget>;
+  resolvePages?: (pageIds: string[]) => Promise<PageLinkTarget[]>;
+  onOpenPage?: (pageId: string) => void;
+  /** `[[Name]]` targets keyed by lowercase name; a name missing from a loaded map has no page yet. */
+  nameTargets?: ReadonlyMap<string, PageLinkTarget>;
+  resolvePageNames?: (names: string[]) => Promise<(PageLinkTarget & { name: string | null })[]>;
+  /** Follows a `[[Name]]` link; when no page has that name yet, the app creates it. */
+  onOpenPageName?: (name: string) => void;
+  /** Lists and projects for `chaos:list/<id>` links. */
+  lists?: ReadonlyMap<string, { name: string; deleted: boolean }>;
+  onOpenList?: (containerId: string) => void;
+  /** Read mode for pages: headings and list items with children fold, headings get anchors. */
+  outline?: boolean;
 };
+
+export type PageLinkTarget = { id: string; title: string; icon: string | null; deleted: boolean; dailyDate: string | null };
+
+/** The anchor ID of the n-th top-level heading of a page in read mode. */
+export const headingAnchor = (index: number) => `page-heading-${index}`;
 
 /** Renders raw Markdown safely. `compact` tightens spacing for timeline entries. */
 export function MarkdownPreview({ source, links = {}, compact = false, className }: { source: string; links?: MarkdownLinks; compact?: boolean; className?: string }) {
@@ -135,9 +179,108 @@ export function MarkdownPreview({ source, links = {}, compact = false, className
     void resolvePads(padIds.split(",")).then(targets => { if (current) setResolvedPads(new Map(targets.map(target => [target.id.toLowerCase(), target]))); }).catch(() => { if (current) setResolvedPads(undefined); });
     return () => { current = false; };
   }, [padIds, resolvePads]);
-  const effective = { ...links, ...(resolved ? { targets: resolved } : {}), ...(resolvedPads ? { padTargets: resolvedPads } : {}) };
+  const pageIds = React.useMemo(() => internalLinkIds(source, internalPageId).sort().join(","), [source]);
+  const [resolvedPages, setResolvedPages] = React.useState<ReadonlyMap<string, PageLinkTarget> | undefined>(undefined);
+  const resolvePages = links.resolvePages;
+  React.useEffect(() => {
+    if (!resolvePages || !pageIds) { setResolvedPages(undefined); return; }
+    let current = true;
+    void resolvePages(pageIds.split(",")).then(targets => { if (current) setResolvedPages(new Map(targets.map(target => [target.id.toLowerCase(), target]))); }).catch(() => { if (current) setResolvedPages(undefined); });
+    return () => { current = false; };
+  }, [pageIds, resolvePages]);
+  const names = React.useMemo(() => wikiLinkNames(source).sort().join("\n"), [source]);
+  const [resolvedNames, setResolvedNames] = React.useState<ReadonlyMap<string, PageLinkTarget> | undefined>(undefined);
+  const resolveNames = links.resolvePageNames;
+  React.useEffect(() => {
+    if (!resolveNames || !names) { setResolvedNames(undefined); return; }
+    let current = true;
+    void resolveNames(names.split("\n")).then(targets => { if (current) setResolvedNames(new Map(targets.map(target => [(target.name ?? target.title).toLowerCase(), target]))); }).catch(() => { if (current) setResolvedNames(undefined); });
+    return () => { current = false; };
+  }, [names, resolveNames]);
+  const effective = { ...links, ...(resolved ? { targets: resolved } : {}), ...(resolvedPads ? { padTargets: resolvedPads } : {}),
+    ...(resolvedPages ? { pageTargets: resolvedPages } : {}), ...(resolvedNames ? { nameTargets: resolvedNames } : {}) };
   if (!source.trim()) return <p className="text-muted-foreground italic">Nothing written yet.</p>;
-  return <div data-slot="markdown" className={cn("markdown grid min-w-0 [overflow-wrap:anywhere]", compact ? "gap-1.5" : "gap-3", className)}>{renderBlocks(tree.children, effective)}</div>;
+  return <div data-slot="markdown" className={cn("markdown grid min-w-0 [overflow-wrap:anywhere]", compact ? "gap-1.5" : "gap-3", className)}>
+    {links.outline ? renderSections(tree.children, effective) : renderBlocks(tree.children, effective)}
+  </div>;
+}
+
+/**
+ * Read mode for pages: each top-level heading starts a section running to the next heading
+ * of the same or a higher level, and the section folds under its heading.
+ */
+function renderSections(nodes: RootContent[], links: MarkdownLinks): React.ReactNode[] {
+  let headingIndex = 0;
+  function build(start: number, end: number, key: string): React.ReactNode[] {
+    const output: React.ReactNode[] = [];
+    let index = start;
+    while (index < end) {
+      const node = nodes[index];
+      if (node.type !== "heading") { output.push(renderBlock(node, links, index)); index++; continue; }
+      let next = index + 1;
+      while (next < end && !(nodes[next].type === "heading" && (nodes[next] as { depth: number }).depth <= node.depth)) next++;
+      const anchor = headingAnchor(headingIndex++);
+      const heading = renderBlock(node, links, index);
+      const body = build(index + 1, next, `${key}-${index}`);
+      output.push(<FoldSection key={`${key}-${index}`} anchor={anchor} heading={heading} empty={body.length === 0}>{body}</FoldSection>);
+      index = next;
+    }
+    return output;
+  }
+  return build(0, nodes.length, "s");
+}
+
+function FoldSection({ anchor, heading, empty, children }: { anchor: string; heading: React.ReactNode; empty: boolean; children: React.ReactNode }) {
+  const [folded, setFolded] = React.useState(false);
+  return <section id={anchor} className="grid scroll-mt-16 gap-3" data-folded={folded || undefined}>
+    <div className="group/fold relative flex items-center">
+      {!empty && <button type="button" className="absolute -left-5 rounded p-0.5 text-muted-foreground opacity-40 hover:opacity-100 focus-visible:opacity-100 group-hover/fold:opacity-100" aria-expanded={!folded}
+        aria-label={folded ? "Unfold section" : "Fold section"} title={folded ? "Unfold" : "Fold"} onClick={() => setFolded(value => !value)}>
+        <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")}/>
+      </button>}
+      {heading}
+    </div>
+    {!folded && children}
+  </section>;
+}
+
+function FoldListItem({ head, nested, className }: { head: React.ReactNode; nested: React.ReactNode; className?: string }) {
+  const [folded, setFolded] = React.useState(false);
+  return <li className={cn("relative", className)} data-folded={folded || undefined}>
+    <button type="button" className="absolute top-0.5 -left-9 rounded p-0.5 text-muted-foreground opacity-40 hover:opacity-100 focus-visible:opacity-100" aria-expanded={!folded}
+      aria-label={folded ? "Unfold item" : "Fold item"} title={folded ? "Unfold" : "Fold"} onClick={() => setFolded(value => !value)}>
+      <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")}/>
+    </button>
+    {head}{folded ? <span className="ml-1 text-xs text-muted-foreground">…</span> : nested}
+  </li>;
+}
+
+/** Text with `[[Name]]` and `[[Name|label]]` page links rendered as links. */
+function renderWikiText(value: string, links: MarkdownLinks, key: number): React.ReactNode {
+  if (!value.includes("[[")) return <React.Fragment key={key}>{value}</React.Fragment>;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  for (const match of value.matchAll(wikiLinkPattern)) {
+    const at = match.index ?? 0;
+    if (at > last) parts.push(value.slice(last, at));
+    parts.push(<WikiLink key={at} name={match[1].trim()} label={match[2]?.trim() ?? null} links={links}/>);
+    last = at + match[0].length;
+  }
+  if (last < value.length) parts.push(value.slice(last));
+  return <React.Fragment key={key}>{parts}</React.Fragment>;
+}
+
+function WikiLink({ name, label, links }: { name: string; label: string | null; links: MarkdownLinks }) {
+  const target = links.nameTargets?.get(name.toLowerCase());
+  const known = links.nameTargets !== undefined;
+  const text = label ?? name;
+  if (!links.onOpenPageName) return <span>{text}</span>;
+  if (known && !target) {
+    return <button type="button" className="inline cursor-pointer rounded-sm text-left text-primary/70 underline decoration-dashed underline-offset-2 hover:text-primary outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      title={`No page named “${name}” yet. Follow the link to create it.`} onClick={() => links.onOpenPageName?.(name)}>{text}</button>;
+  }
+  return <button type="button" className="inline cursor-pointer rounded-sm text-left text-primary underline underline-offset-2 hover:text-primary/80 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    title={target ? `Open page “${target.title}”` : `Open page “${name}”`} onClick={() => target ? links.onOpenPage?.(target.id) : links.onOpenPageName?.(name)}>{target?.icon ? `${target.icon} ` : ""}{text}</button>;
 }
 
 
@@ -241,6 +384,15 @@ function renderListItem(item: ListItem, links: MarkdownLinks, key: number): Reac
   const content = item.children.map((child, index) => child.type === "paragraph" && item.children.length === 1
     ? <React.Fragment key={index}>{renderInline(child.children, links)}</React.Fragment>
     : renderBlock(child, links, index));
+  const nestedAt = item.children.findIndex(child => child.type === "list");
+  if (links.outline && nestedAt > 0) {
+    const head = item.children.slice(0, nestedAt).map((child, index) => child.type === "paragraph" ? <React.Fragment key={index}>{renderInline(child.children, links)}</React.Fragment> : renderBlock(child, links, index));
+    const nested = item.children.slice(nestedAt).map((child, index) => renderBlock(child, links, nestedAt + index));
+    if (typeof item.checked !== "boolean") return <FoldListItem key={key} head={head} nested={nested}/>;
+    return <FoldListItem key={key} className="list-none" head={<span className="inline-flex items-start gap-2">
+      <input type="checkbox" checked={item.checked} disabled readOnly aria-label={item.checked ? "Done" : "Not done"} className="mt-1 size-3.5 accent-primary"/>
+      <span className={cn(item.checked && "text-muted-foreground line-through")}>{head}</span></span>} nested={nested}/>;
+  }
   if (typeof item.checked !== "boolean") return <li key={key}>{content}</li>;
   return <li key={key} className="flex items-start gap-2">
     <input type="checkbox" checked={item.checked} disabled readOnly aria-label={item.checked ? "Done" : "Not done"} className="mt-1 size-3.5 accent-primary"/>
@@ -254,7 +406,7 @@ function renderInline(nodes: PhrasingContent[], links: MarkdownLinks): React.Rea
 
 function renderPhrasing(node: PhrasingContent, links: MarkdownLinks, key: number): React.ReactNode {
   switch (node.type) {
-    case "text": return <React.Fragment key={key}>{node.value}</React.Fragment>;
+    case "text": return renderWikiText(node.value, links, key);
     case "strong": return <strong key={key}>{renderInline(node.children, links)}</strong>;
     case "emphasis": return <em key={key}>{renderInline(node.children, links)}</em>;
     case "delete": return <del key={key}>{renderInline(node.children, links)}</del>;
@@ -298,11 +450,33 @@ function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLi
     return <button type="button" className={linkClass} title={target ? `Open pad note “${target.title}”` : "Open pad note"} onClick={() => links.onOpenPad?.(padId)}>{children}</button>;
   }
 
+  const pageId = internalPageId(url);
+  if (pageId) {
+    const target = links.pageTargets?.get(pageId.toLowerCase());
+    if (links.pageTargets && (!target || target.deleted)) {
+      return <span className="inline-flex items-center gap-1 text-muted-foreground" title={target ? "This page is deleted. Restore it from Deleted pages to follow the link." : "This page no longer exists on this computer."}>
+        <Link2Off className="size-3.5"/><span className="line-through">{target?.title ?? children}</span><span className="text-xs">({target ? "deleted page" : "missing page"})</span>
+      </span>;
+    }
+    return <button type="button" className={linkClass} title={target ? `Open page “${target.title}”` : "Open page"} onClick={() => links.onOpenPage?.(pageId)}>{target?.icon ? `${target.icon} ` : ""}{target?.title ?? children}</button>;
+  }
+
+  const listId = internalListId(url);
+  if (listId) {
+    const target = links.lists?.get(listId.toLowerCase());
+    if (links.lists && (!target || target.deleted)) {
+      return <span className="inline-flex items-center gap-1 text-muted-foreground" title="This list is deleted or no longer exists.">
+        <Link2Off className="size-3.5"/><span className="line-through">{target?.name ?? children}</span><span className="text-xs">({target ? "deleted list" : "missing list"})</span>
+      </span>;
+    }
+    return <button type="button" className={linkClass} title={target ? `Open “${target.name}”` : "Open list"} onClick={() => links.onOpenList?.(listId)}>{target?.name ?? children}</button>;
+  }
+
   if (isSafeExternalUrl(url)) {
     return <button type="button" className={linkClass} title={url} onClick={() => links.onOpenExternal?.(url)}>{children}</button>;
   }
 
-  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task and pad-note links open.">{children}</span>;
+  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task, page, list and pad-note links open.">{children}</span>;
 }
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {

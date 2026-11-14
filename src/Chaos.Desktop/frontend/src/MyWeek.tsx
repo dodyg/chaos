@@ -4,7 +4,7 @@ import React from "react";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
-import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, NotebookPen, Check, ChevronLeft, ChevronRight, Clock, Flag, Lightbulb, Plus, Settings2, Target, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,11 +68,14 @@ export function decideLeftover(draft: WeekDraftDto, taskId: string, decision: st
  * confirmed plan, so cancelling leaves the confirmed week exactly as it was. Nothing here
  * changes a task's planned or due date, except an explicit "schedule later" date.
  */
-export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onOpen, onChanged, focus = null }: {
+export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onOpen, onChanged, focus = null, dailyPages, onOpenDailyPage }: {
   clock: DayClockResponse | null; revision: number; busy: boolean; containers: ContainerResponse[];
   api?: typeof myWeekRpc; onOpen: (task: TaskResponse) => void; onChanged: () => void;
   /** Work/Personal focus for the confirmed board; planning always shows the whole week. */
   focus?: Focus;
+  /** Loads the dates (yyyy-MM-dd) between two days that have a daily page. */
+  dailyPages?: (from: string, to: string) => Promise<string[]>;
+  onOpenDailyPage?: (date: string) => void;
 }) {
   const [date, setDate] = React.useState<string | null>(null);
   const [week, setWeek] = React.useState<WeekOverviewDto | null>(null);
@@ -126,7 +129,7 @@ export function MyWeek({ clock, revision, busy, containers, api = myWeekRpc, onO
     return <>
       {header}
       {error && <InlineError>{error}</InlineError>}
-      <Ritual week={week} draft={draft} tasks={tasks} today={today} containers={containers} disabled={disabled} onOpen={onOpen}
+      <Ritual week={week} draft={draft} tasks={tasks} today={today} containers={containers} disabled={disabled} onOpen={onOpen} dailyPages={dailyPages} onOpenDailyPage={onOpenDailyPage}
         onEdit={setDraft} onSave={save}
         onOutcome={(goal, outcome) => void run(() => api.setGoalOutcome({ operationId: operationId(), goalId: goal.id, expectedVersion: goal.version, outcome }), "Could not save the outcome.")}
         onCancel={() => void run(() => api.discardDraft({ operationId: operationId(), weekStart: week.weekStart, expectedDraftRevision: week.draftRevision }), "Could not cancel planning.")}
@@ -362,10 +365,11 @@ function WeekSettings({ week, api, disabled, onChanged }: { week: WeekOverviewDt
 }
 
 /** The five-step weekly ritual over the stored draft. */
-function Ritual({ week, draft, tasks, today, containers, disabled, onOpen, onEdit, onSave, onOutcome, onCancel, onConfirm, onConfirmSaved }: {
+function Ritual({ week, draft, tasks, today, containers, disabled, onOpen, onEdit, onSave, onOutcome, onCancel, onConfirm, onConfirmSaved, dailyPages, onOpenDailyPage }: {
   week: WeekOverviewDto; draft: WeekDraftDto; tasks: Map<string, WeekTaskDto>; today: string; containers: ContainerResponse[]; disabled: boolean;
   onOpen: (task: TaskResponse) => void; onEdit: (draft: WeekDraftDto) => void; onSave: (draft: WeekDraftDto) => Promise<boolean>;
   onOutcome: (goal: WeekGoalDto, outcome: string) => void; onCancel: () => void; onConfirm: () => Promise<void>; onConfirmSaved: (revision: string) => void;
+  dailyPages?: (from: string, to: string) => Promise<string[]>; onOpenDailyPage?: (date: string) => void;
 }) {
   const step = Math.min(Math.max(draft.step, 1), 5);
   const go = (next: number) => void onSave({ ...draft, step: next });
@@ -375,7 +379,7 @@ function Ritual({ week, draft, tasks, today, containers, disabled, onOpen, onEdi
       <li key={name}><Button type="button" size="sm" variant={index + 1 === step ? "secondary" : "ghost"} aria-current={index + 1 === step ? "step" : undefined} disabled={disabled} onClick={() => go(index + 1)}>
         {index + 1}. {name}</Button></li>)}</ol>
 
-    {step === 1 && <LookBack week={week} tasks={tasks} disabled={disabled} onOpen={onOpen} onOutcome={onOutcome}/>}
+    {step === 1 && <LookBack week={week} tasks={tasks} disabled={disabled} onOpen={onOpen} onOutcome={onOutcome} dailyPages={dailyPages} onOpenDailyPage={onOpenDailyPage}/>}
     {step === 2 && <Leftovers week={week} draft={draft} tasks={tasks} today={today} onOpen={onOpen} onEdit={onEdit}/>}
     {step === 3 && <GoalStep week={week} draft={draft} tasks={tasks} containers={containers} onEdit={onEdit}/>}
     {step === 4 && <PlanDays week={week} draft={draft} tasks={tasks} today={today} onOpen={onOpen} onEdit={onEdit}/>}
@@ -395,8 +399,16 @@ function Ritual({ week, draft, tasks, today, containers, disabled, onOpen, onEdi
   </section>;
 }
 
-function LookBack({ week, tasks, disabled, onOpen, onOutcome }: { week: WeekOverviewDto; tasks: Map<string, WeekTaskDto>; disabled: boolean; onOpen: (task: TaskResponse) => void; onOutcome: (goal: WeekGoalDto, outcome: string) => void }) {
+function LookBack({ week, tasks, disabled, onOpen, onOutcome, dailyPages, onOpenDailyPage }: { week: WeekOverviewDto; tasks: Map<string, WeekTaskDto>; disabled: boolean; onOpen: (task: TaskResponse) => void; onOutcome: (goal: WeekGoalDto, outcome: string) => void;
+  dailyPages?: (from: string, to: string) => Promise<string[]>; onOpenDailyPage?: (date: string) => void }) {
   const back = week.lookBack;
+  const [days, setDays] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    let current = true;
+    setDays([]);
+    if (dailyPages) void dailyPages(back.weekStart, back.weekEnd).then(found => { if (current) setDays([...found].sort()); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [back.weekStart, back.weekEnd, dailyPages]);
   return <div className="grid gap-3">
     <h3 className="font-semibold">Last week, {dayLabel(back.weekStart)} – {dayLabel(back.weekEnd)}</h3>
     <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Last week in numbers">
@@ -405,6 +417,10 @@ function LookBack({ week, tasks, disabled, onOpen, onOutcome }: { week: WeekOver
         <li>{back.goals.filter(goal => goal.outcome === "Achieved").length} goals achieved · {back.goals.filter(goal => goal.outcome === "LetGo").length} let go</li></>}
     </ul>
     {!back.hadPlan && <p className="text-sm text-muted-foreground">Last week was not planned.</p>}
+    {onOpenDailyPage && days.length > 0 && <div className="flex flex-wrap items-center gap-1.5 text-sm" aria-label="Last week's daily pages">
+      <span className="flex items-center gap-1 text-muted-foreground"><NotebookPen className="size-3.5"/>Daily pages:</span>
+      {days.map(day => <Button key={day} type="button" size="xs" variant="outline" onClick={() => onOpenDailyPage(day)}>{dayLabel(day)}</Button>)}
+    </div>}
     <Goals goals={back.goals} disabled={disabled} onOutcome={onOutcome}/>
     {back.summaryId && <p className="text-xs text-muted-foreground">From the stored weekly summary in Summaries.</p>}
     {back.completedTaskIds.length > 0 && <details><summary className="cursor-pointer text-sm font-medium">Completed tasks<Count>{back.completedCount}</Count></summary>

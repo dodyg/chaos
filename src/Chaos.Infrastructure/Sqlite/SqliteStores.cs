@@ -25,6 +25,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IUndoStore Undo { get; } = new SqliteUndoStore(connection);
     public IChecklistConversionStore ChecklistConversions { get; } = new SqliteChecklistConversionStore(connection);
     public IPadStore Pad { get; } = new SqlitePadStore(connection);
+    public IPageStore Pages { get; } = new SqlitePageStore(connection);
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
     public IWaitingStore Waiting { get; } = new SqliteWaitingStore(connection);

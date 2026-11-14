@@ -49,6 +49,73 @@ public static class PlainTextExport
             var path = Unique(used, $"pad/{padIndex:000} {SafeFileName(firstLine, 50)} ({item.Id[..8]}).md");
             Add(zip, path, PadMarkdown(item));
         }
+
+        // Pages: folders follow the page tree; a page with pages under it also names their folder.
+        var pages = snapshot.Pages ?? [];
+        var byId = pages.ToDictionary(page => page.Id, StringComparer.Ordinal);
+        var pageFolders = new Dictionary<string, string>(StringComparer.Ordinal);
+        string FolderOf(ExportPage page, int depth)
+        {
+            if (pageFolders.TryGetValue(page.Id, out var known))
+            {
+                return known;
+            }
+
+            var parent = depth < 64 && page.ParentId is { } parentId && byId.TryGetValue(parentId, out var found) ? FolderOf(found, depth + 1) : "pages";
+            return pageFolders[page.Id] = $"{parent}/{SafeFileName(page.Title, 60)} ({page.Id[..8]})";
+        }
+
+        foreach (var page in pages)
+        {
+            if (page.DailyDate is { } date)
+            {
+                Add(zip, Unique(used, $"daily/{date}.md"), PageMarkdown(page));
+                continue;
+            }
+
+            var folder = page.ParentId is { } parentId && byId.TryGetValue(parentId, out var parent) ? FolderOf(parent, 0) : "pages";
+            Add(zip, Unique(used, $"{folder}/{SafeFileName(page.Title, 60)} ({page.Id[..8]}).md"), PageMarkdown(page));
+        }
+    }
+
+    /// <summary>
+    /// A page's text with its own front matter unchanged and the app's keys added under one
+    /// <c>chaos</c> key (ID, title, parent or daily date, times), so an import can rebuild the
+    /// tree. Front matter that cannot be read is left exactly as written, without that key.
+    /// </summary>
+    public static string PageMarkdown(ExportPage page)
+    {
+        var chaos = new StringBuilder("chaos:\n");
+        void Key(string key, string? value) => chaos.Append("  ").Append(key).Append(": ").Append(value is null ? "null" : JsonSerializer.Serialize(value)).Append('\n');
+        Key("id", page.Id);
+        Key("title", page.Title);
+        if (page.DailyDate is null)
+        {
+            Key("parent", page.ParentId);
+        }
+        else
+        {
+            Key("daily", page.DailyDate);
+        }
+
+        Key("created", page.CreatedAtUtc);
+        Key("updated", page.UpdatedAtUtc);
+
+        var text = page.Markdown.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var frontMatter = Chaos.Application.Pages.PageFrontMatter.Parse(text);
+        if (!frontMatter.Present)
+        {
+            return $"---\n{chaos}---\n\n{text.TrimEnd()}\n";
+        }
+
+        if (frontMatter.Error is not null || frontMatter.Properties.Any(property => property.Key == "chaos"))
+        {
+            return text.TrimEnd() + "\n";
+        }
+
+        // The closing --- line ends at BodyStart; the block goes right before it.
+        var closing = text.LastIndexOf('\n', Math.Max(0, frontMatter.BodyStart - 2)) + 1;
+        return text[..closing] + chaos + text[closing..].TrimEnd() + "\n";
     }
 
     public static string TaskMarkdown(ExportTask task, ExportContainer container)
@@ -134,6 +201,9 @@ public static class PlainTextExport
         - Subtasks are a checklist under "Subtasks"; each keeps its ID in an HTML comment.
         - Diary entries are under "Diary", one heading per entry (UTC time).
         - `pad/` holds one file per Personal pad note.
+        - `pages/` holds one file per page, in folders that follow the page tree, and `daily/`
+          one file per daily page named by its date. Each page keeps its own front matter
+          unchanged; the app's keys (ID, title, parent) are added under `chaos`.
 
         Deleted items are not exported. History, plans, reminders and settings are only in the
         JSON archive, which is the format to use for a complete, lossless copy.

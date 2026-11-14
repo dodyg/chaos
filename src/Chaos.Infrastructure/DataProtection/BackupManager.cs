@@ -317,7 +317,8 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
         command.CommandText = """
             SELECT EXISTS (SELECT 1 FROM OperationReceipts WHERE CommittedAtUtc > $since)
                 OR EXISTS (SELECT 1 FROM TaskHistory WHERE RecordedAtUtc > $since)
-                OR EXISTS (SELECT 1 FROM ScratchPadItems WHERE UpdatedAtUtc > $since);
+                OR EXISTS (SELECT 1 FROM ScratchPadItems WHERE UpdatedAtUtc > $since)
+                OR EXISTS (SELECT 1 FROM Pages WHERE UpdatedAtUtc > $since);
             """;
         command.Parameters.AddWithValue("$since", latest is null ? "" : StorageFormats.Instant(latest.CreatedAtUtc));
         return Convert.ToInt64(await command.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) == 1;

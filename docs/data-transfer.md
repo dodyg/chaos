@@ -100,6 +100,12 @@ A ZIP:
   with its ID in an HTML comment) and the diary entries.
 - `pad/<NNN> <first line> (<id8>).md` holds one file per Personal pad note, with its tags and
   archived flag.
+- `pages/<title> (<id8>).md` holds one file per page. A page with pages under it also has a
+  folder of the same name holding them, so the folders follow the page tree. Daily pages are
+  `daily/<yyyy-MM-dd>.md`. The page's own front matter is written unchanged, with the app's
+  keys added under one `chaos` key: `id`, `title`, `parent` (or `daily` for a daily page),
+  `created` and `updated`. A page without front matter gets a block holding only `chaos`.
+  Front matter that cannot be read is written exactly as it is, without the `chaos` key.
 
 File names never contain path separators, reserved characters or Windows device names. They
 are capped in length and made unique.

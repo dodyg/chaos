@@ -1,7 +1,7 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { summaryRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
-import { BookOpen, CalendarArrowUp, Check, RefreshCw, X } from "lucide-react";
+import { BookOpen, CalendarArrowUp, Check, NotebookPen, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -76,8 +76,10 @@ export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }
 }
 
 /** Summaries (PLAN §12): past summaries newest first, one summary in detail, generation and the schedule. */
-export function Summaries({ api = summaryRpc, revision, today, openId, onOpenTask, onChanged }: {
+export function Summaries({ api = summaryRpc, revision, today, openId, onOpenTask, onChanged, onOpenDailyPage }: {
   api?: typeof summaryRpc; revision: number; today: string; openId: string | null; onOpenTask: (taskId: string) => void; onChanged: () => void;
+  /** Opens the daily page of a date (the evening summary links to it). */
+  onOpenDailyPage?: (date: string) => void;
 }) {
   const [entries, setEntries] = React.useState<SummaryHeaderDto[]>([]);
   const [cursor, setCursor] = React.useState<string | null>(null);
@@ -158,7 +160,7 @@ export function Summaries({ api = summaryRpc, revision, today, openId, onOpenTas
       </nav>
       {detail
         ? <SummaryDetail detail={detail} api={api} working={working} onRevision={setSelectedId} onRegenerate={() => void generate(detail.header.kind, detail.header.periodStart)}
-            onOpenTask={onOpenTask} onCarried={() => { onChanged(); setLocal(value => value + 1); }}/>
+            onOpenTask={onOpenTask} onCarried={() => { onChanged(); setLocal(value => value + 1); }} onOpenDailyPage={onOpenDailyPage}/>
         : entries.length > 0 && <p className="text-sm text-muted-foreground">Choose a summary.</p>}
     </div>
     <SummarySchedule api={api}/>
@@ -180,8 +182,9 @@ function Section({ title, count, children }: { title: string; count?: number; ch
   </section>;
 }
 
-function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenTask, onCarried }: {
+function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenTask, onCarried, onOpenDailyPage }: {
   detail: SummaryDetailDto; api: typeof summaryRpc; working: boolean; onRevision: (id: string) => void; onRegenerate: () => void; onOpenTask: (taskId: string) => void; onCarried: () => void;
+  onOpenDailyPage?: (date: string) => void;
 }) {
   const { header, facts } = detail;
   const byContainer = new Map<string, typeof facts.completions[number][]>();
@@ -193,7 +196,8 @@ function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenT
 
   return <article aria-label={`${kindText[header.kind]} ${periodText(header)}`} className="grid content-start gap-4">
     <header className="grid gap-1">
-      <h3 className="text-lg font-semibold">{kindText[header.kind]} · {periodText(header)}</h3>
+      <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold">{kindText[header.kind]} · {periodText(header)}
+        {header.kind === "Daily" && onOpenDailyPage && <Button type="button" size="xs" variant="outline" className="ml-auto font-normal" onClick={() => onOpenDailyPage(header.periodStart)}><NotebookPen/>That day's page</Button>}</h3>
       <p className="text-xs text-muted-foreground">
         {header.partial ? `Through ${timeText(header.capturedThroughUtc)}` : header.kind === "Morning" ? `As of ${timeText(header.capturedThroughUtc)}` : "Whole period"}
         {" · "}{triggerText[header.trigger]}{detail.revisions.length > 1 && ` · version ${header.revision} of ${detail.revisions.length}`}

@@ -3,7 +3,7 @@ import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { AlertTriangle, CalendarArrowUp, ImagePlus, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
+import { AlertTriangle, CalendarArrowUp, ImagePlus, NotebookPen, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -117,11 +117,13 @@ export function laneToDayIndex(day: readonly string[], lane: readonly string[], 
  * to the next day. Earlier days are read-only and stay reviewable. Choosing a task here never
  * changes its planned or due date.
  */
-export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onView, onChanged, onSetStatus, background, onBackgroundChange, focus = null, onSetCategory }: {
+export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, queryApi = queryRpc, waitingApi, onOpen, onView, onChanged, onSetStatus, background, onBackgroundChange, focus = null, onSetCategory, onOpenDailyPage }: {
   clock: DayClockResponse | null; revision: number; selectedTaskId: string | null; busy: boolean;
   api?: typeof myDayRpc; queryApi?: typeof queryRpc; waitingApi?: typeof waitingRpc; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onChanged: () => void; onSetStatus?: (task: TaskResponse, status: string) => void; background?: DayBackground; onBackgroundChange?: (background: DayBackground) => boolean;
   /** Work/Personal focus; null shows both, split into Work and Personal lanes. */
   focus?: Focus; onSetCategory?: (task: TaskResponse, category: Category) => void;
+  /** Opens the daily page of the shown day. */
+  onOpenDailyPage?: (date: string) => void;
 }) {
   const today = clock?.today ?? null;
   const [day, setDay] = React.useState<string | null>(today);
@@ -236,6 +238,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       actions={<nav aria-label="Day" className="flex items-center gap-1">
         {background && onBackgroundChange && <Button type="button" variant={showBackground ? "secondary" : "ghost"} size="icon-sm" className="mr-1 text-muted-foreground" aria-label="My Day background" title="Change the My Day background"
           aria-expanded={showBackground} aria-controls="day-background-settings" onClick={() => setShowBackground(value => !value)}><ImagePlus/></Button>}
+        {onOpenDailyPage && <Button type="button" variant="ghost" size="sm" className="mr-1" title={day === today ? "Write on today's page" : "Open this day's page"} onClick={() => onOpenDailyPage(day)}><NotebookPen/>{day === today ? "Today's page" : "Day page"}</Button>}
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Previous day" disabled={working} onClick={() => setDay(addDays(day, -1))}><ChevronLeft/></Button>
         <Button type="button" variant={day === today ? "secondary" : "outline"} size="sm" disabled={working || day === today} onClick={() => setDay(today)}>Today</Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Next day" disabled={working} onClick={() => setDay(addDays(day, 1))}><ChevronRight/></Button>

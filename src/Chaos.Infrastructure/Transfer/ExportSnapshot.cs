@@ -38,8 +38,11 @@ public sealed record ExportTask
 
 public sealed record ExportPadItem(string Id, string Markdown, bool Archived, string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> Tags);
 
+/// <summary>One active page: tree pages carry their parent, daily pages their date.</summary>
+public sealed record ExportPage(string Id, string? ParentId, string Title, string Markdown, string? DailyDate, string CreatedAtUtc, string UpdatedAtUtc);
+
 /// <summary>Active (not deleted) data read once, in display order, for the plain-text exports.</summary>
-public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, IReadOnlyList<ExportTask> Tasks, IReadOnlyList<ExportPadItem> PadItems)
+public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, IReadOnlyList<ExportTask> Tasks, IReadOnlyList<ExportPadItem> PadItems, IReadOnlyList<ExportPage>? Pages = null)
 {
     /// <summary>Reads the snapshot inside one read transaction, so every part agrees.</summary>
     public static async Task<ExportSnapshot> ReadAsync(SqliteConnection connection, CancellationToken ct)
@@ -123,8 +126,13 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             WHERE DeletedAtUtc IS NULL ORDER BY ArchivedAtUtc IS NOT NULL, Position, Id;
             """, r => new ExportPadItem(r.GetString(0), r.GetString(1), !r.IsDBNull(2), r.GetString(3), r.GetString(4), padTags.GetValueOrDefault(r.GetString(0)) ?? []), ct);
 
+        var pages = await ListAsync(connection, """
+            SELECT Id, ParentPageId, Title, RawMarkdown, DailyDate, CreatedAtUtc, UpdatedAtUtc FROM Pages
+            WHERE DeletedAtUtc IS NULL ORDER BY DailyDate IS NOT NULL, DailyDate, Position, Id;
+            """, r => new ExportPage(r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetString(5), r.GetString(6)), ct);
+
         snapshot.Commit();
-        return new ExportSnapshot(containers, tasks, pad);
+        return new ExportSnapshot(containers, tasks, pad, pages);
     }
 
     /// <summary>Full slash-delimited display paths of active tags, by tag ID.</summary>

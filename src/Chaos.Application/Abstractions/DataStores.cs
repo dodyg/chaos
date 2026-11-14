@@ -22,6 +22,7 @@ public interface IDataSession
     IUndoStore Undo { get; }
     IChecklistConversionStore ChecklistConversions { get; }
     IPadStore Pad { get; }
+    IPageStore Pages { get; }
     IRecurrenceStore Recurrence { get; }
     IReminderRuleStore ReminderRules { get; }
     IWaitingStore Waiting { get; }
@@ -233,6 +234,46 @@ public interface IPadStore
     Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct);
     /// <summary>IDs of active items in the space whose text matches the search words, best match first.</summary>
     Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct);
+}
+
+/// <summary>
+/// Pages, their versions and their task backlinks (SPEC Pages), within the caller's
+/// transaction. Every add/update also refreshes the page's search document and its tags from
+/// front matter, so derived data always agrees with the row (undo included).
+/// </summary>
+public interface IPageStore
+{
+    Task<PageRecord?> GetAsync(string pageId, CancellationToken ct);
+    Task<PageRecord?> GetIncludingDeletedAsync(string pageId, CancellationToken ct);
+    /// <summary>Active pages of one space (tree and daily), ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<PageRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
+    Task<IReadOnlyList<PageRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct);
+    Task<PageRecord?> FindDailyAsync(string spaceId, DateOnly date, CancellationToken ct);
+    Task AddAsync(PageRecord page, CancellationToken ct);
+    Task<PageRecord?> UpdateAsync(PageRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>The position after the last active sibling under <paramref name="parentPageId"/> (null: top level).</summary>
+    Task<long> GetNextPositionAsync(string spaceId, string? parentPageId, CancellationToken ct);
+
+    /// <summary>Versions newest first.</summary>
+    Task<IReadOnlyList<PageRevisionRecord>> ListRevisionsAsync(string pageId, CancellationToken ct);
+    Task<PageRevisionRecord?> GetRevisionAsync(string pageId, long number, CancellationToken ct);
+    Task AddRevisionAsync(PageRevisionRecord revision, CancellationToken ct);
+    Task UpdateRevisionAsync(PageRevisionRecord revision, CancellationToken ct);
+
+    Task AddTaskLinkAsync(PageTaskLinkRecord link, CancellationToken ct);
+    Task<IReadOnlyList<PageTaskLinkRecord>> ListTaskLinksAsync(string pageId, CancellationToken ct);
+    Task<PageTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct);
+
+    /// <summary>IDs of active pages in the space whose title or text matches the search words, best match first.</summary>
+    Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct);
+    /// <summary>Active pages of the space whose text contains any of the given strings (case-insensitive).</summary>
+    Task<IReadOnlyList<PageRecord>> ListContainingAsync(string spaceId, IReadOnlyList<string> needles, CancellationToken ct);
+    /// <summary>Active tasks whose notes contain any of the given strings (case-insensitive), as (Id, Title, Notes).</summary>
+    Task<IReadOnlyList<(string Id, string Title, string Notes)>> ListTasksContainingAsync(IReadOnlyList<string> needles, CancellationToken ct);
+    /// <summary>Active tag IDs linked to the page from its front matter.</summary>
+    Task<IReadOnlyList<string>> ListTagIdsAsync(string pageId, CancellationToken ct);
+    /// <summary>Active pages linked to any of these tags.</summary>
+    Task<IReadOnlyList<PageRecord>> ListByTagsAsync(IReadOnlyCollection<string> tagIds, CancellationToken ct);
 }
 
 /// <summary>Reversible operations per profile (PLAN §9: latest 100 kept).</summary>

@@ -720,3 +720,40 @@ status-change reading in `ExportSnapshot` that only the Org LOGBOOK used. The RP
 earlier still read; nothing creates it any more. The Org parts of PLAN.md and GITHUB.md
 describe what was built at the time and are superseded by this entry. Markdown files are now
 the only plain-text export; the JSON archive remains the lossless format.
+
+## 2026-11-14 (Pages)
+
+Pages are one table, `Pages` (migration 023), for both tree pages and daily pages. A daily page
+holds `DailyDate` and never a parent; one active daily page per date is a unique index, so a
+deleted day does not block writing that day again. Autosave works like the pad: title and text
+save together with an editor revision, and a late or repeated save never replaces newer text.
+Typing is not an undo step; creating, moving, deleting, restoring, restoring a version, Make task
+and the pad-to-page moves are recorded operations with undo (`ChangeKind.Page`).
+
+Versions (`PageRevisions`) follow sittings of writing rather than keystrokes: a save within ten
+minutes of the newest version updates it, a longer gap (or an hour of continuous writing) starts
+a new one. Restoring a version is itself a new version. The frontend compares versions with a
+line diff.
+
+Links are stored in the text only. `[label](chaos:page/<id>)` links by ID, so renames and moves
+keep them; `[[Name]]` finds a page by title or alias and creates one when followed. A page
+followed from a `[[Name]]` link is created at the top level and the link in the open page is
+rewritten to the ID form. `[label](chaos:list/<id>)` links a list or project. Backlinks and
+"Mentioned in" are found by searching page text and task notes for these forms when a page or
+task opens, instead of keeping a link table in step with every edit.
+
+Front matter is read by a small parser (in C# and TypeScript, kept in step by tests) that
+covers `key: value`, quoted values, `[flow, lists]`, `- item` lists and comments; anything else
+is reported with its line and every property is ignored until fixed. The editor shows only the
+body; the panel edits one key at a time and never rewrites other lines. `PageTags` is derived
+from the `tags` key whenever the page row is written (undo included), linking only tags that
+exist; the panel offers to create missing ones. Image backgrounds wait for attachments; scenes
+and colours work now. The starting background for new daily pages is a per-computer setting,
+like the My Day background, and is written into the new page's front matter.
+
+Outline editing works on the Markdown source: Tab/Shift+Tab and Alt+Up/Down act on the list
+item with its children, and Enter continues a list. Folding happens in read mode, where headings
+start foldable sections and list items with children fold.
+
+Search indexes pages as kind 5; migration 023 recreates the rebuildable search tables with the
+wider check and resets the normalization version so the next start rebuilds the index.

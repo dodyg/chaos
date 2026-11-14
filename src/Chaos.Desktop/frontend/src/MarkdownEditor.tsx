@@ -5,10 +5,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownPreview, htmlToMarkdown, type MarkdownLinks } from "./markdown";
-import { formatEdit, linkQueryAt, padLinkMarkdown, taskLinkMarkdown, type FormatAction, type TextEdit } from "./markdownEditing";
+import { formatEdit, linkQueryAt, listLinkMarkdown, padLinkMarkdown, pageLinkMarkdown, taskLinkMarkdown, type FormatAction, type TextEdit } from "./markdownEditing";
+import { continueList, indentItem, moveItem, outdentItem } from "./outline";
 
-/** A `[[` autocomplete target: a task (default) or a pad note. */
-export type LinkCandidate = { id: string; title: string; kind?: "task" | "pad" };
+/** A `[[` autocomplete target: a task (default), a pad note, a page, a list or project, or a page to create. */
+export type LinkCandidate = { id: string; title: string; kind?: "task" | "pad" | "page" | "list" | "newPage"; icon?: string | null; detail?: string };
+
+const candidateLabels: Record<string, string> = { pad: "Note", page: "Page", list: "List", newPage: "New page" };
 
 type Props = {
   id: string;
@@ -29,6 +32,12 @@ type Props = {
   /** Selects this range in the source when `key` changes (e.g. following a backlink). */
   selectRange?: { start: number; end: number; key: number } | null;
   autoFocus?: boolean;
+  /** Pages: Tab/Shift+Tab, Alt+Up/Down and Enter work on list items as an outline. */
+  outline?: boolean;
+  /** Replaces the hint under the editor. */
+  hint?: React.ReactNode;
+  /** Text area rows grow with the text instead of scrolling (pages). */
+  grow?: boolean;
 };
 
 const tools: { action: FormatAction; label: string; icon: React.ReactNode; shortcut?: string }[] = [
@@ -53,7 +62,7 @@ const tools: { action: FormatAction; label: string; icon: React.ReactNode; short
  * links, and a sanitized preview. Edits go through the browser's own insertText command when
  * available so Ctrl+Z inside the text keeps working.
  */
-export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName, onSelectionChange, selectRange, autoFocus }: Props) {
+export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName, onSelectionChange, selectRange, autoFocus, outline, hint, grow }: Props) {
   const area = React.useRef<HTMLTextAreaElement | null>(null);
   const pendingSelection = React.useRef<[number, number] | null>(null);
   const [mode, setMode] = React.useState<"source" | "preview">("source");
@@ -144,7 +153,11 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
   function pick(candidate: LinkCandidate) {
     const element = area.current;
     if (!element || !linkQuery) return;
-    const insert = candidate.kind === "pad" ? padLinkMarkdown(candidate.title, candidate.id) : taskLinkMarkdown(candidate.title, candidate.id);
+    const insert = candidate.kind === "pad" ? padLinkMarkdown(candidate.title, candidate.id)
+      : candidate.kind === "page" ? pageLinkMarkdown(candidate.title, candidate.id)
+      : candidate.kind === "list" ? listLinkMarkdown(candidate.title, candidate.id)
+      : candidate.kind === "newPage" ? `[[${candidate.title.replace(/[[\]|]/g, "")}]]`
+      : taskLinkMarkdown(candidate.title, candidate.id);
     apply({ start: linkQuery.start, end: element.selectionStart, insert, selectionStart: linkQuery.start + insert.length, selectionEnd: linkQuery.start + insert.length });
     setLinkQuery(null);
   }
@@ -156,6 +169,21 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
       if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pick(candidates[active]); return; }
     }
     if (event.key === "Escape" && linkQuery) { event.preventDefault(); event.stopPropagation(); setLinkQuery(null); return; }
+    if (outline && !disabled) {
+      const element = event.currentTarget;
+      const { selectionStart, selectionEnd } = element;
+      let edit: TextEdit | null = null;
+      if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey) edit = event.shiftKey ? outdentItem(value, selectionStart, selectionEnd) : indentItem(value, selectionStart, selectionEnd);
+      else if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) edit = moveItem(value, selectionStart, selectionEnd, event.key === "ArrowUp" ? "up" : "down");
+      else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) edit = continueList(value, selectionStart, selectionEnd);
+      if (edit) {
+        event.preventDefault();
+        if (edit.start !== edit.end || edit.insert) apply(edit);
+        return;
+      }
+      // Alt+Up/Down outside a movable item does nothing rather than moving the caret oddly.
+      if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) { event.preventDefault(); return; }
+    }
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
       const action = ({ b: "bold", i: "italic", k: "link" } as Record<string, FormatAction>)[event.key.toLowerCase()];
       if (action) { event.preventDefault(); format(action); }
@@ -196,20 +224,20 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
       </div>
       <div className={cn("relative", expanded && "min-h-0")}>
         <Textarea ref={area} id={id} rows={rows} value={value} disabled={disabled} placeholder={placeholder} spellCheck
-          className={cn("font-mono text-sm leading-relaxed", expanded ? "h-full min-h-0 resize-none [field-sizing:fixed]" : areaClassName)} dir="auto"
+          className={cn("font-mono text-sm leading-relaxed", expanded ? "h-full min-h-0 resize-none [field-sizing:fixed]" : areaClassName, grow && !expanded && "[field-sizing:content]")} dir="auto"
           role={searchLinks ? "combobox" : undefined} aria-expanded={searchLinks ? showList : undefined} aria-controls={showList ? listId : undefined}
           aria-autocomplete={searchLinks ? "list" : undefined} aria-activedescendant={showList ? `${listId}-${active}` : undefined}
           onChange={event => { onChange(event.target.value); trackLinkQuery(event.target.value, event.target.selectionStart); }}
           onSelect={event => { trackLinkQuery(event.currentTarget.value, event.currentTarget.selectionStart); onSelectionChange?.(event.currentTarget.selectionStart, event.currentTarget.selectionEnd); }}
           autoFocus={autoFocus}
           onKeyDown={keyDown} onPaste={paste} onBlur={() => { setTimeout(() => setLinkQuery(null), 150); onBlur?.(); }}/>
-        {showList && <ul id={listId} role="listbox" aria-label="Link to a task or note" className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md">
+        {showList && <ul id={listId} role="listbox" aria-label="Link to a task, page or note" className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md">
           {candidates.map((candidate, index) => <li key={candidate.id} id={`${listId}-${index}`} role="option" aria-selected={index === active}
             className={cn("cursor-pointer truncate rounded-sm px-2 py-1.5", index === active && "bg-accent text-accent-foreground")}
-            onMouseDown={event => { event.preventDefault(); pick(candidate); }}>{candidate.kind === "pad" && <span className="mr-1.5 text-xs text-muted-foreground">Note</span>}{candidate.title}</li>)}
+            onMouseDown={event => { event.preventDefault(); pick(candidate); }}>{candidate.kind && candidate.kind !== "task" && <span className="mr-1.5 text-xs text-muted-foreground">{candidateLabels[candidate.kind]}</span>}{candidate.icon ? `${candidate.icon} ` : ""}{candidate.title}{candidate.detail && <span className="ml-1.5 text-xs text-muted-foreground">{candidate.detail}</span>}</li>)}
         </ul>}
       </div>
-      <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task or note.</p>
+      {hint ?? <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task, page or note.</p>}
     </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", expanded ? "row-span-2 min-h-0 overflow-y-auto" : areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
   </div>;
 

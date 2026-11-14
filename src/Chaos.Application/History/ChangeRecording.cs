@@ -22,6 +22,7 @@ public enum ChangeKind
     ReminderRule = 11,
     Waiting = 12,
     FollowUp = 13,
+    Page = 14,
 }
 
 internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
@@ -177,6 +178,7 @@ public sealed class RecordingDataSession : IDataSession
         Tags = new RecordingTagStore(this, inner.Tags);
         Diary = new RecordingDiaryStore(this, inner.Diary);
         Pad = new RecordingPadStore(this, inner.Pad);
+        Pages = new RecordingPageStore(this, inner.Pages);
         Waiting = new RecordingWaitingStore(this, inner.Waiting);
     }
 
@@ -194,6 +196,7 @@ public sealed class RecordingDataSession : IDataSession
     public IUndoStore Undo => _inner.Undo;
     public IChecklistConversionStore ChecklistConversions => _inner.ChecklistConversions;
     public IPadStore Pad { get; }
+    public IPageStore Pages { get; }
     public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
     public IReminderRuleStore ReminderRules => new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IWaitingStore Waiting { get; }
@@ -449,7 +452,8 @@ public sealed class RecordingDataSession : IDataSession
         _ when commandKind.StartsWith("section.", StringComparison.Ordinal) => ChangeKind.Section,
         _ when commandKind.StartsWith("template.", StringComparison.Ordinal) => ChangeKind.Template,
         _ when commandKind.StartsWith("tag.", StringComparison.Ordinal) => ChangeKind.Tag,
-        "pad.make-task" => null,
+        "pad.make-task" or "page.make-task" => null,
+        _ when commandKind.StartsWith("page.", StringComparison.Ordinal) => ChangeKind.Page,
         _ when commandKind.StartsWith("pad.", StringComparison.Ordinal) => ChangeKind.Pad,
         _ => null,
     };
@@ -466,6 +470,7 @@ public sealed class RecordingDataSession : IDataSession
                 ChangeKind.Tag => (await _inner.Tags.GetIncludingDeletedAsync(change.Id, ct))?.DisplayName,
                 ChangeKind.Subtask => (await _inner.Subtasks.GetIncludingDeletedAsync(change.Id, ct))?.Title,
                 ChangeKind.Pad => PadExcerpt.Of((await _inner.Pad.GetIncludingDeletedAsync(change.Id, ct))?.RawMarkdown),
+                ChangeKind.Page => (await _inner.Pages.GetIncludingDeletedAsync(change.Id, ct))?.Title,
                 _ => null,
             };
             if (name is not null)
@@ -614,6 +619,16 @@ internal static class UndoLabels
         ["pad.reorder"] = "Reorder pad note",
         ["pad.review"] = "Archive pad notes in review",
         ["pad.make-task"] = "Make task",
+        ["page.create"] = "Add page",
+        ["page.create-daily"] = "Start daily page",
+        ["page.move"] = "Move page",
+        ["page.delete"] = "Delete page",
+        ["page.restore"] = "Restore page",
+        ["page.restore-version"] = "Restore an earlier version of",
+        ["page.make-task"] = "Make task",
+        ["page.from-pad"] = "Move pad note to page",
+        ["page.append"] = "Add to",
+        ["page.append-pad"] = "Add pad note to",
         ["reminder.add"] = "Add reminder to",
         ["reminder.update"] = "Change reminder of",
         ["reminder.delete"] = "Delete reminder of",
@@ -936,6 +951,46 @@ internal sealed class RecordingPadStore(RecordingDataSession recorder, IPadStore
         if (applied is not null)
         {
             recorder.RecordEntity(ChangeKind.Pad, applied.Id, before, applied.Version);
+        }
+
+        return applied;
+    }
+}
+
+internal sealed class RecordingPageStore(RecordingDataSession recorder, IPageStore inner) : IPageStore
+{
+    public Task<PageRecord?> GetAsync(string pageId, CancellationToken ct) => inner.GetAsync(pageId, ct);
+    public Task<PageRecord?> GetIncludingDeletedAsync(string pageId, CancellationToken ct) => inner.GetIncludingDeletedAsync(pageId, ct);
+    public Task<IReadOnlyList<PageRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct) => inner.ListBySpaceAsync(spaceId, ct);
+    public Task<IReadOnlyList<PageRecord>> ListDeletedBySpaceAsync(string spaceId, CancellationToken ct) => inner.ListDeletedBySpaceAsync(spaceId, ct);
+    public Task<PageRecord?> FindDailyAsync(string spaceId, DateOnly date, CancellationToken ct) => inner.FindDailyAsync(spaceId, date, ct);
+    public Task<long> GetNextPositionAsync(string spaceId, string? parentPageId, CancellationToken ct) => inner.GetNextPositionAsync(spaceId, parentPageId, ct);
+    public Task<IReadOnlyList<PageRevisionRecord>> ListRevisionsAsync(string pageId, CancellationToken ct) => inner.ListRevisionsAsync(pageId, ct);
+    public Task<PageRevisionRecord?> GetRevisionAsync(string pageId, long number, CancellationToken ct) => inner.GetRevisionAsync(pageId, number, ct);
+    public Task AddRevisionAsync(PageRevisionRecord revision, CancellationToken ct) => inner.AddRevisionAsync(revision, ct);
+    public Task UpdateRevisionAsync(PageRevisionRecord revision, CancellationToken ct) => inner.UpdateRevisionAsync(revision, ct);
+    public Task AddTaskLinkAsync(PageTaskLinkRecord link, CancellationToken ct) => inner.AddTaskLinkAsync(link, ct);
+    public Task<IReadOnlyList<PageTaskLinkRecord>> ListTaskLinksAsync(string pageId, CancellationToken ct) => inner.ListTaskLinksAsync(pageId, ct);
+    public Task<PageTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => inner.FindTaskLinkAsync(taskId, ct);
+    public Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct) => inner.SearchAsync(spaceId, text, limit, ct);
+    public Task<IReadOnlyList<PageRecord>> ListContainingAsync(string spaceId, IReadOnlyList<string> needles, CancellationToken ct) => inner.ListContainingAsync(spaceId, needles, ct);
+    public Task<IReadOnlyList<(string Id, string Title, string Notes)>> ListTasksContainingAsync(IReadOnlyList<string> needles, CancellationToken ct) => inner.ListTasksContainingAsync(needles, ct);
+    public Task<IReadOnlyList<string>> ListTagIdsAsync(string pageId, CancellationToken ct) => inner.ListTagIdsAsync(pageId, ct);
+    public Task<IReadOnlyList<PageRecord>> ListByTagsAsync(IReadOnlyCollection<string> tagIds, CancellationToken ct) => inner.ListByTagsAsync(tagIds, ct);
+
+    public async Task AddAsync(PageRecord page, CancellationToken ct)
+    {
+        await inner.AddAsync(page, ct);
+        recorder.RecordEntity<PageRecord>(ChangeKind.Page, page.Id, null, page.Version);
+    }
+
+    public async Task<PageRecord?> UpdateAsync(PageRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.Page, updated.Id) ? null : await inner.GetIncludingDeletedAsync(updated.Id, ct);
+        var applied = await inner.UpdateAsync(updated, expectedVersion, ct);
+        if (applied is not null)
+        {
+            recorder.RecordEntity(ChangeKind.Page, applied.Id, before, applied.Version);
         }
 
         return applied;

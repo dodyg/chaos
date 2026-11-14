@@ -1,11 +1,12 @@
 import React from "react";
 import { DateText, useToday } from "./dates";
 import { addDays } from "./MyDay";
-import { gitHubRpc, subtaskRpc, type taskRpc as TaskRpc, type containerRpc as ContainerRpc, type tagRpc as TagRpc, type markdownRpc as MarkdownRpc, type padRpc as PadRpc,
+import type { PageRequest } from "./Pages";
+import { gitHubRpc, subtaskRpc, type taskRpc as TaskRpc, type containerRpc as ContainerRpc, type tagRpc as TagRpc, type markdownRpc as MarkdownRpc, type padRpc as PadRpc, type pageRpc,
   type diaryRpc as DiaryRpc, type historyRpc as HistoryRpc, type reminderRpc as ReminderRpc, type waitingRpc as WaitingRpc, type recurrenceRpc as RecurrenceRpc,
-  type ContainerResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
+  type ContainerResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type PageAnchorResponse, type PageBacklinkResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
   type TaskOperationResponse, type TaskResponse } from "#neoastra";
-import { ArrowDown, ArrowUp, Bell, CalendarDays, Repeat, History, ListChecks, ListTodo, NotebookPen, SlidersHorizontal, StickyNote, SunMedium, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, CalendarDays, FileText, Repeat, History, ListChecks, ListTodo, NotebookPen, SlidersHorizontal, StickyNote, SunMedium, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,7 +29,7 @@ import type { PadFocus } from "./ScratchPad";
 
 const operationId = () => crypto.randomUUID();
 export type TaskEditorApi = {
-  taskRpc: typeof TaskRpc; containerRpc: typeof ContainerRpc; tagApi: typeof TagRpc; markdownApi: typeof MarkdownRpc; padApi: typeof PadRpc;
+  taskRpc: typeof TaskRpc; containerRpc: typeof ContainerRpc; tagApi: typeof TagRpc; markdownApi: typeof MarkdownRpc; padApi: typeof PadRpc; pageApi?: typeof pageRpc;
   journalApi: { diaryRpc: typeof DiaryRpc; historyRpc: typeof HistoryRpc }; reminderApi: typeof ReminderRpc; waitingApi: typeof WaitingRpc; recurrenceApi: typeof RecurrenceRpc;
 };
 
@@ -38,7 +39,7 @@ export type TaskEditorApi = {
  * and moves save on each action as before.
  */
 export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, busy, setBusy, setError, setNotice, setWarning, run, changed, refresh,
-  revision, subtaskRevision, setSubtaskRevision, canAddToMyDay, onAddToMyDay, links, searchLinks, timeZones, containers, containerId, sections, tags, openPad, api }: {
+  revision, subtaskRevision, setSubtaskRevision, canAddToMyDay, onAddToMyDay, links, searchLinks, timeZones, containers, containerId, sections, tags, openPad, openPage, api }: {
   editing: TaskResponse; setEditing: React.Dispatch<React.SetStateAction<TaskResponse | null>>;
   viewingTask: boolean; setViewingTask: (viewing: boolean) => void;
   busy: boolean; setBusy: (busy: boolean) => void; setError: (error: string | null) => void; setNotice: (notice: string | null) => void; setWarning: (warning: string | null) => void;
@@ -49,8 +50,9 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
   links: MarkdownLinks; searchLinks: (text: string) => Promise<LinkCandidate[]>; timeZones: ReturnType<typeof useTimeZones>;
   containers: ContainerResponse[]; containerId: string; sections: SectionResponse[]; tags: TagResponse[];
   openPad: (request: Omit<PadFocus, "key">) => void; api: TaskEditorApi;
+  openPage?: (request: PageRequest) => void;
 }) {
-  const { taskRpc, containerRpc, tagApi, markdownApi, padApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
+  const { taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
   const drag = useDragReorder();
   const today = useToday();
   const nextMonday = addDays(today, ((8 - new Date(`${today}T00:00:00Z`).getUTCDay()) % 7) || 7);
@@ -58,6 +60,8 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
   const [editorTab, setEditorTab] = React.useState("notes");
   const [checklistChoice, setChecklistChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [padAnchor, setPadAnchor] = React.useState<PadAnchorResponse | null>(null);
+  const [pageAnchor, setPageAnchor] = React.useState<PageAnchorResponse | null>(null);
+  const [mentions, setMentions] = React.useState<PageBacklinkResponse[]>([]);
   const [subtasks, setSubtasks] = React.useState<SubtaskResponse[]>([]);
   const [deletedSubtasks, setDeletedSubtasks] = React.useState<SubtaskResponse[]>([]);
   const [subtaskTitle, setSubtaskTitle] = React.useState("");
@@ -128,6 +132,15 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
     void padApi.locate({ taskId: editing.id }).then(result => { if (current && result.ok) setPadAnchor(result.anchor); }).catch(() => { if (current) setPadAnchor(null); });
     return () => { current = false; };
   }, [editing.id, padApi]);
+  // ...and the page it was made from, plus the pages that link to it ("Mentioned in").
+  React.useEffect(() => {
+    let current = true;
+    setPageAnchor(null); setMentions([]);
+    if (!pageApi) return;
+    void pageApi.locate({ taskId: editing.id }).then(result => { if (current && result.ok) setPageAnchor(result.anchor); }).catch(() => undefined);
+    void pageApi.mentions({ taskId: editing.id }).then(result => { if (current && result.ok) setMentions([...result.pages]); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [editing.id, pageApi, revision]);
   const taskViewLinks: MarkdownLinks = React.useMemo(() => ({ ...links,
     loadGitHubImage: async (url: string) => {
       const result = await gitHubRpc.attachment({ taskId: editing.id, url });
@@ -252,6 +265,19 @@ function checklistPanel() {
               <StickyNote className="size-3.5"/>Made from a pad note{padAnchor.deleted ? " (deleted)" : padAnchor.archived ? " (archived)" : ""}: <q className="block min-w-0 max-w-full flex-1 truncate" title={padAnchor.quote}>{padAnchor.quote}</q>
               {!padAnchor.deleted && <Button type="button" size="xs" variant="outline" onClick={() => openPad({ itemId: padAnchor.padItemId, anchor: padAnchor })}>Open in pad</Button>}
             </p>}
+            {pageAnchor && <p className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <FileText className="size-3.5"/>Made from a page{pageAnchor.deleted ? " (deleted)" : ""}: <q className="block min-w-0 max-w-full flex-1 truncate" title={pageAnchor.quote}>{pageAnchor.quote}</q>
+              {!pageAnchor.deleted && openPage && <Button type="button" size="xs" variant="outline" onClick={() => openPage({ kind: "page", pageId: pageAnchor.pageId, anchor: pageAnchor })}>Open page</Button>}
+            </p>}
+            {mentions.length > 0 && <section aria-label="Mentioned in" className="grid gap-1 rounded-lg border px-3 py-2 text-xs">
+              <h4 className="font-semibold text-muted-foreground">Mentioned in</h4>
+              <ul className="grid gap-1">{mentions.map(page => <li key={page.id}>
+                <button type="button" className="grid w-full gap-0.5 rounded px-1 py-0.5 text-left hover:bg-accent" onClick={() => openPage?.({ kind: "page", pageId: page.id })}>
+                  <span className="flex items-center gap-1.5 font-medium text-foreground"><FileText className="size-3.5 text-muted-foreground"/>{page.title}</span>
+                  {page.line && <span className="truncate text-muted-foreground">{page.line}</span>}
+                </button>
+              </li>)}</ul>
+            </section>}
           </TabsContent>
           <TabsContent value="details" className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <div className="grid grid-cols-2 gap-3">
