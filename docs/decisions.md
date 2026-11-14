@@ -725,7 +725,9 @@ the only plain-text export; the JSON archive remains the lossless format.
 
 Pages are one table, `Pages` (migration 023), for both tree pages and daily pages. A daily page
 holds `DailyDate` and never a parent; one active daily page per date is a unique index, so a
-deleted day does not block writing that day again. Autosave works like the pad: title and text
+deleted day does not block writing that day again. In the app they are two separate views:
+Pages shows only the page tree, and Daily page shows only the daily pages, so the two are not
+mixed in one list. A link from one kind to the other switches to the other view. Autosave works like the pad: title and text
 save together with an editor revision, and a late or repeated save never replaces newer text.
 Typing is not an undo step; creating, moving, deleting, restoring, restoring a version, Make task
 and the pad-to-page moves are recorded operations with undo (`ChangeKind.Page`).

@@ -118,19 +118,25 @@ type Props = {
   onOpenSummary: (summaryId: string) => void;
   onCreateTag: (path: string) => Promise<boolean>;
   onError: (message: string | null) => void;
+  /** "pages" shows the page tree; "daily" shows the daily pages. The two are separate views. */
+  mode?: "pages" | "daily";
+  /** Opens a page of the other kind (a daily page from Pages, or a page from a daily page) in its own view. */
+  onRoute?: (request: PageRequest) => void;
 };
 
 /**
- * Pages (SPEC Pages): a tree of titled Markdown pages and one daily page per date. Pages save
- * as you type and keep versions; front matter shows as a properties panel; lists work as an
- * outline; links and backlinks join pages, tasks and lists; Make task turns lines into tasks.
+ * Pages (SPEC Pages): a tree of titled Markdown pages, or (mode "daily") one daily page per
+ * date. Pages save as you type and keep versions; front matter shows as a properties panel;
+ * lists work as an outline; links and backlinks join pages, tasks and lists; Make task turns
+ * lines into tasks.
  */
-export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, registry, containers, tags, revision, today, focus, links, searchLinks, onChanged, onOpenTask, onOpenSummary, onCreateTag, onError }: Props) {
+export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, registry, containers, tags, revision, today, focus, links, searchLinks, onChanged, onOpenTask, onOpenSummary, onCreateTag, onError, mode = "pages", onRoute }: Props) {
+  const isDailyMode = mode === "daily";
   const [tree, setTree] = React.useState<PageSummaryResponse[]>([]);
   const [daily, setDaily] = React.useState<PageSummaryResponse[]>([]);
   const [deleted, setDeleted] = React.useState<PageSummaryResponse[]>([]);
   const [loaded, setLoaded] = React.useState(false);
-  const [selected, setSelected] = React.useState<Selected>(() => { try { const id = localStorage.getItem("chaos.pages.open"); return id ? { kind: "page", pageId: id } : null; } catch { return null; } });
+  const [selected, setSelected] = React.useState<Selected>(() => { if (isDailyMode) return { kind: "daily", date: today }; try { const id = localStorage.getItem("chaos.pages.open"); return id ? { kind: "page", pageId: id } : null; } catch { return null; } });
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState<{ parentId: string | null } | null>(null);
@@ -152,6 +158,10 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   React.useEffect(() => { void loadRef.current().catch((e: unknown) => onError(e instanceof Error ? e.message : String(e))); }, [revision]);
 
   function open(next: Selected) {
+    if (next && (next.kind === "daily") !== isDailyMode) {
+      onRoute?.(next.kind === "daily" ? { kind: "daily", date: next.date } : { kind: "page", pageId: next.pageId });
+      return;
+    }
     const current = selected?.kind === "page" ? registry.get(selected.pageId) : null;
     if (current) void current.flush();
     setSelected(next);
@@ -282,8 +292,8 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   const todayWritten = daily.some(page => page.dailyDate === today);
 
   return <div className="grid gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]">
-    <nav aria-label="Pages and daily pages" className="grid content-start gap-4 lg:sticky lg:top-[56px] lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto">
-      <section className="grid gap-1">
+    <nav aria-label={isDailyMode ? "Daily pages" : "Pages"} className="grid content-start gap-4 lg:sticky lg:top-[56px] lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto">
+      {isDailyMode && <section className="grid gap-1">
         <h2 className="flex items-center justify-between px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">
           <span>Daily pages</span>
         </h2>
@@ -300,16 +310,16 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
           </li>)}
         </ul>
         {daily.length > 7 && <Button type="button" variant="ghost" size="xs" className="justify-start text-muted-foreground" onClick={() => setAllDaily(value => !value)}>{allDaily ? "Show recent days" : `Show all ${daily.length} days`}</Button>}
-      </section>
-      <section className="grid gap-1">
+      </section>}
+      {!isDailyMode && <section className="grid gap-1">
         <h2 className="flex items-center justify-between px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">
           <span>Pages</span>
           <Button type="button" variant="ghost" size="icon-xs" aria-label="New page" title="New page" onClick={() => setAdding({ parentId: null })}><Plus/></Button>
         </h2>
         {loaded && tree.length === 0 && !adding && <p className="px-1 text-sm text-muted-foreground">No pages yet. Add one to start writing.</p>}
         {renderTree(null, 0)}
-      </section>
-      <DeletedItems noun="pages" items={deleted.filter(page => !page.dailyDate || !daily.some(day => day.dailyDate === page.dailyDate))} name={page => page.dailyDate ? dailyTitle(page.dailyDate) : page.title} busy={busy}
+      </section>}
+      <DeletedItems noun={isDailyMode ? "daily pages" : "pages"} items={deleted.filter(page => isDailyMode ? !!page.dailyDate && !daily.some(day => day.dailyDate === page.dailyDate) : !page.dailyDate)} name={page => page.dailyDate ? dailyTitle(page.dailyDate) : page.title} busy={busy}
         onRestore={page => void run(() => api.restore({ operationId: operationId(), pageId: page.id, expectedVersion: page.version }), "Could not restore the page.", () => open(page.dailyDate ? { kind: "daily", date: page.dailyDate } : { kind: "page", pageId: page.id }))}/>
     </nav>
 
@@ -317,7 +327,7 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
       {missingQuote !== null && <Banner tone="warning" onDismiss={() => setMissingQuote(null)}>The text this task came from was changed or removed. It said: “{missingQuote}”</Banner>}
       {selected === null
-        ? <EmptyState title="Pages are for writing you keep.">Open today's page, or add a page for meeting notes, a project write-up or a recipe collection.</EmptyState>
+        ? <EmptyState title="Pages are for writing you keep.">Add a page for meeting notes, a project write-up or a recipe collection.</EmptyState>
         : <PageEditor key={selected.kind === "page" ? selected.pageId : `daily-${selected.date}`} selected={selected} api={api} summaryApi={summaryApi} captureApi={captureApi} registry={registry}
             containers={containers} tags={tags} tree={tree} revision={revision} today={today} anchor={anchor} links={links} searchLinks={searchLinks} busy={busy}
             onOpen={open} onChanged={async () => { await load(); onChanged(); }} onOpenTask={onOpenTask} onOpenSummary={onOpenSummary} onCreateTag={onCreateTag} onError={onError} onNotice={setNotice}/>}

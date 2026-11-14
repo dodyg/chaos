@@ -36,7 +36,13 @@ import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities,
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
 type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; pageRpc?: typeof pageRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "pages" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
+type View = "tasks" | "templates" | "query" | "pad" | "pages" | "daily" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
+
+/** This computer's date (yyyy-MM-dd), used until the profile's day clock has loaded. */
+function localToday(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -69,6 +75,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const drafts = React.useRef(new DraftRegistry()).current;
   const pageDrafts = React.useRef(new DraftRegistry()).current;
   const [pageFocus, setPageFocus] = React.useState<PageFocus | null>(null);
+  const [dailyFocus, setDailyFocus] = React.useState<PageFocus | null>(null);
   const [pageMatches, setPageMatches] = React.useState<PageSummaryResponse[]>([]);
   const [tagPages, setTagPages] = React.useState<PageSummaryResponse[]>([]);
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
@@ -263,11 +270,20 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   }
   const openPadRef = React.useRef(openPad);
   openPadRef.current = openPad;
-  /** Shows Pages: a page (optionally at a Make task anchor), a day's page, or the page a `[[Name]]` link names. */
+  /**
+   * Shows a page (optionally at a Make task anchor) or the page a `[[Name]]` link names in Pages,
+   * or a day's page in the separate Daily page view. With no request, Pages keeps its open page.
+   */
   function openPages(request: PageRequest | null) {
     setShowTagSettings(false);
+    if (request?.kind === "daily") {
+      setView("daily");
+      setDailyFocus(current => ({ ...request, key: (current?.key ?? 0) + 1 }));
+      return;
+    }
     setView("pages");
     if (request) setPageFocus(current => ({ ...request, key: (current?.key ?? 0) + 1 }));
+    else setPageFocus(null); // an earlier request is not replayed when Pages opens again
   }
   const openPagesRef = React.useRef(openPages);
   openPagesRef.current = openPages;
@@ -308,7 +324,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     if (previousView.current === "pad" && view !== "pad") {
       void drafts.flushAll().then(ok => { if (!ok) setError("A pad note could not be saved. Its text is kept: open the Personal pad to retry or copy it."); });
     }
-    if (previousView.current === "pages" && view !== "pages") {
+    if ((previousView.current === "pages" || previousView.current === "daily") && view !== previousView.current) {
       void pageDrafts.flushAll().then(ok => { if (!ok) setError("A page could not be saved. Its text is kept: open Pages to retry or copy it."); });
     }
     previousView.current = view;
@@ -573,7 +589,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
       ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
       { id: "view:pages", group: "Go to", label: "Pages", icon: <FileText/>, run: () => openPages(null), keywords: "notes writing wiki documents" },
-      { id: "view:today-page", group: "Go to", label: "Today's page", icon: <NotebookPen/>, run: () => openPages(dayClock ? { kind: "daily", date: dayClock.today } : null), keywords: "daily journal diary day page" },
+      { id: "view:today-page", group: "Go to", label: "Today's page", icon: <NotebookPen/>, run: () => openPages({ kind: "daily", date: dayClock?.today ?? localToday() }), keywords: "daily journal diary day page" },
       ...paletteTreePages.map(page => ({ id: `page:${page.id}`, group: "Pages", label: page.title, icon: page.icon ? <span aria-hidden="true">{page.icon}</span> : <FileText/>, run: () => openPages({ kind: "page", pageId: page.id }), keywords: page.aliases.join(" ") })),
       { id: "view:pad", group: "Go to", label: "Personal pad", icon: <StickyNote/>, run: () => { setShowTagSettings(false); setView("pad"); }, keywords: "notes" },
       { id: "view:summaries", group: "Go to", label: "Summaries", icon: <BookOpen/>, run: go("summaries"), keywords: "summary review evening morning plan journal" },
@@ -652,7 +668,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <SidebarSection id="notes" title="Notes">
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "pages" ? "page" : undefined} onClick={() => { setEditing(null); openPages(null); }}><FileText/>Pages</Button>
-          <Button type="button" variant="ghost" className={navItem} title="Open today's daily page" onClick={() => { setEditing(null); openPages(dayClock ? { kind: "daily", date: dayClock.today } : null); }}><NotebookPen/>Daily page</Button>
+          <Button type="button" variant="ghost" className={navItem} aria-current={view === "daily" ? "page" : undefined} title="Open today's daily page" onClick={() => { setEditing(null); openPages({ kind: "daily", date: dayClock?.today ?? localToday() }); }}><NotebookPen/>Daily page</Button>
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "summaries" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("summaries"); }}><BookOpen/>Summaries</Button>
         </SidebarSection>
       </nav>
@@ -705,7 +721,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" ? "max-w-6xl" : "max-w-4xl", " px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "max-w-6xl" : "max-w-4xl", " px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -714,8 +730,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}
           pageApi={pageApi} today={dayClock?.today ?? null} onOpenPage={openPages}/>
-      : view === "pages" ? <Pages api={pageApi} summaryApi={summaryApi} captureApi={captureApi} registry={pageDrafts} containers={containers} tags={tags} revision={revision}
-          today={dayClock?.today ?? new Date().toISOString().slice(0, 10)} focus={pageFocus} links={links} searchLinks={searchLinks} onChanged={changed}
+      : view === "pages" || view === "daily" ? <Pages key={view} mode={view} onRoute={openPages} api={pageApi} summaryApi={summaryApi} captureApi={captureApi} registry={pageDrafts} containers={containers} tags={tags} revision={revision}
+          today={dayClock?.today ?? localToday()} focus={view === "daily" ? dailyFocus : pageFocus} links={links} searchLinks={searchLinks} onChanged={changed}
           onOpenTask={taskId => void openLinkedTask(taskId)} onOpenSummary={id => { setSummaryOpenId(id); setView("summaries"); }} onCreateTag={async path => { const created = await createTag(path); if (created) changed(); return created; }} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}
           dailyPages={dailyPageDates} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>

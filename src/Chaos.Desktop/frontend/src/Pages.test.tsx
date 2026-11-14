@@ -59,8 +59,8 @@ function pageApi(rows: PageResponse[]) {
 
 const summaryApi = { ...summaryRpc, find: async () => ({ ok: true, summary: null, error: null }) } as unknown as typeof summaryRpc;
 
-function renderPages(api: typeof pageRpc, focus: React.ComponentProps<typeof Pages>["focus"] = null) {
-  return render(<Pages api={api} summaryApi={summaryApi} registry={new DraftRegistry()} containers={[]} tags={[]} revision={0} today="2026-11-14" focus={focus} links={{}}
+function renderPages(api: typeof pageRpc, focus: React.ComponentProps<typeof Pages>["focus"] = null, extra: Partial<React.ComponentProps<typeof Pages>> = {}) {
+  return render(<Pages {...extra} api={api} summaryApi={summaryApi} registry={new DraftRegistry()} containers={[]} tags={[]} revision={0} today="2026-11-14" focus={focus} links={{}}
     onChanged={() => {}} onOpenTask={() => {}} onOpenSummary={() => {}} onCreateTag={async () => true} onError={() => {}}/>, { container: dom.window.document.body });
 }
 
@@ -86,6 +86,7 @@ test("the tree nests pages; front matter shows as properties and the body alone 
   assert.equal((screen.getByLabelText("foo") as HTMLInputElement).value, "bar");
   assert.ok(screen.getByRole("treeitem", { name: /Kitchen renovation/ }));
   assert.ok(screen.getByRole("navigation", { name: "Contents" }));
+  assert.equal(screen.queryByRole("button", { name: /Today's page/ }), null, "Pages lists only pages; daily pages have their own view");
 
   fireEvent.change(editor, { target: { value: "# Plan\nTiles and a sink" } });
   fireEvent.change(screen.getByLabelText("Page title"), { target: { value: "Kitchen" } });
@@ -106,8 +107,10 @@ test("the tree nests pages; front matter shows as properties and the body alone 
 test("today's page is stored only once something is written on it", async () => {
   const rows: PageResponse[] = [];
   const { api, dailyCreates, saves } = pageApi(rows);
-  renderPages(api, { key: 1, kind: "daily", date: "2026-11-14" });
+  const routed: unknown[] = [];
+  renderPages(api, { key: 1, kind: "daily", date: "2026-11-14" }, { mode: "daily", onRoute: request => routed.push(request) });
   const editor = await screen.findByLabelText("Daily page") as HTMLTextAreaElement;
+  assert.equal(screen.queryByRole("tree", { name: "Pages" }), null, "the daily view does not show the page tree");
   assert.match(screen.getByRole("status").textContent ?? "", /kept once you write/);
   assert.equal(dailyCreates.length, 0);
 
@@ -118,6 +121,13 @@ test("today's page is stored only once something is written on it", async () => 
   fireEvent.blur(screen.getByLabelText("Daily page"));
   await waitFor(() => assert.equal(saves.at(-1)?.markdown, "Good day"));
   assert.equal(dailyCreates.length, 1, "later typing saves the stored page");
+  assert.equal(routed.length, 0);
+  cleanup();
+
+  // Pages asked to show a daily page hands it to the daily view instead.
+  const sent: unknown[] = [];
+  renderPages(api, { key: 1, kind: "daily", date: "2026-11-14" }, { onRoute: request => sent.push(request) });
+  await waitFor(() => assert.deepEqual(sent, [{ kind: "daily", date: "2026-11-14" }]));
   cleanup();
 });
 
