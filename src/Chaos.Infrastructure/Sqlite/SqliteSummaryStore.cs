@@ -64,7 +64,7 @@ public sealed class SqliteSummaryStore(SqliteConnection connection) : ISummarySt
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<IReadOnlyList<SummaryRecord>> ListJournalAsync(string profileId, DateOnly? endBefore, SummaryKind? kindBefore, int limit, CancellationToken ct)
+    public async Task<IReadOnlyList<SummaryRecord>> ListLatestAsync(string profileId, DateOnly? endBefore, SummaryKind? kindBefore, int limit, CancellationToken ct)
     {
         var cursor = endBefore is null ? "" : "AND (s.PeriodEnd < $end OR (s.PeriodEnd = $end AND s.Kind < $kind))";
         var parameters = new List<(string, object)> { ("$profile", profileId), ("$limit", (long)Math.Clamp(limit, 1, 200)) };

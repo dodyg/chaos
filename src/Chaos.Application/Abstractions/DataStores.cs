@@ -111,10 +111,10 @@ public interface ISummaryStore
     Task<bool> TryAddAsync(SummaryRecord row, CancellationToken ct);
     Task MarkPromptSeenAsync(string id, DateTimeOffset seenAtUtc, CancellationToken ct);
     /// <summary>
-    /// The journal: the newest revision of each period, ordered by (PeriodEnd, Kind)
+    /// Stored summaries: the newest revision of each period, ordered by (PeriodEnd, Kind)
     /// descending. The cursor is exclusive: rows strictly before (endBefore, kindBefore).
     /// </summary>
-    Task<IReadOnlyList<SummaryRecord>> ListJournalAsync(string profileId, DateOnly? endBefore, Chaos.Domain.Summaries.SummaryKind? kindBefore, int limit, CancellationToken ct);
+    Task<IReadOnlyList<SummaryRecord>> ListLatestAsync(string profileId, DateOnly? endBefore, Chaos.Domain.Summaries.SummaryKind? kindBefore, int limit, CancellationToken ct);
     /// <summary>Newest revisions whose prompt time has come and that were not opened or dismissed, newest first.</summary>
     Task<IReadOnlyList<SummaryRecord>> ListPromptsDueAsync(string profileId, DateTimeOffset now, CancellationToken ct);
     /// <summary>History rows of the space's tasks effective at or after <paramref name="fromUtc"/>, in recorded order.</summary>

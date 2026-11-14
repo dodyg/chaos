@@ -29,17 +29,17 @@ public sealed record SummaryHeaderDto(string Id, string Kind, string PeriodStart
 public sealed record SummaryRevisionDto(string Id, string Revision, string GeneratedAtUtc, string CapturedThroughUtc, string Trigger);
 public sealed record SummaryDetailDto(SummaryHeaderDto Header, SummaryFactsDto Facts, IReadOnlyList<SummaryRevisionDto> Revisions, bool IsLatest);
 
-public sealed record JournalListRequest(string? Cursor, int? Limit);
-public sealed record JournalListResponse(bool Ok, IReadOnlyList<SummaryHeaderDto> Entries, string? NextCursor, TaskErrorResponse? Error);
-public sealed record JournalGetRequest(string SummaryId);
+public sealed record SummaryListRequest(string? Cursor, int? Limit);
+public sealed record SummaryListResponse(bool Ok, IReadOnlyList<SummaryHeaderDto> Entries, string? NextCursor, TaskErrorResponse? Error);
+public sealed record SummaryGetRequest(string SummaryId);
 /// <summary>The newest summary of the period containing the date (kind Morning, Daily or Weekly).</summary>
-public sealed record JournalFindRequest(string Kind, string Date);
-public sealed record JournalDetailResponse(bool Ok, SummaryDetailDto? Summary, TaskErrorResponse? Error);
-public sealed record JournalGenerateRequest(string OperationId, string Kind, string Date);
-public sealed record JournalPromptsRequest();
-public sealed record JournalPromptsResponse(bool Ok, IReadOnlyList<SummaryHeaderDto> Prompts, TaskErrorResponse? Error);
-public sealed record JournalDismissRequest(string SummaryId);
-public sealed record JournalDismissResponse(bool Ok, TaskErrorResponse? Error);
+public sealed record SummaryFindRequest(string Kind, string Date);
+public sealed record SummaryDetailResponse(bool Ok, SummaryDetailDto? Summary, TaskErrorResponse? Error);
+public sealed record SummaryGenerateRequest(string OperationId, string Kind, string Date);
+public sealed record SummaryPromptsRequest();
+public sealed record SummaryPromptsResponse(bool Ok, IReadOnlyList<SummaryHeaderDto> Prompts, TaskErrorResponse? Error);
+public sealed record SummaryDismissRequest(string SummaryId);
+public sealed record SummaryDismissResponse(bool Ok, TaskErrorResponse? Error);
 public sealed record CarryOverPreviewRequest(string SummaryId);
 public sealed record CarryOverCandidateDto(SummaryTaskDto Task, bool StillOpen, bool AlreadyPlanned);
 public sealed record CarryOverPreviewResponse(bool Ok, string? Target, string? TargetDate, IReadOnlyList<CarryOverCandidateDto> Candidates, TaskErrorResponse? Error);
@@ -50,36 +50,36 @@ public sealed record SummarySettingsRequest();
 public sealed record SummarySettingsResponse(bool Ok, string? MorningTime, string? EveningTime, string? WeeklyDay, string? FirstWeekday, string? Version, string? ZoneId, TaskErrorResponse? Error);
 public sealed record SummarySettingsUpdateRequest(string OperationId, string ExpectedVersion, string? MorningTime, string? EveningTime, string? WeeklyDay);
 
-/// <summary>Plain summaries, the journal, carry-over and the summary schedule (PLAN §12, WP11).</summary>
-[NeoRpcService("journal", Version = 1)]
-public sealed class JournalRpcService(SummaryCommands summaries)
+/// <summary>Plain summaries, their history, carry-over and the summary schedule (PLAN §12, WP11).</summary>
+[NeoRpcService("summaries", Version = 1)]
+public sealed class SummaryRpcService(SummaryCommands summaries)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<JournalListResponse> ListAsync(JournalListRequest request, CancellationToken ct)
+    public async ValueTask<SummaryListResponse> ListAsync(SummaryListRequest request, CancellationToken ct)
     {
         try
         {
-            var page = await summaries.JournalAsync(request.Cursor, request.Limit ?? 20, ct);
+            var page = await summaries.ListAsync(request.Cursor, request.Limit ?? 20, ct);
             return new(true, [.. page.Entries.Select(entry => Header(entry.Summary, entry.Counts))], page.NextCursor, null);
         }
         catch (AppException error) { return new(false, [], null, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("get")]
-    public ValueTask<JournalDetailResponse> GetAsync(JournalGetRequest request, CancellationToken ct) =>
+    public ValueTask<SummaryDetailResponse> GetAsync(SummaryGetRequest request, CancellationToken ct) =>
         Detail(async () => await summaries.GetAsync(request.SummaryId, ct));
 
     [NeoRpcMethod("find")]
-    public ValueTask<JournalDetailResponse> FindAsync(JournalFindRequest request, CancellationToken ct) =>
+    public ValueTask<SummaryDetailResponse> FindAsync(SummaryFindRequest request, CancellationToken ct) =>
         Detail(async () => await summaries.FindAsync(Kind(request.Kind), Date(request.Date, "date"), ct));
 
     [NeoRpcMethod("generate")]
-    public ValueTask<JournalDetailResponse> GenerateAsync(JournalGenerateRequest request, CancellationToken ct) =>
+    public ValueTask<SummaryDetailResponse> GenerateAsync(SummaryGenerateRequest request, CancellationToken ct) =>
         Detail(async () => await summaries.GenerateAsync(new GenerateSummaryCommand(request.OperationId, Kind(request.Kind), Date(request.Date, "date")), ct));
 
     /// <summary>Generates anything due first, so a prompt appears as soon as the frontend asks.</summary>
     [NeoRpcMethod("prompts")]
-    public async ValueTask<JournalPromptsResponse> PromptsAsync(JournalPromptsRequest request, CancellationToken ct)
+    public async ValueTask<SummaryPromptsResponse> PromptsAsync(SummaryPromptsRequest request, CancellationToken ct)
     {
         try
         {
@@ -90,7 +90,7 @@ public sealed class JournalRpcService(SummaryCommands summaries)
     }
 
     [NeoRpcMethod("dismiss")]
-    public async ValueTask<JournalDismissResponse> DismissAsync(JournalDismissRequest request, CancellationToken ct)
+    public async ValueTask<SummaryDismissResponse> DismissAsync(SummaryDismissRequest request, CancellationToken ct)
     {
         try
         {
@@ -146,7 +146,7 @@ public sealed class JournalRpcService(SummaryCommands summaries)
         catch (AppException error) { return new(false, null, null, null, null, null, null, TaskRpcService.ToErrorResponse(error)); }
     }
 
-    private static async ValueTask<JournalDetailResponse> Detail(Func<Task<SummaryView?>> run)
+    private static async ValueTask<SummaryDetailResponse> Detail(Func<Task<SummaryView?>> run)
     {
         try
         {

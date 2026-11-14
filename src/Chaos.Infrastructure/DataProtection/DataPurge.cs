@@ -19,7 +19,7 @@ public sealed record PurgeOutcome(PurgeCounts Removed, IReadOnlyList<string> OsN
 /// delete. Everything that belongs only to a purged item goes with it in one transaction:
 /// subtasks, tag links, diary entries and their revisions, history, search documents,
 /// reminders, follow-ups, notification jobs, plan membership, pad links, import mappings and
-/// undo entries that mention it. Journal summaries keep their counts but the purged task's
+/// undo entries that mention it. Stored summaries keep their counts but the purged task's
 /// title is replaced. Lists, sections, tags and recurrence series that are deleted are removed
 /// only once nothing refers to them. The database is then compacted so the removed text does
 /// not stay in free pages. Backups made earlier still contain the items until they rotate out.
@@ -219,7 +219,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
         }
     }
 
-    /// <summary>Replaces the captured title of purged tasks in journal facts; counts and structure stay.</summary>
+    /// <summary>Replaces the captured title of purged tasks in stored summary facts; counts and structure stay.</summary>
     private static void ScrubSummaries(SqliteConnection connection)
     {
         var purged = Strings(connection, "SELECT Id FROM temp.PurgeTasks;").ToHashSet(StringComparer.Ordinal);

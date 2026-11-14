@@ -5,7 +5,7 @@ import React from "react";
 import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
 import { handleListKeys } from "./listKeyboard";
 import { TodayContext } from "./dates";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, journalRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
@@ -19,7 +19,7 @@ import { MyDay, useDayClock } from "./MyDay";
 import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
 import { AlertStack, NotificationCenter } from "./Reminders";
-import { Journal, SummaryPrompts } from "./Journal";
+import { Summaries, SummaryPrompts } from "./Summaries";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
 import { Help } from "./Help";
@@ -34,8 +34,8 @@ import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities,
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; journalRpc?: typeof journalRpc; shellRpc?: typeof shellRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "journal" | "data" | "settings" | "help";
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc };
+type View = "tasks" | "templates" | "query" | "pad" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
 
 /** Focus is in a text field, where Ctrl+Z belongs to the field's own text undo (PLAN §9). */
 function isTextEditing(target: EventTarget | null) {
@@ -58,7 +58,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const myWeekApi = api.myWeekRpc ?? myWeekRpc;
   const reminderApi = api.reminderRpc ?? reminderRpc;
   const waitingApi = api.waitingRpc ?? waitingRpc;
-  const summaryApi = api.journalRpc ?? journalRpc;
+  const summaryApi = api.summaryRpc ?? summaryRpc;
   const shellApi = api.shellRpc ?? shellRpc;
   const dayBackground = useDayBackground();
   const dayClock = useDayClock(myDayApi);
@@ -99,7 +99,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
   const [view, setView] = React.useState<View>(initialView);
-  const [journalOpenId, setJournalOpenId] = React.useState<string | null>(null);
+  const [summaryOpenId, setSummaryOpenId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
   const [tags, setTags] = React.useState<TagResponse[]>([]);
@@ -517,7 +517,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
       ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
       { id: "view:pad", group: "Go to", label: "Personal pad", icon: <StickyNote/>, run: () => { setShowTagSettings(false); setView("pad"); }, keywords: "notes" },
-      { id: "view:journal", group: "Go to", label: "Journal", icon: <BookOpen/>, run: go("journal"), keywords: "summary" },
+      { id: "view:summaries", group: "Go to", label: "Summaries", icon: <BookOpen/>, run: go("summaries"), keywords: "summary review evening morning plan journal" },
       { id: "view:notifications", group: "Go to", label: "Notifications", icon: <Bell/>, run: go("notifications"), keywords: "alerts reminders" },
       { id: "view:templates", group: "Go to", label: "Templates", icon: <LayoutTemplate/>, run: go("templates") },
       { id: "view:data", group: "Go to", label: "Data & backups", icon: <Database/>, run: go("data"), keywords: "export import backup" },
@@ -590,7 +590,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         </SidebarSection>
         <SidebarSection id="notes" title="Notes">
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
-          <Button type="button" variant="ghost" className={navItem} aria-current={view === "journal" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("journal"); }}><BookOpen/>Journal</Button>
+          <Button type="button" variant="ghost" className={navItem} aria-current={view === "summaries" ? "page" : undefined} onClick={() => { setShowTagSettings(false); setView("summaries"); }}><BookOpen/>Summaries</Button>
         </SidebarSection>
       </nav>
       <SidebarSection id="lists" title="Lists & projects" addLabel="New list or project" adding={addingContainer || userContainers.length === 0} onAdd={() => setAddingContainer(v => !v)}
@@ -646,13 +646,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
-      <SummaryPrompts api={summaryApi} onOpen={id => { setJournalOpenId(id); setShowTagSettings(false); setView("journal"); }}/>
+      <SummaryPrompts api={summaryApi} onOpen={id => { setSummaryOpenId(id); setShowTagSettings(false); setView("summaries"); }}/>
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
           links={links} searchLinks={searchLinks} onChanged={changed} onOpenTask={taskId => void openLinkedTask(taskId)} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}/>
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory}/>
-      : view === "journal" ? <Journal api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={journalOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
+      : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
       : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else setView(next); }}/>

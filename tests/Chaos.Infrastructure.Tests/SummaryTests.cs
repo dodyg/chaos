@@ -14,7 +14,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Tests;
 
-/// <summary>Plain summaries and the journal on real SQLite with a fake clock (PLAN §15 WP11 tests).</summary>
+/// <summary>Plain summaries and their list on real SQLite with a fake clock (PLAN §15 WP11 tests).</summary>
 public sealed class SummaryTests
 {
     // Tuesday 10 November 2026; weeks start on Sunday (8–14 November).
@@ -196,9 +196,9 @@ public sealed class SummaryTests
         await Assert.That(regenerated.Revisions.Count).IsEqualTo(2);
         await Assert.That(regenerated.Summary.CapturedThroughUtc).IsEqualTo(At(Today, 22));
         await Assert.That(host.Scalar("SELECT count(*) FROM Summaries WHERE Kind = 1;")).IsEqualTo(2L);
-        var journal = await host.Summaries.JournalAsync(null, 20);
-        await Assert.That(journal.Entries.Count(entry => entry.Summary.Kind == SummaryKind.Daily)).IsEqualTo(1);
-        await Assert.That(journal.Entries.Single(entry => entry.Summary.Kind == SummaryKind.Daily).Summary.Revision).IsEqualTo(2L);
+        var listed = await host.Summaries.ListAsync(null, 20);
+        await Assert.That(listed.Entries.Count(entry => entry.Summary.Kind == SummaryKind.Daily)).IsEqualTo(1);
+        await Assert.That(listed.Entries.Single(entry => entry.Summary.Kind == SummaryKind.Daily).Summary.Revision).IsEqualTo(2L);
     }
 
     [Test]
@@ -335,7 +335,7 @@ public sealed class SummaryTests
     }
 
     [Test]
-    public async Task Week_OfFixtureActivity_ProducesAnUnderstandableJournalAndFeedsTheNextReview()
+    public async Task Week_OfFixtureActivity_ProducesUnderstandableSummariesAndFeedsTheNextReview()
     {
         // Sunday 8 November: plan the week, then work through it day by day.
         using var host = await Host.StartAsync(At(WeekStart, 8));
@@ -380,8 +380,8 @@ public sealed class SummaryTests
         var nextWeek = await host.Weeks.OpenAsync(WeekStart.AddDays(7));
 
         await Assert.That(complete.Summary.IsPartial).IsFalse();
-        await Assert.That(nextWeek.LookBack.JournalSummaryId).IsEqualTo(complete.Summary.Id);
-        await Assert.That(nextWeek.LookBack.JournalCompleted!.Single().Title).IsEqualTo("Plant bulbs");
+        await Assert.That(nextWeek.LookBack.SummaryId).IsEqualTo(complete.Summary.Id);
+        await Assert.That(nextWeek.LookBack.SummaryCompleted!.Single().Title).IsEqualTo("Plant bulbs");
         await Assert.That(nextWeek.LookBack.CompletedCount).IsEqualTo(1L);
         await Assert.That(nextWeek.LookBack.UnfinishedTaskIds.SequenceEqual([shed.Id])).IsTrue();
 

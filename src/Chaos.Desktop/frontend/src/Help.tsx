@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common";
 import { listShortcuts } from "./listKeyboard";
 
-export type HelpLink = "myday" | "myweek" | "tasks" | "pad" | "journal" | "notifications" | "templates" | "data" | "settings";
+export type HelpLink = "myday" | "myweek" | "tasks" | "pad" | "summaries" | "notifications" | "templates" | "data" | "settings";
 
 /** Shortcuts that work anywhere in the main window (App's keydown handler). */
 export const appShortcuts: readonly [string, string][] = [
@@ -69,7 +69,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
         <li><strong>Capture</strong> anything the moment it comes up with <kbd>Ctrl+N</kbd>. It lands in the Inbox unless you name a list.</li>
         <li><strong>Plan the week</strong> once, in My Week: carry over what slipped and spread tasks across the days.</li>
         <li><strong>Choose today's work</strong> each morning in My Day. Suggestions show what is planned, due or left over from yesterday.</li>
-        <li><strong>Review</strong> in the Journal to see what you finished and what slipped.</li>
+        <li><strong>Review</strong> in Summaries: each evening shows what you finished and what slipped.</li>
       </ol>
       <Go to="myday" onNavigate={onNavigate}>Open My Day</Go>
     </> },
@@ -98,10 +98,10 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
     { id: "find", title: "Finding things", icon: <Search/>, keywords: "search find palette jump command", body: <>
       <p>The sidebar search box matches words in titles, notes, subtasks, diary entries and pad notes. <kbd>Ctrl+K</kbd> opens the command palette: type a few letters to jump to any view, list, tag or task, or to run an action.</p>
     </> },
-    { id: "pad", title: "Personal pad and journal", icon: <StickyNote/>, keywords: "pad notes scratch journal summary diary make task", body: <>
+    { id: "pad", title: "Personal pad and summaries", icon: <StickyNote/>, keywords: "pad notes scratch summaries summary review morning evening journal diary make task", body: <>
       <p>The <strong>Personal pad</strong> is for thoughts that are not tasks yet. Notes save as you type. Select some text and choose <em>Make task</em> to turn it into a task that links back to its spot on the pad.</p>
-      <p>The <strong>Journal</strong> builds plain daily and weekly summaries from your own lists and history.</p>
-      <div className="flex flex-wrap gap-2"><Go to="pad" onNavigate={onNavigate}>Open the pad</Go><Go to="journal" onNavigate={onNavigate}>Open the Journal</Go></div>
+      <p><strong>Summaries</strong> are built from your own lists and history: a morning plan, an evening summary and a weekly look back. From an evening summary you can carry unfinished tasks over to tomorrow.</p>
+      <div className="flex flex-wrap gap-2"><Go to="pad" onNavigate={onNavigate}>Open the pad</Go><Go to="summaries" onNavigate={onNavigate}>Open Summaries</Go></div>
     </> },
     { id: "reminders", title: "Reminders and waiting", icon: <Bell/>, keywords: "reminder notification alert waiting follow up delegate", body: <>
       <p>Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date so it comes back to you. Everything that fired is listed under Alerts.</p>

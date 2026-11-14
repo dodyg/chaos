@@ -201,7 +201,7 @@ Text files must be UTF-8. The largest file one import accepts is 100 MB.
   - My Day and week-plan membership, pad links and import records
   - undo entries that mention them
 
-  Journal summaries keep their counts, but the task's captured title becomes "Permanently
+  Stored summaries keep their counts, but the task's captured title becomes "Permanently
   deleted task" and its diary excerpts are cleared. Deleted lists, sections, tags, templates
   and recurrence series go once nothing refers to them. The database is then compacted, so
   the removed text is not left in free space. Backups made earlier still contain these items

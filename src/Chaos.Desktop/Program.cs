@@ -154,7 +154,7 @@ internal static class Program
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddJournalRpcService(new JournalRpcService(summaries));
+                rpc.AddSummaryRpcService(new SummaryRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
                 rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine, githubApi, githubScheduler));
             });
@@ -468,16 +468,16 @@ internal static class Program
 [JsonSerializable(typeof(SummaryHeaderDto))]
 [JsonSerializable(typeof(SummaryRevisionDto))]
 [JsonSerializable(typeof(SummaryDetailDto))]
-[JsonSerializable(typeof(JournalListRequest))]
-[JsonSerializable(typeof(JournalListResponse))]
-[JsonSerializable(typeof(JournalGetRequest))]
-[JsonSerializable(typeof(JournalFindRequest))]
-[JsonSerializable(typeof(JournalDetailResponse))]
-[JsonSerializable(typeof(JournalGenerateRequest))]
-[JsonSerializable(typeof(JournalPromptsRequest))]
-[JsonSerializable(typeof(JournalPromptsResponse))]
-[JsonSerializable(typeof(JournalDismissRequest))]
-[JsonSerializable(typeof(JournalDismissResponse))]
+[JsonSerializable(typeof(SummaryListRequest))]
+[JsonSerializable(typeof(SummaryListResponse))]
+[JsonSerializable(typeof(SummaryGetRequest))]
+[JsonSerializable(typeof(SummaryFindRequest))]
+[JsonSerializable(typeof(SummaryDetailResponse))]
+[JsonSerializable(typeof(SummaryGenerateRequest))]
+[JsonSerializable(typeof(SummaryPromptsRequest))]
+[JsonSerializable(typeof(SummaryPromptsResponse))]
+[JsonSerializable(typeof(SummaryDismissRequest))]
+[JsonSerializable(typeof(SummaryDismissResponse))]
 [JsonSerializable(typeof(CarryOverPreviewRequest))]
 [JsonSerializable(typeof(CarryOverCandidateDto))]
 [JsonSerializable(typeof(CarryOverPreviewResponse))]

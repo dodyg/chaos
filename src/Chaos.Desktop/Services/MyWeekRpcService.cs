@@ -18,10 +18,10 @@ public sealed record WeekDraftAssignmentDto(string TaskId, string? Day);
 public sealed record WeekDraftLeftoverDto(string TaskId, string Decision, string? LaterDate);
 public sealed record WeekDraftOverrideDto(string Date, int TotalMinutes, int? WorkMinutes);
 public sealed record WeekDraftDto(IReadOnlyList<WeekDraftGoalDto> Goals, IReadOnlyList<WeekDraftAssignmentDto> Assignments, IReadOnlyList<WeekDraftLeftoverDto> Leftovers, IReadOnlyList<WeekDraftOverrideDto> Overrides, int Step);
-/// <param name="JournalSummaryId">The stored weekly summary the completion facts came from; null when they are live.</param>
-/// <param name="JournalCompleted">Completed tasks with the titles the summary captured (journal facts only).</param>
+/// <param name="SummaryId">The stored weekly summary the completion facts came from; null when they are live.</param>
+/// <param name="SummaryCompleted">Completed tasks with the titles the summary captured (stored summary facts only).</param>
 public sealed record WeekLookBackDto(string WeekStart, string WeekEnd, bool HadPlan, IReadOnlyList<string> CompletedTaskIds, int CompletedCount, int AssignedCount, int AssignedDone, int AssignedCancelled, IReadOnlyList<string> UnfinishedTaskIds, IReadOnlyList<WeekGoalDto> Goals,
-    string? JournalSummaryId, IReadOnlyList<SummaryTaskDto> JournalCompleted);
+    string? SummaryId, IReadOnlyList<SummaryTaskDto> SummaryCompleted);
 public sealed record WeekCandidateDto(string TaskId, string Reason);
 public sealed record WeekGoalSuggestionDto(string Title, string? ProjectId, IReadOnlyList<string> TaskIds, string Reason);
 public sealed record DayReconciliationDto(string Date, string WeekPlanId, string Revision, IReadOnlyList<string> AddTaskIds, IReadOnlyList<string> RemoveTaskIds);
@@ -163,7 +163,7 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
             StorageFormats.Date(week.LookBack.WeekStart), StorageFormats.Date(week.LookBack.WeekEnd), week.LookBack.HadPlan,
             week.LookBack.CompletedTaskIds, (int)Math.Min(week.LookBack.CompletedCount, int.MaxValue), week.LookBack.AssignedCount, week.LookBack.AssignedDone,
             week.LookBack.AssignedCancelled, week.LookBack.UnfinishedTaskIds, [.. week.LookBack.Goals.Select(Map)],
-            week.LookBack.JournalSummaryId, [.. (week.LookBack.JournalCompleted ?? []).Select(JournalRpcService.Map)]),
+            week.LookBack.SummaryId, [.. (week.LookBack.SummaryCompleted ?? []).Select(SummaryRpcService.Map)]),
         [.. week.Candidates.Select(item => new WeekCandidateDto(item.TaskId, item.Reason.ToString()))],
         [.. week.GoalSuggestions.Select(item => new WeekGoalSuggestionDto(item.Title, item.ProjectId, item.TaskIds, item.Reason.ToString()))],
         [.. week.PendingReconciliation.Select(item => new DayReconciliationDto(StorageFormats.Date(item.Date), item.WeekPlanId, Text(item.Revision), item.AddTaskIds, item.RemoveTaskIds))],

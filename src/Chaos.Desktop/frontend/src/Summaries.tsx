@@ -1,6 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
-import { journalRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
+import { summaryRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
 import { BookOpen, CalendarArrowUp, Check, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +43,7 @@ export function countsText(header: SummaryHeaderDto) {
  * The "summary ready" prompt (PLAN §12): the newest unseen summary per kind, shown once its
  * time has come and outside quiet hours. Opening or dismissing it marks it seen.
  */
-export function SummaryPrompts({ api = journalRpc, intervalMs = 60_000, onOpen }: { api?: typeof journalRpc; intervalMs?: number; onOpen: (summaryId: string) => void }) {
+export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }: { api?: typeof summaryRpc; intervalMs?: number; onOpen: (summaryId: string) => void }) {
   const [prompts, setPrompts] = React.useState<SummaryHeaderDto[]>([]);
   const load = React.useCallback(async () => {
     try {
@@ -75,9 +75,9 @@ export function SummaryPrompts({ api = journalRpc, intervalMs = 60_000, onOpen }
   </section>;
 }
 
-/** The journal (PLAN §12): past summaries newest first, one summary in detail, generation and the schedule. */
-export function Journal({ api = journalRpc, revision, today, openId, onOpenTask, onChanged }: {
-  api?: typeof journalRpc; revision: number; today: string; openId: string | null; onOpenTask: (taskId: string) => void; onChanged: () => void;
+/** Summaries (PLAN §12): past summaries newest first, one summary in detail, generation and the schedule. */
+export function Summaries({ api = summaryRpc, revision, today, openId, onOpenTask, onChanged }: {
+  api?: typeof summaryRpc; revision: number; today: string; openId: string | null; onOpenTask: (taskId: string) => void; onChanged: () => void;
 }) {
   const [entries, setEntries] = React.useState<SummaryHeaderDto[]>([]);
   const [cursor, setCursor] = React.useState<string | null>(null);
@@ -97,7 +97,7 @@ export function Journal({ api = journalRpc, revision, today, openId, onOpenTask,
     void api.list({ cursor: null, limit: 20 }).then(result => {
       if (!current) return;
       if (result.ok) { setEntries([...result.entries]); setCursor(result.nextCursor); setSelectedId(id => id ?? result.entries[0]?.id ?? null); }
-      else setError(result.error?.message ?? "Could not load the journal.");
+      else setError(result.error?.message ?? "Could not load summaries.");
     }).catch((e: unknown) => { if (current) setError(String(e)); });
     return () => { current = false; };
   }, [api, revision, local]);
@@ -131,8 +131,8 @@ export function Journal({ api = journalRpc, revision, today, openId, onOpenTask,
     finally { setWorking(false); }
   }
 
-  return <section aria-labelledby="journal-title" className="grid gap-5">
-    <PageHeader eyebrow="Journal" title="Journal" titleId="journal-title" subtitle="Plain summaries built from your own lists and history, on this device only."/>
+  return <section aria-labelledby="summaries-title" className="grid gap-5">
+    <PageHeader eyebrow="Review" title="Summaries" titleId="summaries-title" subtitle="Plain summaries built from your own lists and history, on this device only."/>
     {error && <InlineError>{error}</InlineError>}
     <form className="flex flex-wrap items-end gap-2" onSubmit={event => { event.preventDefault(); void generate(kind, date); }}>
       <Field label="Summary"><NativeSelect value={kind} onChange={event => setKind(event.target.value)}>
@@ -181,7 +181,7 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 }
 
 function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenTask, onCarried }: {
-  detail: SummaryDetailDto; api: typeof journalRpc; working: boolean; onRevision: (id: string) => void; onRegenerate: () => void; onOpenTask: (taskId: string) => void; onCarried: () => void;
+  detail: SummaryDetailDto; api: typeof summaryRpc; working: boolean; onRevision: (id: string) => void; onRegenerate: () => void; onOpenTask: (taskId: string) => void; onCarried: () => void;
 }) {
   const { header, facts } = detail;
   const byContainer = new Map<string, typeof facts.completions[number][]>();
@@ -266,7 +266,7 @@ function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenT
 }
 
 /** Previewed, explicit carry-over of unfinished tasks to the next My Day or next week's draft. */
-function CarryOver({ detail, api, next, onOpenTask, onCarried }: { detail: SummaryDetailDto; api: typeof journalRpc; next: string; onOpenTask: (taskId: string) => void; onCarried: () => void }) {
+function CarryOver({ detail, api, next, onOpenTask, onCarried }: { detail: SummaryDetailDto; api: typeof summaryRpc; next: string; onOpenTask: (taskId: string) => void; onCarried: () => void }) {
   const unfinished = detail.facts.unfinished;
   const [preview, setPreview] = React.useState<{ target: string; targetDate: string; candidates: CarryOverCandidateDto[] } | null>(null);
   const [chosen, setChosen] = React.useState<ReadonlySet<string>>(new Set());
@@ -325,7 +325,7 @@ function CarryOver({ detail, api, next, onOpenTask, onCarried }: { detail: Summa
 }
 
 /** When summaries are made: morning, evening and weekly. An empty time or day turns that one off. */
-function SummarySchedule({ api }: { api: typeof journalRpc }) {
+function SummarySchedule({ api }: { api: typeof summaryRpc }) {
   const [settings, setSettings] = React.useState<SummarySettingsResponse | null>(null);
   const [draft, setDraft] = React.useState({ morningTime: "", eveningTime: "", weeklyDay: "" });
   const [status, setStatus] = React.useState<string | null>(null);

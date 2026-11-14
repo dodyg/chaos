@@ -14,7 +14,7 @@ public enum SummaryTrigger
 
 /// <summary>
 /// One stored revision of a plain summary (PLAN §5 Summaries, §12). The facts are captured
-/// once and never recomputed, so a later rename, move or deletion does not rewrite the journal.
+/// once and never recomputed, so a later rename, move or deletion does not rewrite stored summaries.
 /// </summary>
 public sealed record SummaryRecord
 {

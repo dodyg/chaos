@@ -38,20 +38,20 @@ public sealed record WeekDayLoad(DateOnly Date, DayAvailability Availability, bo
 public sealed record WeekBoard(IReadOnlyList<WeekGoalProgress> Goals, IReadOnlyList<WeekPlacement> Placements, IReadOnlyList<WeekDayLoad> Days, DayLoad Pool);
 
 /// <summary>
-/// Historical facts of one planned week (ritual step 1). When the journal holds a complete
+/// Historical facts of one planned week (ritual step 1). When a stored summary covers a complete
 /// weekly summary of that week, its stored facts supply what was completed (with the titles
 /// captured then) and the planned-task counts; otherwise they come live from the plan's
 /// membership and the tasks' current state. Unfinished tasks and goals are always current,
 /// because the leftover decisions and goal outcomes act on them now.
 /// </summary>
-/// <param name="JournalSummaryId">The weekly summary the facts came from, or null for the live view.</param>
-/// <param name="JournalCompleted">Completed tasks as the summary captured them (only from the journal).</param>
+/// <param name="SummaryId">The weekly summary the facts came from, or null for the live view.</param>
+/// <param name="SummaryCompleted">Completed tasks as the summary captured them (only from a stored summary).</param>
 public sealed record WeekLookBack(
     DateOnly WeekStart, DateOnly WeekEnd, bool HadPlan,
     IReadOnlyList<string> CompletedTaskIds, long CompletedCount,
     int AssignedCount, int AssignedDone, int AssignedCancelled,
     IReadOnlyList<string> UnfinishedTaskIds, IReadOnlyList<WeekGoalProgress> Goals,
-    string? JournalSummaryId = null, IReadOnlyList<SummaryTaskFact>? JournalCompleted = null);
+    string? SummaryId = null, IReadOnlyList<SummaryTaskFact>? SummaryCompleted = null);
 
 public sealed record WeekCandidate(string TaskId, WeekCandidateReason Reason);
 public sealed record WeekGoalSuggestion(string Title, string? ProjectId, IReadOnlyList<string> TaskIds, WeekGoalSuggestionReason Reason);
@@ -593,7 +593,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
     }
 
     /// <summary>
-    /// Adds open tasks to the unassigned pool of a week's draft (journal carry-over, PLAN §12),
+    /// Adds open tasks to the unassigned pool of a week's draft (summary carry-over, PLAN §12),
     /// starting the draft from the confirmed plan when there is none. A task already in the
     /// week's plan is left as it is. The confirmed plan changes only when the person confirms.
     /// </summary>
@@ -1219,7 +1219,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
         var completedCount = await session.Queries.CountAsync(criteria, token);
         if (previous is null)
         {
-            return await FromJournalAsync(session, context, new WeekLookBack(start, end, false, [.. completed.Rows.Select(row => row.Task.Id)], completedCount, 0, 0, 0, [], []), token);
+            return await FromSummaryAsync(session, context, new WeekLookBack(start, end, false, [.. completed.Rows.Select(row => row.Task.Id)], completedCount, 0, 0, 0, [], []), token);
         }
 
         int assigned = 0, done = 0, cancelled = 0;
@@ -1243,12 +1243,12 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
         var goals = await session.Weeks.ListGoalsAsync(previous.Id, token);
         var board = await BoardAsync(session, cache, previous.WeekStartDate, [], [],
             [.. goals.Select(goal => (goal.Id, goal.Title, goal.ProjectId, goal.TaskIds, goal.Outcome, goal.Version))], [], token);
-        return await FromJournalAsync(session, context, new WeekLookBack(previous.WeekStartDate, WeekCalendar.EndOf(previous.WeekStartDate), true,
+        return await FromSummaryAsync(session, context, new WeekLookBack(previous.WeekStartDate, WeekCalendar.EndOf(previous.WeekStartDate), true,
             [.. completed.Rows.Select(row => row.Task.Id)], completedCount, assigned, done, cancelled, unfinished, board.Goals), token);
     }
 
     /// <summary>Replaces the live completion facts with the stored weekly summary of that week, when a complete one exists.</summary>
-    private static async Task<WeekLookBack> FromJournalAsync(IDataSession session, TaskQueries.QueryContext context, WeekLookBack live, CancellationToken token)
+    private static async Task<WeekLookBack> FromSummaryAsync(IDataSession session, TaskQueries.QueryContext context, WeekLookBack live, CancellationToken token)
     {
         if (await session.Summaries.FindLatestAsync(context.Profile.Id, Chaos.Domain.Summaries.SummaryKind.Weekly, live.WeekStart, token) is not { IsPartial: false } summary
             || StoredJsonFormats.ReadSnapshot<SummaryFacts>(summary.FactsJson) is not { } facts)
@@ -1265,8 +1265,8 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
             AssignedCount = facts.Week?.AssignedCount ?? live.AssignedCount,
             AssignedDone = facts.Week?.DoneCount ?? live.AssignedDone,
             AssignedCancelled = facts.Week?.CancelledCount ?? live.AssignedCancelled,
-            JournalSummaryId = summary.Id,
-            JournalCompleted = completed,
+            SummaryId = summary.Id,
+            SummaryCompleted = completed,
         };
     }
 

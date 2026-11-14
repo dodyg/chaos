@@ -7,10 +7,10 @@ using Chaos.Infrastructure.Bootstrap;
 
 namespace Chaos.Desktop.Tests.Rpc;
 
-public sealed class JournalRpcTests
+public sealed class SummaryRpcTests
 {
     [Test]
-    public async Task JournalThroughRpc_GenerateCarryOverAndRestart_KeepsTheStoredSummary()
+    public async Task SummariesThroughRpc_GenerateCarryOverAndRestart_KeepsTheStoredSummary()
     {
         var root = TestPaths.NewDataRoot();
         var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
@@ -20,7 +20,7 @@ public sealed class JournalRpcTests
             var ids = new SequentialIdGenerator();
             var tasks = new TaskCommands(storage.Store, ids, clock);
             var days = new MyDayRpcService(new MyDayCommands(storage.Store, ids, clock));
-            var rpc = new JournalRpcService(new SummaryCommands(storage.Store, ids, clock));
+            var rpc = new SummaryRpcService(new SummaryCommands(storage.Store, ids, clock));
             today = (await days.ClockAsync(new(), CancellationToken.None)).Clock!.Today;
             var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Renew passport", null))).Task;
             title = task.Title;
@@ -56,7 +56,7 @@ public sealed class JournalRpcTests
         }
 
         using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", new SequentialIdGenerator(), clock, CancellationToken.None);
-        var again = new JournalRpcService(new SummaryCommands(reopened.Store, new SequentialIdGenerator(), clock));
+        var again = new SummaryRpcService(new SummaryCommands(reopened.Store, new SequentialIdGenerator(), clock));
         var list = await again.ListAsync(new(null, null), CancellationToken.None);
         var found = await again.FindAsync(new("Daily", today), CancellationToken.None);
 

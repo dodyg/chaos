@@ -126,7 +126,7 @@ function week(): WeekOverviewDto {
     pool: { plannedMinutes: 0, workMinutes: 0, unknownEstimates: 0, openCount: 0 } };
   return { weekStart: start, weekEnd: days[6], today, firstWeekday: "Monday", planId: "plan", state: "Confirmed", confirmedRevision: "1", confirmedAtUtc: now(),
     editable: true, availabilityConfigured: true, confirmed: board, draft: null, draftRevision: "0", draftBoard: null,
-    lookBack: { weekStart: addDays(start, -7), weekEnd: addDays(start, -1), hadPlan: false, completedTaskIds: [], completedCount: 0, assignedCount: 0, assignedDone: 0, assignedCancelled: 0, unfinishedTaskIds: [], goals: [], journalSummaryId: null, journalCompleted: [] },
+    lookBack: { weekStart: addDays(start, -7), weekEnd: addDays(start, -1), hadPlan: false, completedTaskIds: [], completedCount: 0, assignedCount: 0, assignedDone: 0, assignedCancelled: 0, unfinishedTaskIds: [], goals: [], summaryId: null, summaryCompleted: [] },
     candidates: [], goalSuggestions: [], pendingReconciliation: [], checkIn: null,
     tasks: tasks.map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false })) };
 }

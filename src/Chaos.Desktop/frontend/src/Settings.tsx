@@ -10,7 +10,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Banner, Field, PageHeader } from "@/components/common";
 
 type Api = typeof shellRpc;
-export type SettingsLink = "notifications" | "journal" | "myweek" | "data";
+export type SettingsLink = "notifications" | "summaries" | "myweek" | "data";
 
 const dateFormats: { value: string; text: string }[] = [
   { value: "DMY", text: "Day / month / year (31/12/2026)" },
@@ -147,7 +147,7 @@ export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced }
     <TabsContent value="github"><GitHubSettings onSynced={onGitHubSynced}/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">
-      <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("journal")}>Summary times</Button>
+      <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("summaries")}>Summary times</Button>
       <Button type="button" variant="outline" size="sm" onClick={() => onNavigate("myweek")}>Week start and available time</Button>
     </nav></TabsContent>
     </Tabs>
