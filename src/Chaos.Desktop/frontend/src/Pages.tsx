@@ -1,6 +1,6 @@
 import React from "react";
 import { pageRpc, summaryRpc, type CaptureDraftDto, type CaptureSubtaskDto, type ContainerResponse, type PageResponse, type PageRevisionResponse, type PageSummaryResponse, type SummaryDetailDto, type TagResponse } from "#neoastra";
-import { BookOpen, CalendarDays, ChevronRight, Copy, FileText, Focus, History, Link2, ListPlus, ListTree, Minimize2, MoveRight, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
+import { BookOpen, CalendarDays, ChevronRight, Copy, FileText, Focus, History, Link2, ListPlus, ListTree, Minimize2, MoveRight, PenLine, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,9 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   const [anchor, setAnchor] = React.useState<{ start: number; end: number; key: number } | null>(null);
   const [missingQuote, setMissingQuote] = React.useState<string | null>(null);
   const [allDaily, setAllDaily] = React.useState(false);
+  const [pageBackground, setPageBackground] = React.useState<{ key: string; value: string | null } | null>(null);
+  const selectedKey = selected ? (selected.kind === "page" ? selected.pageId : `daily-${selected.date}`) : null;
+  const sharedBackground = pageBackground?.key === selectedKey ? pageBackgroundStyle(pageBackground.value).style : undefined;
   const pendingRewrite = React.useRef<{ name: string; pageId: string } | null>(null);
 
   async function load() {
@@ -291,8 +294,8 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   const dailyShown = allDaily ? daily : daily.slice(0, 7);
   const todayWritten = daily.some(page => page.dailyDate === today);
 
-  return <div className="grid gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]">
-    <nav aria-label={isDailyMode ? "Daily pages" : "Pages"} className="grid content-start gap-4 lg:sticky lg:top-[56px] lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto">
+  return <div className={cn("grid gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]", sharedBackground && "rounded-xl p-3 sm:p-5")} style={sharedBackground}>
+    <nav aria-label={isDailyMode ? "Daily pages" : "Pages"} className={cn("grid content-start gap-4 lg:sticky lg:top-[56px] lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto", sharedBackground && "rounded-xl bg-background/92 p-4 shadow-lg backdrop-blur-sm")}>
       {isDailyMode && <section className="grid gap-1">
         <h2 className="flex items-center justify-between px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">
           <span>Daily pages</span>
@@ -330,7 +333,7 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
         ? <EmptyState title="Pages are for writing you keep.">Add a page for meeting notes, a project write-up or a recipe collection.</EmptyState>
         : <PageEditor key={selected.kind === "page" ? selected.pageId : `daily-${selected.date}`} selected={selected} api={api} summaryApi={summaryApi} captureApi={captureApi} registry={registry}
             containers={containers} tags={tags} tree={tree} revision={revision} today={today} anchor={anchor} links={links} searchLinks={searchLinks} busy={busy}
-            onOpen={open} onChanged={async () => { await load(); onChanged(); }} onOpenTask={onOpenTask} onOpenSummary={onOpenSummary} onCreateTag={onCreateTag} onError={onError} onNotice={setNotice}/>}
+            onBackground={value => setPageBackground({ key: selectedKey!, value })} onOpen={open} onChanged={async () => { await load(); onChanged(); }} onOpenTask={onOpenTask} onOpenSummary={onOpenSummary} onCreateTag={onCreateTag} onError={onError} onNotice={setNotice}/>}
     </div>
   </div>;
 }
@@ -361,6 +364,7 @@ type EditorProps = {
   searchLinks?: (query: string) => Promise<LinkCandidate[]>;
   busy: boolean;
   onOpen: (next: Selected) => void;
+  onBackground: (value: string | null) => void;
   onChanged: () => Promise<void>;
   onOpenTask: (taskId: string) => void;
   onOpenSummary: (summaryId: string) => void;
@@ -370,7 +374,7 @@ type EditorProps = {
 };
 
 /** One page: title, properties, the editor, contents, backlinks, tasks and history. */
-function PageEditor({ selected, api, summaryApi, captureApi, registry, containers, tags, tree, revision, today, anchor, links, searchLinks, busy: treeBusy, onOpen, onChanged, onOpenTask, onOpenSummary, onCreateTag, onError, onNotice }: EditorProps) {
+function PageEditor({ selected, api, summaryApi, captureApi, registry, containers, tags, tree, revision, today, anchor, links, searchLinks, busy: treeBusy, onOpen, onBackground, onChanged, onOpenTask, onOpenSummary, onCreateTag, onError, onNotice }: EditorProps) {
   const [page, setPage] = React.useState<PageResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
@@ -381,6 +385,7 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
   const [makeTask, setMakeTask] = React.useState<{ start: number; end: number; text: string; subtasks: CaptureSubtaskDto[] } | null>(null);
   const [selectRange, setSelectRange] = React.useState<{ start: number; end: number; key: number } | null>(null);
   const [focusMode, setFocusMode] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
   const [showContents, setShowContents] = React.useState(() => { try { return localStorage.getItem("chaos.pages.contents") !== "0"; } catch { return true; } });
   const [showHistory, setShowHistory] = React.useState(false);
   const [showMove, setShowMove] = React.useState(false);
@@ -421,11 +426,15 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
   const properties = pageProperties(frontMatter);
   const prefix = joinPage(head, "").length;
   const background = pageBackgroundStyle(properties.background);
+  React.useEffect(() => { onBackground(properties.background); }, [properties.background]);
   const headings = React.useMemo(() => headingsOf(body), [body]);
   const words = React.useMemo(() => wordCount(body), [body]);
 
   React.useEffect(() => {
-    if (anchor && saver) setSelectRange({ start: Math.max(0, anchor.start - prefix), end: Math.max(0, anchor.end - prefix), key: anchor.key });
+    if (anchor && saver) {
+      setEditing(true);
+      setSelectRange({ start: Math.max(0, anchor.start - prefix), end: Math.max(0, anchor.end - prefix), key: anchor.key });
+    }
   }, [anchor?.key, saver]);
 
   // Esc leaves focus mode.
@@ -572,11 +581,13 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
   const pageLinks: MarkdownLinks = { ...links, outline: true };
 
   const editorArea = <div className="grid gap-2">
-    <MarkdownEditor key={isDaily ? "daily" : page?.id} id={isDaily ? "page-daily" : `page-${page?.id}`} label={isDaily ? "Daily page" : "Page"} value={body} onChange={editBody}
+    {editing ? <MarkdownEditor key={isDaily ? "daily" : page?.id} id={isDaily ? "page-daily" : `page-${page?.id}`} label={isDaily ? "Daily page" : "Page"} value={body} onChange={editBody}
       onBlur={() => void saver?.flush()} onSelectionChange={(start, end) => setSelection({ start, end })} selectRange={selectRange} outline grow
       links={pageLinks} searchLinks={searchLinks} rows={focusMode ? 24 : 16} areaClassName="min-h-80"
       placeholder={isDaily ? "How did today go? This page is kept once you write in it." : "Write anything. Lists work as an outline: Tab, Shift+Tab, Alt+↑ and Alt+↓."}
       hint={<p className="text-[0.7rem] text-muted-foreground">Markdown. <kbd className="font-mono">[[</kbd> links a page, task or list · Tab/Shift+Tab indent list items · Alt+↑/↓ move them · Read mode folds headings and lists.</p>}/>
+      : body.trim() ? <div className="min-h-24 py-2 text-sm"><MarkdownPreview source={body} links={pageLinks}/></div>
+      : <p className="py-2 text-sm text-muted-foreground">This page is empty. Select Edit to start writing.</p>}
     <SaveLine snapshot={snapshot} unwritten={!page} words={words} onRetry={() => void saver?.flush()} onCopy={() => void copyDraft()}/>
   </div>;
 
@@ -584,7 +595,7 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
     {!isDaily && ancestors.length > 0 && <nav aria-label="Page path" className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
       {ancestors.map(row => <React.Fragment key={row.id}><button type="button" className="hover:text-foreground hover:underline" onClick={() => onOpen({ kind: "page", pageId: row.id })}>{row.icon ? `${row.icon} ` : ""}{row.title}</button><ChevronRight className="size-3"/></React.Fragment>)}
     </nav>}
-    {isDaily
+    {isDaily || !editing
       ? <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">{properties.icon && <span aria-hidden="true">{properties.icon}</span>}{title}</h1>
       : <div className="flex items-center gap-2">
           {properties.icon && <span aria-hidden="true" className="text-2xl">{properties.icon}</span>}
@@ -595,29 +606,32 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
         </div>}
   </div>;
 
+  const editButton = <Button type="button" variant={editing ? "secondary" : "outline"} size="sm" onClick={() => { if (editing) { void saver?.flush(); setSelection({ start: 0, end: 0 }); setMakeTask(null); } setEditing(!editing); }}><PenLine/>{editing ? "Done editing" : "Edit"}</Button>;
+
   const panel = <PropertiesPanel frontMatter={frontMatter} head={head} body={body} raw={rawYaml} setRaw={setRawYaml} tagByPath={tagByPath} properties={properties}
     backgroundNote={background.note ?? null} onSet={setProp} onRaw={yaml => setMarkdown(joinPage(withYaml(yaml), body))} onRemoveAll={() => setMarkdown(body)} onCreateTag={path => void createTag(path)}/>;
 
   if (focusMode) {
     return <div role="dialog" aria-modal="true" aria-label={`${title} (focus mode)`} className="fixed inset-x-0 top-[40px] bottom-0 z-40 overflow-y-auto bg-background" style={background.style}>
       <div className={cn("mx-auto grid min-h-full max-w-[74ch] content-start gap-4 px-6 py-10", background.style && "bg-background/92 shadow-xl")}>
-        <div className="flex justify-end"><Button type="button" variant="outline" size="sm" onClick={() => setFocusMode(false)}><Minimize2/>Leave focus mode<kbd className="ml-1 text-xs text-muted-foreground">Esc</kbd></Button></div>
+        <div className="flex justify-end gap-2">{editButton}<Button type="button" variant="outline" size="sm" onClick={() => setFocusMode(false)}><Minimize2/>Leave focus mode<kbd className="ml-1 text-xs text-muted-foreground">Esc</kbd></Button></div>
         {titleBlock}
         {editorArea}
       </div>
     </div>;
   }
 
-  return <article aria-label={title} className={cn("grid gap-4 rounded-xl", background.style && "p-3 sm:p-5")} style={background.style}>
+  return <article aria-label={title} className="grid gap-4 rounded-xl">
     <div className={cn("grid gap-4", background.style && "rounded-xl bg-background/92 p-4 shadow-lg backdrop-blur-sm sm:p-6")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         {titleBlock}
         <div className="flex flex-wrap items-center gap-1">
+          {editButton}
           <Button type="button" variant={showContents ? "secondary" : "ghost"} size="sm" aria-pressed={showContents} title="Contents from the page's headings"
             onClick={() => setShowContents(value => { try { localStorage.setItem("chaos.pages.contents", value ? "0" : "1"); } catch { /* storage unavailable */ } return !value; })}><ListTree/>Contents</Button>
           <Button type="button" variant="ghost" size="sm" title="Write at a comfortable width with nothing else on screen (Esc leaves)" onClick={() => setFocusMode(true)}><Focus/>Focus</Button>
           {page && <Button type="button" variant={showHistory ? "secondary" : "ghost"} size="sm" aria-pressed={showHistory} onClick={() => setShowHistory(value => !value)}><History/>Versions</Button>}
-          {!frontMatter.present && !frontMatter.error && <Button type="button" variant="ghost" size="sm" title="Add front matter: icon, background, tags, aliases" onClick={() => setMarkdown(joinPage(withYaml(""), body))}><Settings2/>Properties</Button>}
+          {editing && !frontMatter.present && !frontMatter.error && <Button type="button" variant="ghost" size="sm" title="Add front matter: icon, background, tags, aliases" onClick={() => setMarkdown(joinPage(withYaml(""), body))}><Settings2/>Properties</Button>}
           {page && !isDaily && <Button type="button" variant={showMove ? "secondary" : "ghost"} size="sm" aria-pressed={showMove} onClick={() => setShowMove(value => !value)}><MoveRight/>Move</Button>}
           {page && <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Delete page" title="Delete page" disabled={busy || treeBusy} onClick={() => void remove()}><Trash2/></Button>}
         </div>
@@ -635,7 +649,7 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
         <Button type="button" size="icon-xs" variant="ghost" className="ml-auto" aria-label="Close move" onClick={() => setShowMove(false)}><X/></Button>
       </div>}
 
-      {(frontMatter.present || frontMatter.error) && panel}
+      {editing && (frontMatter.present || frontMatter.error) && panel}
 
       {isDaily && summary && <aside aria-label="That day's summary" className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
         <BookOpen className="size-4 text-muted-foreground"/>
@@ -653,7 +667,7 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
         </nav>}
       </div>
 
-      {page && <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+      {editing && page && <div className="flex flex-wrap items-center gap-2 border-t pt-3">
         <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select a line or a few lines first" onClick={startMakeTask}><ListPlus/>Make task</Button>
         {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task. Lines indented under the first one become subtasks.</span>}
       </div>}

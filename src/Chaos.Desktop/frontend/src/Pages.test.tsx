@@ -74,12 +74,17 @@ test("a page's title and text travel through one autosave, and helpers read sele
 
 test("the tree nests pages; front matter shows as properties and the body alone is in the editor", async () => {
   const rows = [
-    page(kitchenId, "Kitchen renovation", "---\nicon: 🛠️\nfoo: bar\n---\n# Plan\nTiles", { icon: "🛠️" }),
+    page(kitchenId, "Kitchen renovation", "---\nicon: 🛠️\nbackground: '#2f6f4e'\nfoo: bar\n---\n# Plan\nTiles", { icon: "🛠️" }),
     page(quotesId, "Quotes", "Three quotes", { parentPageId: kitchenId }),
   ];
   const { api, saves } = pageApi(rows);
   renderPages(api, { key: 1, kind: "page", pageId: kitchenId });
 
+  assert.ok(await screen.findByText("Tiles"));
+  await waitFor(() => assert.equal(screen.getByRole("navigation", { name: "Pages" }).parentElement?.style.backgroundColor, "rgb(47, 111, 78)"));
+  assert.equal(screen.queryByLabelText("Page"), null);
+  assert.equal(screen.queryByLabelText("Page title"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   const editor = await screen.findByLabelText("Page") as HTMLTextAreaElement;
   assert.equal(editor.value, "# Plan\nTiles");
   assert.equal((screen.getByLabelText("Icon") as HTMLInputElement).value, "🛠️");
@@ -91,13 +96,20 @@ test("the tree nests pages; front matter shows as properties and the body alone 
   fireEvent.change(editor, { target: { value: "# Plan\nTiles and a sink" } });
   fireEvent.change(screen.getByLabelText("Page title"), { target: { value: "Kitchen" } });
   fireEvent.blur(screen.getByLabelText("Page title"));
-  await waitFor(() => assert.equal(saves.at(-1)?.markdown, "---\nicon: 🛠️\nfoo: bar\n---\n# Plan\nTiles and a sink"));
+  await waitFor(() => assert.equal(saves.at(-1)?.markdown, "---\nicon: 🛠️\nbackground: '#2f6f4e'\nfoo: bar\n---\n# Plan\nTiles and a sink"));
   assert.equal(saves.at(-1)?.title, "Kitchen");
+  fireEvent.click(screen.getByRole("button", { name: "Done editing" }));
+  assert.equal(screen.queryByLabelText("Page"), null);
+  assert.equal(screen.queryByLabelText("Page title"), null);
+  assert.equal(screen.queryByLabelText("Icon"), null);
+  assert.ok(screen.getByText("Tiles and a sink"));
 
   // Typing --- on the first line of a page opens the properties panel.
   cleanup();
   renderPages(api, { key: 2, kind: "page", pageId: quotesId });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const quotes = await screen.findByLabelText("Page") as HTMLTextAreaElement;
+  assert.equal(screen.getByRole("navigation", { name: "Pages" }).parentElement?.style.backgroundColor, "");
   fireEvent.change(quotes, { target: { value: "---\nThree quotes" } });
   await waitFor(() => assert.ok(screen.getByRole("region", { name: "Page properties" })));
   assert.equal((screen.getByLabelText("Page") as HTMLTextAreaElement).value, "Three quotes");
@@ -109,6 +121,7 @@ test("today's page is stored only once something is written on it", async () => 
   const { api, dailyCreates, saves } = pageApi(rows);
   const routed: unknown[] = [];
   renderPages(api, { key: 1, kind: "daily", date: "2026-11-14" }, { mode: "daily", onRoute: request => routed.push(request) });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const editor = await screen.findByLabelText("Daily page") as HTMLTextAreaElement;
   assert.equal(screen.queryByRole("tree", { name: "Pages" }), null, "the daily view does not show the page tree");
   assert.match(screen.getByRole("status").textContent ?? "", /kept once you write/);
