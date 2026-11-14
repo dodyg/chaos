@@ -137,13 +137,12 @@ public sealed class GitHubSchemaTests
     }
 
     [Test]
-    public async Task TextExports_LinkedTask_IncludesOriginUrl()
+    public async Task MarkdownExport_LinkedTask_IncludesOriginUrl()
     {
         using var connection = await OpenAsync();
         var snapshot = await ExportSnapshot.ReadAsync(connection, CancellationToken.None);
         var markdown = PlainTextExport.TaskMarkdown(snapshot.Tasks.Single(), snapshot.Containers.Single());
         await Assert.That(markdown).Contains("Source: https://github.com/person/repo/issues/1");
-        await Assert.That(PlainTextExport.WriteOrg(snapshot, DateTimeOffset.UtcNow)).Contains(":GITHUB_URL: https://github.com/person/repo/issues/1");
     }
 
     [Test]

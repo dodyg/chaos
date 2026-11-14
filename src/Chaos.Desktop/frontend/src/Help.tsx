@@ -117,7 +117,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
     </> },
     { id: "data", title: "Undo, backups and your data", icon: <Database/>, keywords: "undo backup export import restore delete trash data privacy", body: <>
       <p>Almost every change can be undone with <kbd>Ctrl+Z</kbd> or the Undo button that appears after it. Deleted tasks, lists and tags can be restored from their “Deleted” section.</p>
-      <p>Your data lives in a local database. Back it up, export it, or import from CSV and Org files under Data &amp; backups. Backups are ordinary local files and are not encrypted.</p>
+      <p>Your data lives in a local database. Back it up, export it, or import from a CSV file under Data &amp; backups. Backups are ordinary local files and are not encrypted.</p>
       <Go to="data" onNavigate={onNavigate}>Open Data &amp; backups</Go>
     </> },
   ];

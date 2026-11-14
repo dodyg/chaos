@@ -7,6 +7,7 @@ namespace Chaos.Application.Transfer;
 public enum ImportSourceKind
 {
     ChaosJson = 0,
+    /// <summary>Org files, no longer read. Kept so earlier ImportBatches rows still map.</summary>
     Org = 1,
     Csv = 2,
 }

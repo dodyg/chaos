@@ -4,7 +4,7 @@ using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.Tests.Transfer;
 
-/// <summary>PLAN §14 import parsing without storage: RFC 4180 CSV with mapping, and the documented Org subset.</summary>
+/// <summary>PLAN §14 import parsing without storage: RFC 4180 CSV with mapping.</summary>
 public sealed class ImportParserTests
 {
     [Test]
@@ -52,84 +52,6 @@ public sealed class ImportParserTests
         var draft = CsvImport.ToDraft("x.csv", new string('0', 64), table, new Dictionary<string, int>());
 
         await Assert.That(draft.Errors.Single().Field).IsEqualTo("title");
-    }
-
-    [Test]
-    public async Task OrgParse_ListsTasksSubtasksKeywordsPrioritiesTagsAndDates()
-    {
-        const string org = """
-            #+TITLE: mine
-            #+TODO: TODO NEXT | DONE DELEGATED
-            * Errands
-            ** NEXT [#A] Buy milk :shop:food:
-               SCHEDULED: <2026-11-12 Thu 08:15> DEADLINE: <2026-11-13 Fri>
-               :PROPERTIES:
-               :ID: abc-1
-               :END:
-               Remember the oat one.
-            *** DONE Check fridge
-            **** TODO Too deep
-            ** DELEGATED Ask Sam
-               CLOSED: [2026-11-09 Mon 10:00]
-            * TODO Loose task
-            #+BEGIN_SRC markdown :chaos-diary 2026-11-08T07:00:00Z
-            ,* escaped bullet
-            #+END_SRC
-            """;
-
-        var draft = OrgImport.Parse("mine.org", new string('0', 64), org);
-
-        await Assert.That(draft.Errors).IsEmpty();
-        await Assert.That(draft.Tasks.Count).IsEqualTo(3);
-        var milk = draft.Tasks[0];
-        await Assert.That((milk.Title, milk.ListName, milk.Priority, milk.Status)).IsEqualTo(("Buy milk", "Errands", TaskPriority.Urgent, TaskItemStatus.NotStarted));
-        await Assert.That(milk.TagPaths).IsEquivalentTo(new[] { "shop", "food" });
-        await Assert.That(milk.Planned).IsEqualTo(new ImportDate(new DateOnly(2026, 11, 12), new TimeOnly(8, 15), null));
-        await Assert.That(milk.Due).IsEqualTo(new ImportDate(new DateOnly(2026, 11, 13), null, null));
-        await Assert.That(milk.SourceKey).IsEqualTo("abc-1");
-        await Assert.That(milk.Notes.Trim()).IsEqualTo("Remember the oat one.");
-        await Assert.That(milk.Subtasks.Select(s => (s.Title, s.Status))).IsEquivalentTo(new[] { ("Check fridge", TaskItemStatus.Done), ("Too deep", TaskItemStatus.NotStarted) });
-        await Assert.That(draft.Warnings.Any(w => w.Message.Contains("cannot have subtasks", StringComparison.Ordinal))).IsTrue();
-
-        var sam = draft.Tasks[1];
-        await Assert.That(sam.Status).IsEqualTo(TaskItemStatus.Done);
-        await Assert.That(sam.ClosedAtUtc).IsEqualTo(new DateTimeOffset(2026, 11, 9, 10, 0, 0, TimeSpan.Zero));
-
-        var loose = draft.Tasks[2];
-        await Assert.That(loose.ListName).IsNull();
-        await Assert.That(loose.Diary.Single().Markdown).IsEqualTo("* escaped bullet");
-    }
-
-    [Test]
-    public async Task OrgParse_ListProperties_CarryKindDeadlineAndDefaultCategory()
-    {
-        const string org = """
-            * Sprint 21
-            :PROPERTIES:
-            :CHAOS_KIND: project
-            :CHAOS_DEADLINE: 2026-11-30
-            :CHAOS_DEFAULT_CATEGORY: work
-            :END:
-            ** TODO Ship it
-            * Errands
-            ** TODO Buy milk
-            """;
-
-        var draft = OrgImport.Parse("lists.org", new string('0', 64), org);
-
-        await Assert.That(draft.Errors).IsEmpty();
-        var ship = draft.Tasks.Single(task => task.Title == "Ship it");
-        await Assert.That((ship.ListKind, ship.ListDeadline, ship.ListDefaultCategory)).IsEqualTo((ContainerKind.Project, (DateOnly?)new DateOnly(2026, 11, 30), (CapacityCategory?)CapacityCategory.Work));
-        var milk = draft.Tasks.Single(task => task.Title == "Buy milk");
-        await Assert.That((milk.ListKind, milk.ListDeadline, milk.ListDefaultCategory)).IsEqualTo((ContainerKind.List, (DateOnly?)null, (CapacityCategory?)null));
-    }
-
-    [Test]
-    public async Task OrgParse_UnclosedSourceBlock_IsAnError()
-    {
-        var draft = OrgImport.Parse("x.org", new string('0', 64), "* TODO A\n#+BEGIN_SRC markdown\nnever closed\n");
-
-        await Assert.That(draft.Errors.Single().Field).IsEqualTo("notes");
     }
 
     [Test]

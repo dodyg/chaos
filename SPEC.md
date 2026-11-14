@@ -40,6 +40,7 @@ Everything in the app is organised as spaces, which hold projects and lists, whi
 | Task | One thing to do, with an optional planned date, due date, estimate, status, priority, tags, notes and assignee. | Book the plumber |
 | Subtask | A smaller step inside a task. A task can show progress such as 2 of 5 done. | Get three quotes |
 | Update (diary) | A dated note on a task recording what happened, kept as a running log. | Called plumber, visit on Thursday |
+| Page | A titled piece of writing you keep, in a space, optionally under another page. Daily pages hold one day each. | Kitchen renovation › Quotes; 14 Nov 2026 |
 | My Day | Your personal plan for today, picked from any space. Only you see it. | 5 tasks from three spaces |
 | Connection | A link to an outside system whose items appear as tasks. | GitHub repository acme/web |
 
@@ -63,17 +64,17 @@ Tasks, subtasks, states and templates are part of phase 1. A space's own states 
 
 ### Notes, Markdown and attachments
 
-Task notes, diary updates, comments and scratch pad notes are all written in Markdown, and any of them can hold files and images.
+Task notes, diary updates, comments, scratch pad notes and pages are all written in Markdown, and any of them can hold files and images.
 
 - **Full Markdown:** headings, bold, italic, strikethrough, bullet and numbered lists, checklists, links, quotes, inline code, code blocks with highlighting, and tables. The app follows GitHub-flavoured Markdown, so text moves cleanly to and from GitHub Issues.
 - **Write your way:** type Markdown directly, or use the formatting bar and keyboard shortcuts without knowing any Markdown. Switch between editing and a formatted preview. Rich text pasted from a web page or a document is converted to Markdown.
 - **Checklists to subtasks:** turn a checklist in the notes into subtasks in one step.
-- **Link things together:** type \[\[ to link to another task or a scratch pad item.
+- **Link things together:** type \[\[ to link to another task, a page or a scratch pad item.
 - **Attach any file:** drag and drop, paste, use the share menu, or take a photo or scan a document with the phone camera.
 - **See it in place:** images appear inside the notes where they are placed. PDFs, videos and audio show a preview, and other files show their name, type and size.
 - **Offline:** attachments are stored on the device. In synced and shared spaces, large files download when first opened, and you can keep chosen lists fully available offline.
 - **Shared safely:** attachments follow the permissions of their task or pad. Files sent to the online service are encrypted and checked for known malware.
-- **Across connections:** Markdown and images in GitHub issue descriptions and comments stay intact in both directions. Notes are converted to Org markup for the Org files connection.
+- **Across connections:** Markdown and images in GitHub issue descriptions and comments stay intact in both directions.
 - **Agents:** agents can read and write Markdown notes and attach files, such as logs or screenshots, within their permissions.
 - **Export:** exports keep notes as Markdown files, with attachments in a folder beside them.
 
@@ -89,7 +90,7 @@ Any task can carry as many tags as you like, so you can group tasks across lists
 - **Personal and shared tags:** tags in a shared space are visible to its members, and an owner can set the space's list of tags. Your Personal tags stay private, even on shared tasks you can see.
 - **Manage in one place:** rename, merge or delete a tag once, and every task that uses it updates.
 - **Use tags everywhere:** filter any view by tags, build saved filters such as #work and #urgent, group the Kanban board by tag, and see each tag as a list of its own in the sidebar.
-- **Kept in step with other systems:** tags match GitHub labels and Org mode tags through their connections.
+- **Kept in step with other systems:** tags match GitHub labels through the GitHub connection.
 - **Agents can tag:** an agent can add tags to tasks it creates or works on, within the tags its space allows.
 
 Tags are part of phase 1. Shared tags arrive with sharing in phase 3.
@@ -107,7 +108,7 @@ A repeating task comes back on a schedule, so regular chores, bills and meetings
 - **See what's coming:** future occurrences appear in the calendar, and My Day suggests the ones due today.
 - **History:** the task shows when each past occurrence was completed or skipped.
 - **Take turns:** in a shared space, a repeating task can rotate between members, such as a different book club host each month.
-- **Quick add and Org mode:** type every Monday, every other week or every 3 months after done in quick add. Org mode repeaters map to the same patterns.
+- **Quick add:** type every Monday, every other week or every 3 months after done in quick add.
 
 Repeating tasks are part of phase 1. Rotating between members arrives with sharing in phase 3.
 
@@ -149,9 +150,57 @@ The scratch pad is a free space to drop thoughts, sketches and bits of informati
 - **Keep it tidy:** a weekly prompt suggests reviewing the pad, and old items can be archived in one step. Nothing is deleted without asking.
 - **Find it later:** search covers typed text on the pad. Recognising handwriting comes later.
 - **Agents:** with permission, an agent can read a pad and propose tasks from it. The proposals wait for a person to accept them.
-- **Works offline**, and exports with everything else, with notes as Org or Markdown and drawings as images.
+- **Works offline**, and exports with everything else, with notes as Markdown and drawings as images.
 
 Typed notes on the personal scratch pad are part of phase 1. Drawing, photos and voice notes arrive in phase 2, shared pads in phase 3, and handwriting search in phase 4.
+
+### Pages
+
+Pages are for writing you keep: meeting notes, a project write-up, a recipe collection, or a few lines about how today went. The scratch pad is where things land quickly; pages are where they are worked into something lasting.
+
+| | Scratch pad | Pages |
+| --- | --- | --- |
+| Purpose | Drop something in a second | Write, organise and come back to it |
+| Title | None | Every page has one; daily pages are titled by their date |
+| Lifetime | Reviewed weekly and archived | Kept and edited over time |
+| Shape | One stream of notes | A tree of pages, joined by links |
+
+**Writing**
+
+- **Markdown, like everything else:** pages use the same editor and GitHub-flavoured Markdown as task notes, so formatting, pasting and export work the same way.
+- **Room to write:** a focus mode with a comfortable reading width, a contents sidebar built from the page's headings, and a word count.
+- **Outline as you type:** in any list, Tab and Shift+Tab indent and outdent an item, Alt+Up and Alt+Down move it with everything beneath it, and items with children can be folded. Headings fold the same way. A page can be written as an outline, as prose, or as a mix.
+- **Saved as you go:** pages save while you type, and every page keeps its earlier versions, which you can compare and restore.
+
+**Organising**
+
+- **A tree of pages:** any page can sit under another, such as Kitchen renovation › Quotes › Plumbers. Nesting is optional; a page with no parent sits at the top of its space.
+- **Links:** type \[\[ to link to another page, a task, a project or a list. Linking to a page that does not exist yet creates it when you follow the link.
+- **Backlinks:** every page shows the pages and tasks that link to it, with the surrounding line, so you can see where an idea came up.
+- **Moving and renaming:** links keep working when a page is renamed or moved.
+- **Belongs to a space:** pages live in a space like tasks do, so work pages stay in the work space and follow its rules.
+
+**Daily pages**
+
+- **One page per day:** today's page is one step away from My Day and the command palette. It is created the first time you write in it, so empty days leave nothing behind.
+- **Your own account of the day:** daily pages hold what you write; the Summaries page holds what the app records. The evening summary links to that day's page, and a daily page shows that day's summary beside it.
+- **Look back:** daily pages are listed by date, separate from the page tree, and My Week's look back links to the week's daily pages.
+
+**Pages and tasks**
+
+- **Make task:** select a line or a few lines and choose Make task, as on the scratch pad. Quick add reads the text for dates and tags, the new task links back to its line on the page, and indented lines under it become subtasks.
+- **Mentioned in:** a task shows the pages that link to it, so meeting notes and decisions are one step away from the work they led to.
+- **From the pad:** any pad note can be moved to a page, or appended to today's daily page, in one step.
+
+**Finding and keeping**
+
+- **Search** covers page titles and text, alongside tasks and the pad.
+- **Export** writes pages as Markdown files in folders that follow the page tree, with daily pages in their own folder named by date. Attachments go in a folder beside them.
+- **Works offline**, like the rest of the app.
+
+**What pages leave out.** Pages are not a block database. There are no references to single paragraphs or list items, no embedding one page inside another, no queries inside pages and no graph view. Keeping pages as plain Markdown is what lets them export cleanly, sync simply and move to other tools.
+
+Pages, daily pages, links, backlinks, outline editing and version history are part of phase 1. Shared pages that members edit together arrive with sharing in phase 3, along with agents reading and writing pages within their permissions.
 
 ### Updates and diary
 
@@ -285,7 +334,7 @@ The timeline, with dependencies, arrives in phase 4.
 
 ### Finding things
 
-- Search across all spaces by words, tags, people and dates.
+- Search across all spaces by words, tags, people and dates, in tasks, pages and the scratch pad.
 - Built-in views: Today, Upcoming, Overdue, Assigned to me and Recently completed. Until sharing arrives, every open task in your Personal space counts as assigned to you.
 - Save any search or filter as a custom view, such as all high-priority work tasks due this week.
 
@@ -303,7 +352,7 @@ A custom view is a saved, live list of exactly the tasks you want to follow, cho
 | Ready for agents | Marked Ready for agent, label bug, no linked pull request | List, oldest first |
 | Book club this month | Space Book Club, due this month | Calendar |
 
-- **Any attribute:** space, list, project, status, tags, priority, assignee, planned and due dates (including relative ones such as next 7 days), created or changed dates, estimate, scratch pad links, and where a task came from (the app, GitHub, Org files or an agent).
+- **Any attribute:** space, list, project, status, tags, priority, assignee, planned and due dates (including relative ones such as next 7 days), created or changed dates, estimate, scratch pad links, and where a task came from (the app, GitHub or an agent).
 - **Connection fields:** for GitHub, repository, labels, milestone, issue type, open or closed, author, linked pull requests and their review state. Each future connection adds its own fields the same way.
 - **Combine conditions:** match all or any conditions, and nest groups, such as label bug or label regression, and assigned to me. Words in the title or notes can be a condition too.
 - **Choose the layout:** list, table, board, calendar or timeline, with grouping, sorting and, for tables, the columns to show. Tasks can be edited directly in the table.
@@ -345,7 +394,7 @@ Reminders on the device, insistent reminders and quiet hours are part of phase 1
 - See time spent per task, project and week.
 - Off by default. In work spaces, the organisation decides whether it is available.
 
-Time tracking arrives in phase 4. Until then, the daily summary and the Org files connection leave time tracked out.
+Time tracking arrives in phase 4. Until then, the daily summary leaves time tracked out.
 
 ## How it works
 
@@ -373,10 +422,10 @@ The app keeps all your data on your own device first, and only uses the online s
 ### Backups and moving data
 
 - The app keeps automatic local backups.
-- Export everything at any time to standard formats, including Org and Markdown plain text, and import from common to-do apps.
+- Export everything at any time to standard formats, including Markdown plain text, and import from common to-do apps.
 - Deleting your account deletes your data from the online service.
 
-Using the app without an account, local backups and restore, export, and importing from CSV, Org files and the app's own archives are part of phase 1. Accounts and syncing devices arrive in phase 2, and importing directly from other to-do apps arrives with their connections.
+Using the app without an account, local backups and restore, export, and importing from CSV and the app's own archives are part of phase 1. Accounts and syncing devices arrive in phase 2, and importing directly from other to-do apps arrives with their connections.
 
 ## Sharing and collaboration
 
@@ -527,26 +576,6 @@ Connections show items from outside systems, starting with GitHub Issues, as tas
 
 The GitHub Issues connection arrives in phase 3.
 
-### Org mode files
-
-A connection to a folder of Org files lets Emacs users keep their plain-text files as the source of truth, while using the app on mobile and for sharing.
-
-| In Org mode | In the app | Direction |
-| --- | --- | --- |
-| Heading with a TODO state | Task, with matching status | Both ways |
-| Nested headings | Subtasks | Both ways |
-| SCHEDULED date | Planned date | Both ways |
-| DEADLINE date | Due date | Both ways |
-| Tags | Tags | Both ways |
-| LOGBOOK notes | Updates in the task's diary | Both ways |
-| Clock entries | Time tracked | Both ways |
-
-- Changes made in the app are written back into the files, keeping the user's formatting and any content the app does not understand.
-- The folder can be anywhere the device can read, such as a git repository or a synced folder.
-- This connection needs no account or server, so it works in the offline-only app.
-
-The Org files connection arrives in phase 3, with the other connections.
-
 ### Google Calendar
 
 A connection to Google Calendar puts your meetings next to your tasks, so My Week and My Day plan around the time you actually have. Unlike GitHub, it is a personal connection: it belongs to you, not to a space, and nobody else sees your calendar through it.
@@ -626,9 +655,9 @@ The app ships in four phases, each usable on its own, so real use shapes the nex
 
 | Phase | Focus | What it includes |
 | --- | --- | --- |
-| 1 | One person's day and week, on the Windows desktop | Tasks, subtasks, estimates, templates and repeating tasks; Markdown notes; tags; quick add in six languages; typed notes on the personal scratch pad; projects and lists; My Day and My Week; plain morning, evening and weekly summaries; search and built-in views; reminders on the device; waiting on outside people with follow-ups; undo and task history; local backups, export and import from CSV and Org files; no account needed |
+| 1 | One person's day and week, on the Windows desktop | Tasks, subtasks, estimates, templates and repeating tasks; Markdown notes; tags; quick add in six languages; typed notes on the personal scratch pad; pages and daily pages with links, backlinks and version history; projects and lists; My Day and My Week; plain morning, evening and weekly summaries; search and built-in views; reminders on the device; waiting on outside people with follow-ups; undo and task history; local backups, export and import from CSV; no account needed |
 | 2 | Sync, richer views and AI help | Accounts and sync; attachments; drawing, photos and voice notes on the pad; the calendar, subscription link and Google Calendar meetings; the Kanban board; custom views and alerts; AI summaries and drafted week plans with your own key; place reminders; app lock |
-| 3 | Other people and other systems | Sharing, roles and comments; shared tags, pads and boards; rotating repeating tasks; delegating to members; space and project summaries; GitHub Issues, including GitHub fields and shared custom views; Org files; Google Calendar time blocking; AI agents |
+| 3 | Other people and other systems | Sharing, roles and comments; shared tags, pads, pages and boards; rotating repeating tasks; delegating to members; space and project summaries; GitHub Issues, including GitHub fields and shared custom views; Google Calendar time blocking; AI agents |
 | 4 | Organisations and their clients | The timeline with dependencies; time tracking; shared dashboards for outside people; organisation sign-in, admin and activity log; data region; organisation-managed AI keys; organisation controls for agents; handwriting search |
 
 Each phase must prove itself in real use before the next one starts; the exact gate for each move is still to be agreed (see Open questions).
@@ -643,12 +672,13 @@ Phase 1 follows the guiding principle: it holds exactly what one person needs to
 - [ ] What must each phase show in real use before the next one starts?
 - [ ] Should shared social spaces support end-to-end encryption, given that it limits search and smart notifications?
 - [ ] Which work tracker comes after GitHub Issues?
-- [ ] Which Org features must survive a round trip without loss: properties, drawers, links, tables?
 - [ ] Can agents hand tasks to other agents, and how long can such a chain run before a person must review it?
 - [ ] Which AI assistants should be tested first with the agent features?
 - [ ] What size limits apply to attachments, and how much storage does each plan include?
 - [ ] Should dashboard visitors be able to leave comments or subscribe to email updates?
 - [ ] Google reviews apps before the public can grant them calendar access, which can take weeks. When does that review start so phase 2 is not held up?
+- [ ] When two members edit the same shared page at once, do they see each other's changes live, as on shared pads, or does the page merge on save?
+- [ ] Should a daily page start from a template, for example today's My Day list and a few prompts, or always start empty?
 - [ ] Should the app also offer a built-in AI option, for example in a paid plan, for people who don't have their own key?
 
 ### Decided

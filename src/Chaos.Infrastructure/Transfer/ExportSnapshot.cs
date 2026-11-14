@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Transfer;
@@ -8,8 +7,6 @@ public sealed record ExportContainer(string Id, string Name, int Kind, bool Arch
 public sealed record ExportSubtask(string Id, string Title, string Notes, int Status, IReadOnlyList<string> Tags);
 
 public sealed record ExportDiaryEntry(string Id, string EntryAtUtc, string Markdown);
-
-public sealed record ExportStatusChange(string AtUtc, int? From, int To);
 
 public sealed record ExportTask
 {
@@ -37,7 +34,6 @@ public sealed record ExportTask
     public required IReadOnlyList<string> Tags { get; init; }
     public required IReadOnlyList<ExportSubtask> Subtasks { get; init; }
     public required IReadOnlyList<ExportDiaryEntry> Diary { get; init; }
-    public required IReadOnlyList<ExportStatusChange> StatusChanges { get; init; }
 }
 
 public sealed record ExportPadItem(string Id, string Markdown, bool Archived, string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> Tags);
@@ -80,13 +76,6 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             """, r => (TaskId: r.GetString(0), Rule: r.GetString(1)), ct))
             .GroupBy(x => x.TaskId).ToDictionary(g => g.Key, g => g.First().Rule, StringComparer.Ordinal);
 
-        var changes = (await ListAsync(connection, """
-            SELECT TaskId, EffectiveAtUtc, SnapshotBefore, SnapshotAfter FROM TaskHistory ORDER BY TaskId, EffectiveAtUtc, rowid;
-            """, r => (TaskId: r.GetString(0), At: r.GetString(1), Before: r.IsDBNull(2) ? null : r.GetString(2), After: r.IsDBNull(3) ? null : r.GetString(3)), ct))
-            .Select(row => (row.TaskId, Change: StatusChange(row.At, row.Before, row.After)))
-            .Where(row => row.Change is not null)
-            .ToLookup(row => row.TaskId, row => row.Change!);
-
         var tasks = await ListAsync(connection, """
             SELECT t.Id, t.ContainerId, s.Title, t.Title, t.Notes, t.Status, t.Priority, t.EstimateMinutes, t.CapacityCategory,
                    t.PlannedDate, t.PlannedTime, t.PlannedZoneId, t.DueDate, t.DueTime, t.DueZoneId,
@@ -126,7 +115,6 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
                     Tags = taskTags.GetValueOrDefault(id) ?? [],
                     Subtasks = [.. subtasks[id]],
                     Diary = [.. diary[id]],
-                    StatusChanges = [.. changes[id]],
                 };
             }, ct);
 
@@ -137,40 +125,6 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
 
         snapshot.Commit();
         return new ExportSnapshot(containers, tasks, pad);
-    }
-
-    /// <summary>A status change recorded by one history entry, read from its before/after snapshots.</summary>
-    private static ExportStatusChange? StatusChange(string at, string? before, string? after)
-    {
-        var to = SnapshotStatus(after);
-        if (to is null)
-        {
-            return null;
-        }
-
-        var from = SnapshotStatus(before);
-        return from == to ? null : new ExportStatusChange(at, from, to.Value);
-    }
-
-    private static int? SnapshotStatus(string? json)
-    {
-        if (json is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty("payload", out var payload)
-                && payload.TryGetProperty("task", out var task)
-                && task.TryGetProperty("status", out var status)
-                && status.TryGetInt32(out var value) ? value : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 
     /// <summary>Full slash-delimited display paths of active tags, by tag ID.</summary>

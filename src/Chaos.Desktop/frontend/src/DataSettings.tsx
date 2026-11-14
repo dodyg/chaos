@@ -7,10 +7,10 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Banner, Count, Field, InlineError, PageHeader } from "@/components/common";
 
 type Api = typeof dataRpc;
-type ImportFormat = "csv" | "org" | "json" | "json-restore";
+type ImportFormat = "csv" | "json" | "json-restore";
 
 const reasonText: Record<string, string> = { Manual: "made by hand", Scheduled: "daily", PreImport: "before an import", PreRestore: "before a restore", PreMigration: "before an update" };
-const formatText: Record<ImportFormat, string> = { csv: "CSV file", org: "Org file", json: "Chaos archive: add its tasks", "json-restore": "Chaos archive: replace all data" };
+const formatText: Record<ImportFormat, string> = { csv: "CSV file", json: "Chaos archive: add its tasks", "json-restore": "Chaos archive: replace all data" };
 const fieldText: Record<string, string> = { title: "Title", notes: "Notes", list: "List", status: "Status", planned: "Planned date", due: "Due date", priority: "Priority", tags: "Tags", id: "Row ID", parent_id: "Parent row ID" };
 const outcomeText: Record<string, string> = { New: "new", Duplicate: "already here", Conflict: "ID in use" };
 
@@ -231,12 +231,11 @@ export function DataSettings({ api = dataRpc, containers, onImported, onReplaced
       </div>}
     </Section>
 
-    <Section title="Export" icon={<Download/>} description="The Chaos archive is a complete copy of everything, including history and plans. Markdown and Org are readable plain text with the original notes; they leave some data out.">
+    <Section title="Export" icon={<Download/>} description="The Chaos archive is a complete copy of everything, including history and plans. Markdown files are readable plain text with the original notes; they leave some data out.">
       <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
         <Field label="Format"><NativeSelect value={exportFormat} onChange={event => setExportFormat(event.target.value)}>
           <NativeSelectOption value="json">Chaos archive (.zip)</NativeSelectOption>
           <NativeSelectOption value="markdown">Markdown files (.zip)</NativeSelectOption>
-          <NativeSelectOption value="org">Org file (.org)</NativeSelectOption>
         </NativeSelect></Field>
         <Field label="Save in folder"><Input value={exportDirectory} onChange={event => setExportDirectory(event.target.value)}/></Field>
       </div>
@@ -252,7 +251,7 @@ export function DataSettings({ api = dataRpc, containers, onImported, onReplaced
         <Field label="Import from"><NativeSelect value={importFormat} onChange={event => { setImportFormat(event.target.value as ImportFormat); setPreview(null); setImportFile(null); }}>
           {(Object.keys(formatText) as ImportFormat[]).map(format => <NativeSelectOption key={format} value={format}>{formatText[format]}</NativeSelectOption>)}
         </NativeSelect></Field>
-        <Field label="File"><Input type="file" accept={importFormat === "csv" ? ".csv,text/csv" : importFormat === "org" ? ".org,text/plain" : ".zip"} disabled={busy} onChange={chooseFile}/></Field>
+        <Field label="File"><Input type="file" accept={importFormat === "csv" ? ".csv,text/csv" : ".zip"} disabled={busy} onChange={chooseFile}/></Field>
       </div>
       {preview && importFormat === "json-restore" && <div role="region" aria-label="Import preview" className="grid gap-2 rounded-lg border p-3">
         <p className="text-sm">Archive exported {when(preview.archive?.exportedAtUtc ?? null)} by Chaos {preview.archive?.appVersion}: {countsText(preview.archiveCounts)}.</p>

@@ -1,8 +1,9 @@
 # Backups, export and import
 
 This page lists what each format holds and what it leaves out (PLAN §14). Only the Chaos
-JSON archive is a complete, lossless copy. The Markdown and Org exports are for reading and
-for other tools, and they keep the original Markdown notes unchanged.
+JSON archive is a complete, lossless copy. The Markdown export is for reading and for other
+tools, and it keeps the original Markdown notes unchanged. Chaos no longer reads or writes Org
+files.
 
 ## Backups
 
@@ -105,32 +106,6 @@ are capped in length and made unique.
 
 Deleted items, history, plans, reminders and settings are not included.
 
-## Org export (readable)
-
-One `.org` file:
-
-- `#+TODO: TODO STARTED WAITING REVIEW | DONE CANCELLED` maps the six statuses.
-  `#+PRIORITIES: A D C` maps the priorities: A = Urgent, B = High, C = Normal, D = Low.
-  Tasks with no priority get no cookie.
-- Each list is a level-1 heading with its ID and kind as properties. Tasks are level-2 TODO
-  headings and subtasks are level 3.
-- `SCHEDULED` is the planned date, `DEADLINE` is the due date, and `CLOSED` is the completion
-  or cancellation time (UTC).
-- Org tags are a simplified form of the tag names. The exact paths are in `:CHAOS_TAGS:`
-  (JSON).
-- The properties drawer holds the stable `:ID:` and the `CHAOS_` properties:
-  - `CHAOS_TITLE`: the exact title, when the heading would be ambiguous
-  - `CHAOS_SECTION`, `CHAOS_ESTIMATE` and `CHAOS_CATEGORY`
-  - `CHAOS_PLANNED_ZONE` and `CHAOS_DUE_ZONE`
-  - `CHAOS_RECURRENCE`: the rule as JSON
-  - `CHAOS_CREATED`
-- `:LOGBOOK:` lists status changes from the task history (UTC).
-- Notes are the original Markdown inside `#+BEGIN_SRC markdown` blocks. Lines that Org would
-  read as structure get Org's comma escape. Each diary entry is its own block, tagged
-  `:chaos-diary <UTC time>`.
-
-Markdown is not converted to Org markup.
-
 ## Import
 
 Every import is read and checked completely before anything is written. The preview shows:
@@ -179,18 +154,6 @@ Text files must be UTF-8. The largest file one import accepts is 100 MB.
 - Proprietary to-do app exports (such as Todoist or Microsoft To Do) are not specifically
   supported. Their CSV files can be imported through the column mapping.
 
-### Org (the subset Chaos writes)
-
-- A heading with a TODO keyword is a task. Keyword headings below a task become its
-  subtasks; deeper levels are flattened, with a note. A heading without a keyword is a list.
-- **Keywords:** the six Chaos keywords plus NEXT and CANCELED. Custom keywords declared with
-  `#+TODO:` also work: those before `|` are open, those after are done.
-- Supported: priority cookies A–D, heading tags (or `CHAOS_TAGS`), SCHEDULED, DEADLINE and
-  CLOSED, the properties above, plain-text notes, Markdown source blocks and `:chaos-diary`
-  blocks.
-- Repeaters and `CHAOS_RECURRENCE` are imported as a single date, with a note. Recurrence
-  comes back only from a JSON restore. LOGBOOK drawers are skipped.
-
 ## Removing data
 
 - **Removing deleted items permanently** (Settings → Deleted items) affects only items
@@ -218,8 +181,8 @@ Text files must be UTF-8. The largest file one import accepts is 100 MB.
 GitHub connection data (schema 14) is included in complete JSON archives and database backups,
 including issue and comment text from private repositories. GitHub credentials are never part
 of either format. JSON exports omit sync-run diagnostics and reset ETags, incremental cursors,
-rate-limit/reset times, retry times and attempt counts. Markdown and Org task exports retain
-the issue's source URL. Permanently purging a linked task removes checklist/comment mappings
+rate-limit/reset times, retry times and attempt counts. Markdown task exports retain the
+issue's source URL. Permanently purging a linked task removes checklist/comment mappings
 and keeps an ignored issue identity so synchronization cannot import that issue again.
 
 GitHub links in a JSON merge are retained only when the same connection and repository

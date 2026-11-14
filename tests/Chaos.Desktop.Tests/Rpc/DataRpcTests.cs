@@ -68,7 +68,7 @@ public sealed class DataRpcTests
         {
             await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Exported task", "with notes"));
             var exportDir = Path.Combine(root, "my exports");
-            foreach (var format in new[] { "json", "markdown", "org" })
+            foreach (var format in new[] { "json", "markdown" })
             {
                 var export = await rpc.ExportAsync(new(format, exportDir), CancellationToken.None);
                 await Assert.That(export.Ok).IsTrue();
@@ -76,6 +76,7 @@ public sealed class DataRpcTests
             }
 
             await Assert.That((await rpc.ExportAsync(new("pdf", exportDir), CancellationToken.None)).Ok).IsFalse();
+            await Assert.That((await rpc.ExportAsync(new("org", exportDir), CancellationToken.None)).Ok).IsFalse();
             await Assert.That((await rpc.ExportAsync(new("json", "relative\\folder"), CancellationToken.None)).Ok).IsFalse();
 
             var csv = Convert.ToBase64String(Encoding.UTF8.GetBytes("Task,Where,Deadline\nRenew passport,Admin,2026-12-01\nBook dentist,Admin,\n"));

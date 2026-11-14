@@ -10,7 +10,6 @@ public enum ExportFormat
 {
     Json = 0,
     Markdown = 1,
-    Org = 2,
 }
 
 public sealed record ExportOutcome(string Path, string FileName, long Bytes, ExportFormat Format);
@@ -48,8 +47,7 @@ public sealed class DataTransfer(SqliteApplicationStore store, string appVersion
         var fileName = format switch
         {
             ExportFormat.Json => $"chaos-archive-{now:yyyyMMdd-HHmmss}.zip",
-            ExportFormat.Markdown => $"chaos-markdown-{now:yyyyMMdd-HHmmss}.zip",
-            _ => $"chaos-{now:yyyyMMdd-HHmmss}.org",
+            _ => $"chaos-markdown-{now:yyyyMMdd-HHmmss}.zip",
         };
         var path = Path.Combine(directory, fileName);
         var temp = path + ".partial";
@@ -65,12 +63,8 @@ public sealed class DataTransfer(SqliteApplicationStore store, string appVersion
                     case ExportFormat.Json:
                         await JsonArchive.WriteAsync(connection, output, appVersion, now, token);
                         break;
-                    case ExportFormat.Markdown:
-                        PlainTextExport.WriteMarkdownZip(await ExportSnapshot.ReadAsync(connection, token), output, now);
-                        break;
                     default:
-                        var org = PlainTextExport.WriteOrg(await ExportSnapshot.ReadAsync(connection, token), now);
-                        await output.WriteAsync(new UTF8Encoding(false).GetBytes(org), token);
+                        PlainTextExport.WriteMarkdownZip(await ExportSnapshot.ReadAsync(connection, token), output, now);
                         break;
                 }
 
@@ -125,9 +119,6 @@ public sealed class DataTransfer(SqliteApplicationStore store, string appVersion
                 var archive = JsonArchive.Read(stream);
                 return new ImportSource(ArchiveMerge.ToDraft(archive, name, fingerprint), null, null, archive);
             }
-
-            case ImportSourceKind.Org:
-                return new ImportSource(OrgImport.Parse(name, fingerprint, DecodeText(content)), null, null, null);
 
             default:
             {

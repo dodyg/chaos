@@ -39,7 +39,7 @@ public sealed record ExportResponse(bool Ok, string? Path, string? FileName, dou
 public sealed record OpenFolderRequest(string Which, string? Path);
 public sealed record OpenFolderResponse(bool Ok, TaskErrorResponse? Error);
 public sealed record CsvColumnDto(string Field, int Column);
-/// <summary>Format is "csv", "org", "json" (merge) or "json-restore". ContentBase64 holds the file bytes.</summary>
+/// <summary>Format is "csv", "json" (merge) or "json-restore". ContentBase64 holds the file bytes.</summary>
 public sealed record ImportPreviewRequest(string Format, string FileName, string ContentBase64, IReadOnlyList<CsvColumnDto>? Mapping);
 public sealed record ImportIssueDto(int Line, string Field, string Message);
 public sealed record ImportListPlanDto(string SourceName, int TaskCount, string? ExistingContainerId, string? ExistingName);
@@ -170,8 +170,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
             {
                 "json" => ExportFormat.Json,
                 "markdown" => ExportFormat.Markdown,
-                "org" => ExportFormat.Org,
-                _ => throw AppException.Validation("format", "Choose JSON archive, Markdown or Org."),
+                _ => throw AppException.Validation("format", "Choose JSON archive or Markdown."),
             };
             var directory = string.IsNullOrWhiteSpace(request.Directory) ? DefaultExportDirectory : request.Directory.Trim();
             var outcome = await transfer.ExportAsync(format, directory, ct);
@@ -347,10 +346,9 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     private static (ImportSourceKind Kind, bool Restore) ParseFormat(string format) => format.ToLowerInvariant() switch
     {
         "csv" => (ImportSourceKind.Csv, false),
-        "org" => (ImportSourceKind.Org, false),
         "json" => (ImportSourceKind.ChaosJson, false),
         "json-restore" => (ImportSourceKind.ChaosJson, true),
-        _ => throw AppException.Validation("format", "Choose CSV, Org, or a Chaos JSON archive."),
+        _ => throw AppException.Validation("format", "Choose CSV or a Chaos JSON archive."),
     };
 
     private static byte[] Decode(string base64)

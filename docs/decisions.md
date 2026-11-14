@@ -709,3 +709,14 @@ Enter opens, V views, X toggles done and M adds to My Day. Ctrl+K opens a comman
 (views, lists, projects, tags, actions, focus, and task search from two characters). Inside a
 text field Ctrl+K stays the editor's link shortcut, and the palette also opens from the
 "Ctrl K" button in the sidebar search box.
+
+## 2026-11-14 (Org files removed)
+
+Org support is gone from the product. The spec no longer has an Org files connection, and the
+app no longer exports an `.org` file or imports one: `OrgImport`, `PlainTextExport.WriteOrg`,
+`ExportFormat.Org` and the Org choices under Data & backups are removed, along with the
+status-change reading in `ExportSnapshot` that only the Org LOGBOOK used. The RPC refuses
+`"org"` for both export and import. `ImportSourceKind.Org = 1` stays so import records made
+earlier still read; nothing creates it any more. The Org parts of PLAN.md and GITHUB.md
+describe what was built at the time and are superseded by this entry. Markdown files are now
+the only plain-text export; the JSON archive remains the lossless format.

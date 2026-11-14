@@ -13,7 +13,7 @@ namespace Chaos.Infrastructure.Tests.DataProtection;
 
 /// <summary>
 /// PLAN §15 WP12 transfer on real SQLite: lossless JSON round trip of every persisted feature
-/// (including deleted rows), hostile archives, Markdown/Org exports, CSV/Org/JSON imports with
+/// (including deleted rows), hostile archives, Markdown exports, CSV/JSON imports with
 /// preview, duplicates, conflicts and atomic rollback, recovery from a bad import with a local
 /// backup (exit criterion), and permanent purge.
 /// </summary>
@@ -139,47 +139,6 @@ public sealed class TransferTests
         await Assert.That(SafeArchive.IsSafeEntryName("/etc/passwd")).IsFalse();
         await Assert.That(SafeArchive.IsSafeEntryName("a\\..\\b")).IsFalse();
         await Assert.That(SafeArchive.IsSafeEntryName("tasks/01 Inbox/x.md")).IsTrue();
-    }
-
-    [Test]
-    public async Task OrgExport_ThenImportIntoCleanRoot_KeepsTasksSubtasksTagsNotesAndDiary()
-    {
-        using var source = await DataHost.StartAsync();
-        var seed = await source.SeedAsync();
-        var export = await source.Transfer.ExportAsync(ExportFormat.Org, Path.Combine(source.Root, "out"), CancellationToken.None);
-        var org = await File.ReadAllTextAsync(export.Path);
-        await Assert.That(org).Contains("#+TODO: TODO STARTED WAITING REVIEW | DONE CANCELLED");
-        await Assert.That(org).Contains("SCHEDULED: <2026-11-11 Wed 09:30> DEADLINE: <2026-11-14 Sat>");
-        await Assert.That(org).Contains(",* not a heading"); // Markdown line escaped inside the src block
-        await Assert.That(org).DoesNotContain("Old idea"); // deleted
-
-        var draft = Read(ImportSourceKind.Org, export.FileName, org).Draft;
-        await Assert.That(draft.Errors).IsEmpty();
-        var paint = draft.Tasks.Single(task => task.Title == "Buy paint — أزرق 🎨");
-        await Assert.That(paint.ListName).IsEqualTo("Home project");
-        await Assert.That(paint.Priority).IsEqualTo(TaskPriority.High);
-        await Assert.That(paint.Planned).IsEqualTo(new ImportDate(new DateOnly(2026, 11, 11), new TimeOnly(9, 30), "UTC"));
-        await Assert.That(paint.Due!.Date).IsEqualTo(new DateOnly(2026, 11, 14));
-        await Assert.That(paint.TagPaths).IsEquivalentTo(new[] { "colour", "home/errands" });
-        await Assert.That(paint.Notes).Contains("* not a heading");
-        await Assert.That(paint.Notes).Contains("| hall | blue |");
-        await Assert.That(paint.Subtasks.Select(s => (s.Title, s.Status))).IsEquivalentTo(new[] { ("Pick shade", TaskItemStatus.Done), ("Get brushes", TaskItemStatus.NotStarted) });
-        await Assert.That(paint.Diary.Single().Markdown).IsEqualTo("Bought the **blue** sample.\n* careful");
-        await Assert.That(draft.Tasks.Single(task => task.Title == "Finished thing").Status).IsEqualTo(TaskItemStatus.Done);
-        await Assert.That(draft.Warnings.Any(w => w.Field == "recurrence")).IsTrue();
-
-        using var target = await DataHost.StartAsync();
-        var result = await target.Imports.CommitAsync(draft, new ImportCommitOptions(new Dictionary<string, string>(), null, null));
-        await Assert.That(result.Created).IsEqualTo(4);
-        await Assert.That(result.CreatedListNames).IsEquivalentTo(new[] { "Home project" });
-        await Assert.That(await target.CountAsync("SELECT count(*) FROM DiaryEntries;")).IsEqualTo(1L);
-        await Assert.That(await target.CountAsync("SELECT count(*) FROM TaskHistory WHERE EventKind = 'task.imported';")).IsEqualTo(4L);
-
-        // Importing the same file into the database it came from finds the tasks already there.
-        var again = await source.Imports.PreviewAsync(draft);
-        await Assert.That(again.NewTasks).IsEqualTo(0);
-        await Assert.That(again.Duplicates).IsEqualTo(4);
-        _ = seed;
     }
 
     [Test]
