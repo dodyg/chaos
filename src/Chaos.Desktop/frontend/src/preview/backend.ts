@@ -58,6 +58,11 @@ const subtasks: SubtaskResponse[] = [
 ];
 const dayPlans = new Map<string, string[]>([[today, ["task-1", "task-2", "task-3", "task-4"]]]);
 const undo: UndoEntryResponse[] = [];
+/** A long trash, so the bounded deleted-notes list can be seen. */
+const deletedPadNotes: PadItemResponse[] = Array.from({ length: 64 }, (_, i) => ({
+  id: `pad-deleted-${i}`, markdown: i % 9 === 0 ? "" : ["Meeting notes", "Grocery list", "Idea: offline sync", "Reading list", "Draft reply to Sam"][i % 5] + ` ${i + 1}`,
+  version: "2", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: true, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [],
+}) as PadItemResponse);
 const padNotes: PadItemResponse[] = [
   { id: "pad-1", markdown: "React Server Components\n\n- read the RFC\n- try it in a side project", version: "1", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [] },
 ];
@@ -225,7 +230,7 @@ const handlers: Record<string, Handler> = {
   },
 
   "pad.list": (r: { archived: boolean }) => ok({ items: padNotes.filter(n => n.archived === r.archived) }),
-  "pad.listDeleted": () => ok({ items: [] }),
+  "pad.listDeleted": () => ok({ items: deletedPadNotes }),
   "pad.reviewStatus": () => ok({ due: false, lastReviewedAtUtc: null, suggestions: [] }),
   "pad.get": (r: { itemId: string }) => ok({ items: padNotes.filter(n => n.id === r.itemId) }),
   "pad.search": (r: { text: string }) => ok({ items: padNotes.filter(n => n.markdown.toLowerCase().includes(r.text.toLowerCase())) }),

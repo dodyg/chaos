@@ -3,6 +3,7 @@ import { ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -62,16 +63,40 @@ export function InlineError({ children }: { children: React.ReactNode }) {
 }
 
 /** Collapsible list of soft-deleted items with a Restore action each. */
+/** Above this many deleted items the list gets a find box. */
+const DELETED_FILTER_AT = 8;
+/** At most this many rows are drawn at once; the find box reaches the rest. */
+const DELETED_SHOWN_MAX = 50;
+
+/**
+ * A collapsed trash list with Restore. It stays small however much is deleted: the open list
+ * scrolls inside a fixed height, gets a find box past a handful of items, and draws at most
+ * {@link DELETED_SHOWN_MAX} rows.
+ */
 export function DeletedItems<T extends { id: string }>({ noun, items, name, busy, onRestore, className }: { noun: string; items: T[]; name: (item: T) => string; busy: boolean; onRestore: (item: T) => void; className?: string }) {
+  const [query, setQuery] = React.useState("");
   if (items.length === 0) return null;
+  const searchable = items.length > DELETED_FILTER_AT;
+  const needle = searchable ? query.trim().toLocaleLowerCase() : "";
+  const matches = needle ? items.filter(item => name(item).toLocaleLowerCase().includes(needle)) : items;
+  const shown = matches.slice(0, DELETED_SHOWN_MAX);
   return <details className={cn("group/trash", className)}>
     <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1.5 text-xs text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
       <ChevronRight className="size-3.5 transition-transform group-open/trash:rotate-90"/>Deleted {noun} ({items.length})
     </summary>
-    <ul className="grid gap-0.5 pt-1 pl-4">{items.map(item => <li key={item.id} className="flex items-center justify-between gap-2 rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-accent">
-      <span className="truncate">{name(item)}</span>
-      <Button type="button" variant="link" size="xs" disabled={busy} onClick={() => onRestore(item)}>Restore</Button>
-    </li>)}</ul>
+    <div className="grid gap-1.5 pt-1 pl-4">
+      {searchable && <div className="flex items-center gap-2">
+        <Input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder={`Find deleted ${noun}`} aria-label={`Find deleted ${noun}`} className="h-7 max-w-xs text-xs"/>
+        <span className="text-xs text-muted-foreground" aria-live="polite">{needle ? `${matches.length} of ${items.length}` : ""}</span>
+      </div>}
+      {shown.length === 0
+        ? <p className="px-1.5 py-1 text-xs text-muted-foreground">No deleted {noun} match “{query.trim()}”.</p>
+        : <ul className="grid max-h-72 gap-0.5 overflow-y-auto pr-1" aria-label={`Deleted ${noun}`}>{shown.map(item => <li key={item.id} className="flex items-center justify-between gap-2 rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-accent">
+            <span className="truncate">{name(item)}</span>
+            <Button type="button" variant="link" size="xs" disabled={busy} onClick={() => onRestore(item)}>Restore</Button>
+          </li>)}</ul>}
+      {matches.length > shown.length && <p className="px-1.5 text-xs text-muted-foreground">Showing {DELETED_SHOWN_MAX} of {matches.length}. Type to find the others.</p>}
+    </div>
   </details>;
 }
 
