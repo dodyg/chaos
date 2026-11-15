@@ -39,27 +39,34 @@ public sealed class SyncTriggerInstallerTests
     public async Task An_edit_pends_its_changed_groups_and_a_delete_pends_a_purge()
     {
         using var host = await DataHost.StartAsync();
+        await SyncTestHelpers.EnableSyncAsync(host);
         var task = await CaptureTaskAsync(host);
 
-        // A capture pends the groups it wrote; the planned date changes only with its command.
-        var afterCapture = await CountAsync(host, $"SELECT count(*) FROM SyncPending WHERE Kind = 'task' AND EntityKey = '{task.Id}';");
-        await Assert.That(afterCapture > 0).IsTrue();
+        // The flush consumes SyncPending at commit, so the groups the triggers pended are
+        // observed through the outbox change each write produced. A capture pends every
+        // group; a details edit pends exactly the groups it wrote.
+        var afterCapture = (await SyncTestHelpers.ChangesAsync(host, "task", task.Id))[^1];
+        var expectedGroups = SyncCatalog.Find("Tasks")!.Groups.Select(group => group.Name).Order(StringComparer.Ordinal).ToList();
+        await Assert.That(afterCapture.Op).IsEqualTo("upsert");
+        await Assert.That(afterCapture.Groups.Order(StringComparer.Ordinal)).IsEquivalentTo(expectedGroups);
 
         await host.Tasks.UpdateDetailsAsync(new(Op(), task.Id, task.Version, task.Title, task.Notes,
             new DateOnly(2026, 11, 20), null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
-        var planned = await CountAsync(host, $"SELECT count(*) FROM SyncPending WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND GroupName = 'planned';");
-        await Assert.That(planned).IsEqualTo(1L);
+        var planned = (await SyncTestHelpers.ChangesAsync(host, "task", task.Id))[^1];
+        await Assert.That(planned.Op).IsEqualTo("upsert");
+        await Assert.That(planned.Groups).IsEquivalentTo(new[] { "planned" });
 
         // A soft delete travels as the deleted group; a purge (the real hard-delete path) as
         // __purge, captured by the delete trigger on the physical row removal.
         var current = (await host.Tasks.GetAsync(task.Id))!;
         await host.Tasks.DeleteAsync(new(Op(), task.Id, current.Version));
-        var deleted = await CountAsync(host, $"SELECT count(*) FROM SyncPending WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND GroupName = 'deleted';");
-        await Assert.That(deleted).IsEqualTo(1L);
+        var deleted = (await SyncTestHelpers.ChangesAsync(host, "task", task.Id))[^1];
+        await Assert.That(deleted.Op).IsEqualTo("upsert");
+        await Assert.That(deleted.Groups).IsEquivalentTo(new[] { "deleted" });
 
         await host.Purge.PurgeAsync(task.Id, CancellationToken.None);
-        var purge = await CountAsync(host, $"SELECT count(*) FROM SyncPending WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND GroupName = '__purge';");
-        await Assert.That(purge).IsEqualTo(1L);
+        var purged = (await SyncTestHelpers.ChangesAsync(host, "task", task.Id))[^1];
+        await Assert.That(purged.Op).IsEqualTo("purge");
     }
 
     [Test]

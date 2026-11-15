@@ -56,6 +56,9 @@
       },
       "chaos.domain": {
         "type": "Project"
+      },
+      "chaos.sync": {
+        "type": "Project"
       }
     },
     "net11.0/win-x64": {

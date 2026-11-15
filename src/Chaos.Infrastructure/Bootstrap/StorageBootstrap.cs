@@ -106,7 +106,7 @@ public static class StorageBootstrap
                 Sync.SyncTriggerInstaller.Install(migrationConnection);
             }
 
-            var store = new SqliteApplicationStore(source);
+            var store = new SqliteApplicationStore(source, new Sync.SyncFlush(clock));
             try
             {
                 var profileId = await SeedAsync(store, ids, clock, ct);
@@ -205,7 +205,7 @@ public static class StorageBootstrap
             // a database that has none: a fresh data root, or a reset.
             var device = ((SqliteDataSession)session).Connection.CreateCommand();
             device.CommandText = "INSERT OR IGNORE INTO DeviceSettings (Key, Value) VALUES ('DeviceId', $id);";
-            device.Parameters.AddWithValue("$id", ids.NewId().ToString());
+            device.Parameters.AddWithValue("$id", ids.NewId().ToString("N"));
             await device.ExecuteNonQueryAsync(token);
 
             return profile.Id;

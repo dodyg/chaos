@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chaos.Infrastructure\Chaos.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Chaos.Application\Chaos.Application.csproj" />
+    <ProjectReference Include="..\..\src\Chaos.Sync\Chaos.Sync.csproj" />
   </ItemGroup>
 
 </Project>

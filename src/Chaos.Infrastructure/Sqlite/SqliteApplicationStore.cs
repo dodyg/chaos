@@ -1,5 +1,6 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Infrastructure.Sync;
 using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Sqlite;
@@ -16,9 +17,10 @@ namespace Chaos.Infrastructure.Sqlite;
 /// reads in flight, closes the writer and clears the pool, runs the file work, then reopens.
 /// </para>
 /// </summary>
-public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApplicationStore, IDisposable
+public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncCapture? syncCapture = null) : IApplicationStore, IDisposable
 {
     private readonly SqliteConnectionSource _source = source;
+    private readonly ISyncCapture? _syncCapture = syncCapture;
     private SqliteConnection _writer = source.Open();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly Lock _readSync = new();
@@ -42,6 +44,9 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source) : IApp
             try
             {
                 var result = await operation(new SqliteDataSession(_writer), ct).ConfigureAwait(false);
+                // Change capture (PLAN2 §7.3): the flush runs inside the user's transaction,
+                // immediately before commit, so a rolled-back change produces no outbox row.
+                _syncCapture?.Flush(_writer);
                 transaction.Commit();
                 return result;
             }
