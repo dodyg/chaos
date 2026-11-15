@@ -122,7 +122,7 @@ public sealed class SyncFlushTests
     }
 
     [Test]
-    public async Task A_purge_in_the_same_transaction_travels_as_a_purge_and_resets_the_clocks()
+    public async Task A_purge_travels_as_a_purge_and_leaves_a_clock_watermark()
     {
         using var host = await DataHost.StartAsync();
         await EnableSync(host);
@@ -132,9 +132,12 @@ public sealed class SyncFlushTests
         await host.Purge.PurgeAsync(task.Id, CancellationToken.None);
 
         var rows = await CountAsync(host, $"SELECT count(*) FROM SyncOutbox WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND Op = 'purge';");
-        var clocks = await CountAsync(host, $"SELECT count(*) FROM SyncClocks WHERE Kind = 'task' AND EntityKey = '{task.Id}';");
         await Assert.That(rows).IsEqualTo(1L);
-        await Assert.That(clocks).IsEqualTo(0L);
+
+        // The clocks stay as a watermark: a replayed change older than the last one seen for
+        // this entity must not resurrect the row, while a genuinely newer insert still wins.
+        var clocks = await CountAsync(host, $"SELECT count(*) FROM SyncClocks WHERE Kind = 'task' AND EntityKey = '{task.Id}';");
+        await Assert.That(clocks > 0).IsTrue();
 
         var payload = await OutboxPayloadAsync(host, "task", op: "purge");
         await Assert.That(payload.GetProperty("op").GetString()).IsEqualTo("purge");

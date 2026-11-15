@@ -251,9 +251,9 @@ public static class SyncCatalog
                     "One active occurrence per series; the retired duplicate raises attention (§7.6)."),
                 new("UX_RecurrenceOccurrences_Task", SyncUniqueRuleKind.KeepLowestRetireOther,
                     "One task per occurrence; the retired duplicate raises attention (§7.6)."),
+                new("sqlite_autoindex_RecurrenceOccurrences_2", SyncUniqueRuleKind.RepointChildren,
+                    "Legacy occurrence rows created before deterministic ids: same series and nominal key on two devices is one entity — the lowest-id row stays, the other is removed with its task and a notice (§7.5 prevents new ones)."),
             ],
-            DeterministicIndexes: [new("sqlite_autoindex_RecurrenceOccurrences_2",
-                "SeriesId+NominalKey is the deterministic identity of an occurrence (§7.5), so two devices upsert the same row.")],
             ApplyOrder: 170),
 
         new SyncTable("RecurrenceExceptions", "recurrence_exception", SyncMode.Merge, ["SeriesId", "NominalKey"],

@@ -67,9 +67,10 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
             if (groups.Contains(SyncTriggerInstaller.PurgeGroup))
             {
                 // A hard delete in the same transaction outranks anything the row's inserts and
-                // updates pended: the whole entity travels as a purge, and its clocks reset.
+                // updates pended: the whole entity travels as a purge. Its clocks stay as a
+                // watermark, so a replayed older change cannot resurrect the row, while a
+                // genuinely newer insert (the row re-created) still wins.
                 WriteOutbox(connection, NewChangeId(), kind, key, "purge", PurgePayload(kind, key), now);
-                Execute(connection, $"DELETE FROM SyncClocks WHERE Kind = {Literal(kind)} AND EntityKey = {Literal(key)};");
                 continue;
             }
 

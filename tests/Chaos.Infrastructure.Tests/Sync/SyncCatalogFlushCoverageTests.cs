@@ -279,7 +279,7 @@ public sealed class SyncCatalogFlushCoverageTests
         var tasks = new TaskCommands(host.Store, host.Ids, host.Clock);
         var task = (await tasks.CaptureAsync(new(Op(), string.Empty, "Flush planning", null))).Task;
 
-        var days = new MyDayCommands(host.Store, host.Ids, host.Clock);
+        var days = new MyDayCommands(host.Store, host.Clock);
         var day = await days.OpenAsync(null);
         await days.AddAsync(new DayItemCommand(Op(), day.Date, task.Id));
         expected["day_plan"] = (await TextsAsync(host, "SELECT Id FROM DayPlans;"))[0];
