@@ -759,3 +759,26 @@ start foldable sections and list items with children fold.
 
 Search indexes pages as kind 5; migration 023 recreates the rebuildable search tables with the
 wider check and resets the normalization version so the next start rebuilds the index.
+
+## 2026-11-15 (Google Calendar access for Phase 2)
+
+- **Internal OAuth app first.** The current audience is SilverKey, so Google Calendar access
+  will use an OAuth client in a Google Cloud project owned by the SilverKey Google Workspace
+  organisation, with the consent screen's user type set to **Internal**. Internal apps skip
+  Google's verification, show no "unverified app" warning and have no 100-user cap. Only
+  accounts in the SilverKey domain can sign in. The project must sit under the organisation, so
+  a Workspace admin creates it, and an admin policy restricting internal or third-party apps
+  could require allowing it.
+- **Desktop flow, narrowest scope.** Use a Desktop-type OAuth client with a loopback redirect
+  and the narrowest read-only calendar scope that serves My Week and the calendar view. The
+  Google API client library (`Google.Apis.Calendar.v3`) is only a transport and does not
+  affect review.
+- **Public release needs verification.** Calendar scopes are sensitive, so a public release
+  needs Google's OAuth verification (brand, privacy policy, domain, scope justification),
+  which the spec warns can take weeks. Calendar is not a restricted scope, but confirm
+  against Google's current scope table. Switching from Internal to External is a consent-screen
+  change, so the sign-in code stays the same. Start the submission well before any public
+  release (SPEC open question).
+- **ICS subscription link needs no OAuth.** Importing a calendar's secret ICS address gives
+  read-only meetings with no Google review and works for any user, so it can be built first
+  and independently of the Google connection.
