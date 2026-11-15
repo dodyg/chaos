@@ -1639,6 +1639,38 @@ it.
 - Offline-only behaviour is unchanged (all existing tests pass).
 - No network code exists.
 
+**Progress note 2026-11-15.** Items 1–4 landed in commits 6f4154d..603b33f: Chaos.Sync (Hlc,
+NameBasedId, Merge) with their tests, migration 024 with the link tombstones and the rebuilt
+WeekGoalTasks, DeviceSettings seeding with archive exclusions and restore-safe device identity,
+the SyncCatalog over every table with its guard test, and the trigger installer with the catalog
+hash. Item 9's flush hook landed in b42e5b1: one outbox change per entity with exactly the pended
+groups and fresh HLCs, a purge for entities removed in the transaction, nothing for rolled-back
+writes, and only a SyncPending clear while sync is off. One test per synced catalog kind (added
+in 6760afd) drives a real command and asserts the outbox caught it; the one kind no command can
+reach (space) is documented in a guard test. Item 10 landed in b8023d4: name-based UUIDs for day
+plans and items, week plans and assignments, daily pages, recurrence occurrences with their
+successor tasks and copied subtasks, summaries and GitHub-imported tasks; existing rows keep
+their random ids, so the duplicate rules still cover them. Items 11–12 landed in 53493a6:
+SyncApplier merges per field group by HLC, applies purges as hard deletes with their dependents,
+resolves unique breaks with the catalog's rules (RenameLoser, MergeTag, AppendText,
+KeepLowestRetireOther, RepointChildren), parks children whose parent has not arrived in
+SyncInboxParked and retries them after the batch, keeps replaced values as sync.merged history
+(task, subtask) and page revisions, bumps the local Version so a stale undo refuses, refreshes
+search documents, and receives remote clocks into SyncState.LastHlc. A purged or removed
+duplicate keeps a clock watermark so a replayed change cannot resurrect it, and a missing parent
+is detected before the write because deferred foreign keys only fail at commit. The two-data-root
+harness covers all eleven scenarios and settles to identical synced columns and clocks; the
+legacy-duplicate scenarios (daily page, occurrence) construct pre-P1 rows with random ids, since
+the deterministic ids prevent new ones. Performance (Release, 10,000 tasks, 60 ordinary saves):
+p50 4 ms, p95 6 ms, max 16 ms per save — the capture overhead is invisible against the 150 ms
+budget. Gate: Domain 192/192, Application 47/47, Infrastructure 487/487, Sync 26/26,
+Desktop 88/89 in the sandbox — the one failure (LaunchRouting named-pipe IPC) passes 89/89
+outside it; the sandbox denies named-pipe connections, as it also does for `dotnet test`'s own
+IPC, so verify.ps1's direct-run fallback is used. Frontend npm test 131/131. Slopwatch clean.
+Offline-only behaviour is unchanged (sync seeds disabled; every pre-existing suite passes) and no
+network code exists. D6 is still pending per the P0 note, so the package box stays unticked until
+the owner answers it.
+
 ### [ ] P2 — Kanban board
 
 **Depends on:** P1. **Migration:** `025_board_settings.sql`. **Read:** section 11.1.
