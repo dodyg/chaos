@@ -6,6 +6,7 @@ using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
+using Chaos.Sync;
 
 namespace Chaos.Application.Planning;
 
@@ -271,7 +272,8 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
 
                 return new WeekAssignmentRecord
                 {
-                    Id = StorageFormats.Id(ids.NewId()),
+                    // §7.5: weekassign:{weekPlanId}:{taskId}; re-confirming a task keeps its row id.
+                    Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.WeekAssignment(plan.Id, item.TaskId))),
                     WeekPlanId = plan.Id,
                     TaskId = item.TaskId,
                     LocalDate = item.Day,
@@ -375,7 +377,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
             var changed = 0;
             foreach (var taskId in difference.AddTaskIds.Where(command.AddTaskIds.Contains))
             {
-                changed += await DayPlanning.PlaceAsync(session, ids, day, taskId, DayPlanItemOrigin.Week, now, token) ? 1 : 0;
+                changed += await DayPlanning.PlaceAsync(session, day, taskId, DayPlanItemOrigin.Week, now, token) ? 1 : 0;
             }
 
             foreach (var taskId in difference.RemoveTaskIds.Where(command.RemoveTaskIds.Contains))
@@ -725,7 +727,8 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
 
         await session.Weeks.TryAddAsync(new WeekPlanRecord
         {
-            Id = StorageFormats.Id(ids.NewId()),
+            // §7.5: the id is the week's natural key, so two devices planning the same week make one row.
+            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.WeekPlan(profileId, weekStart))),
             ProfileId = profileId,
             WeekStartDate = weekStart,
             State = WeekPlanState.Draft,

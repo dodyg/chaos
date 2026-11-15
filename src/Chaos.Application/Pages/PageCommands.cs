@@ -5,6 +5,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
 using Chaos.Application.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.Pages;
 
@@ -647,7 +648,9 @@ public sealed partial class PageCommands(IApplicationStore store, IIdGenerator i
     {
         var page = new PageRecord
         {
-            Id = ids.NewId().ToString(),
+            // §7.5: a daily page's id is its natural key (one page per space and date); ordinary
+            // pages have no natural key and keep random ids.
+            Id = daily is { } date ? StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DailyPage(spaceId, date))) : ids.NewId().ToString(),
             SpaceId = spaceId,
             ParentPageId = parentId,
             Title = title,

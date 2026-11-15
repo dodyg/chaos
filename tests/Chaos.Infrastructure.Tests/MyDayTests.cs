@@ -44,7 +44,7 @@ public sealed class MyDayTests
                 Storage = storage,
                 Clock = clock,
                 Tasks = new TaskCommands(storage.Store, ids, clock),
-                Days = new MyDayCommands(storage.Store, ids, clock),
+                Days = new MyDayCommands(storage.Store, clock),
                 Queries = new TaskQueries(storage.Store, clock),
             };
         }

@@ -51,7 +51,7 @@ public sealed class MyWeekTests
                 Storage = storage,
                 Clock = clock,
                 Tasks = new TaskCommands(storage.Store, ids, clock),
-                Days = new MyDayCommands(storage.Store, ids, clock),
+                Days = new MyDayCommands(storage.Store, clock),
                 Weeks = new MyWeekCommands(storage.Store, ids, clock),
                 Queries = new TaskQueries(storage.Store, clock),
             };

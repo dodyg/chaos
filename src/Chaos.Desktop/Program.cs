@@ -152,7 +152,7 @@ internal static class Program
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));

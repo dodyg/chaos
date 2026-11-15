@@ -6,6 +6,7 @@ using Chaos.Application.Tasks;
 using Chaos.Domain.GitHub;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
+using Chaos.Sync;
 
 namespace Chaos.Application.GitHub;
 
@@ -80,7 +81,10 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 if (task is null || (link!.PlacementManaged && (transferred || (baseline.RepositorySubscriptionId is not null && baseline.RepositorySubscriptionId != repo.Id) || baseline.MilestoneNumber != remote.MilestoneNumber))) await ValidatePlacement(s, placement.ContainerId, placement.SectionId, token);
                 if (task is null)
                 {
-                    task = new TaskRecord { Id = ids.NewId().ToString(), SpaceId = space.Id, ContainerId = placement.ContainerId, SectionId = placement.SectionId,
+                    // §7.5: githubtask:{connectionId}:{repositoryId}:{issueNumber}; two devices importing
+                    // the same issue make one task (issue numbers fit an int in the name).
+                    task = new TaskRecord { Id = NameBasedId.Create(NameBasedId.Names.GitHubTask(connection.Id, repo.RepositoryId, (int)issue.Number)).ToString(),
+                        SpaceId = space.Id, ContainerId = placement.ContainerId, SectionId = placement.SectionId,
                         Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = remote.MilestoneDue, CapacityCategory = repo.TaskCategory,
                         CompletedAtUtc = status == TaskItemStatus.Done ? now : null, CancelledAtUtc = status == TaskItemStatus.Cancelled ? now : null,
                         Position = await s.Tasks.GetNextPositionAsync(placement.ContainerId, token), Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now };

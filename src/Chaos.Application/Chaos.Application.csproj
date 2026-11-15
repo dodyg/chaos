@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Chaos.Domain\Chaos.Domain.csproj" />
+    <ProjectReference Include="..\Chaos.Sync\Chaos.Sync.csproj" />
   </ItemGroup>
 
 </Project>

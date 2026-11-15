@@ -119,7 +119,7 @@ internal sealed class DataHost : IDisposable
         await Tasks.DeleteAsync(new DeleteTaskCommand(Op(), old.Id, old.Version));
 
         var pad = (await new PadCommands(Store, Ids, Clock).CreateAsync(new CreatePadItemCommand(Op(), "# Shopping\nmilk, eggs"))).Item;
-        await new MyDayCommands(Store, Ids, Clock).AddAsync(new DayItemCommand(Op(), new DateOnly(2026, 11, 10), paint.Id));
+        await new MyDayCommands(Store, Clock).AddAsync(new DayItemCommand(Op(), new DateOnly(2026, 11, 10), paint.Id));
         await new TemplateCommands(Store, Ids, Clock).CreateAsync(new CreateTemplateCommand(Op(), "Paint job", new TemplatePayload { Title = "Paint a room", Notes = "Prime first", Subtasks = [] }, null));
 
         return new SeedIds(project.Id, paint.Id, created[1].Id, created[2].Id, old.Id, finished.Id, pad.Id);
