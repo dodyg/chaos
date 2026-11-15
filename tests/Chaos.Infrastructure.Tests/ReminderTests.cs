@@ -88,7 +88,7 @@ public sealed class ReminderTests
                 Diary = new DiaryCommands(storage.Store, ids, clock),
                 Undo = new UndoCommands(storage.Store, ids, clock),
                 Queries = new TaskQueries(storage.Store, clock),
-                Days = new MyDayCommands(storage.Store, ids, clock),
+                Days = new MyDayCommands(storage.Store, clock),
             };
         }
 

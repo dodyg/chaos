@@ -60,7 +60,7 @@ public sealed class SummaryTests
                 Tasks = new TaskCommands(storage.Store, ids, clock),
                 Containers = new ContainerCommands(storage.Store, ids, clock),
                 Diary = new DiaryCommands(storage.Store, ids, clock),
-                Days = new MyDayCommands(storage.Store, ids, clock),
+                Days = new MyDayCommands(storage.Store, clock),
                 Weeks = new MyWeekCommands(storage.Store, ids, clock),
                 Summaries = new SummaryCommands(storage.Store, ids, clock),
                 Queries = new TaskQueries(storage.Store, clock),

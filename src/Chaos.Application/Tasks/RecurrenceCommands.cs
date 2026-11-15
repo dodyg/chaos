@@ -5,6 +5,7 @@ using Chaos.Application.History;
 using Chaos.Domain.Recurrence;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
+using Chaos.Sync;
 
 namespace Chaos.Application.Tasks;
 
@@ -156,7 +157,10 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         await session.Recurrence.AddSeriesAsync(series, ct);
         var occurrence = new RecurrenceOccurrenceRecord
         {
-            Id = ids.NewId().ToString(), SeriesId = series.Id, TaskId = task.Id, NominalKey = Key(first), ScheduleKey = Key(first),
+            // §7.5: occurrence:{seriesId}:{nominalKey}. The first task predates the series and keeps
+            // its random id; only materialized successors take occurrencetask ids.
+            Id = NameBasedId.Create(NameBasedId.Names.Occurrence(series.Id, Key(first))).ToString(),
+            SeriesId = series.Id, TaskId = task.Id, NominalKey = Key(first), ScheduleKey = Key(first),
             EffectiveLocal = Key(first), State = OccurrenceState.Active, SeriesRevision = 1,
             Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
         };
@@ -374,12 +378,14 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
             : RecurrenceCalculator.AfterCompletion(rule, rule.AnchorTime is null ? localNow.Date : localNow);
         if (next is null) return;
 
-        var taskId = ids.NewId().ToString();
         var nominalKey = Key(next.Value);
+        // §7.5: the successor task and its occurrence row are named after the series and slot, so two
+        // devices completing the same occurrence make the same rows. A retired prior row keeps its id.
+        var taskId = NameBasedId.Create(NameBasedId.Names.OccurrenceTask(series.Id, nominalKey)).ToString();
         var priorOccurrence = await session.Recurrence.FindByKeyAsync(series.Id, nominalKey, ct);
         if (priorOccurrence is { DeletedAtUtc: null })
             throw AppException.VersionConflict("That occurrence already exists. Refresh and reconcile the series.");
-        var occurrenceId = priorOccurrence?.Id ?? ids.NewId().ToString();
+        var occurrenceId = priorOccurrence?.Id ?? NameBasedId.Create(NameBasedId.Names.Occurrence(series.Id, nominalKey)).ToString();
         var dayDelta = DateOnly.FromDateTime(next.Value).DayNumber - rule.AnchorDate.DayNumber;
         DateOnly? Shift(DateOnly? date) => date?.AddDays(dayDelta);
         var anchor = rule.AnchorDate.ToDateTime(rule.AnchorTime ?? TimeOnly.MinValue);
@@ -404,7 +410,18 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
             Position = await session.Tasks.GetNextPositionAsync(completed.ContainerId, ct),
             RecurrenceOccurrenceKey = occurrenceId, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, DeletedAtUtc = null,
         };
-        await session.Tasks.AddAsync(successor, ct);
+        // §7.5: the successor id is deterministic, so after an undo it can already exist as a
+        // tombstone; revive it in place, exactly as the occurrence row below.
+        if (await session.Tasks.GetIncludingDeletedAsync(taskId, ct) is { } priorTask)
+        {
+            successor = successor with { Version = priorTask.Version + 1, CreatedAtUtc = priorTask.CreatedAtUtc };
+            if (await session.Tasks.UpdateAsync(successor, priorTask.Version, ct) is null)
+                throw AppException.VersionConflict("The recurrence changed elsewhere.");
+        }
+        else
+        {
+            await session.Tasks.AddAsync(successor, ct);
+        }
         foreach (var reminder in template.ReminderRules ?? [])
         {
             if (reminder.Anchor == ReminderAnchor.Absolute) continue;
@@ -412,11 +429,23 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
                 Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, DeletedAtUtc = null }, ct);
         }
         foreach (var tagId in template.TagIds ?? []) await session.Tags.AddTaskLinkAsync(taskId, tagId, ct);
-        foreach (var child in template.Subtasks)
+        for (var templateIndex = 0; templateIndex < template.Subtasks.Count; templateIndex++)
         {
-            var newChild = child with { Id = ids.NewId().ToString(), TaskId = taskId, Status = TaskItemStatus.NotStarted,
+            var child = template.Subtasks[templateIndex];
+            // §7.5: occurrencesubtask:{occurrenceTaskId}:{templateIndex} — the copy's place in the template.
+            var newChild = child with { Id = NameBasedId.Create(NameBasedId.Names.OccurrenceSubtask(taskId, templateIndex)).ToString(), TaskId = taskId, Status = TaskItemStatus.NotStarted,
                 CompletedAtUtc = null, CancelledAtUtc = null, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, DeletedAtUtc = null };
-            await session.Subtasks.AddAsync(newChild, ct);
+            // As the successor above: a deterministic id may still exist as an undo's tombstone.
+            if (await session.Subtasks.GetIncludingDeletedAsync(newChild.Id, ct) is { } priorChild)
+            {
+                newChild = newChild with { Version = priorChild.Version + 1, CreatedAtUtc = priorChild.CreatedAtUtc };
+                if (await session.Subtasks.UpdateAsync(newChild, priorChild.Version, ct) is null)
+                    throw AppException.VersionConflict("A subtask changed elsewhere.");
+            }
+            else
+            {
+                await session.Subtasks.AddAsync(newChild, ct);
+            }
             if (template.SubtaskTagIds?.TryGetValue(child.Id, out var tagIds) == true)
                 foreach (var tagId in tagIds) await session.Tags.AddSubtaskLinkAsync(newChild.Id, tagId, ct);
         }

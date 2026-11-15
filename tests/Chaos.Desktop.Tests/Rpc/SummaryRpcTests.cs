@@ -19,7 +19,7 @@ public sealed class SummaryRpcTests
         {
             var ids = new SequentialIdGenerator();
             var tasks = new TaskCommands(storage.Store, ids, clock);
-            var days = new MyDayRpcService(new MyDayCommands(storage.Store, ids, clock));
+            var days = new MyDayRpcService(new MyDayCommands(storage.Store, clock));
             var rpc = new SummaryRpcService(new SummaryCommands(storage.Store, ids, clock));
             today = (await days.ClockAsync(new(), CancellationToken.None)).Clock!.Today;
             var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Renew passport", null))).Task;

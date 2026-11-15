@@ -149,7 +149,8 @@
       "chaos.application": {
         "type": "Project",
         "dependencies": {
-          "Chaos.Domain": "[1.0.0, )"
+          "Chaos.Domain": "[1.0.0, )",
+          "Chaos.Sync": "[1.0.0, )"
         }
       },
       "chaos.desktop": {
@@ -176,8 +177,12 @@
         "dependencies": {
           "Chaos.Application": "[1.0.0, )",
           "Chaos.Domain": "[1.0.0, )",
+          "Chaos.Sync": "[1.0.0, )",
           "Microsoft.Data.Sqlite": "[10.0.14, )"
         }
+      },
+      "chaos.sync": {
+        "type": "Project"
       },
       "Microsoft.Data.Sqlite": {
         "type": "CentralTransitive",

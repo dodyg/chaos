@@ -109,10 +109,14 @@
       "chaos.application": {
         "type": "Project",
         "dependencies": {
-          "Chaos.Domain": "[1.0.0, )"
+          "Chaos.Domain": "[1.0.0, )",
+          "Chaos.Sync": "[1.0.0, )"
         }
       },
       "chaos.domain": {
+        "type": "Project"
+      },
+      "chaos.sync": {
         "type": "Project"
       }
     },

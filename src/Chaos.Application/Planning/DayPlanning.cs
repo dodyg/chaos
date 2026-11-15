@@ -1,6 +1,7 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.Planning;
 
@@ -15,7 +16,7 @@ internal static class DayPlanning
     /// assignments for that date seed the new day (origin Week) and the revision is recorded;
     /// an existing day is never reseeded, so a task the person removed stays removed.
     /// </summary>
-    public static async Task<DayPlanRecord> EnsurePlanAsync(IDataSession session, IIdGenerator ids, string profileId, DateOnly date, DateTimeOffset now, CancellationToken token)
+    public static async Task<DayPlanRecord> EnsurePlanAsync(IDataSession session, string profileId, DateOnly date, DateTimeOffset now, CancellationToken token)
     {
         if (await session.DayPlans.FindAsync(profileId, date, token) is { } existing)
         {
@@ -25,7 +26,8 @@ internal static class DayPlanning
         var week = await WeekResolution.ConfirmedContainingAsync(session, profileId, date, token);
         var created = await session.DayPlans.TryAddAsync(new DayPlanRecord
         {
-            Id = StorageFormats.Id(ids.NewId()),
+            // §7.5: the id is the day's natural key, so two devices opening the same day make one row.
+            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DayPlan(profileId, date))),
             ProfileId = profileId,
             LocalDate = date,
             SeededWeekPlanId = week?.Id,
@@ -42,7 +44,7 @@ internal static class DayPlanning
         {
             foreach (var taskId in await AssignedOpenTaskIdsAsync(session, week.Id, date, token))
             {
-                await PlaceAsync(session, ids, plan, taskId, DayPlanItemOrigin.Week, now, token);
+                await PlaceAsync(session, plan, taskId, DayPlanItemOrigin.Week, now, token);
             }
         }
 
@@ -65,7 +67,7 @@ internal static class DayPlanning
     }
 
     /// <returns>True when the task was added or brought back; false when it was already on the day.</returns>
-    public static async Task<bool> PlaceAsync(IDataSession session, IIdGenerator ids, DayPlanRecord plan, string taskId, DayPlanItemOrigin origin, DateTimeOffset now, CancellationToken token)
+    public static async Task<bool> PlaceAsync(IDataSession session, DayPlanRecord plan, string taskId, DayPlanItemOrigin origin, DateTimeOffset now, CancellationToken token)
     {
         var existing = await session.DayPlans.FindItemAsync(plan.Id, taskId, token);
         if (existing is { RemovedAtUtc: null })
@@ -91,7 +93,8 @@ internal static class DayPlanning
 
         await session.DayPlans.AddItemAsync(new DayPlanItemRecord
         {
-            Id = StorageFormats.Id(ids.NewId()),
+            // §7.5: dayplanitem:{dayPlanId}:{taskId}; re-adding a removed task revives the same row id.
+            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DayPlanItem(plan.Id, taskId))),
             DayPlanId = plan.Id,
             TaskId = taskId,
             Position = position,
