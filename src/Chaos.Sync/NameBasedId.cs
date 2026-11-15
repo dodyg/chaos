@@ -56,6 +56,7 @@ public static class NameBasedId
         public static string Availability(string profileId, int weekday) => $"availability:{profileId}:{weekday}";
         public static string AvailabilityOverride(string profileId, DateOnly date) => $"availabilityoverride:{profileId}:{StorageDate(date)}";
         public static string GitHubTask(string connectionId, long repositoryId, int issueNumber) => $"githubtask:{connectionId}:{repositoryId}:{issueNumber}";
+        public static string BoardSetting(string targetKind, string targetId) => $"boardsetting:{targetKind}:{targetId}";
 
         private static string StorageDate(DateOnly date) => date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
     }

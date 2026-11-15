@@ -145,6 +145,20 @@ public static class SyncCatalog
             ApplyOrder: 50),
 
         // ---- Work -------------------------------------------------------------------------
+        // P2 Kanban settings: deterministic id (boardsetting:{targetKind}:{targetId}) makes a
+        // second row for the same target impossible, so the target unique index needs no rule.
+        new SyncTable("BoardSettings", "board_setting", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["TargetKind", "TargetId", "CreatedAtUtc"]),
+                new("grouping", ["GroupBy", "SwimlaneBy", "ColumnTagId", "SwimlaneTagId"]),
+                new("limits", ["WipLimitsJson", "HiddenColumnsJson"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            DeterministicIndexes: [new("UX_BoardSettings_Target",
+                "Deterministic ID: both devices derive boardsetting:{targetKind}:{targetId}, so the row upserts onto itself (§7.5).")],
+            ApplyOrder: 55),
         new SyncTable("Tasks", "task", SyncMode.Merge, ["Id"],
             Groups:
             [

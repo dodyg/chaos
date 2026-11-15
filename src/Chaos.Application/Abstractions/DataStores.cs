@@ -34,6 +34,7 @@ public interface IDataSession
     IBackupCatalogStore Backups { get; }
     IImportStore Imports { get; }
     IGitHubStore GitHub { get; }
+    IBoardStore Boards { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
@@ -462,6 +463,23 @@ public interface IBackupCatalogStore
 {
     Task AddAsync(BackupCatalogRecord entry, CancellationToken ct);
     Task<BackupCatalogRecord?> FindByFileNameAsync(string fileName, CancellationToken ct);
+}
+
+/// <summary>
+/// Board settings rows and the card reads a board needs (PLAN2 P2). Settings are a synced
+/// aggregate; the card reads are ordinary read-snapshot queries over tasks, subtasks, tag
+/// links and GitHub issue links.
+/// </summary>
+public interface IBoardStore
+{
+    /// <summary>The target's active settings row, or null when the board still uses the defaults.</summary>
+    Task<BoardSettingsRecord?> GetAsync(BoardTargetKind targetKind, string targetId, CancellationToken ct);
+    Task AddAsync(BoardSettingsRecord settings, CancellationToken ct);
+    Task<BoardSettingsRecord?> UpdateAsync(BoardSettingsRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>Active top-level tasks of one container with subtask progress and an issue-link mark, ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<BoardCardRow>> ListCardsAsync(string containerId, CancellationToken ct);
+    /// <summary>Active task-tag links of one container's tasks, ordered by (TaskId, TagId).</summary>
+    Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct);
 }
 
 /// <summary>

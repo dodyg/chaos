@@ -3,6 +3,7 @@ using Chaos.Infrastructure.GitHub;
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
+using Chaos.Application.Boards;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
@@ -51,6 +52,8 @@ internal static class Program
             .GetAwaiter().GetResult();
 
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var boards = new BoardCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var boardQueries = new BoardQueries(storage.Store);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
@@ -145,6 +148,7 @@ internal static class Program
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddQueryRpcService(new QueryRpcService(new TaskQueries(storage.Store, TimeProvider.System)));
+                rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, githubEngine));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -298,6 +302,16 @@ internal static class Program
 [JsonSerializable(typeof(TagLinkRequest))]
 [JsonSerializable(typeof(TagUnlinkRequest))]
 [JsonSerializable(typeof(TagIdsResponse))]
+[JsonSerializable(typeof(BoardGetRequest))]
+[JsonSerializable(typeof(BoardSettingsDto))]
+[JsonSerializable(typeof(BoardColumnResponse))]
+[JsonSerializable(typeof(BoardLaneResponse))]
+[JsonSerializable(typeof(BoardCardResponse))]
+[JsonSerializable(typeof(BoardGetResponse))]
+[JsonSerializable(typeof(BoardUpdateSettingsRequest))]
+[JsonSerializable(typeof(BoardSettingsResponse))]
+[JsonSerializable(typeof(BoardMoveRequest))]
+[JsonSerializable(typeof(BoardMoveResponse))]
 [JsonSerializable(typeof(TaskQueryRequest))]
 [JsonSerializable(typeof(QueryRowResponse))]
 [JsonSerializable(typeof(TaskQueryResponse))]

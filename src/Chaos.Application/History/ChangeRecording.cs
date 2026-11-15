@@ -208,6 +208,7 @@ public sealed class RecordingDataSession : IDataSession
     public IBackupCatalogStore Backups => _inner.Backups;
     public IImportStore Imports => _inner.Imports;
     public IGitHubStore GitHub => _inner.GitHub;
+    public IBoardStore Boards => _inner.Boards;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
     public string? OperationId { get; private set; }
@@ -569,6 +570,7 @@ internal static class UndoLabels
         ["task.set-status"] = "Change status of",
         ["task.move"] = "Move task",
         ["task.reorder"] = "Reorder task",
+        ["board.move"] = "Move task on board",
         ["task.delete"] = "Delete task",
         ["task.restore"] = "Restore task",
         ["task.restore-fields"] = "Restore earlier values of",

@@ -25,6 +25,9 @@ public static class StorageFormats
 
     public static string Time(TimeOnly time) => time.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <summary>An instant to bind as a SQL value: null stays null (SQL NULL), not an empty string.</summary>
+    public static object? Optional(DateTimeOffset? instant) => instant is { } value ? Instant(value) : null;
+
     public static DateTimeOffset? ParseInstant(string? text) =>
         text is null ? null : DateTimeOffset.Parse(text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal);
 

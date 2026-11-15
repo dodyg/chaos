@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Boards;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
@@ -43,6 +44,7 @@ public sealed class SyncCatalogFlushCoverageTests
     private const string Records = "records";
     private const string Pages = "pages";
     private const string GitHub = "github";
+    private const string Board = "board";
 
     /// <summary>Which scenario group produces each kind. Every non-LocalOnly catalog kind is
     /// either here or in <see cref="UnreachableKinds"/> (the guard test below enforces that).</summary>
@@ -95,6 +97,8 @@ public sealed class SyncCatalogFlushCoverageTests
         ["github_comment_link"] = GitHub,
         ["github_label_tag"] = GitHub,
         ["github_milestone_project"] = GitHub,
+
+        ["board_setting"] = Board,
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -168,6 +172,9 @@ public sealed class SyncCatalogFlushCoverageTests
                 break;
             case GitHub:
                 await GitHubScenarioAsync(host, expected);
+                break;
+            case Board:
+                await BoardScenarioAsync(host, expected);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown scenario group: {group}");
@@ -371,6 +378,19 @@ public sealed class SyncCatalogFlushCoverageTests
         var comment = new GitHubComment(5, "A comment", new(2, "other"), DataHost.Start, DataHost.Start, "https://github.com/person/repo/issues/1#issuecomment-5");
         await new GitHubInboundComments(host.Store, host.Ids, host.Clock).ApplyAsync(link.Id, link.Version, [comment], true);
         expected["github_comment_link"] = (await TextsAsync(host, "SELECT DiaryEntryId FROM GitHubCommentLinks;"))[0];
+    }
+
+    /// <summary>A list whose board is configured with a grouping and a WIP limit.</summary>
+    private static async Task BoardScenarioAsync(DataHost host, Dictionary<string, string> expected)
+    {
+        var containers = new ContainerCommands(host.Store, host.Ids, host.Clock);
+        var list = (await containers.CreateAsync(new CreateContainerCommand(Op(), "Flush board", ContainerKind.List, null))).Container;
+
+        var boards = new BoardCommands(host.Store, host.Ids, host.Clock);
+        var settings = await boards.UpdateSettingsAsync(new UpdateBoardSettingsCommand(
+            Op(), BoardTargetKind.Container, list.Id, ExpectedVersion: 0,
+            BoardGrouping.Priority, BoardSwimlane.None, null, null, "{\"Low\": 3}", "[]"));
+        expected["board_setting"] = settings.Settings.Id;
     }
 
     // ---- Helpers ---------------------------------------------------------------------------

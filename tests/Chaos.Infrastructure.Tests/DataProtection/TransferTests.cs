@@ -372,6 +372,7 @@ public sealed class TransferTests
             public IBackupCatalogStore Backups => inner.Backups;
             public IImportStore Imports => inner.Imports;
             public IGitHubStore GitHub => inner.GitHub;
+            public IBoardStore Boards => inner.Boards;
         }
 
         private sealed class FailingTasks(ITaskStore inner) : ITaskStore
