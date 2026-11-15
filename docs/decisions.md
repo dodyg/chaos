@@ -782,3 +782,30 @@ wider check and resets the normalization version so the next start rebuilds the 
 - **ICS subscription link needs no OAuth.** Importing a calendar's secret ICS address gives
   read-only meetings with no Google review and works for any user, so it can be built first
   and independently of the Google connection.
+
+## 2026-11-15 (Phase 2 owner decisions — status after P0)
+
+PLAN2 §4 lists eight decisions (D1–D8). Status after package P0; defaults are in use where the
+plan provides one, and each blocking package stays unticked until the owner confirms or replaces:
+
+- **D1 (phone client in Phase 2)** — default adopted: no; Phase 2 is desktop plus service. P19
+  will be recorded as not applicable unless the owner says otherwise.
+- **D2 (hosting)** — default stands (any Linux container host with managed PostgreSQL, S3-compatible
+  storage, key vault). Affects P20 only; nothing in code depends on it.
+- **D3 (domain, email sender)** — `https://sync.<owner-domain>` placeholder; affects P12's live
+  exit and P20, not P1–P11.
+- **D4 (sign-in providers)** — default adopted: email code + Google first; Microsoft, Apple and
+  GitHub share the code path and stay off until registered. Affects P14 exits only.
+- **D5 (attachment limits)** — default adopted: 100 MiB per file, 5 GiB per account, enforced by
+  the server, configurable. The local client cap (P9) is 100 MiB.
+- **D6 (has Phase 1 proven itself?)** — **PENDING; no default exists.** The installed-desktop
+  checklist (`docs/acceptance.md`) and the WP0/WP10 interactive items need a person at a Windows
+  desktop with an installed MSIX; the implementing environment is headless. The owner instructed
+  "implement PLAN2 up to P11", which P1–P11 implementation proceeded on; the P0 and P1 checkboxes
+  stay unticked until D6 is answered (pass or written waiver).
+- **D7 (GitHub fields in personal custom views)** — default adopted: yes, personal views only;
+  shared views remain phase 3.
+- **D8 (calendar library)** — default adopted: FullCalendar standard (MIT) only. Spike note (P0,
+  `docs/desktop-support.md`): v7 restructured the packages; P4 pins `@fullcalendar/react@7.1.5`
+  and verifies the v7 API before use. No premium packages exist on npm (`@fullcalendar/premium`
+  is 404), so "standard only" is currently the whole registry offering.

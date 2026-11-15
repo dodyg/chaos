@@ -1502,6 +1502,16 @@ The steps below add only what is specific to each package.
 
 **Depends on:** nothing. **Migration:** none.
 
+**Progress note 2026-11-15.** All eight spikes recorded in `docs/desktop-support.md` ("Phase 2
+spikes"): #7 (FullCalendar registry facts, MIT, v7 restructure) verified; #1 documented the
+NeoAstra custom-scheme capability without a running app (P9 uses the RPC chunk path); #2–#5 and
+#8 are blocked — they need an interactive Windows desktop, an installed MSIX or an elevated
+Docker daemon, none of which exists in the implementing environment. D6 is therefore PENDING
+(no default): the Phase 1 installed checklist could not be run, so WP0/WP10/WP13 stay open and
+this package is not ticked. The owner's instruction "implement PLAN2 up to P11" authorized
+starting P1 while D6 is outstanding; decisions D1–D8 status recorded in `docs/decisions.md`
+(2026-11-15 entry). No product code changed. Gate not applicable (docs only).
+
 1. Run the installed-desktop checklist in `docs/acceptance.md` on a real Windows desktop, with an
    installed MSIX package. This closes Phase 1 WP0, WP10 and WP13. Record the results. If the
    owner waives any step, record the waiver with the owner's words and date (D6).

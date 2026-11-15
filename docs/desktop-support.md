@@ -57,3 +57,21 @@ with steps, in `docs/acceptance.md`:
   instance; date change cancels the old notification; notifications turned off in Windows.
 - High DPI (100/150/200%), RTL text, keyboard-only use and Narrator.
 - Package upgrade keeps data.
+
+## Phase 2 spikes (P0, 2026-11-15)
+
+The implementing agent works in a headless sandbox (no interactive desktop, no MSIX install, no
+audio devices, and a Docker CLI whose daemon needs elevation to start). Spikes that need a person
+at the desktop are recorded as **blocked** with the exact reason and the smallest next action; none
+was simulated. Results so far:
+
+| # | Spike | Result |
+| --- | --- | --- |
+| 1 | Local file viewing in the WebView | **Documented capability found, not yet verified.** NeoAstra 1.12.0 documents `NeoCustomScheme.Create(...)` with per-host origins and provider-set response headers (`docs/capabilities-and-security.md`, "Frames and content of other origins"). A safe, host-validated custom scheme therefore exists on paper. It was not exercised in a running app in this environment. P9 proceeds with the `attachments.read` RPC chunk → `Blob` → object-URL path (works in the browser preview and jsdom, needs only `blob:` in three CSP directives); the custom scheme stays recorded as a later optimization that needs one native check. |
+| 2 | Microphone in the WebView | **Blocked (needs an interactive desktop).** NeoAstra 1.12.0's docs mention no media-device permission request API and no `getUserMedia` guidance; WebView2 itself supports media capture only when the host handles `PermissionRequested`, which is not documented here. Smallest next action: on a desktop, try `navigator.mediaDevices.getUserMedia({audio:true})` in the app view; if it is denied, use the planned C# `MediaCapture` fallback (audio-only, `.m4a`) for P10. |
+| 3 | Credential store (`PasswordVault`) | **Blocked (needs an interactive desktop + installed MSIX).** Cannot be exercised headlessly. The port `ISecretStore` still targets `PasswordVault` first, `CredWrite`/`CredRead` as fallback, per PLAN2 §6.2; the choice must be confirmed by the spike before P7/P11 are ticked. |
+| 4 | Windows Hello (`UserConsentVerifier`) | **Blocked (needs an interactive desktop).** The interop call and front-most prompt behaviour need a real window. P11 implements `IUserPresenceVerifier` behind the port and reports availability honestly; the live prompt check stays open. |
+| 5 | Loopback sign-in from the installed package | **Blocked (needs an interactive desktop + installed MSIX).** Needed for P12's exit, not for P1–P11. |
+| 6 | Docker or PostgreSQL for server tests | **Docker CLI 27.2.0 present; the daemon is not reachable** (`docker ps` fails: the named pipe needs elevation). `psql` is not installed. Server tests are P12+, outside the current range; on a normal desktop, start Docker Desktop once and record which of `CHAOS_TEST_PG`/Testcontainers works. |
+| 7 | FullCalendar (D8) | **Registry facts verified (2026-11-15):** all standard packages are MIT. v7 restructured: `@fullcalendar/core` is now types-only, connectors are self-contained (`@fullcalendar/react@7.1.5` depends on `@fullcalendar/core@7.1.5` + `@full-ui/headless-calendar@7.1.5`, peers React 17–19 and `temporal-polyfill`), and the old `daygrid`/`timegrid`/`list`/`interaction` packages remain at 6.1.22 (v6 line). The plan's v6-era package list therefore does not apply as written; P4 pins `@fullcalendar/react@7.1.5` and confirms view imports against current v7 docs before use. Rendering, dark mode, focus and RTL checks need the running app and remain part of P4's native check. |
+| 8 | ClamAV in Docker | **Blocked (same daemon reason as #6).** Needed for P16 only. |
