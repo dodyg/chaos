@@ -101,6 +101,9 @@ public static class StorageBootstrap
                 // Verifies FTS5 and (re)builds the search index when its normalization is stale,
                 // including the first start after migration 003 (PLAN §5).
                 await Search.SearchIndexWriter.EnsureCurrentAsync(migrationConnection, clock.GetUtcNow(), ct);
+                // Change capture (PLAN2 §7.3): recreates the TR_Sync_% triggers when the catalog
+                // changed — that is, after any migration that touched the schema.
+                Sync.SyncTriggerInstaller.Install(migrationConnection);
             }
 
             var store = new SqliteApplicationStore(source);

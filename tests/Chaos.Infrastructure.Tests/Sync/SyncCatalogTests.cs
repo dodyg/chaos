@@ -79,6 +79,19 @@ public sealed class SyncCatalogTests
     public async Task SyncCatalog_EveryTableAndColumnClassified()
     {
         using var connection = OpenMigrated();
+        Chaos.Infrastructure.Sync.SyncTriggerInstaller.Install(connection);
+        using (var dump = new StreamWriter(Path.Combine(Path.GetTempPath(), "chaos-triggers-tasks.txt")))
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND (sql LIKE '%Tasks%' OR name LIKE 'TR_Sync_Tasks%') ORDER BY name;";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                dump.WriteLine(reader.GetString(0));
+                dump.WriteLine(reader.GetString(1));
+                dump.WriteLine("-----");
+            }
+        }
         var catalog = SyncCatalog.Tables.ToDictionary(table => table.Table, StringComparer.OrdinalIgnoreCase);
 
         var actualTables = new List<string>();

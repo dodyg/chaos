@@ -836,3 +836,11 @@ plan provides one, and each blocking package stays unticked until the owner conf
   another device's identity; archives exclude `DeviceSettings` and every `Sync*` table, and
   a reset starts a fresh identity. Seeding (`INSERT OR IGNORE`) only fills a database that
   has none.
+- **Capture triggers deduplicate with `WHERE NOT EXISTS`, not `INSERT OR IGNORE`.** SQLite
+  gives statements inside a trigger program the conflict-resolution algorithm of the
+  statement that fired the trigger, so an ordinary write's default ABORT overrides the
+  trigger's `OR IGNORE`, and a field group whose pending row already existed (captured by an
+  earlier write) failed the SyncPending key. The pending inserts therefore carry an explicit
+  `WHERE NOT EXISTS` probe, and multi-column group comparisons are parenthesized (`AND`
+  binds tighter than `OR` — the first generated version silently dropped the guard for all
+  but the last column of a group).

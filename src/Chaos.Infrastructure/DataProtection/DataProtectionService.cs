@@ -210,6 +210,9 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, ct);
         await SearchIndexWriter.EnsureCurrentAsync(connection, now, ct);
+        // A restored or rebuilt file may lack the change-capture triggers (an archive builds
+        // one without them) or carry a stale catalog hash: reinstall when it differs (PLAN2 §7.3).
+        Sync.SyncTriggerInstaller.Install(connection);
 
         using (var check = connection.CreateCommand())
         {
