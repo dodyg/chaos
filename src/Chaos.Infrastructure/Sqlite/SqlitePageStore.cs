@@ -199,7 +199,7 @@ public sealed class SqlitePageStore(SqliteConnection connection) : IPageStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT l.TagId FROM PageTags l JOIN Tags t ON t.Id = l.TagId
-            WHERE l.PageId = $id AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, l.TagId;
+            WHERE l.PageId = $id AND l.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, l.TagId;
             """;
         command.Parameters.AddWithValue("$id", pageId);
         using var reader = await command.ExecuteReaderAsync(ct);
@@ -221,7 +221,7 @@ public sealed class SqlitePageStore(SqliteConnection connection) : IPageStore
 
         var names = tagIds.Select((_, index) => $"$t{index}").ToList();
         return await ReadAsync(
-            $"SELECT * FROM Pages WHERE DeletedAtUtc IS NULL AND Id IN (SELECT PageId FROM PageTags WHERE TagId IN ({string.Join(", ", names)})) ORDER BY Title COLLATE NOCASE, Id;",
+            $"SELECT * FROM Pages WHERE DeletedAtUtc IS NULL AND Id IN (SELECT PageId FROM PageTags WHERE TagId IN ({string.Join(", ", names)}) AND DeletedAtUtc IS NULL) ORDER BY Title COLLATE NOCASE, Id;",
             ct, [.. tagIds.Select((id, index) => ($"$t{index}", (object)id))]);
     }
 
@@ -260,10 +260,13 @@ public sealed class SqlitePageStore(SqliteConnection connection) : IPageStore
     {
         await SearchIndexWriter.SyncAsync(connection, SearchTargetKind.Page, page.Id, null, page.Title, page.RawMarkdown, page.DeletedAtUtc is null, ct);
 
+        // Page tags are rewritten from the front matter; removed ones are tombstoned so the
+        // removal syncs (PLAN2 §7.2). The page save time stamps them deterministically.
         using (var clear = connection.CreateCommand())
         {
-            clear.CommandText = "DELETE FROM PageTags WHERE PageId = $id;";
+            clear.CommandText = "UPDATE PageTags SET DeletedAtUtc = $at WHERE PageId = $id AND DeletedAtUtc IS NULL;";
             clear.Parameters.AddWithValue("$id", page.Id);
+            clear.Parameters.AddWithValue("$at", StorageFormats.Instant(page.UpdatedAtUtc));
             await clear.ExecuteNonQueryAsync(ct);
         }
 
@@ -279,7 +282,10 @@ public sealed class SqlitePageStore(SqliteConnection connection) : IPageStore
             if (paths.TryGetValue(NormalizePath(path), out var tagId))
             {
                 using var insert = connection.CreateCommand();
-                insert.CommandText = "INSERT OR IGNORE INTO PageTags (PageId, TagId) VALUES ($page, $tag);";
+                insert.CommandText = """
+                    INSERT INTO PageTags (PageId, TagId, DeletedAtUtc) VALUES ($page, $tag, NULL)
+                    ON CONFLICT (PageId, TagId) DO UPDATE SET DeletedAtUtc = NULL WHERE PageTags.DeletedAtUtc IS NOT NULL;
+                    """;
                 insert.Parameters.AddWithValue("$page", page.Id);
                 insert.Parameters.AddWithValue("$tag", tagId);
                 await insert.ExecuteNonQueryAsync(ct);

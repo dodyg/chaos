@@ -421,13 +421,13 @@ public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, s
     public Task<IReadOnlyList<string>> ListTaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TagId == id).Select(x => x.TaskId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListSubtaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(subtaskLinks.Where(x => x.TagId == id).Select(x => x.SubtaskId).Order(StringComparer.Ordinal).ToList());
     public Task<bool> AddTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Add((target, tag)));
-    public Task<bool> RemoveTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
+    public Task<bool> RemoveTaskLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
     public Task<bool> AddSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Add((target, tag)));
-    public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
+    public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
     public Task<IReadOnlyList<string>> ListPadTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.PadItemId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListPadItemIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.TagId == id).Select(x => x.PadItemId).Order(StringComparer.Ordinal).ToList());
     public Task<bool> AddPadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Add((target, tag)));
-    public Task<bool> RemovePadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Remove((target, tag)));
+    public Task<bool> RemovePadLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(padLinks.Remove((target, tag)));
 }
 
 public sealed class FakePadStore(List<PadItemRecord> rows, List<ScratchTaskLinkRecord> links) : IPadStore

@@ -143,7 +143,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
         }).ToList();
         command.CommandText = $"""
             SELECT l.TaskId, l.TagId FROM TaskTags l JOIN Tags g ON g.Id = l.TagId
-            WHERE g.DeletedAtUtc IS NULL AND l.TaskId IN ({string.Join(", ", names)})
+            WHERE g.DeletedAtUtc IS NULL AND l.DeletedAtUtc IS NULL AND l.TaskId IN ({string.Join(", ", names)})
             ORDER BY l.TaskId, g.NormalizedName, g.Id;
             """;
         using var reader = await command.ExecuteReaderAsync(ct);
@@ -285,9 +285,9 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                         WHERE child.DeletedAtUtc IS NULL AND scope.Depth < {MaxTagDepth})
                     """);
                 where.Add("""
-                    (EXISTS (SELECT 1 FROM TaskTags tt WHERE tt.TaskId = t.Id AND tt.TagId IN (SELECT Id FROM TagScope))
+                    (EXISTS (SELECT 1 FROM TaskTags tt WHERE tt.TaskId = t.Id AND tt.DeletedAtUtc IS NULL AND tt.TagId IN (SELECT Id FROM TagScope))
                      OR EXISTS (SELECT 1 FROM Subtasks st JOIN SubtaskTags stt ON stt.SubtaskId = st.Id
-                                WHERE st.TaskId = t.Id AND st.DeletedAtUtc IS NULL AND stt.TagId IN (SELECT Id FROM TagScope)))
+                                WHERE st.TaskId = t.Id AND st.DeletedAtUtc IS NULL AND stt.DeletedAtUtc IS NULL AND stt.TagId IN (SELECT Id FROM TagScope)))
                     """);
             }
 

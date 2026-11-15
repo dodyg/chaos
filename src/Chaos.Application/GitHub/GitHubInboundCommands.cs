@@ -208,7 +208,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         }
         foreach (var mapping in mappings)
             if (merged.Contains(mapping.LabelId) && await s.Tags.GetAsync(mapping.TagId, ct) is not null) await s.Tags.AddTaskLinkAsync(task, mapping.TagId, ct);
-            else await s.Tags.RemoveTaskLinkAsync(task, mapping.TagId, ct);
+            else await s.Tags.RemoveTaskLinkAsync(task, mapping.TagId, now, ct);
     }
 
     private async Task<(string ContainerId, string? SectionId)> Placement(IDataSession s, GitHubRepositoryRecord repo, GitHubMilestone? milestone, string space, DateTimeOffset now, CancellationToken ct)

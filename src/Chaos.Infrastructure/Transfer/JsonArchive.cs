@@ -68,6 +68,14 @@ public static class JsonArchive
         ["GitHubConnectionBackoff"] = "device synchronization retry state",
         ["GitHubSyncCheckpoints"] = "device pagination, query and pre-import backup bookkeeping",
         ["GitHubCommentCheckpoints"] = "device comment pagination and deletion-check bookkeeping",
+        ["SyncPending"] = "sync capture queue, rebuilt from triggers",
+        ["SyncApplyState"] = "sync apply flag, device-local",
+        ["SyncState"] = "sync account binding and state, device-local",
+        ["SyncClocks"] = "sync clocks, rebuilt on push",
+        ["SyncOutbox"] = "outgoing sync queue, device-local",
+        ["SyncInboxParked"] = "parked remote changes, device-local",
+        ["SyncAttention"] = "sync notices, device-local",
+        ["DeviceSettings"] = "this device's identity and device-only settings",
     };
 
     /// <summary>Columns reset on export because they describe this machine, not the data.</summary>

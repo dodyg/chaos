@@ -73,47 +73,58 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     public async Task<IReadOnlyList<string>> ListTaskTagIdsAsync(string taskId, CancellationToken ct) =>
         await IdsAsync("""
             SELECT l.TagId FROM TaskTags l JOIN Tags t ON t.Id = l.TagId
-            WHERE l.TaskId = $id AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
+            WHERE l.TaskId = $id AND l.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
             """, taskId, ct);
 
     public async Task<IReadOnlyList<string>> ListSubtaskTagIdsAsync(string subtaskId, CancellationToken ct) =>
         await IdsAsync("""
             SELECT l.TagId FROM SubtaskTags l JOIN Tags t ON t.Id = l.TagId
-            WHERE l.SubtaskId = $id AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
+            WHERE l.SubtaskId = $id AND l.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
             """, subtaskId, ct);
 
     public async Task<IReadOnlyList<string>> ListTaskIdsAsync(string tagId, CancellationToken ct) =>
-        await IdsAsync("SELECT TaskId FROM TaskTags WHERE TagId = $id ORDER BY TaskId;", tagId, ct);
+        await IdsAsync("SELECT TaskId FROM TaskTags WHERE TagId = $id AND DeletedAtUtc IS NULL ORDER BY TaskId;", tagId, ct);
 
     public async Task<IReadOnlyList<string>> ListSubtaskIdsAsync(string tagId, CancellationToken ct) =>
-        await IdsAsync("SELECT SubtaskId FROM SubtaskTags WHERE TagId = $id ORDER BY SubtaskId;", tagId, ct);
+        await IdsAsync("SELECT SubtaskId FROM SubtaskTags WHERE TagId = $id AND DeletedAtUtc IS NULL ORDER BY SubtaskId;", tagId, ct);
 
+    // Links are tombstoned, not deleted (migration 024, PLAN2 §7.2): re-adding un-tombstones
+    // the same row, and removal records when the link went away so the removal can sync.
     public async Task<bool> AddTaskLinkAsync(string taskId, string tagId, CancellationToken ct) =>
-        await LinkAsync("INSERT OR IGNORE INTO TaskTags (TaskId, TagId) VALUES ($target, $tag);", taskId, tagId, ct);
+        await LinkAsync("""
+            INSERT INTO TaskTags (TaskId, TagId, DeletedAtUtc) VALUES ($target, $tag, NULL)
+            ON CONFLICT (TaskId, TagId) DO UPDATE SET DeletedAtUtc = NULL WHERE TaskTags.DeletedAtUtc IS NOT NULL;
+            """, taskId, tagId, ct);
 
-    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct) =>
-        await LinkAsync("DELETE FROM TaskTags WHERE TaskId = $target AND TagId = $tag;", taskId, tagId, ct);
+    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct) =>
+        await UnlinkAsync("UPDATE TaskTags SET DeletedAtUtc = $at WHERE TaskId = $target AND TagId = $tag AND DeletedAtUtc IS NULL;", taskId, tagId, removedAtUtc, ct);
 
     public async Task<bool> AddSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct) =>
-        await LinkAsync("INSERT OR IGNORE INTO SubtaskTags (SubtaskId, TagId) VALUES ($target, $tag);", subtaskId, tagId, ct);
+        await LinkAsync("""
+            INSERT INTO SubtaskTags (SubtaskId, TagId, DeletedAtUtc) VALUES ($target, $tag, NULL)
+            ON CONFLICT (SubtaskId, TagId) DO UPDATE SET DeletedAtUtc = NULL WHERE SubtaskTags.DeletedAtUtc IS NOT NULL;
+            """, subtaskId, tagId, ct);
 
-    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct) =>
-        await LinkAsync("DELETE FROM SubtaskTags WHERE SubtaskId = $target AND TagId = $tag;", subtaskId, tagId, ct);
+    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct) =>
+        await UnlinkAsync("UPDATE SubtaskTags SET DeletedAtUtc = $at WHERE SubtaskId = $target AND TagId = $tag AND DeletedAtUtc IS NULL;", subtaskId, tagId, removedAtUtc, ct);
 
     public async Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct) =>
         await IdsAsync("""
             SELECT l.TagId FROM ScratchPadTags l JOIN Tags t ON t.Id = l.TagId
-            WHERE l.PadItemId = $id AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
+            WHERE l.PadItemId = $id AND l.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL ORDER BY t.NormalizedName, t.Id;
             """, padItemId, ct);
 
     public async Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct) =>
-        await IdsAsync("SELECT PadItemId FROM ScratchPadTags WHERE TagId = $id ORDER BY PadItemId;", tagId, ct);
+        await IdsAsync("SELECT PadItemId FROM ScratchPadTags WHERE TagId = $id AND DeletedAtUtc IS NULL ORDER BY PadItemId;", tagId, ct);
 
     public async Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct) =>
-        await LinkAsync("INSERT OR IGNORE INTO ScratchPadTags (PadItemId, TagId) VALUES ($target, $tag);", padItemId, tagId, ct);
+        await LinkAsync("""
+            INSERT INTO ScratchPadTags (PadItemId, TagId, DeletedAtUtc) VALUES ($target, $tag, NULL)
+            ON CONFLICT (PadItemId, TagId) DO UPDATE SET DeletedAtUtc = NULL WHERE ScratchPadTags.DeletedAtUtc IS NOT NULL;
+            """, padItemId, tagId, ct);
 
-    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct) =>
-        await LinkAsync("DELETE FROM ScratchPadTags WHERE PadItemId = $target AND TagId = $tag;", padItemId, tagId, ct);
+    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct) =>
+        await UnlinkAsync("UPDATE ScratchPadTags SET DeletedAtUtc = $at WHERE PadItemId = $target AND TagId = $tag AND DeletedAtUtc IS NULL;", padItemId, tagId, removedAtUtc, ct);
 
     private async Task<bool> LinkAsync(string sql, string targetId, string tagId, CancellationToken ct)
     {
@@ -121,6 +132,16 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         command.CommandText = sql;
         command.Parameters.AddWithValue("$target", targetId);
         command.Parameters.AddWithValue("$tag", tagId);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    private async Task<bool> UnlinkAsync(string sql, string targetId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$target", targetId);
+        command.Parameters.AddWithValue("$tag", tagId);
+        command.Parameters.AddWithValue("$at", StorageFormats.Instant(removedAtUtc));
         return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 

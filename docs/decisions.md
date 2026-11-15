@@ -809,3 +809,30 @@ plan provides one, and each blocking package stays unticked until the owner conf
   `docs/desktop-support.md`): v7 restructured the packages; P4 pins `@fullcalendar/react@7.1.5`
   and verifies the v7 API before use. No premium packages exist on npm (`@fullcalendar/premium`
   is 404), so "standard only" is currently the whole registry offering.
+
+## 2026-11-15 (P1 sync foundation — implementation decisions)
+
+- **Link tombstones without partial unique indexes.** PLAN2 §7.2 asks for tombstoned link
+  tables to carry partial `WHERE DeletedAtUtc IS NULL` unique indexes. For the five link
+  tables (TaskTags, SubtaskTags, ScratchPadTags, PageTags, WeekGoalTasks) uniqueness is the
+  composite **primary key**, which SQLite cannot make partial. Instead the row stays and a
+  re-added link **un-tombstones** it (`ON CONFLICT … DO UPDATE SET DeletedAtUtc = NULL`),
+  which preserves the same guarantee: a removed link never blocks re-adding it. The catalog
+  records the classification comment; no unique rule is needed for a primary key.
+- **WeekGoalTasks loses its `ON DELETE CASCADE`.** Goals are replaced wholesale when a week
+  is re-confirmed, so a cascade would erase even tombstoned links without the store seeing
+  the removal. Migration 024 rebuilds the table in place (rows and index carried over).
+  Content replacement removes a goal's links physically with the goal — the removal travels
+  as a purge, like the goal's own; `DeletedAtUtc` remains for removals that keep the parent
+  and for tombstones the sync applier writes. Tag links (TaskTags, SubtaskTags,
+  ScratchPadTags, PageTags) do tombstone: their removal is a user-facing change on a living
+  entity.
+- **Purge takes tombstoned links of purged owners.** A purged tag or task removes its link
+  rows entirely (they are dependents), which the link tables' foreign keys require anyway;
+  a **live** task's tombstoned link survives, because the removal it records still has to
+  sync (`DataPurge` collects deletable tags per pass and removes their links first).
+- **Restore keeps this device's identity.** Every restore rewrites `DeviceSettings` with the
+  live database's rows (`OpenAndPrepareAsync`), so neither a backup nor an archive can import
+  another device's identity; archives exclude `DeviceSettings` and every `Sync*` table, and
+  a reset starts a fresh identity. Seeding (`INSERT OR IGNORE`) only fills a database that
+  has none.

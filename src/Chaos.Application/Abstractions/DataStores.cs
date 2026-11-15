@@ -83,7 +83,7 @@ public interface IWeekPlanStore
     Task<WeekGoalRecord?> UpdateGoalOutcomeAsync(WeekGoalRecord goal, long expectedVersion, CancellationToken ct);
     /// <summary>Confirmed assignments ordered by (day, Position, Id); pool items (no day) last.</summary>
     Task<IReadOnlyList<WeekAssignmentRecord>> ListAssignmentsAsync(string weekPlanId, CancellationToken ct);
-    /// <summary>Replaces every confirmed goal, goal link and assignment of the plan with the given rows.</summary>
+    /// <summary>Replaces every confirmed goal, goal link and assignment of the plan with the given rows. A goal's links are removed with the goal.</summary>
     Task ReplaceContentAsync(string weekPlanId, IReadOnlyList<WeekGoalRecord> goals, IReadOnlyList<WeekAssignmentRecord> assignments, CancellationToken ct);
     Task AddRevisionAsync(string weekPlanId, long revision, string snapshot, DateTimeOffset confirmedAtUtc, CancellationToken ct);
     Task<long> CountRevisionsAsync(string weekPlanId, CancellationToken ct);
@@ -419,15 +419,15 @@ public interface ITagStore
     /// <returns>False when the link already existed.</returns>
     Task<bool> AddTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
     /// <returns>False when there was no such link.</returns>
-    Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
+    Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
     Task<bool> AddSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
-    Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
+    Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
 
     Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct);
     /// <summary>Pad item IDs linked to this exact tag, including tombstoned items.</summary>
     Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct);
     Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct);
-    Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct);
+    Task<bool> RemovePadLinkAsync(string padItemId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
 }
 
 /// <summary>

@@ -127,6 +127,10 @@ public sealed class SqliteWeekPlanStore(SqliteConnection connection) : IWeekPlan
 
     public async Task ReplaceContentAsync(string weekPlanId, IReadOnlyList<WeekGoalRecord> goals, IReadOnlyList<WeekAssignmentRecord> assignments, CancellationToken ct)
     {
+        // Goal replacement is wholesale: goals and their links are replaced together, so the
+        // links are hard-deleted with the goals they belong to (the removal travels as a purge,
+        // like the goals'). WeekGoalTasks.DeletedAtUtc (migration 024) exists for link removals
+        // that keep the parent — none today — and for tombstones the sync applier writes.
         await NonQueryAsync("DELETE FROM WeekGoalTasks WHERE GoalId IN (SELECT Id FROM WeekGoals WHERE WeekPlanId = $plan);", weekPlanId, ct);
         await NonQueryAsync("DELETE FROM WeekGoals WHERE WeekPlanId = $plan;", weekPlanId, ct);
         await NonQueryAsync("DELETE FROM WeekAssignments WHERE WeekPlanId = $plan;", weekPlanId, ct);
@@ -152,7 +156,7 @@ public sealed class SqliteWeekPlanStore(SqliteConnection connection) : IWeekPlan
             foreach (var taskId in goal.TaskIds.Distinct(StringComparer.Ordinal))
             {
                 using var link = connection.CreateCommand();
-                link.CommandText = "INSERT INTO WeekGoalTasks (GoalId, TaskId) VALUES ($goal, $task);";
+                link.CommandText = "INSERT OR IGNORE INTO WeekGoalTasks (GoalId, TaskId, DeletedAtUtc) VALUES ($goal, $task, NULL);";
                 link.Parameters.AddWithValue("$goal", goal.Id);
                 link.Parameters.AddWithValue("$task", taskId);
                 await link.ExecuteNonQueryAsync(ct);
@@ -286,7 +290,7 @@ public sealed class SqliteWeekPlanStore(SqliteConnection connection) : IWeekPlan
     private async Task<IReadOnlyList<string>> GoalTaskIdsAsync(string goalId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT TaskId FROM WeekGoalTasks WHERE GoalId = $goal ORDER BY TaskId;";
+        command.CommandText = "SELECT TaskId FROM WeekGoalTasks WHERE GoalId = $goal AND DeletedAtUtc IS NULL ORDER BY TaskId;";
         command.Parameters.AddWithValue("$goal", goalId);
         using var reader = await command.ExecuteReaderAsync(ct);
         var ids = new List<string>();

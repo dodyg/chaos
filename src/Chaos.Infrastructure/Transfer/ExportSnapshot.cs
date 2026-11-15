@@ -59,9 +59,9 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             WHERE DeletedAtUtc IS NULL ORDER BY IsInbox DESC, Position, Id;
             """, r => new ExportContainer(r.GetString(0), r.GetString(1), r.GetInt32(2), !r.IsDBNull(3), r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetInt32(5)), ct);
 
-        var taskTags = await GroupAsync(connection, "SELECT TaskId, TagId FROM TaskTags;", tagPaths, ct);
-        var subtaskTags = await GroupAsync(connection, "SELECT SubtaskId, TagId FROM SubtaskTags;", tagPaths, ct);
-        var padTags = await GroupAsync(connection, "SELECT PadItemId, TagId FROM ScratchPadTags;", tagPaths, ct);
+        var taskTags = await GroupAsync(connection, "SELECT TaskId, TagId FROM TaskTags WHERE DeletedAtUtc IS NULL;", tagPaths, ct);
+        var subtaskTags = await GroupAsync(connection, "SELECT SubtaskId, TagId FROM SubtaskTags WHERE DeletedAtUtc IS NULL;", tagPaths, ct);
+        var padTags = await GroupAsync(connection, "SELECT PadItemId, TagId FROM ScratchPadTags WHERE DeletedAtUtc IS NULL;", tagPaths, ct);
 
         var subtasks = (await ListAsync(connection, """
             SELECT TaskId, Id, Title, Notes, Status FROM Subtasks WHERE DeletedAtUtc IS NULL ORDER BY TaskId, Position, Id;

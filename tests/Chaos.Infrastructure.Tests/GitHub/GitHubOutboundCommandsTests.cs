@@ -384,7 +384,7 @@ public sealed class GitHubOutboundCommandsTests
         await Assert.That(remote.Assignees.Single().Id).IsEqualTo(connection.AccountId);
         await host.Store.ExecuteAsync(async (s, ct) =>
         {
-            await s.Tags.RemoveTaskLinkAsync(link.TaskId!, tag.Id, ct);
+            await s.Tags.RemoveTaskLinkAsync(link.TaskId!, tag.Id, DataHost.Start, ct);
             return true;
         });
         await commands.SetSelfAssignmentAsync(new(DataHost.Op(), link.TaskId!, false));
@@ -426,7 +426,7 @@ public sealed class GitHubOutboundCommandsTests
         api.AfterSetWrite = () => throw new GitHubApiException(GitHubErrorKind.Network);
         var outbound = new GitHubOutboundCommands(host.Store, api, inbound, host.Clock);
         await Assert.That(async () => await outbound.PushAsync(repo.Id, CancellationToken.None)).Throws<GitHubApiException>();
-        await host.Store.ExecuteAsync(async (s, ct) => { await s.Tags.RemoveTaskLinkAsync(link.TaskId!, tag.Id, ct); return true; });
+        await host.Store.ExecuteAsync(async (s, ct) => { await s.Tags.RemoveTaskLinkAsync(link.TaskId!, tag.Id, DataHost.Start, ct); return true; });
         api.AfterSetWrite = null;
         await outbound.RecoverAsync(repo.Id, CancellationToken.None);
         await outbound.PushAsync(repo.Id, CancellationToken.None);

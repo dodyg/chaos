@@ -197,6 +197,14 @@ public static class StorageBootstrap
                 await session.Containers.AddAsync(inbox, token);
             }
 
+            // One device identity per data root (PLAN2 §7.1, migration 024). Restores keep the
+            // current device's DeviceSettings rows (DataProtectionService), so this only fills
+            // a database that has none: a fresh data root, or a reset.
+            var device = ((SqliteDataSession)session).Connection.CreateCommand();
+            device.CommandText = "INSERT OR IGNORE INTO DeviceSettings (Key, Value) VALUES ('DeviceId', $id);";
+            device.Parameters.AddWithValue("$id", ids.NewId().ToString());
+            await device.ExecuteNonQueryAsync(token);
+
             return profile.Id;
         }, ct);
     }

@@ -846,10 +846,10 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct)
+    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
         await recorder.TouchTaskAsync(taskId, ct);
-        var changed = await inner.RemoveTaskLinkAsync(taskId, tagId, ct);
+        var changed = await inner.RemoveTaskLinkAsync(taskId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.TaskTag, taskId, tagId, presentAfter: false);
         return changed;
     }
@@ -862,10 +862,10 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct)
+    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
         await TouchSubtaskParentAsync(subtaskId, ct);
-        var changed = await inner.RemoveSubtaskLinkAsync(subtaskId, tagId, ct);
+        var changed = await inner.RemoveSubtaskLinkAsync(subtaskId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.SubtaskTag, subtaskId, tagId, presentAfter: false);
         return changed;
     }
@@ -880,9 +880,9 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct)
+    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
-        var changed = await inner.RemovePadLinkAsync(padItemId, tagId, ct);
+        var changed = await inner.RemovePadLinkAsync(padItemId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.PadTag, padItemId, tagId, presentAfter: false);
         return changed;
     }
