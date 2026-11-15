@@ -52,6 +52,11 @@ const tasks: TaskResponse[] = [
   task("task-8", "Write release notes", { containerId: "chaos", category: "Work", status: "Done" }),
 ];
 const deletedTasks: TaskResponse[] = [];
+// Board settings per container (PLAN2 P2): version 0 means "defaults, no row yet".
+type PreviewBoardSettings = { groupBy: string; swimlaneBy: string; columnTagId: string | null; swimlaneTagId: string | null; wipLimitsJson: string; hiddenColumnsJson: string; version: number };
+const boardSettings = new Map<string, PreviewBoardSettings>();
+/** The container's manual task order; board moves reorder inside it. */
+const taskOrder: string[] = [];
 const subtasks: SubtaskResponse[] = [
   { id: "sub-1", taskId: "task-2", title: "Design the blocklist table", notes: "", status: "Done", version: "1" },
   { id: "sub-2", taskId: "task-2", title: "Add the admin screen", notes: "", status: "NotStarted", version: "1" },
@@ -129,6 +134,108 @@ function week(): WeekOverviewDto {
     lookBack: { weekStart: addDays(start, -7), weekEnd: addDays(start, -1), hadPlan: false, completedTaskIds: [], completedCount: 0, assignedCount: 0, assignedDone: 0, assignedCancelled: 0, unfinishedTaskIds: [], goals: [], summaryId: null, summaryCompleted: [] },
     candidates: [], goalSuggestions: [], pendingReconciliation: [], checkIn: null,
     tasks: tasks.map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false })) };
+}
+
+/** The container's tasks in the current manual order, picking up tasks created later. */
+function orderedTasks(containerId: string) {
+  for (const row of tasks) if (row.containerId === containerId && !taskOrder.includes(row.id)) taskOrder.push(row.id);
+  return tasks.filter(t => t.containerId === containerId).sort((a, b) => taskOrder.indexOf(a.id) - taskOrder.indexOf(b.id));
+}
+function boardDefaults(): PreviewBoardSettings { return { groupBy: "Status", swimlaneBy: "None", columnTagId: null, swimlaneTagId: null, wipLimitsJson: "{}", hiddenColumnsJson: "[]", version: 0 }; }
+const settingsDto = (s: PreviewBoardSettings) => ({ groupBy: s.groupBy, swimlaneBy: s.swimlaneBy, columnTagId: s.columnTagId, swimlaneTagId: s.swimlaneTagId, wipLimitsJson: s.wipLimitsJson, hiddenColumnsJson: s.hiddenColumnsJson, version: String(s.version), isDefault: s.version === 0 });
+const priorities = ["Urgent", "High", "Normal", "Low", "None"];
+function boardColumns(s: PreviewBoardSettings, containerId: string, showCancelled: boolean) {
+  if (s.groupBy === "Section") return [...(sections.get(containerId) ?? []).map(section => ({ key: section.id, title: section.title, isNone: false })), { key: "", title: "No section", isNone: true }];
+  if (s.groupBy === "Priority") return [...priorities.map(p => ({ key: p, title: p, isNone: p === "None" }))];
+  if (s.groupBy === "TagGroup") {
+    const children = s.columnTagId ? tags.filter(t => t.parentId === s.columnTagId) : [];
+    return [...children.map(t => ({ key: t.id, title: t.name, isNone: false })), { key: "", title: "None", isNone: true }];
+  }
+  const status = ["NotStarted", "InProgress", "WaitingOnSomeone", "NeedsReview", "Done"];
+  const statusTitles: Record<string, string> = { NotStarted: "Not started", InProgress: "In progress", WaitingOnSomeone: "Waiting on someone", NeedsReview: "Needs review", Done: "Done" };
+  return [...status.map(k => ({ key: k, title: statusTitles[k], isNone: false })), ...(showCancelled ? [{ key: "Cancelled", title: "Cancelled", isNone: false }] : [])];
+}
+function boardLanes(s: PreviewBoardSettings) {
+  if (s.swimlaneBy === "Priority") return priorities.map(p => ({ key: p, title: p, isNone: p === "None" }));
+  if (s.swimlaneBy === "TagGroup") {
+    const children = s.swimlaneTagId ? tags.filter(t => t.parentId === s.swimlaneTagId) : [];
+    return [...children.map(t => ({ key: t.id, title: t.name, isNone: false })), { key: "", title: "None", isNone: true }];
+  }
+  if (s.swimlaneBy === "Category") return [{ key: "Work", title: "Work", isNone: false }, { key: "Personal", title: "Personal", isNone: false }];
+  return [{ key: "", title: "All tasks", isNone: true }];
+}
+function columnKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
+  if (s.groupBy === "Section") return t.sectionId ?? "";
+  if (s.groupBy === "Priority") return t.priority;
+  if (s.groupBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.columnTagId && ids.includes(tag.id))?.id ?? ""; }
+  return t.status;
+}
+function laneKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
+  if (s.swimlaneBy === "Priority") return t.priority;
+  if (s.swimlaneBy === "Category") return t.category;
+  if (s.swimlaneBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.swimlaneTagId && ids.includes(tag.id))?.id ?? ""; }
+  return "";
+}
+function inColumn(s: PreviewBoardSettings, t: TaskResponse, column: string | null): boolean {
+  if (s.groupBy === "Section") return column === null ? t.sectionId === null : t.sectionId === column;
+  if (s.groupBy === "TagGroup") return true; // tag columns share the container's rank space
+  return columnKeyOf(s, t) === column;
+}
+function boardHandlers(): Record<string, Handler> {
+  return {
+    "board.get": (r: { containerId: string; category: string | null; showCancelled: boolean }) => {
+      const container = containers.find(c => c.id === r.containerId);
+      if (!container) return { ...fail("That list or project no longer exists."), settings: settingsDto(boardDefaults()), columns: [], lanes: [], cards: [], totalCount: 0, truncated: false };
+      const s = boardSettings.get(r.containerId) ?? boardDefaults();
+      const visible = orderedTasks(r.containerId)
+        .filter(t => !r.category || t.category === r.category)
+        .filter(t => r.showCancelled || t.status !== "Cancelled");
+      const cards = visible.map(t => {
+        const subs = subtasks.filter(sub => sub.taskId === t.id);
+        return { task: t, tagIds: [...(taskTags.get(t.id) ?? [])], subtasksTotal: subs.length, subtasksDone: subs.filter(sub => sub.status === "Done").length,
+          hasIssueLink: t.id === "task-2", columnKey: columnKeyOf(s, t), laneKey: laneKeyOf(s, t) };
+      });
+      return ok({ settings: settingsDto(s), columns: boardColumns(s, r.containerId, r.showCancelled), lanes: boardLanes(s), cards, totalCount: cards.length, truncated: false });
+    },
+    "board.updateSettings": (r: { operationId: string; targetId: string; expectedVersion: string; groupBy: string; swimlaneBy: string; columnTagId: string | null; swimlaneTagId: string | null; wipLimitsJson: string; hiddenColumnsJson: string }) => {
+      const existing = boardSettings.get(r.targetId);
+      if ((existing ?? boardDefaults()).version !== Number(r.expectedVersion)) return { ...fail("This board's settings changed elsewhere. Refresh and try again."), settings: null };
+      const saved: PreviewBoardSettings = { groupBy: r.groupBy, swimlaneBy: r.swimlaneBy, columnTagId: r.columnTagId || null, swimlaneTagId: r.swimlaneTagId || null,
+        wipLimitsJson: r.wipLimitsJson || "{}", hiddenColumnsJson: r.hiddenColumnsJson || "[]", version: (existing?.version ?? 0) + 1 };
+      boardSettings.set(r.targetId, saved);
+      record("Change board settings");
+      return ok({ settings: settingsDto(saved) });
+    },
+    "board.move": (r: { taskId: string; expectedVersion: string; groupBy: string; fromColumn: string | null; toColumn: string | null; toIndex: number | null; subtaskChoice: string | null }) => {
+      const t = find(r.taskId);
+      if (!t) return { ...fail("That task no longer exists."), task: null, warning: null };
+      if (t.version !== r.expectedVersion) return { ...fail("This task changed elsewhere while you were working. Refresh and try again."), task: null, warning: null };
+      if (r.groupBy === "Status" && r.toColumn === "Done" && r.subtaskChoice === null
+        && subtasks.some(sub => sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled")) {
+        return { ok: false, task: null, warning: null, error: { kind: "Validation", message: "Open subtasks", fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }], correlationId: "preview" } };
+      }
+      if (r.groupBy === "Status") update(r.taskId, { status: r.toColumn ?? "NotStarted" }, "Change status of");
+      else if (r.groupBy === "Section") update(r.taskId, { sectionId: r.toColumn || null }, "Move");
+      else if (r.groupBy === "Priority") update(r.taskId, { priority: r.toColumn ?? "Normal" }, "Edit");
+      else if (r.groupBy === "TagGroup" && r.fromColumn !== r.toColumn) {
+        const links = (taskTags.get(r.taskId) ?? []).filter(id => id !== r.fromColumn);
+        if (r.toColumn) links.push(r.toColumn);
+        taskTags.set(r.taskId, links);
+        record(`Retag “${t.title}”`);
+      }
+      if (r.toIndex !== null && r.toIndex >= 0) {
+        const settings = { ...(boardSettings.get(t.containerId) ?? boardDefaults()), groupBy: r.groupBy }; // rank among the column the move named
+        const members = orderedTasks(t.containerId).filter(row => row.id !== t.id && inColumn(settings, row, r.toColumn));
+        const anchor = members[Math.min(r.toIndex, members.length - 1)] ?? members[members.length - 1];
+        const at = anchor ? taskOrder.indexOf(anchor.id) + (r.toIndex >= members.length ? 1 : 0) : taskOrder.length;
+        const from = taskOrder.indexOf(t.id);
+        if (from >= 0) taskOrder.splice(from, 1);
+        taskOrder.splice(Math.max(0, Math.min(at, taskOrder.length)), 0, t.id);
+        update(r.taskId, {}, "Reorder");
+      }
+      return ok({ task: find(r.taskId), warning: null });
+    },
+  };
 }
 
 function previewDraft(text: string, containerId: string | null): CaptureDraftDto {
@@ -357,6 +464,7 @@ const handlers: Record<string, Handler> = {
   "pad.search": (r: { text: string }) => ok({ items: padNotes.filter(n => n.markdown.toLowerCase().includes(r.text.toLowerCase())) }),
   "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
+  ...boardHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),

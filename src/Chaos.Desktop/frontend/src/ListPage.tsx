@@ -1,7 +1,7 @@
 import React from "react";
 import { DateText, friendlyDate, relativeDays, useToday } from "./dates";
 import { ContextMenu } from "radix-ui";
-import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
+import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TagResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
 import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, Settings2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Count, DeletedItems, EmptyState, Field, PageHeader, PriorityBadge, Stat
 import { ContainerManagement } from "./ContainerManagement";
 import { QuickAdd } from "./QuickAdd";
 import { GitHubTaskMark } from "./GitHubTaskMark";
+import { Board, LayoutSwitch, loadLayout, saveLayout, type BoardLayout } from "./Board";
 import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { rowClass } from "./taskRow";
@@ -26,7 +27,7 @@ const operationId = () => crypto.randomUUID();
  */
 export function ListPage({ tasks, deleted, sections, setSections, containers, containerId, selected, busy, setBusy, setError, run, runContainer, refresh, refreshContainers,
   onDeleted, isStillSelected, editingId, setEditing, onOpen, onDelete, onSetStatus, onSetCategory, revision, subtaskRevision, focus, setFocus,
-  showSettings, setShowSettings, captureApi, onCapture, quickAddInput, containerApi, taskApi }: {
+  showSettings, setShowSettings, captureApi, onCapture, quickAddInput, containerApi, taskApi, tags }: {
   tasks: TaskResponse[]; deleted: TaskResponse[]; sections: SectionResponse[]; setSections: (sections: SectionResponse[]) => void;
   containers: ContainerResponse[]; containerId: string; selected: ContainerResponse | undefined;
   busy: boolean; setBusy: (busy: boolean) => void; setError: (error: string | null) => void;
@@ -38,9 +39,17 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   revision: number; subtaskRevision: number; focus: Focus; setFocus: (focus: Focus) => void;
   showSettings: boolean; setShowSettings: React.Dispatch<React.SetStateAction<boolean>>;
   captureApi: typeof CaptureRpc; onCapture: (drafts: CaptureDraftDto[], operation: string) => Promise<string | null>; quickAddInput: React.RefObject<HTMLTextAreaElement | null>;
-  containerApi: typeof ContainerRpc; taskApi: typeof TaskRpc;
+  containerApi: typeof ContainerRpc; taskApi: typeof TaskRpc; tags: TagResponse[];
 }) {
   const [completionFilter, setCompletionFilter] = React.useState("all");
+  const [layout, setLayout] = React.useState<BoardLayout>(() => loadLayout(containerId));
+  React.useEffect(() => setLayout(loadLayout(containerId)), [containerId]);
+  // A device-local choice per container: switching never changes tasks (PLAN2 §11.1).
+  const boardable = selected?.kind === "List" || selected?.kind === "Project";
+  function changeLayout(next: BoardLayout) {
+    setLayout(next);
+    saveLayout(containerId, next);
+  }
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const drag = useDragReorder();
@@ -169,17 +178,20 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
         {newTaskCategory && <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>{categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}{listDefault ? " (list default)" : " (focus)"}</p>}
 
         <div className="flex flex-wrap items-center gap-3">
-          <div role="radiogroup" aria-label="Completion" className="inline-flex rounded-md border bg-muted/40 p-0.5 text-xs">
+          {boardable && <LayoutSwitch layout={layout} onLayout={changeLayout} disabled={busy}/>}
+          {(!boardable || layout === "list") && <div role="radiogroup" aria-label="Completion" className="inline-flex rounded-md border bg-muted/40 p-0.5 text-xs">
             {([["all", "All"], ["open", "Open"], ["finished", "Finished"]] as const).map(([value, name]) => <button key={value} type="button" role="radio" aria-checked={completionFilter === value}
               className={cn("rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50", completionFilter === value && "bg-background text-foreground shadow-xs")}
               onClick={() => setCompletionFilter(value)}>{name}</button>)}
-          </div>
+          </div>}
           <p role="status" className="text-xs text-muted-foreground">Showing {visibleTasks.length} of {tasks.length} tasks{hiddenByFocus > 0 && ` · ${hiddenByFocus} ${focus === "Work" ? "personal" : "work"} hidden by focus`}</p>
           {hiddenByFocus > 0 && <Button type="button" variant="ghost" size="sm" onClick={() => setFocus(null)}>Show all</Button>}
         </div>
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
         {focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>}
+        {boardable && layout === "board" && <Board containerId={containerId} tags={tags} focus={focus} busy={busy} revision={revision} onOpen={onOpen} onChanged={() => void refresh()}/>}
+        {(!boardable || layout === "list") && <>
         {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
         {sections.map(section => { const rows = sectionedTasks.filter(task => task.sectionId === section.id); return <section key={section.id} className={cn("grid gap-1.5 rounded-lg", sectionDrop === section.id && "bg-accent ring-1 ring-primary")} aria-label={`${section.title} tasks`} {...sectionDropTarget(section.id)}>{groupHeading(section.title, rows.length)}{rows.length === 0 ? <p className="px-2 py-1 text-muted-foreground italic">{completionFilter === "all" ? "No tasks in this section." : `No ${completionFilter} tasks in this section.`}</p> : taskList(rows, `${section.title} tasks`)}</section>; })}
         {unknownSections.map(id => <section key={id} className="grid gap-1.5" aria-label="Other section tasks">{groupHeading("Other section")}{taskList(sectionedTasks.filter(task => task.sectionId === id), "Other section tasks")}</section>)}
@@ -195,6 +207,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
           <Input id="new-section" className="border-dashed bg-transparent focus-visible:border-solid" value={sectionTitle} onChange={e => setSectionTitle(e.target.value)} placeholder="New section" autoComplete="off"/>
           <Button variant="outline" disabled={busy || !sectionTitle.trim()}>Add section</Button>
         </form>}
+        </>}
 
         <DeletedItems noun="tasks" items={deleted} name={task => task.title} busy={busy} onRestore={task => void run(() => taskApi.restore({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }))}/>
   </>;

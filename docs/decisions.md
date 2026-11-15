@@ -844,3 +844,30 @@ plan provides one, and each blocking package stays unticked until the owner conf
   `WHERE NOT EXISTS` probe, and multi-column group comparisons are parenthesized (`AND`
   binds tighter than `OR` — the first generated version silently dropped the guard for all
   but the last column of a group).
+
+## 2026-11-15 (P2 Kanban board - implementation decisions)
+
+- **BoardSettings rows use a deterministic id** (`boardsetting:{targetKind}:{targetId}`,
+  UUIDv5) rather than a random one, so two devices that configure the same target offline
+  converge on one row and the `UX_BoardSettings_Target` unique index needs no duplicate rule
+  (a catalog exemption, like Sections). The plan left the id open; the natural key is stable.
+- **The tag-group choice lives in two extra columns** (`ColumnTagId`, `SwimlaneTagId`) that
+  the plan's column list did not name: grouping by a tag group is meaningless without saying
+  which parent tag, and columns and lanes can pick different parents. They travel in the
+  `grouping` field group.
+- **A card move is one composed operation, not a chain of commands.** `board.move` performs
+  the column's field change and the within-column reorder inside one transaction with one
+  OperationId, so it produces exactly one receipt and one undo entry ("Move task on board").
+  The status-change core was extracted from `TaskCommands.SetStatusAsync` into
+  `TaskCommands.ApplyStatusAsync` and reused; behaviour of the existing command is unchanged.
+- **Board rows come from the board store, not the query specification.** A board's within-
+  column order is the container's manual rank order, which the query store does not return;
+  `IBoardStore.ListCardsAsync` joins tasks with subtask progress, tag links and the GitHub
+  mark in three statements. The Work/Personal focus filter is applied in the read model.
+- **`get` returns defaults without writing.** A target with no settings row gets the
+  defaults (Status columns, no lanes, version 0); the row is created only by the first
+  `updateSettings`. This keeps opening a board a pure read.
+- **Known gap, accepted for P2:** a container's board-settings row has no foreign key and
+  `DataPurge` does not remove it, so purging a list leaves an inert settings row that still
+  syncs. Harmless (it is keyed by target id and re-created lazily); P3 should decide whether
+  view settings share the fate of their target.

@@ -90,8 +90,9 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       <p>Use the Work / Personal switch (<kbd>Ctrl+2</kbd>, <kbd>Ctrl+3</kbd>) to see one side of your life at a time; <kbd>Ctrl+1</kbd> shows both.</p>
       <div className="flex flex-wrap gap-2"><Go to="myweek" onNavigate={onNavigate}>Open My Week</Go><Go to="myday" onNavigate={onNavigate}>Open My Day</Go></div>
     </> },
-    { id: "organise", title: "Lists, projects, tags and views", icon: <ListTodo/>, keywords: "list project section tag view today upcoming overdue waiting subtasks templates drag reorder", body: <>
+    { id: "organise", title: "Lists, projects, tags and views", icon: <ListTodo/>, keywords: "list project section tag view today upcoming overdue waiting subtasks templates drag reorder board kanban column swimlane wip", body: <>
       <p><strong>Lists</strong> hold open-ended tasks; <strong>projects</strong> have an end and show progress. Create them with the + next to “Lists &amp; projects” in the sidebar, drag to reorder, and group tasks into sections.</p>
+      <p><strong>Boards</strong> show a list or project as a Kanban board: switch with the List / Board control above the tasks (each list remembers its own). Drag cards between and within columns, or use the arrow keys and each card's menu. Columns group by status, section, priority or a tag's children, with optional swimlanes, WIP limits and hidden columns in the board settings. Switching layout never changes the tasks.</p>
       <p><strong>Tags</strong> cut across lists. Nest them with a slash (#home/garden), and drag a task onto a tag in the sidebar to tag it without moving it.</p>
       <p><strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed and Assigned to me.</p>
       <p>Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. Save task shapes you reuse as <strong>templates</strong>.</p>

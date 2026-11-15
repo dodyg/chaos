@@ -750,7 +750,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           editingId={editing?.id ?? null} setEditing={setEditing} onOpen={(task, viewing) => { setViewingTask(viewing); setEditing(task); }}
           onDelete={task => void requestTaskDeletion(task)} onSetStatus={setTaskStatus} onSetCategory={setTaskCategory}
           revision={revision} subtaskRevision={subtaskRevision} focus={focus} setFocus={setFocus}
-          showSettings={showSettings} setShowSettings={setShowSettings} captureApi={captureApi} onCapture={saveCaptured} quickAddInput={quickAddInput} containerApi={containerRpc} taskApi={taskRpc}/>
+          showSettings={showSettings} setShowSettings={setShowSettings} captureApi={captureApi} onCapture={saveCaptured} quickAddInput={quickAddInput} containerApi={containerRpc} taskApi={taskRpc} tags={tags}/>
       </>}
     </div>
     </div>

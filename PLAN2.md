@@ -1706,6 +1706,33 @@ the owner answers it.
 **Exit:** a project board grouped by status and then by section moves tasks with both pointer and
 keyboard. Every move is undoable and survives restart.
 
+**Progress note 2026-11-15.** Implemented in two commits on `phase-2-plan` (backend, then
+frontend). Migration 025 adds `BoardSettings` with a deterministic name-based id
+(`boardsetting:{targetKind}:{targetId}`) plus `ColumnTagId`/`SwimlaneTagId` for the tag-group
+choices (recorded in `docs/decisions.md`, 2026-11-15 P2 entry, with the other calls: one
+composed operation per card move, board rows from the board store rather than the query
+specification, defaults returned without writing, and the accepted gap that purging a
+container leaves an inert settings row). The sync catalog classifies the table (Merge,
+grouping/limits groups, deterministic-index exemption) and the flush-coverage suite gained a
+`board` scenario, so the guard tests enforce it like every other kind. `BoardCommands.MoveAsync`
+composes the column's field change (status via the extracted `TaskCommands.ApplyStatusAsync`,
+section, priority, tag swap) with the within-column rank reorder in one transaction — one
+receipt, one undo entry ("Move task on board"), the open-subtask question surfacing exactly as
+the list's. `BoardQueries` builds columns, swimlanes and cards (tags, subtask progress, GitHub
+mark, 500-card cap with truncation flag); `board` RPC exposes get/updateSettings/move.
+Frontend: `Board.tsx` (columns, swimlanes, WIP warnings, hidden columns, show-cancelled,
+settings popover, open-subtask dialog), `dragReorder.tsx` generalized to two axes with
+cross-column drops, a List/Board switch on list and project pages remembered per container,
+roving-tabindex keyboard moves with a card menu, a preview-backend model, and a Help update.
+Gate (Release): Domain 192/192, Application 57/57, Infrastructure 492/492, Sync 26/26, Desktop
+88/89 in the sandbox — the one failure (LaunchRouting named-pipe IPC) is the same known
+sandbox denial P1 recorded; it passes outside. Frontend `npm test` 144/144 (131 pre-existing +
+13 new). Slopwatch clean. Not done: the native pointer-drag check on a running desktop and
+the installed-package checks need an interactive Windows session this environment does not
+have (as in P0); drag between swimlanes of one column only reorders — changing a lane field is
+a task edit, since `board.move` changes one grouping field. The box stays unticked until the
+native check runs.
+
 ### [ ] P3 — Custom views, alerts and spreadsheet export
 
 **Depends on:** P2. **Migration:** `026_saved_views.sql`. **Read:** section 11.2.
