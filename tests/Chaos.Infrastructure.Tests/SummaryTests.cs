@@ -385,7 +385,7 @@ public sealed class SummaryTests
         await Assert.That(nextWeek.LookBack.CompletedCount).IsEqualTo(1L);
         await Assert.That(nextWeek.LookBack.UnfinishedTaskIds.SequenceEqual([shed.Id])).IsTrue();
 
-        // Weekly carry-over goes into next week's draft pool, once; the task's dates stay.
+        // Weekly carry-over goes into next week's draft pool, once; carrying over changes no date (the planned date is the day it was confirmed on).
         var carried = await host.Summaries.CarryOverAsync(new SummaryCarryOverCommand(Op(), complete.Summary.Id, [shed.Id]));
         var again = await host.Summaries.CarryOverAsync(new SummaryCarryOverCommand(Op(), complete.Summary.Id, [shed.Id]));
         var planned = await host.Weeks.OpenAsync(WeekStart.AddDays(7));
@@ -396,7 +396,7 @@ public sealed class SummaryTests
         await Assert.That(again.Added).IsEqualTo(0);
         await Assert.That(planned.Draft!.Assignments.Single(item => item.TaskId == shed.Id).Day).IsNull();
         await Assert.That(planned.Confirmed.Placements.Count).IsEqualTo(0);
-        await Assert.That((await host.CurrentAsync(shed.Id)).PlannedDate).IsNull();
+        await Assert.That((await host.CurrentAsync(shed.Id)).PlannedDate).IsEqualTo(WeekStart.AddDays(3));
     }
 
     [Test]

@@ -238,6 +238,13 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
                 }
             }
 
+            // Confirming makes each day assignment the task's planned date, so the calendar agrees with the plan.
+            // One change per task, recorded in the task's history under this operation (so it can be undone).
+            foreach (var placement in placements.Where(item => item.Day is not null))
+            {
+                await ReplanTaskAsync(session, placement.TaskId, placement.Day!.Value, command.OperationId, now, token);
+            }
+
             var existingGoals = (await session.Weeks.ListGoalsAsync(plan.Id, token)).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             var goals = draft.Goals.Select((goal, index) => existingGoals.TryGetValue(goal.Id, out var before)
                 ? before with { Title = goal.Title, ProjectId = goal.ProjectId, TaskIds = goal.TaskIds, Position = index * RankOrdering.Gap, Version = before.Version + 1, UpdatedAtUtc = now }
@@ -967,7 +974,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
     private async Task ReplanTaskAsync(IDataSession session, string taskId, DateOnly plannedDate, string operationId, DateTimeOffset now, CancellationToken token)
     {
         var task = await session.Tasks.GetAsync(taskId, token);
-        if (task is null || task.PlannedDate == plannedDate)
+        if (task is null || task.IsTerminal || task.PlannedDate == plannedDate)
         {
             return;
         }

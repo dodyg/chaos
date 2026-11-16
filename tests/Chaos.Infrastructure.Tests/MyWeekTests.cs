@@ -107,7 +107,7 @@ public sealed class MyWeekTests
     private static WeekDraftGoal Goal(string title, params string[] taskIds) => new(Guid.NewGuid().ToString(), title, null, taskIds, WeekGoalOutcome.Pending);
 
     [Test]
-    public async Task Confirm_SeedsTodayOnce_KeepsTaskDates_AndRemovalIsNotReseeded()
+    public async Task Confirm_SeedsTodayOnce_SetsPlannedDatesKeepsDueDates_AndRemovalIsNotReseeded()
     {
         using var host = await Host.StartAsync();
         var report = await host.TaskAsync("Write report", planned: Today.AddDays(3), due: Today.AddDays(4), estimate: 60);
@@ -117,11 +117,13 @@ public sealed class MyWeekTests
         await Assert.That(week.State).IsEqualTo(WeekPlanState.Confirmed);
         await Assert.That(week.ConfirmedRevision).IsEqualTo(1L);
 
-        // The week assignment never changes the task's own planned/due dates.
+        // Confirming makes the day the task's planned date (one history entry); the due date is never touched.
         var saved = (await host.Tasks.GetAsync(report.Id))!;
-        await Assert.That(saved.PlannedDate).IsEqualTo(Today.AddDays(3));
+        await Assert.That(saved.PlannedDate).IsEqualTo(Today);
         await Assert.That(saved.DueDate).IsEqualTo(Today.AddDays(4));
-        await Assert.That(saved.Version).IsEqualTo(report.Version);
+        await Assert.That(saved.Version).IsEqualTo(report.Version + 1);
+        await Assert.That((await host.Tasks.GetAsync(call.Id))!.PlannedDate).IsEqualTo(Today.AddDays(1));
+        await Assert.That(host.Scalar($"SELECT COUNT(*) FROM TaskHistory WHERE TaskId = '{report.Id}' AND EventKind = 'task.updated' AND ChangedFields LIKE '%PlannedDate%';")).IsEqualTo(2L);
 
         var opened = await host.Days.OpenAsync(null);
         await Assert.That(opened.OpenCount).IsEqualTo(1);
@@ -136,6 +138,22 @@ public sealed class MyWeekTests
         // Tomorrow is seeded from the same confirmed week when it is first opened.
         await host.Days.OpenAsync(Today.AddDays(1));
         await Assert.That(await host.DayTitlesAsync(Today.AddDays(1))).IsEquivalentTo(["Call the bank"]);
+    }
+
+    [Test]
+    public async Task Confirm_DoesNotReplanFinishedTasks_OrTasksAlreadyOnThatDay_AndPoolTasksKeepTheirDate()
+    {
+        using var host = await Host.StartAsync();
+        var done = await host.TaskAsync("Already done", planned: Today.AddDays(-2), estimate: 10);
+        await host.Tasks.SetStatusAsync(new(Op(), done.Id, done.Version, TaskItemStatus.Done, null));
+        var same = await host.TaskAsync("Same day", planned: Today, estimate: 10);
+        var pool = await host.TaskAsync("In the pool", planned: Today.AddDays(5), estimate: 10);
+
+        await host.PlanAsync(WeekStart, Draft([new(done.Id, Today.AddDays(1)), new(same.Id, Today), new(pool.Id, null)]));
+
+        await Assert.That((await host.Tasks.GetAsync(done.Id))!.PlannedDate).IsEqualTo(Today.AddDays(-2));
+        await Assert.That((await host.Tasks.GetAsync(same.Id))!.Version).IsEqualTo(same.Version);
+        await Assert.That((await host.Tasks.GetAsync(pool.Id))!.PlannedDate).IsEqualTo(Today.AddDays(5));
     }
 
     [Test]
@@ -323,6 +341,7 @@ public sealed class MyWeekTests
         var week = await host.PlanAsync(WeekStart, Draft([new(slip.Id, Today)], [Goal("Rest more")]));
         var goal = week.Confirmed.Goals.Single();
         await Assert.That(goal.CountedCount).IsEqualTo(0);
+        var versionAfterConfirm = (await host.Tasks.GetAsync(slip.Id))!.Version;
 
         var assessed = (await host.Weeks.SetGoalOutcomeAsync(new(Op(), goal.Id, goal.Version, WeekGoalOutcome.Achieved))).Week;
         await Assert.That(assessed.Confirmed.Goals.Single().Outcome).IsEqualTo(WeekGoalOutcome.Achieved);
@@ -332,7 +351,7 @@ public sealed class MyWeekTests
         await Assert.That(midweek.CheckIn!.Midweek).IsTrue();
         await Assert.That(midweek.CheckIn.Slipped.Select(item => (item.TaskId, item.Day))).IsEquivalentTo([(slip.Id, Today)]);
         // The check-in changes nothing by itself.
-        await Assert.That((await host.Tasks.GetAsync(slip.Id))!.Version).IsEqualTo(slip.Version);
+        await Assert.That((await host.Tasks.GetAsync(slip.Id))!.Version).IsEqualTo(versionAfterConfirm);
     }
 
     [Test]
