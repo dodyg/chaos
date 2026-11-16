@@ -139,6 +139,15 @@ public sealed class FakeBoardStore(
             taskTags
                 .Where(link => tasks.FirstOrDefault(task => task.Id == link.TaskId) is { ContainerId: var container, DeletedAtUtc: null } && container == containerId)
             .Select(link => new BoardCardTag(link.TaskId, link.TagId))]);
+
+    public Task<IReadOnlyDictionary<string, BoardCardExtras>> ListCardExtrasAsync(IReadOnlyList<string> taskIds, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyDictionary<string, BoardCardExtras>>(taskIds.ToDictionary(
+            id => id,
+            id =>
+            {
+                var children = subtasks.Where(subtask => subtask.TaskId == id && subtask.DeletedAtUtc is null).ToList();
+                return new BoardCardExtras(children.Count, children.Count(subtask => subtask.Status == TaskItemStatus.Done), HasIssueLink: false);
+            }));
 }
 
 public sealed class FakeReminderRuleStore(List<ReminderRuleRecord> rows) : IReminderRuleStore

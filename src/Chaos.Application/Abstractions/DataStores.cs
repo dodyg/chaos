@@ -481,6 +481,8 @@ public interface IBoardStore
     Task<IReadOnlyList<BoardCardRow>> ListCardsAsync(string containerId, CancellationToken ct);
     /// <summary>Active task-tag links of one container's tasks, ordered by (TaskId, TagId).</summary>
     Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct);
+    /// <summary>Subtask progress and the issue-link mark for these tasks, keyed by task id (a view's board reads cards across lists).</summary>
+    Task<IReadOnlyDictionary<string, BoardCardExtras>> ListCardExtrasAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
 }
 
 /// <summary>

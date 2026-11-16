@@ -53,5 +53,8 @@ public sealed record BoardSettingsRecord : AggregateRecord
 /// <summary>One card's data beyond the task row: subtask progress and the GitHub issue mark.</summary>
 public sealed record BoardCardRow(TaskRecord Task, int SubtasksTotal, int SubtasksDone, bool HasIssueLink);
 
+/// <summary>Subtask progress and the GitHub issue mark of one task.</summary>
+public sealed record BoardCardExtras(int SubtasksTotal, int SubtasksDone, bool HasIssueLink);
+
 /// <summary>One active task-tag link of a container's tasks.</summary>
 public sealed record BoardCardTag(string TaskId, string TagId);

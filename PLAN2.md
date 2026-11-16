@@ -1834,6 +1834,14 @@ state are NOT built: the sync does not store them (see decisions, 2026-11-16 D7)
 GitHub bugs" view with a matching sidebar count), frontend views 12/12. Still open in P3: alerts,
 board layout on a view, inline tag editing in the table, the native desktop run.
 
+**Progress note 2026-11-16 (board layout on a view).** A view can be shown as a board: `board.getView`
+(`ViewBoardQueries`), settings stored against the view, no section grouping, lanes by list, drops change
+the column only (decisions, 2026-11-16). Tests: 7 real-SQLite view-board tests (cards across lists,
+settings across restart, lane assignment, move to Done, subtask progress, deleted view, focus) and
+4 jsdom tests (getView with the focus, card menu without Move up/down, a drop sends no position,
+settings save against the view). Still open in P3: alerts, inline tag editing in the table, the
+native desktop run.
+
 ### [ ] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.

@@ -280,6 +280,22 @@ function boardHandlers(): Record<string, Handler> {
       });
       return ok({ settings: settingsDto(s), columns: boardColumns(s, r.containerId, r.showCancelled), lanes: boardLanes(s), cards, totalCount: cards.length, truncated: false });
     },
+    "board.getView": (r: { viewId: string; category: string | null; showCancelled: boolean }) => {
+      const view = savedViews.find(v => v.id === r.viewId && !v.deleted);
+      if (!view) return { ...fail("That view no longer exists."), settings: settingsDto(boardDefaults()), columns: [], lanes: [], cards: [], totalCount: 0, truncated: false };
+      const found = boardSettings.get(r.viewId) ?? boardDefaults();
+      const s = found.groupBy === "Section" ? { ...found, groupBy: "Status" } : found;
+      const visible = viewRows(view.definitionJson, r.category).map(row => row.task).filter(t => r.showCancelled || t.status !== "Cancelled");
+      const lanes = s.swimlaneBy === "Container"
+        ? [...new Set(visible.map(t => t.containerId))].map(id => ({ key: id, title: containerName(id), isNone: false }))
+        : boardLanes(s);
+      const cards = visible.map(t => {
+        const subs = subtasks.filter(sub => sub.taskId === t.id);
+        return { task: t, tagIds: [...(taskTags.get(t.id) ?? [])], subtasksTotal: subs.length, subtasksDone: subs.filter(sub => sub.status === "Done").length,
+          hasIssueLink: t.id === "task-2", columnKey: columnKeyOf(s, t), laneKey: s.swimlaneBy === "Container" ? t.containerId : laneKeyOf(s, t) };
+      });
+      return ok({ settings: settingsDto(found), columns: boardColumns(s, "", r.showCancelled), lanes, cards, totalCount: cards.length, truncated: false });
+    },
     "board.updateSettings": (r: { operationId: string; targetId: string; expectedVersion: string; groupBy: string; swimlaneBy: string; columnTagId: string | null; swimlaneTagId: string | null; wipLimitsJson: string; hiddenColumnsJson: string }) => {
       const existing = boardSettings.get(r.targetId);
       if ((existing ?? boardDefaults()).version !== Number(r.expectedVersion)) return { ...fail("This board's settings changed elsewhere. Refresh and try again."), settings: null };

@@ -90,7 +90,7 @@ public sealed class BoardQueries(IApplicationStore store)
         }, ct);
     }
 
-    private static IReadOnlyList<BoardColumnDto> ColumnsFor(
+    internal static IReadOnlyList<BoardColumnDto> ColumnsFor(
         BoardSettingsRecord settings,
         IReadOnlyList<SectionRecord> sections,
         IReadOnlyList<TagRecord> columnTags,
@@ -134,7 +134,7 @@ public sealed class BoardQueries(IApplicationStore store)
         }
     }
 
-    private static IReadOnlyList<BoardLaneDto> LanesFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> laneTags) =>
+    internal static IReadOnlyList<BoardLaneDto> LanesFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> laneTags, IReadOnlyList<(string Id, string Name)>? containerLanes = null) =>
         settings.SwimlaneBy switch
         {
             BoardSwimlane.Priority =>
@@ -152,11 +152,12 @@ public sealed class BoardQueries(IApplicationStore store)
                 new(nameof(CapacityCategory.Work), "Work", IsNone: false),
                 new(nameof(CapacityCategory.Personal), "Personal", IsNone: false),
             ],
-            // BoardSwimlane.Container lanes belong to custom views (P3); a container board has one lane.
+            // Container lanes exist only on a custom view's board (it spans lists); a container board has one lane.
+            BoardSwimlane.Container when containerLanes is not null => [.. containerLanes.Select(container => new BoardLaneDto(container.Id, container.Name, IsNone: false))],
             _ => [new(string.Empty, "All tasks", IsNone: true)],
         };
 
-    private static string ColumnKeyFor(
+    internal static string ColumnKeyFor(
         BoardSettingsRecord settings,
         IReadOnlyList<SectionRecord> sections,
         IReadOnlyList<TagRecord> columnTags,
@@ -179,12 +180,13 @@ public sealed class BoardQueries(IApplicationStore store)
         }
     }
 
-    private static string LaneKeyFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> laneTags, TaskRecord task, IReadOnlyList<string> tagIds) =>
+    internal static string LaneKeyFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> laneTags, TaskRecord task, IReadOnlyList<string> tagIds, bool containerLanes = false) =>
         settings.SwimlaneBy switch
         {
             BoardSwimlane.Priority => task.Priority.ToString(),
             BoardSwimlane.TagGroup => laneTags.FirstOrDefault(tag => tagIds.Contains(tag.Id))?.Id ?? string.Empty,
             BoardSwimlane.Category => task.CapacityCategory.ToString(),
+            BoardSwimlane.Container when containerLanes => task.ContainerId,
             _ => string.Empty,
         };
 }

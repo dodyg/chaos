@@ -58,6 +58,7 @@ internal static class Program
         var taskQueries = new TaskQueries(storage.Store, TimeProvider.System);
         var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
+        var viewBoardQueries = new ViewBoardQueries(storage.Store, taskQueries);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
@@ -153,7 +154,7 @@ internal static class Program
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
                 rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries));
-                rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, githubEngine));
+                rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -332,6 +333,7 @@ internal static class Program
 [JsonSerializable(typeof(ViewGitHubOptionsResponse))]
 [JsonSerializable(typeof(ViewFromSearchRequest))]
 [JsonSerializable(typeof(ViewFromSearchResponse))]
+[JsonSerializable(typeof(BoardViewGetRequest))]
 [JsonSerializable(typeof(BoardGetRequest))]
 [JsonSerializable(typeof(BoardSettingsDto))]
 [JsonSerializable(typeof(BoardColumnResponse))]

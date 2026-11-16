@@ -222,6 +222,11 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
             throw AppException.Validation("swimlaneBy", "Choose how the board groups its swimlanes.");
         }
 
+        if (command.TargetKind == BoardTargetKind.View && command.GroupBy == BoardGrouping.Section)
+        {
+            throw AppException.Validation("groupBy", "A view can group its board by status, priority or a tag group. Sections belong to one list or project.");
+        }
+
         var columnTag = Blank(command.ColumnTagId);
         var laneTag = Blank(command.SwimlaneTagId);
         if (command.GroupBy == BoardGrouping.TagGroup && columnTag is null)

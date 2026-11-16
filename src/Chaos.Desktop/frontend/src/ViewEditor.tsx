@@ -114,7 +114,7 @@ export function ViewEditor({ view, initialDefinitionJson, initialName = "", icon
     <fieldset className="grid gap-2"><legend className="mb-1 text-sm font-semibold">Layout</legend>
       <div className="flex flex-wrap items-end gap-3">
         <Field label="Show as" className="w-36"><NativeSelect value={layout.kind} onChange={event => setLayout({ ...layout, kind: event.target.value as Layout["kind"] })}>
-          <NativeSelectOption value="list">List</NativeSelectOption><NativeSelectOption value="table">Table</NativeSelectOption></NativeSelect></Field>
+          <NativeSelectOption value="list">List</NativeSelectOption><NativeSelectOption value="table">Table</NativeSelectOption><NativeSelectOption value="board">Board</NativeSelectOption></NativeSelect></Field>
         {layout.kind === "list" && <Field label="Group by" className="w-40"><NativeSelect value={layout.group} onChange={event => setLayout({ ...layout, group: event.target.value })}>
           {groupOptions.map(option => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}</NativeSelect></Field>}
         <Field label="Sort by" className="w-40"><NativeSelect value={layout.sortField} onChange={event => setLayout({ ...layout, sortField: event.target.value })}>

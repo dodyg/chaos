@@ -104,6 +104,37 @@ public sealed class SqliteBoardStore(SqliteConnection connection) : IBoardStore
         return rows;
     }
 
+    public async Task<IReadOnlyDictionary<string, BoardCardExtras>> ListCardExtrasAsync(IReadOnlyList<string> taskIds, CancellationToken ct)
+    {
+        var result = new Dictionary<string, BoardCardExtras>(StringComparer.Ordinal);
+        if (taskIds.Count == 0)
+        {
+            return result;
+        }
+
+        using var command = connection.CreateCommand();
+        var names = taskIds.Select((id, index) =>
+        {
+            command.Parameters.AddWithValue($"$t{index}", id);
+            return $"$t{index}";
+        });
+        command.CommandText = $"""
+            SELECT Tasks.Id,
+                (SELECT COUNT(*) FROM Subtasks s WHERE s.TaskId = Tasks.Id AND s.DeletedAtUtc IS NULL) AS Subtotal,
+                (SELECT COUNT(*) FROM Subtasks s WHERE s.TaskId = Tasks.Id AND s.DeletedAtUtc IS NULL AND s.Status = $done) AS Subdone,
+                EXISTS (SELECT 1 FROM GitHubIssueLinks l WHERE l.TaskId = Tasks.Id) AS HasIssue
+            FROM Tasks WHERE Tasks.Id IN ({string.Join(", ", names)});
+            """;
+        command.Parameters.AddWithValue("$done", (int)TaskItemStatus.Done);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result[reader.S("Id")] = new BoardCardExtras((int)reader.L("Subtotal"), (int)reader.L("Subdone"), reader.B("HasIssue"));
+        }
+
+        return result;
+    }
+
     public async Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

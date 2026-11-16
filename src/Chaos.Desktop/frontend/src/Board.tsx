@@ -45,6 +45,9 @@ function parseJson<T>(json: string | null | undefined, fallback: T): T {
 
 const groupByChoices = [["Status", "Status"], ["Section", "Sections"], ["Priority", "Priority"], ["TagGroup", "Tag group"]] as const;
 const swimlaneChoices = [["None", "No swimlanes"], ["Priority", "Priority"], ["TagGroup", "Tag group"], ["Category", "Work / Personal"]] as const;
+/** A custom view spans lists: no sections to group by, and a lane can be a list. */
+const viewGroupByChoices = groupByChoices.filter(([value]) => value !== "Section");
+const viewSwimlaneChoices = [...swimlaneChoices, ["Container", "List or project"]] as const;
 
 /** A settings draft being edited in the popover; saved as one board.updateSettings call. */
 type SettingsDraft = {
@@ -104,8 +107,9 @@ const cellKey = (laneKey: string, columnKey: string) => `${laneKey}|${columnKey}
  * column within a swimlane) is a drop zone that shows where the card will land. A card keeps
  * its swimlane (a lane is a task field board.move does not change), so other lanes refuse it.
  */
-export function Board({ containerId, tags, focus, busy, revision, onOpen, onChanged, api = boardRpc }: {
-  containerId: string; tags: TagResponse[]; focus: Focus; busy: boolean; revision: number;
+export function Board({ containerId = "", viewId, tags, focus, busy, revision, onOpen, onChanged, api = boardRpc }: {
+  /** The list or project shown as a board; or <c>viewId</c> for the board layout of a custom view (PLAN2 P3), whose drops change only the column. */
+  containerId?: string; viewId?: string; tags: TagResponse[]; focus: Focus; busy: boolean; revision: number;
   onOpen: (task: TaskResponse, viewing: boolean) => void; onChanged: () => void; api?: BoardApi;
 }) {
   const [board, setBoard] = React.useState<{ columns: readonly BoardColumnResponse[]; lanes: readonly BoardLaneResponse[]; cards: readonly BoardCardResponse[]; settings: BoardSettingsDto; totalCount: number; truncated: boolean } | null>(null);
@@ -135,14 +139,14 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   React.useEffect(() => {
     let current = true;
     setLoading(true);
-    void api.get({ containerId, category: focus, showCancelled }).then(result => {
+    void (viewId ? api.getView({ viewId, category: focus, showCancelled }) : api.get({ containerId, category: focus, showCancelled })).then(result => {
       if (!current) return;
       if (result.ok) { setBoard(result); setLoadError(null); }
       else setLoadError(result.error?.message ?? "Could not load the board.");
       setLoading(false);
     }).catch((e: unknown) => { if (current) { setLoadError(String(e)); setLoading(false); } });
     return () => { current = false; };
-  }, [api, containerId, focus, showCancelled, revision, reloads]);
+  }, [api, containerId, viewId, focus, showCancelled, revision, reloads]);
 
   React.useEffect(() => {
     const id = pendingFocus.current;
@@ -197,7 +201,9 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     }
   }
 
-  function moveCard(card: BoardCardResponse, toColumn: string, placement: Placement, subtaskChoice: string | null = null) {
+  function moveCard(card: BoardCardResponse, toColumn: string, requested: Placement, subtaskChoice: string | null = null) {
+    // A view orders its cards by its own sort, so a drop there only changes the column.
+    const placement = viewId ? keepPlace : requested;
     return mutate(async () => {
       const result = await api.move({
         operationId: operationId(), taskId: card.task.id, expectedVersion: card.task.version,
@@ -226,7 +232,7 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     return mutate(async () => {
       const limits = Object.fromEntries(Object.entries(next.wip).filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)]));
       const result = await api.updateSettings({
-        operationId: operationId(), targetKind: "Container", targetId: containerId, expectedVersion,
+        operationId: operationId(), targetKind: viewId ? "View" : "Container", targetId: viewId ?? containerId, expectedVersion,
         groupBy: next.groupBy, swimlaneBy: next.swimlaneBy,
         columnTagId: next.columnTagId || null, swimlaneTagId: next.swimlaneTagId || null,
         wipLimitsJson: JSON.stringify(limits), hiddenColumnsJson: JSON.stringify(next.hidden),
@@ -312,8 +318,9 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
       }}>
       {menu.page === "main" ? <>
         <button type="button" role="menuitem" className={item} disabled={columns.length < 2} onClick={() => setMenu({ cardId: card.task.id, page: "columns" })}>Move to column…</button>
+        {!viewId && <>
         <button type="button" role="menuitem" className={item} disabled={disabled || index <= 0} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: cell[index - 1].task.id, afterTaskId: null }); }}>Move up</button>
-        <button type="button" role="menuitem" className={item} disabled={disabled || index >= cell.length - 1} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: null, afterTaskId: cell[index + 1].task.id }); }}>Move down</button>
+        <button type="button" role="menuitem" className={item} disabled={disabled || index >= cell.length - 1} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: null, afterTaskId: cell[index + 1].task.id }); }}>Move down</button></>}
       </> : <>
         {columns.filter(column => column.key !== card.columnKey).map(column => <button key={column.key} type="button" role="menuitem" className={item} disabled={disabled} onClick={() => { setMenu(null); void moveCard(card, column.key, keepPlace); }}>Move to {column.title}</button>)}
         <button type="button" role="menuitem" className={item} onClick={() => setMenu({ cardId: card.task.id, page: "main" })}>Back</button>
@@ -447,7 +454,7 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
       {board && board.truncated && <p role="status" className="text-xs text-muted-foreground">{board.cards.length} of {board.totalCount} shown, filter to see more</p>}
     </div>
     {/* Keyed by the settings version: a newer row (saved here or elsewhere) starts a fresh draft. */}
-    {showSettings && board && <BoardSettingsPanel key={board.settings.version} settings={board.settings} columns={board.columns} tags={tags} disabled={disabled}
+    {showSettings && board && <BoardSettingsPanel key={board.settings.version} forView={!!viewId} settings={board.settings} columns={board.columns} tags={tags} disabled={disabled}
       onSave={next => void saveSettings(next)} onCancel={() => setShowSettings(false)}/>}
     {(loadError ?? error) && <InlineError>{loadError ?? error}</InlineError>}
     {notice && <div role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">{notice}</div>}
@@ -477,8 +484,8 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
 }
 
 /** The board settings editor: a local draft of the saved settings, saved as one board.updateSettings call. */
-function BoardSettingsPanel({ settings, columns, tags, disabled, onSave, onCancel }: {
-  settings: BoardSettingsDto; columns: readonly BoardColumnResponse[]; tags: TagResponse[]; disabled: boolean;
+function BoardSettingsPanel({ settings, columns, tags, disabled, forView = false, onSave, onCancel }: {
+  settings: BoardSettingsDto; forView?: boolean; columns: readonly BoardColumnResponse[]; tags: TagResponse[]; disabled: boolean;
   onSave: (draft: SettingsDraft) => void; onCancel: () => void;
 }) {
   const [current, setDraft] = React.useState(() => draftFrom(settings, columns.map(column => column.key)));
@@ -487,10 +494,10 @@ function BoardSettingsPanel({ settings, columns, tags, disabled, onSave, onCance
   return <div id="board-settings" className="grid gap-4 rounded-xl border bg-muted/50 p-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Group columns by"><NativeSelect value={current.groupBy} disabled={disabled} onChange={e => set({ groupBy: e.target.value })}>
-          {groupByChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
+          {(forView ? viewGroupByChoices : groupByChoices).map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
         </NativeSelect></Field>
         <Field label="Swimlanes"><NativeSelect value={current.swimlaneBy} disabled={disabled} onChange={e => set({ swimlaneBy: e.target.value })}>
-          {swimlaneChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
+          {(forView ? viewSwimlaneChoices : swimlaneChoices).map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
         </NativeSelect></Field>
         {current.groupBy === "TagGroup" && <Field label="Column parent tag"><NativeSelect value={current.columnTagId} disabled={disabled} onChange={e => set({ columnTagId: e.target.value })}>
           <NativeSelectOption value="">Choose a parent tag…</NativeSelectOption>

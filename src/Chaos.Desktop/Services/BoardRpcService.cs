@@ -8,6 +8,7 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record BoardGetRequest(string ContainerId, string? Category = null, bool ShowCancelled = false);
+public sealed record BoardViewGetRequest(string ViewId, string? Category = null, bool ShowCancelled = false);
 public sealed record BoardSettingsDto(
     string GroupBy,
     string SwimlaneBy,
@@ -62,7 +63,7 @@ public sealed record BoardMoveResponse(bool Ok, TaskResponse? Task, TaskErrorRes
 
 /// <summary>Kanban boards on lists and projects (PLAN2 P2). Errors are returned as data.</summary>
 [NeoRpcService("board", Version = 1)]
-public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
+public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries, Chaos.Application.Views.ViewBoardQueries viewQueries, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("get")]
     public async ValueTask<BoardGetResponse> GetAsync(BoardGetRequest request, CancellationToken ct)
@@ -74,6 +75,19 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
                 [.. board.Cards.Select(Map)], board.TotalCount, board.Truncated, null);
         }
         catch (AppException error) { return new(false, Map(BoardCommands.Defaults(BoardTargetKind.Container, request.ContainerId)), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    /// <summary>The board layout of a custom view: its rows as cards (settings target kind View).</summary>
+    [NeoRpcMethod("getView")]
+    public async ValueTask<BoardGetResponse> GetViewAsync(BoardViewGetRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var board = await viewQueries.GetAsync(request.ViewId, Category(request.Category), request.ShowCancelled, ct);
+            return new(true, Map(board.Settings), [.. board.Columns.Select(Map)], [.. board.Lanes.Select(Map)],
+                [.. board.Cards.Select(Map)], board.TotalCount, board.Truncated, null);
+        }
+        catch (AppException error) { return new(false, Map(BoardCommands.Defaults(BoardTargetKind.View, request.ViewId)), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("updateSettings")]
