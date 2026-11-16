@@ -316,6 +316,46 @@ function calendarsHandlers(): Record<string, Handler> {
     "calendars.taskLinks": (r: { taskIds: string[] }) => ok({ links: r.taskIds.flatMap(id => meetingTaskLinks.get(id) ?? []) }),
   };
 }
+// Google Calendar (PLAN2 P6): a fake account and two calendars; nothing leaves the page. Sources of the account are CalendarSources with provider Google.
+type PreviewGoogleAccount = { id: string; email: string; signedInHere: boolean; needsSignIn: boolean; error: string | null; lastSuccessUtc: string | null };
+const googleAccounts: PreviewGoogleAccount[] = [];
+const googleCalendarList = [
+  { calendarId: "you@example.com", name: "you@example.com", color: "#16a765", primary: true },
+  { calendarId: "team@example.com", name: "Team (shared)", color: "#9a9cff", primary: false },
+];
+function googleAccountView(account: PreviewGoogleAccount) {
+  return { ...account, calendars: calendarSources.filter(s => s.provider === "Google") };
+}
+function googleHandlers(): Record<string, Handler> {
+  return {
+    "googleCalendar.status": () => ok({ configured: true, accounts: googleAccounts.map(googleAccountView) }),
+    "googleCalendar.connect": () => {
+      let account = googleAccounts[0];
+      if (!account) { account = { id: "acct-1", email: "you@example.com", signedInHere: true, needsSignIn: false, error: null, lastSuccessUtc: now() }; googleAccounts.push(account); }
+      account.signedInHere = true; account.needsSignIn = false; account.error = null;
+      return ok({ account: googleAccountView(account) });
+    },
+    "googleCalendar.calendars": () => ok({ calendars: googleCalendarList.map(c => {
+      const source = calendarSources.find(s => s.id === `g-${c.calendarId}`) ?? null;
+      return { ...c, chosen: !!source?.enabled, source };
+    }) }),
+    "googleCalendar.choose": (r: { accountId: string; calendarId: string; name: string; color: string | null; chosen: boolean }) => {
+      const id = `g-${r.calendarId}`;
+      const index = calendarSources.findIndex(s => s.id === id);
+      const next: PreviewSource = index >= 0
+        ? { ...calendarSources[index], enabled: r.chosen, version: String(Number(calendarSources[index].version) + 1) }
+        : { id, provider: "Google", name: r.name, color: r.color ?? "#3b82f6", countsAsBusy: true, enabled: r.chosen, ownerEmail: null, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null };
+      if (index >= 0) calendarSources[index] = next; else calendarSources.push(next);
+      return ok({ source: next, refreshError: null });
+    },
+    "googleCalendar.disconnect": (r: { accountId: string }) => {
+      const index = googleAccounts.findIndex(a => a.id === r.accountId);
+      if (index >= 0) googleAccounts.splice(index, 1);
+      for (let i = calendarSources.length - 1; i >= 0; i--) if (calendarSources[i].provider === "Google") calendarSources.splice(i, 1);
+      return ok({ revoked: true });
+    },
+  };
+}
 function calendarHandlers(): Record<string, Handler> {
   type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showMeetings?: boolean; showCompleted?: boolean } | null;
   const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
@@ -671,6 +711,7 @@ const handlers: Record<string, Handler> = {
   ...boardHandlers(),
   ...calendarHandlers(),
   ...calendarsHandlers(),
+  ...googleHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),

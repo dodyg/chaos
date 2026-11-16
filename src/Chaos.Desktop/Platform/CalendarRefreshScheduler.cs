@@ -12,7 +12,7 @@ public sealed class CalendarRefreshScheduler(CalendarRefresher refresher, TimePr
     private ITimer? _timer;
     private int _running;
 
-    public void Start() => _timer ??= clock.CreateTimer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(20), CalendarRefresher.Interval);
+    public void Start() => _timer ??= clock.CreateTimer(_ => _ = TickAsync(), null, TimeSpan.FromSeconds(20), CalendarRefresher.GoogleInterval);
 
     public async Task TickAsync()
     {
@@ -25,7 +25,7 @@ public sealed class CalendarRefreshScheduler(CalendarRefresher refresher, TimePr
         {
             if (await refresher.HasSourcesAsync())
             {
-                await refresher.RefreshAsync();
+                await refresher.RefreshAsync(onlyDue: true); // Google every 5 minutes, a feed every 15
             }
         }
         catch (Exception error) when (error is not OutOfMemoryException)

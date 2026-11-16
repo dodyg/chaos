@@ -27,7 +27,7 @@ public sealed record CalendarUpdateRequest(string SourceId, string ExpectedVersi
 public sealed record CalendarRemoveRequest(string SourceId);
 public sealed record CalendarOperationResponse(bool Ok, TaskErrorResponse? Error);
 /// <summary>A null SourceId refreshes every feed.</summary>
-public sealed record CalendarRefreshRequest(string? SourceId = null);
+public sealed record CalendarRefreshRequest(string? SourceId = null, bool OnlyDue = false);
 public sealed record CalendarRefreshResultDto(string SourceId, bool Ok, bool Changed, int EventCount, string? Error);
 public sealed record CalendarRefreshResponse(bool Ok, IReadOnlyList<CalendarRefreshResultDto> Results, IReadOnlyList<CalendarSourceDto> Sources, TaskErrorResponse? Error);
 public sealed record CalendarMakeTaskRequest(string OperationId, string SourceId, string EventId, string? ContainerId = null);
@@ -88,7 +88,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     {
         try
         {
-            var results = await refresher.RefreshAsync(string.IsNullOrWhiteSpace(request.SourceId) ? null : request.SourceId, ct);
+            var results = await refresher.RefreshAsync(string.IsNullOrWhiteSpace(request.SourceId) ? null : request.SourceId, ct, request.OnlyDue);
             return new(true,
                 [.. results.Select(item => new CalendarRefreshResultDto(item.SourceId, item.Ok, item.Changed, item.EventCount, item.Error))],
                 [.. (await commands.ListAsync(ct)).Select(Map)], null);
@@ -119,7 +119,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
 
-    private static CalendarSourceDto Map(CalendarSourceView view) => new(
+    internal static CalendarSourceDto Map(CalendarSourceView view) => new(
         view.Source.Id, view.Source.Provider.ToString(), view.Source.Name, view.Source.Color, view.Source.CountsAsBusy, view.Source.Enabled,
         view.Source.OwnerEmail, view.Source.Version.ToString(System.Globalization.CultureInfo.InvariantCulture),
         view.State?.LastAttemptUtc is { } attempt ? StorageFormats.Instant(attempt) : null,

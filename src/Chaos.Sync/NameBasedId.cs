@@ -58,6 +58,8 @@ public static class NameBasedId
         public static string GitHubTask(string connectionId, long repositoryId, int issueNumber) => $"githubtask:{connectionId}:{repositoryId}:{issueNumber}";
         public static string BoardSetting(string targetKind, string targetId) => $"boardsetting:{targetKind}:{targetId}";
         public static string CalendarEventLink(string taskId) => $"calendareventlink:{taskId}";
+        public static string GoogleAccount(string subject) => $"googleaccount:{subject}";
+        public static string GoogleCalendarSource(string accountId, string calendarId) => $"calendarsource:google:{accountId}:{calendarId}";
 
         private static string StorageDate(DateOnly date) => date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
     }

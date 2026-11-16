@@ -56,3 +56,18 @@ public sealed record CalendarEventLinkRecord : AggregateRecord
     public required string EventTitle { get; init; }
     public string? EventWebUrl { get; init; }
 }
+
+/// <summary>A connected Google account (synced). The refresh token is NOT here: it is in the secret store.</summary>
+public sealed record GoogleAccountRecord : AggregateRecord
+{
+    public required string Email { get; init; }
+    public required string Subject { get; init; }
+}
+
+/// <summary>This device's view of an account: whether the last call said "sign in again", and when it last worked.</summary>
+public sealed record GoogleAccountState(
+    string AccountId,
+    bool NeedsSignIn,
+    DateTimeOffset? LastAttemptUtc,
+    DateTimeOffset? LastSuccessUtc,
+    string? LastError);

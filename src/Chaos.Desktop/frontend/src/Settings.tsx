@@ -1,5 +1,6 @@
 import { GitHubSettings } from "./GitHubSettings";
 import { CalendarSettings } from "./CalendarSettings";
+import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto } from "#neoastra";
@@ -145,7 +146,7 @@ export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced, 
     </form>}
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
-    <TabsContent value="calendars"><CalendarSettings onChanged={onCalendarsChanged}/></TabsContent>
+    <TabsContent value="calendars" className="grid gap-4"><CalendarSettings onChanged={onCalendarsChanged}/><GoogleCalendarSettings onChanged={onCalendarsChanged}/></TabsContent>
     <TabsContent value="github"><GitHubSettings onSynced={onGitHubSynced}/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">

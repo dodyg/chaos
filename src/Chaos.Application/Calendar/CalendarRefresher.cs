@@ -13,17 +13,29 @@ public sealed record RefreshOutcome(string SourceId, bool Ok, bool Changed, int 
 /// fetch keeps the old cache and records the error, shown in Settings. With no source at all nothing is
 /// fetched and no request is made.
 /// </summary>
-public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secrets, ICalendarFeedClient feeds, IIcsParser parser, TimeProvider clock)
+public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secrets, ICalendarFeedClient feeds, IIcsParser parser, TimeProvider clock, IGoogleCalendarClient? google = null)
 {
     public const int DaysBack = 7;
     public const int DaysAhead = 56;
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(15);
+    /// <summary>Google calendars are fetched every 5 minutes and on window focus (PLAN2 §10.3); the timer ticks at this pace.</summary>
+    public static readonly TimeSpan GoogleInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DueSlack = TimeSpan.FromSeconds(30);
+
+    private bool Fetchable(CalendarSourceRecord source) =>
+        source.Enabled && (source.Provider == CalendarProvider.Feed || (source.Provider == CalendarProvider.Google && google is not null));
+
+    private static bool IsDue(CalendarSourceRecord source, CalendarSourceState? state, DateTimeOffset now)
+    {
+        var interval = source.Provider == CalendarProvider.Google ? GoogleInterval : Interval;
+        return state?.LastAttemptUtc is not { } last || now - last >= interval - DueSlack;
+    }
 
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    /// <summary>True when at least one feed source exists; the host runs its timer only then.</summary>
+    /// <summary>True when at least one feed or Google source is enabled; the host fetches only then.</summary>
     public async Task<bool> HasSourcesAsync(CancellationToken ct = default) =>
-        await store.QueryAsync(async (session, token) => (await session.Calendars.ListSourcesAsync(token)).Any(source => source.Provider == CalendarProvider.Feed && source.Enabled), ct);
+        await store.QueryAsync(async (session, token) => (await session.Calendars.ListSourcesAsync(token)).Any(Fetchable), ct);
 
     /// <summary>Runs <paramref name="work"/> while no refresh is writing (restore and reset replace the database).</summary>
     public async Task RunPausedAsync(Func<Task> work, CancellationToken ct)
@@ -39,8 +51,12 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
         }
     }
 
-    /// <summary>Refreshes one source, or every enabled feed when <paramref name="sourceId"/> is null.</summary>
-    public async Task<IReadOnlyList<RefreshOutcome>> RefreshAsync(string? sourceId = null, CancellationToken ct = default)
+    /// <summary>
+    /// Refreshes one source, or every enabled source when <paramref name="sourceId"/> is null. With <paramref name="onlyDue"/>
+    /// a source fetched recently enough (5 minutes for Google, 15 for a feed) is skipped, so the timer and window focus can
+    /// both call this without doubling the requests.
+    /// </summary>
+    public async Task<IReadOnlyList<RefreshOutcome>> RefreshAsync(string? sourceId = null, CancellationToken ct = default, bool onlyDue = false)
     {
         await _gate.WaitAsync(ct);
         try
@@ -49,7 +65,7 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
             {
                 var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
                 var sources = (await session.Calendars.ListSourcesAsync(token))
-                    .Where(source => source.Provider == CalendarProvider.Feed && source.Enabled && (sourceId is null || source.Id == sourceId))
+                    .Where(source => Fetchable(source) && (sourceId is null || source.Id == sourceId))
                     .ToList();
                 var states = new Dictionary<string, CalendarSourceState?>();
                 foreach (var source in sources)
@@ -57,13 +73,22 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
                     states[source.Id] = await session.Calendars.GetStateAsync(source.Id, token);
                 }
 
+                if (onlyDue)
+                {
+                    var moment = clock.GetUtcNow();
+                    sources = [.. sources.Where(source => IsDue(source, states[source.Id], moment))];
+                }
+
                 return (sources, states, context.Zone);
             }, ct);
 
             var outcomes = new List<RefreshOutcome>();
+            var blockedAccounts = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var source in plan.sources)
             {
-                outcomes.Add(await RefreshOneAsync(source, plan.states[source.Id], plan.Zone, ct));
+                outcomes.Add(source.Provider == CalendarProvider.Google
+                    ? await RefreshGoogleAsync(source, plan.states[source.Id], blockedAccounts, ct)
+                    : await RefreshOneAsync(source, plan.states[source.Id], plan.Zone, ct));
             }
 
             return outcomes;
@@ -71,6 +96,52 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// One Google calendar: the whole window is fetched (a sync token cannot be combined with a time window, so every refresh
+    /// replaces the cache). When an account needs a new sign-in, is blocked or is offline, its other calendars in this run are
+    /// not even tried.
+    /// </summary>
+    private async Task<RefreshOutcome> RefreshGoogleAsync(CalendarSourceRecord source, CalendarSourceState? state, Dictionary<string, string> blockedAccounts, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var accountId = source.AccountRef ?? string.Empty;
+        if (blockedAccounts.TryGetValue(accountId, out var blocked))
+        {
+            await SaveFailureAsync(source, state, now, blocked, ct);
+            return new RefreshOutcome(source.Id, false, false, 0, blocked);
+        }
+
+        try
+        {
+            var token = await secrets.GetAsync(GoogleCalendarCommands.SecretKey(accountId), ct)
+                ?? throw new GoogleCalendarException(GoogleFailure.SignInAgain, GoogleCalendarCommands.SignInHereMessage);
+            var fetched = await google!.ListEventsAsync(token, source.ExternalId, now.AddDays(-DaysBack), now.AddDays(DaysAhead), ct);
+            var events = fetched
+                .Select(item => new CalendarEventRecord(source.Id, item.ExternalId, item.StartUtc, item.EndUtc, item.AllDay, item.StartDate, item.EndDate,
+                    item.Title, item.Location, item.VideoUrl, item.WebUrl, item.Busy, now))
+                .ToList();
+            await SaveAsync(new CalendarSourceState(source.Id, now, now, null, null, null), events, ct, accountId);
+            return new RefreshOutcome(source.Id, true, true, events.Count, null);
+        }
+        catch (GoogleCalendarException error)
+        {
+            var message = error.Message == GoogleCalendarCommands.SignInHereMessage ? error.Message : GoogleCalendarCommands.MessageOf(error);
+            if (error.Kind is GoogleFailure.SignInAgain or GoogleFailure.Blocked or GoogleFailure.Offline)
+            {
+                blockedAccounts[accountId] = message;
+            }
+
+            await SaveFailureAsync(source, state, now, message, ct, accountId, error.Kind == GoogleFailure.SignInAgain);
+            return new RefreshOutcome(source.Id, false, false, 0, message);
+        }
+        catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+        {
+            const string message = "Something went wrong while reading Google Calendar.";
+            await SaveFailureAsync(source, state, now, message, ct, accountId);
+            return new RefreshOutcome(source.Id, false, false, 0, message);
         }
     }
 
@@ -109,7 +180,7 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
     }
 
     /// <summary>One transaction: the whole window is replaced and the state recorded together.</summary>
-    private async Task SaveAsync(CalendarSourceState state, IReadOnlyList<CalendarEventRecord>? events, CancellationToken ct) =>
+    private async Task SaveAsync(CalendarSourceState state, IReadOnlyList<CalendarEventRecord>? events, CancellationToken ct, string? googleAccountId = null) =>
         await store.ExecuteAsync(async (session, token) =>
         {
             // The source may have been removed while the fetch was running; do not resurrect its cache.
@@ -124,10 +195,15 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
             }
 
             await session.Calendars.SaveStateAsync(state, token);
+            if (googleAccountId is not null && await session.Calendars.GetAccountAsync(googleAccountId, token) is { DeletedAtUtc: null })
+            {
+                await session.Calendars.SaveAccountStateAsync(new GoogleAccountState(googleAccountId, false, state.LastAttemptUtc, state.LastSuccessUtc, null), token);
+            }
+
             return 0;
         }, ct);
 
-    private async Task SaveFailureAsync(CalendarSourceRecord source, CalendarSourceState? state, DateTimeOffset now, string error, CancellationToken ct) =>
+    private async Task SaveFailureAsync(CalendarSourceRecord source, CalendarSourceState? state, DateTimeOffset now, string error, CancellationToken ct, string? googleAccountId = null, bool needsSignIn = false) =>
         await store.ExecuteAsync(async (session, token) =>
         {
             if (await session.Calendars.GetSourceAsync(source.Id, token) is not { DeletedAtUtc: null })
@@ -137,6 +213,12 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
 
             // The cache stays as it was; only the error and the attempt time change.
             await session.Calendars.SaveStateAsync(new CalendarSourceState(source.Id, now, state?.LastSuccessUtc, error, state?.ETag, state?.LastModified), token);
+            if (googleAccountId is not null && await session.Calendars.GetAccountAsync(googleAccountId, token) is { DeletedAtUtc: null })
+            {
+                var previous = await session.Calendars.GetAccountStateAsync(googleAccountId, token);
+                await session.Calendars.SaveAccountStateAsync(new GoogleAccountState(googleAccountId, needsSignIn, now, previous?.LastSuccessUtc, error), token);
+            }
+
             return 0;
         }, ct);
 }

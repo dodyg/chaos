@@ -176,6 +176,15 @@ public static class SyncCatalog
             ],
             LocalColumns: ["Version"],
             ApplyOrder: 56),
+        // P6 Google accounts. The refresh token is NOT a column: it lives in the secret store by account id.
+        new SyncTable("GoogleAccounts", "google_account", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["Email", "Subject", "CreatedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 54),
         // P5 calendar sources. The feed address is NOT a column: it lives in the secret store by source id.
         new SyncTable("CalendarSources", "calendar_source", SyncMode.Merge, ["Id"],
             Groups:
@@ -204,6 +213,7 @@ public static class SyncCatalog
             ApplyOrder: 65),
         new SyncTable("CalendarEvents", "calendar_event", SyncMode.LocalOnly, ["SourceId", "ExternalId"], ApplyOrder: 532), // each device fetches its own cache (PLAN2 §10.2)
         new SyncTable("CalendarSourceState", "calendar_source_state", SyncMode.LocalOnly, ["SourceId"], ApplyOrder: 533), // this device's fetch state, ETag included
+        new SyncTable("GoogleAccountState", "google_account_state", SyncMode.LocalOnly, ["AccountId"], ApplyOrder: 534), // this device's sign-in problems (P6)
         new SyncTable("Tasks", "task", SyncMode.Merge, ["Id"],
             Groups:
             [

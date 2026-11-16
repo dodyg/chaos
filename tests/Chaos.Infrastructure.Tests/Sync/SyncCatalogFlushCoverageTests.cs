@@ -104,6 +104,7 @@ public sealed class SyncCatalogFlushCoverageTests
 
         ["calendar_source"] = Calendars,
         ["calendar_event_link"] = Calendars,
+        ["google_account"] = Calendars,
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -421,8 +422,22 @@ public sealed class SyncCatalogFlushCoverageTests
                 [new CalendarEventRecord(source.Id, "evt-1", DataHost.Start.AddDays(2), DataHost.Start.AddDays(2).AddHours(1), false, null, null, "Flush meeting", null, null, null, true, DataHost.Start)], token);
             return 0;
         });
+        // A connected Google account (P6): the row syncs, the token stays in the secret store.
+        var google = new Chaos.Application.Calendar.GoogleCalendarCommands(host.Store, new NoSecrets(), new FlushGoogle(), host.Clock);
+        var account = await google.ConnectAsync();
+        expected["google_account"] = account.Account.Id;
+
         var made = await calendars.MakeTaskAsync(new(Op(), source.Id, "evt-1", null));
         expected["calendar_event_link"] = Chaos.Application.Abstractions.StorageFormats.NameBasedId(Chaos.Sync.NameBasedId.Names.CalendarEventLink(made.Task.Id));
+    }
+
+    private sealed class FlushGoogle : IGoogleCalendarClient
+    {
+        public bool IsConfigured => true;
+        public Task<GoogleSignIn> SignInAsync(CancellationToken ct) => Task.FromResult(new GoogleSignIn("flush-subject", "flush@example.com", "token"));
+        public Task<IReadOnlyList<GoogleCalendarInfo>> ListCalendarsAsync(string refreshToken, CancellationToken ct) => Task.FromResult<IReadOnlyList<GoogleCalendarInfo>>([]);
+        public Task<IReadOnlyList<ParsedMeeting>> ListEventsAsync(string refreshToken, string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct) => Task.FromResult<IReadOnlyList<ParsedMeeting>>([]);
+        public Task<bool> RevokeAsync(string refreshToken, CancellationToken ct) => Task.FromResult(true);
     }
 
     private sealed class NoSecrets : ISecretStore

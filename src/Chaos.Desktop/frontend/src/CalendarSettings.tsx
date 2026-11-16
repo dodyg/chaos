@@ -33,7 +33,7 @@ function SourceRow({ source, api, onUpdated, onRemoved, onError }: {
   async function refresh() {
     setWorking(true);
     try {
-      const result = await api.refresh({ sourceId: source.id });
+      const result = await api.refresh({ sourceId: source.id, onlyDue: false });
       const fresh = result.sources.find(item => item.id === source.id);
       if (fresh) onUpdated(fresh);
       if (!result.ok) onError(result.error?.message ?? "Could not refresh.");
@@ -94,7 +94,7 @@ export function CalendarSettings({ api = calendarsRpc, onChanged }: { api?: Api;
 
   React.useEffect(() => {
     let current = true;
-    void api.list({}).then(result => { if (!current) return; if (result.ok) setSources([...result.sources]); else setError(result.error?.message ?? "Could not load calendars."); })
+    void api.list({}).then(result => { if (!current) return; if (result.ok) setSources(result.sources.filter(item => item.provider === "Feed")); else setError(result.error?.message ?? "Could not load calendars."); })
       .catch((e: unknown) => { if (current) setError(String(e)); });
     return () => { current = false; };
   }, [api]);

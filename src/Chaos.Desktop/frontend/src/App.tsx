@@ -5,7 +5,7 @@ import React from "react";
 import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
 import { handleListKeys } from "./listKeyboard";
 import { TodayContext } from "./dates";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, viewRpc, dataRpc, type ViewDto, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, viewRpc, dataRpc, calendarsRpc, type ViewDto, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
@@ -425,6 +425,24 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     void take();
     return stop;
   }, [shellApi]);
+
+  // Window focus refreshes calendars that are due (Google every 5 minutes, feeds every 15); the host skips the rest.
+  const changedRef = React.useRef(changed);
+  changedRef.current = changed;
+  React.useEffect(() => {
+    let running = false;
+    async function refreshDue() {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      try {
+        const result = await calendarsRpc.refresh({ sourceId: null, onlyDue: true });
+        if (result.ok && result.results.some(item => item.changed)) changedRef.current();
+      } catch { /* outside the desktop host, or offline: the host's own timer keeps trying */ }
+      finally { running = false; }
+    }
+    window.addEventListener("focus", refreshDue);
+    return () => window.removeEventListener("focus", refreshDue);
+  }, []);
 
   async function openLinkedTask(taskId: string) {
     const result = await taskRpc.get({ taskId });

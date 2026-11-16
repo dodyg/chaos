@@ -228,6 +228,100 @@ public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendar
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<GoogleAccountRecord?> GetAccountAsync(string id, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM GoogleAccounts WHERE Id = $id;";
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadAccount(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<GoogleAccountRecord>> ListAccountsAsync(CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM GoogleAccounts WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc, Id;";
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<GoogleAccountRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(ReadAccount(reader));
+        }
+
+        return rows;
+    }
+
+    public async Task AddAccountAsync(GoogleAccountRecord account, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO GoogleAccounts (Id, Email, Subject, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $email, $subject, $version, $created, $updated, $deleted);
+            """;
+        command.Parameters.AddWithValue("$id", account.Id);
+        command.Parameters.AddWithValue("$email", account.Email);
+        command.Parameters.AddWithValue("$subject", account.Subject);
+        command.Parameters.AddWithValue("$version", account.Version);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(account.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(account.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", StorageFormats.Optional(account.DeletedAtUtc) ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<GoogleAccountRecord?> UpdateAccountAsync(GoogleAccountRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE GoogleAccounts SET Email = $email, Version = $version, UpdatedAtUtc = $updated, DeletedAtUtc = $deleted
+            WHERE Id = $id AND Version = $expected;
+            """;
+        command.Parameters.AddWithValue("$id", updated.Id);
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        command.Parameters.AddWithValue("$email", updated.Email);
+        command.Parameters.AddWithValue("$version", updated.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(updated.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$deleted", StorageFormats.Optional(updated.DeletedAtUtc) ?? DBNull.Value);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? await GetAccountAsync(updated.Id, ct) : null;
+    }
+
+    public async Task<GoogleAccountState?> GetAccountStateAsync(string accountId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM GoogleAccountState WHERE AccountId = $id;";
+        command.Parameters.AddWithValue("$id", accountId);
+        using var r = await command.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct)
+            ? new GoogleAccountState(r.S("AccountId"), r.B("NeedsSignIn"), r.In("LastAttemptUtc"), r.In("LastSuccessUtc"), r.Sn("LastError"))
+            : null;
+    }
+
+    public async Task SaveAccountStateAsync(GoogleAccountState state, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO GoogleAccountState (AccountId, NeedsSignIn, LastAttemptUtc, LastSuccessUtc, LastError)
+            VALUES ($id, $needs, $attempt, $success, $error)
+            ON CONFLICT (AccountId) DO UPDATE SET NeedsSignIn = $needs, LastAttemptUtc = $attempt, LastSuccessUtc = $success, LastError = $error;
+            """;
+        command.Parameters.AddWithValue("$id", state.AccountId);
+        command.Parameters.AddWithValue("$needs", state.NeedsSignIn ? 1 : 0);
+        command.Parameters.AddWithValue("$attempt", StorageFormats.Optional(state.LastAttemptUtc) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$success", StorageFormats.Optional(state.LastSuccessUtc) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$error", (object?)state.LastError ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static GoogleAccountRecord ReadAccount(SqliteDataReader r) => new()
+    {
+        Id = r.S("Id"),
+        Email = r.S("Email"),
+        Subject = r.S("Subject"),
+        Version = r.L("Version"),
+        CreatedAtUtc = r.I("CreatedAtUtc"),
+        UpdatedAtUtc = r.I("UpdatedAtUtc"),
+        DeletedAtUtc = r.In("DeletedAtUtc"),
+    };
+
     private static CalendarSourceRecord ReadSource(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),

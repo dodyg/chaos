@@ -564,6 +564,15 @@ public interface ICalendarStore
     Task<IReadOnlyList<CalendarEventRecord>> ListEventsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, DateOnly fromDate, DateOnly toDate, CancellationToken ct);
     Task<CalendarEventRecord?> GetEventAsync(string sourceId, string externalId, CancellationToken ct);
 
+    Task<GoogleAccountRecord?> GetAccountAsync(string id, CancellationToken ct);
+    /// <summary>Active Google accounts, oldest first.</summary>
+    Task<IReadOnlyList<GoogleAccountRecord>> ListAccountsAsync(CancellationToken ct);
+    Task AddAccountAsync(GoogleAccountRecord account, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<GoogleAccountRecord?> UpdateAccountAsync(GoogleAccountRecord updated, long expectedVersion, CancellationToken ct);
+    Task<GoogleAccountState?> GetAccountStateAsync(string accountId, CancellationToken ct);
+    Task SaveAccountStateAsync(GoogleAccountState state, CancellationToken ct);
+
     Task<CalendarEventLinkRecord?> FindLinkAsync(string taskId, CancellationToken ct);
     Task<IReadOnlyList<CalendarEventLinkRecord>> ListLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
     Task AddLinkAsync(CalendarEventLinkRecord link, CancellationToken ct);

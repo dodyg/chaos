@@ -120,7 +120,10 @@ internal static class Program
         // Calendar feeds (PLAN2 P5): addresses live in the protected secret store, never in the database.
         var secrets = new FileSecretStore(Path.Combine(dataRoot, "secrets"), new Chaos.Desktop.Windows.Security.DpapiSecretProtector());
         using var feedClient = new CalendarFeedClient();
-        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System);
+        // Google Calendar (PLAN2 P6): the OAuth client comes from google-oauth.json beside the exe (git-ignored); tokens go to the secret store only.
+        using var googleClient = new GoogleCalendarClient(GoogleOAuthConfig.TryLoad(Path.Combine(AppContext.BaseDirectory, "google-oauth.json")), new Chaos.Desktop.Platform.ShellBrowser());
+        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
+        var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
         using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System);
         calendarScheduler.Start();
@@ -170,6 +173,7 @@ internal static class Program
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
+                rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -358,6 +362,18 @@ internal static class Program
 [JsonSerializable(typeof(CalendarRangeResponse))]
 [JsonSerializable(typeof(CalendarUnscheduledRequest))]
 [JsonSerializable(typeof(CalendarSourceDto))]
+[JsonSerializable(typeof(GoogleAccountDto))]
+[JsonSerializable(typeof(GoogleStatusRequest))]
+[JsonSerializable(typeof(GoogleStatusResponse))]
+[JsonSerializable(typeof(GoogleConnectRequest))]
+[JsonSerializable(typeof(GoogleAccountResponse))]
+[JsonSerializable(typeof(GoogleCalendarsRequest))]
+[JsonSerializable(typeof(GoogleCalendarsResponse))]
+[JsonSerializable(typeof(GoogleCalendarChoiceDto))]
+[JsonSerializable(typeof(GoogleChooseRequest))]
+[JsonSerializable(typeof(GoogleChooseResponse))]
+[JsonSerializable(typeof(GoogleDisconnectRequest))]
+[JsonSerializable(typeof(GoogleDisconnectResponse))]
 [JsonSerializable(typeof(CalendarsListRequest))]
 [JsonSerializable(typeof(CalendarsListResponse))]
 [JsonSerializable(typeof(CalendarAddFeedRequest))]
