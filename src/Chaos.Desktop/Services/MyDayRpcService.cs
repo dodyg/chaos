@@ -9,7 +9,8 @@ public sealed record DayClockResponse(string Today, string NextDayStartsAtUtc, s
 public sealed record DayClockRequest();
 public sealed record DayClockResult(bool Ok, DayClockResponse? Clock, TaskErrorResponse? Error);
 public sealed record DaySummaryResponse(string Date, DayClockResponse Clock, bool Exists, bool Editable, int OpenCount, int FinishedCount, int RemainingMinutes, int UnknownEstimates,
-    int AvailableMinutes = 0, int? WorkAllowanceMinutes = null, int WorkMinutes = 0);
+    int AvailableMinutes = 0, int? WorkAllowanceMinutes = null, int WorkMinutes = 0,
+    int BusyMinutes = 0, int FreeMinutes = 0, bool MeetingsDontFit = false, IReadOnlyList<CalendarMeetingDto>? Meetings = null);
 /// <summary>A yyyy-MM-dd local date, or null for today.</summary>
 public sealed record DayOpenRequest(string? Date);
 public sealed record DayOpenResponse(bool Ok, DaySummaryResponse? Day, TaskErrorResponse? Error);
@@ -90,7 +91,11 @@ public sealed class MyDayRpcService(MyDayCommands days)
         day.UnknownEstimates,
         day.AvailableMinutes,
         day.WorkAllowanceMinutes,
-        day.WorkMinutes);
+        day.WorkMinutes,
+        day.BusyMinutes,
+        day.FreeMinutes,
+        day.MeetingsDontFit,
+        [.. (day.Meetings ?? []).Select(CalendarRpcService.Map)]);
 
     private static DateOnly Date(string? value, string field) =>
         OptionalDate(value, field) ?? throw AppException.Validation(field, "Choose a date.");

@@ -194,19 +194,25 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
 }
 
 function DayHeading({ day, focus = null }: { day: WeekDayDto; focus?: Focus }) {
+  // Meetings take time off the day: the figure shown is what is left; editing keeps the configured hours.
+  const net = Math.max(0, day.availableMinutes - day.busyMinutes);
+  const netWork = day.workAllowanceMinutes === null ? null : Math.min(day.workAllowanceMinutes, net);
+  const meetings = day.busyMinutes > 0 ? <span className="tabular-nums text-muted-foreground" data-meetings={day.date}>{minutesText(day.busyMinutes)} meetings</span> : null;
   const warn = focus === "Personal" ? day.overTotal : focus === "Work" ? day.overWork : day.overTotal || day.overWork;
   if (focus === "Work") return <div className="grid gap-0.5 text-xs">
     <span className="text-sm font-semibold">{dayLabel(day.date)}</span>
-    <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)}{day.workAllowanceMinutes !== null ? ` of ${minutesText(day.workAllowanceMinutes)}` : ""}</span>
+    <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)}{netWork !== null ? ` of ${minutesText(netWork)}` : ""}</span>
+    {meetings}
     {warn && <span className="inline-flex items-center gap-1 text-destructive" role="status"><AlertTriangle className="size-3"/>More work than planned</span>}
   </div>;
   return <div className="grid gap-0.5 text-xs">
     <span className="text-sm font-semibold">{dayLabel(day.date)}</span>
     {focus === "Personal" && <span className="tabular-nums text-muted-foreground">Personal {minutesText(Math.max(0, day.plannedMinutes - day.workMinutes))}</span>}
     <span className={cn("tabular-nums text-muted-foreground", warn && "font-medium text-destructive")}>
-      {minutesText(day.plannedMinutes)} of {minutesText(day.availableMinutes)}{day.unknownEstimates > 0 && ` · ${day.unknownEstimates} unestimated`}
+      {minutesText(day.plannedMinutes)} of {minutesText(net)}{day.unknownEstimates > 0 && ` · ${day.unknownEstimates} unestimated`}
     </span>
-    {focus === null && day.workAllowanceMinutes !== null && <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)} of {minutesText(day.workAllowanceMinutes)}</span>}
+    {meetings}
+    {focus === null && day.workAllowanceMinutes !== null && <span className={cn("tabular-nums text-muted-foreground", day.overWork && "font-medium text-destructive")}>Work {minutesText(day.workMinutes)} of {minutesText(netWork ?? 0)}</span>}
     {warn && <span className="inline-flex items-center gap-1 text-destructive" role="status"><AlertTriangle className="size-3"/>{day.overTotal ? "More than this day holds" : "More work than planned"}</span>}
   </div>;
 }

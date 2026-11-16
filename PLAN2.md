@@ -1892,7 +1892,7 @@ month), 7 jsdom tests (move dialog, refused move, due marker, Plan…, filters, 
 check (drag between days and into a time slot) confirmed by the owner on 2026-11-16. Meetings are an
 empty list until P5.
 
-### [ ] P5 — Calendar feeds and meetings in planning
+### [x] P5 — Calendar feeds and meetings in planning
 
 **Depends on:** P4. **Migration:** `027_calendars.sql`. **Read:** sections 10.2 and 10.4.
 
@@ -1934,6 +1934,8 @@ empty list until P5.
 
 **Exit:** a real Google or Outlook secret ICS address shows meetings in the calendar and My Day. My
 Week's hours drop by the busy time, and the feed URL is not in the database.
+
+**Progress note 2026-11-16 (calendar feeds).** Migration 028 (027 was taken), `ISecretStore` over DPAPI, `CalendarFeedClient`, `IcsParser` (Ical.Net 5.2.4), `CalendarCommands`/`CalendarRefresher`, `MeetingTime` busy maths, meetings in the calendar, My Week capacity and My Day (with the fit warning), Make a task, the summary switch, `calendars` RPC and Settings → Calendars. Decisions are in `docs/decisions.md` (2026-11-16, P5). Tests: 10 domain busy-maths cases, 9 parser fixtures, 8 feed-client cases, 17 real-SQLite calendar cases (including a byte scan for the feed address) and 9 jsdom tests. **Still open:** the native check with a real secret ICS address.
 
 ### [ ] P6 — Google Calendar connection
 

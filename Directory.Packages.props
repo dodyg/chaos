@@ -11,6 +11,10 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <!-- Tests: TUnit 1.81.16, latest stable verified at kickoff 2026-11-09 (plan §1). -->
     <PackageVersion Include="TUnit" Version="1.81.16" />
+    <!-- Calendar feeds (PLAN2 P5): ICS parsing and recurrence expansion. -->
+    <PackageVersion Include="Ical.Net" Version="5.2.4" />
+    <!-- OS-protected secret store (DPAPI) for calendar feed addresses (PLAN2 P5). -->
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>
 
 </Project>

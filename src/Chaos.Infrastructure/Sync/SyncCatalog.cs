@@ -67,7 +67,7 @@ public static class SyncCatalog
                 new("zone", ["ZoneId"]),
                 new("locale", ["Locale"]),
                 new("dates", ["DateFormat", "FirstWeekday"]),
-                new("planning", ["PlanningTime", "SummaryTime", "MorningTime", "WeeklySummaryDay"]),
+                new("planning", ["PlanningTime", "SummaryTime", "MorningTime", "WeeklySummaryDay", "IncludeMeetingsInSummaries"]),
                 new("reminders", ["DefaultReminderTime"]),
                 new("quiet", ["QuietHoursEnabled", "QuietStart", "QuietEnd"]),
                 new("deleted", ["DeletedAtUtc"]),
@@ -176,6 +176,34 @@ public static class SyncCatalog
             ],
             LocalColumns: ["Version"],
             ApplyOrder: 56),
+        // P5 calendar sources. The feed address is NOT a column: it lives in the secret store by source id.
+        new SyncTable("CalendarSources", "calendar_source", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["Provider", "AccountRef", "ExternalId", "CreatedAtUtc"]),
+                new("name", ["Name"]),
+                new("look", ["Color"]),
+                new("busy", ["CountsAsBusy"]),
+                new("enabled", ["Enabled"]),
+                new("owner", ["OwnerEmail"]),
+                new("position", ["Position"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 57),
+        // A task made from a meeting. Deterministic id (calendareventlink:{taskId}): one link per task.
+        new SyncTable("CalendarEventLinks", "calendar_event_link", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["TaskId", "Provider", "CalendarId", "EventId", "EventStartUtc", "EventTitle", "EventWebUrl", "CreatedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            DeterministicIndexes: [new("UX_CalendarEventLinks_Task",
+                "Deterministic ID: both devices derive calendareventlink:{taskId}, so the row upserts onto itself (§7.5).")],
+            ApplyOrder: 65),
+        new SyncTable("CalendarEvents", "calendar_event", SyncMode.LocalOnly, ["SourceId", "ExternalId"], ApplyOrder: 532), // each device fetches its own cache (PLAN2 §10.2)
+        new SyncTable("CalendarSourceState", "calendar_source_state", SyncMode.LocalOnly, ["SourceId"], ApplyOrder: 533), // this device's fetch state, ETag included
         new SyncTable("Tasks", "task", SyncMode.Merge, ["Id"],
             Groups:
             [

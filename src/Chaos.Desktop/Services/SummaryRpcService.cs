@@ -21,7 +21,10 @@ public sealed record FollowUpFactDto(SummaryTaskDto Task, string? Person, string
 public sealed record SummaryFactsDto(
     IReadOnlyList<CompletionDto> Completions, IReadOnlyList<ProjectProgressDto> Projects, IReadOnlyList<UnfinishedDto> Unfinished,
     IReadOnlyList<WaitingFactDto> Waiting, IReadOnlyList<SummaryTaskDto> Deadlines, IReadOnlyList<DiaryFactDto> DiaryUpdates, int DiaryUpdateCount,
-    IReadOnlyList<SuggestionDto> Suggested, WeekProgressDto? Week, IReadOnlyList<SummaryTaskDto> Selected, int OverdueCount, IReadOnlyList<FollowUpFactDto> FollowUps);
+    IReadOnlyList<SuggestionDto> Suggested, WeekProgressDto? Week, IReadOnlyList<SummaryTaskDto> Selected, int OverdueCount, IReadOnlyList<FollowUpFactDto> FollowUps,
+    IReadOnlyList<MeetingFactDto>? Meetings = null);
+/// <summary>A meeting in a summary: Date is yyyy-MM-dd, Start and End are HH:mm (null for all-day).</summary>
+public sealed record MeetingFactDto(string Title, string Date, string? Start, string? End, bool AllDay);
 public sealed record SummaryCountsDto(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, bool Quiet);
 /// <param name="Partial">Generated before the period ended; <see cref="CapturedThroughUtc"/> says how far it reaches.</param>
 public sealed record SummaryHeaderDto(string Id, string Kind, string PeriodStart, string PeriodEnd, string Revision, string CapturedThroughUtc, bool Partial,
@@ -47,8 +50,8 @@ public sealed record CarryOverRequest(string OperationId, string SummaryId, IRea
 public sealed record CarryOverResponse(bool Ok, string? Target, string? TargetDate, int Added, int Skipped, bool Replayed, TaskErrorResponse? Error);
 public sealed record SummarySettingsRequest();
 /// <summary>Times are HH:mm; null means that summary is not scheduled.</summary>
-public sealed record SummarySettingsResponse(bool Ok, string? MorningTime, string? EveningTime, string? WeeklyDay, string? FirstWeekday, string? Version, string? ZoneId, TaskErrorResponse? Error);
-public sealed record SummarySettingsUpdateRequest(string OperationId, string ExpectedVersion, string? MorningTime, string? EveningTime, string? WeeklyDay);
+public sealed record SummarySettingsResponse(bool Ok, string? MorningTime, string? EveningTime, string? WeeklyDay, string? FirstWeekday, string? Version, string? ZoneId, TaskErrorResponse? Error, bool IncludeMeetings = false);
+public sealed record SummarySettingsUpdateRequest(string OperationId, string ExpectedVersion, string? MorningTime, string? EveningTime, string? WeeklyDay, bool IncludeMeetings = false);
 
 /// <summary>Plain summaries, their history, carry-over and the summary schedule (PLAN §12, WP11).</summary>
 [NeoRpcService("summaries", Version = 1)]
@@ -141,7 +144,8 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
                 ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"),
                 Time(request.MorningTime, "morningTime"),
                 Time(request.EveningTime, "eveningTime"),
-                weekly), ct));
+                weekly,
+                request.IncludeMeetings), ct));
         }
         catch (AppException error) { return new(false, null, null, null, null, null, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -183,7 +187,8 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
             : null,
         [.. facts.Selected.Select(Map)],
         facts.OverdueCount,
-        [.. facts.FollowUps.Select(item => new FollowUpFactDto(Map(item.Task), item.Person, StorageFormats.Instant(item.DueAtUtc)))]);
+        [.. facts.FollowUps.Select(item => new FollowUpFactDto(Map(item.Task), item.Person, StorageFormats.Instant(item.DueAtUtc)))],
+        [.. facts.Meetings.Select(item => new MeetingFactDto(item.Title, StorageFormats.Date(item.Date), item.Start?.ToString("HH:mm", CultureInfo.InvariantCulture), item.End?.ToString("HH:mm", CultureInfo.InvariantCulture), item.AllDay))]);
 
     internal static SummaryTaskDto Map(SummaryTaskFact task) => new(
         task.TaskId, task.Title, task.ContainerId, task.ContainerName, task.ContainerKind.ToString(), task.Status.ToString(), task.Priority.ToString(),
@@ -200,7 +205,8 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
         settings.FirstWeekday.ToString(),
         settings.Version.ToString(CultureInfo.InvariantCulture),
         settings.ZoneId,
-        null);
+        null,
+        settings.IncludeMeetings);
 
     private static string? Clock(TimeOnly? time) => time?.ToString("HH:mm", CultureInfo.InvariantCulture);
 

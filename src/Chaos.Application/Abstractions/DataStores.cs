@@ -36,6 +36,7 @@ public interface IDataSession
     IGitHubStore GitHub { get; }
     IBoardStore Boards { get; }
     ISavedViewStore SavedViews { get; }
+    ICalendarStore Calendars { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
@@ -538,4 +539,32 @@ public interface IImportStore
     /// <summary>Records (or re-points, after the earlier task was deleted) the task an item became.</summary>
     Task MapItemAsync(string itemFingerprint, string batchId, string taskId, string sourceKey, CancellationToken ct);
     Task<IReadOnlyList<Transfer.ImportBatchRecord>> ListBatchesAsync(int limit, CancellationToken ct);
+}
+
+/// <summary>
+/// Calendar sources, the device-local meeting cache and event links (PLAN2 P5). Sources and links are
+/// synced aggregates; events and fetch state stay on this device.
+/// </summary>
+public interface ICalendarStore
+{
+    Task<CalendarSourceRecord?> GetSourceAsync(string id, CancellationToken ct);
+    /// <summary>Active (not removed) sources ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<CalendarSourceRecord>> ListSourcesAsync(CancellationToken ct);
+    Task AddSourceAsync(CalendarSourceRecord source, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<CalendarSourceRecord?> UpdateSourceAsync(CalendarSourceRecord updated, long expectedVersion, CancellationToken ct);
+
+    Task<CalendarSourceState?> GetStateAsync(string sourceId, CancellationToken ct);
+    Task SaveStateAsync(CalendarSourceState state, CancellationToken ct);
+
+    /// <summary>Replaces every cached event of the source with these rows.</summary>
+    Task ReplaceEventsAsync(string sourceId, IReadOnlyList<CalendarEventRecord> events, CancellationToken ct);
+    Task DeleteEventsAsync(string sourceId, CancellationToken ct);
+    /// <summary>Events of enabled, active sources that may touch the half-open UTC window, ordered by start. Date-only events are matched by date.</summary>
+    Task<IReadOnlyList<CalendarEventRecord>> ListEventsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, DateOnly fromDate, DateOnly toDate, CancellationToken ct);
+    Task<CalendarEventRecord?> GetEventAsync(string sourceId, string externalId, CancellationToken ct);
+
+    Task<CalendarEventLinkRecord?> FindLinkAsync(string taskId, CancellationToken ct);
+    Task<IReadOnlyList<CalendarEventLinkRecord>> ListLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
+    Task AddLinkAsync(CalendarEventLinkRecord link, CancellationToken ct);
 }

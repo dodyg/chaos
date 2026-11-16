@@ -34,7 +34,8 @@ public sealed record CalendarEntryDto(
     bool IsEstimated,
     int? EstimateMinutes,
     string Category);
-public sealed record CalendarMeetingDto(string Id, string Title, string Date, string? Start, string? End, string? Color, bool Busy);
+/// <summary>A meeting, one per local day it touches. Start and End are HH:mm and null for all-day meetings.</summary>
+public sealed record CalendarMeetingDto(string Id, string SourceId, string EventId, string SourceName, string Title, string Date, string? Start, string? End, bool AllDay, string? Color, bool Busy, string? Location, string? VideoUrl, string? WebUrl);
 public sealed record CalendarDayDto(string Date, int AvailableMinutes, int? WorkAllowanceMinutes, int BusyMinutes, int PlannedMinutes, int WorkMinutes, int UnknownEstimates, int OpenCount, bool OverTotal, bool OverWork);
 public sealed record CalendarRangeResponse(
     bool Ok,
@@ -61,7 +62,7 @@ public sealed class CalendarRpcService(CalendarQueries queries)
             var result = await queries.RangeAsync(Date(request.From, "from"), Date(request.To, "to"), ToFilters(request.Filters), ct);
             return new(true, StorageFormats.Date(result.From), StorageFormats.Date(result.To), StorageFormats.Date(result.Today), result.ZoneId,
                 [.. result.Entries.Select(Map)],
-                [.. result.Meetings.Select(item => new CalendarMeetingDto(item.Id, item.Title, StorageFormats.Date(item.Date), Time(item.Start), Time(item.End), item.Color, item.Busy))],
+                [.. result.Meetings.Select(Map)],
                 [.. result.Days.Select(day => new CalendarDayDto(StorageFormats.Date(day.Date), day.Availability.TotalMinutes, day.Availability.WorkMinutes, day.BusyMinutes,
                     day.Load.PlannedMinutes, day.Load.WorkMinutes, day.Load.UnknownEstimates, day.Load.OpenCount, day.Load.OverTotal, day.Load.OverWork))],
                 result.Truncated, null);
@@ -82,6 +83,10 @@ public sealed class CalendarRpcService(CalendarQueries queries)
         }
         catch (AppException error) { return new(false, [], 0, null, TaskRpcService.ToErrorResponse(error)); }
     }
+
+    internal static CalendarMeetingDto Map(CalendarMeeting item) => new(
+        item.Id, item.SourceId, item.EventId, item.SourceName, item.Title, StorageFormats.Date(item.Date), Time(item.Start), Time(item.End), item.AllDay, item.Color, item.Busy,
+        item.Location, item.VideoUrl, item.WebUrl);
 
     private static CalendarEntryDto Map(CalendarEntry entry) => new(
         entry.Kind.ToString(), entry.TaskId, entry.Title, entry.Status.ToString(), entry.Priority.ToString(), entry.ContainerName,

@@ -45,6 +45,7 @@ public sealed class SyncCatalogFlushCoverageTests
     private const string Pages = "pages";
     private const string GitHub = "github";
     private const string Board = "board";
+    private const string Calendars = "calendars";
 
     /// <summary>Which scenario group produces each kind. Every non-LocalOnly catalog kind is
     /// either here or in <see cref="UnreachableKinds"/> (the guard test below enforces that).</summary>
@@ -100,6 +101,9 @@ public sealed class SyncCatalogFlushCoverageTests
 
         ["board_setting"] = Board,
         ["saved_view"] = Board,
+
+        ["calendar_source"] = Calendars,
+        ["calendar_event_link"] = Calendars,
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -176,6 +180,9 @@ public sealed class SyncCatalogFlushCoverageTests
                 break;
             case Board:
                 await BoardScenarioAsync(host, expected);
+                break;
+            case Calendars:
+                await CalendarsScenarioAsync(host, expected);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown scenario group: {group}");
@@ -398,6 +405,31 @@ public sealed class SyncCatalogFlushCoverageTests
             Op(), null, 0, "Flush view", "bug", "blue",
             "{\"v\":1,\"items\":[{\"field\":\"priority\",\"op\":\"atLeast\",\"value\":\"High\"}]}", null, Pinned: true, AlertsEnabled: false));
         expected["saved_view"] = view.View.Id;
+    }
+
+    /// <summary>A calendar feed source and a task made from one of its meetings (P5).</summary>
+    private static async Task CalendarsScenarioAsync(DataHost host, Dictionary<string, string> expected)
+    {
+        var calendars = new Chaos.Application.Calendar.CalendarCommands(host.Store, new NoSecrets(), host.Ids, host.Clock, new CaptureCommands(host.Store, host.Ids, host.Clock));
+        var source = (await calendars.AddFeedAsync(new("https://calendar.example.org/flush.ics", "Flush feed", "#3366cc", true, null))).Source;
+        expected["calendar_source"] = source.Id;
+
+        // The meeting cache is device-local; seed one row the way a refresh would.
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            await session.Calendars.ReplaceEventsAsync(source.Id,
+                [new CalendarEventRecord(source.Id, "evt-1", DataHost.Start.AddDays(2), DataHost.Start.AddDays(2).AddHours(1), false, null, null, "Flush meeting", null, null, null, true, DataHost.Start)], token);
+            return 0;
+        });
+        var made = await calendars.MakeTaskAsync(new(Op(), source.Id, "evt-1", null));
+        expected["calendar_event_link"] = Chaos.Application.Abstractions.StorageFormats.NameBasedId(Chaos.Sync.NameBasedId.Names.CalendarEventLink(made.Task.Id));
+    }
+
+    private sealed class NoSecrets : ISecretStore
+    {
+        public Task SetAsync(string key, string value, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // ---- Helpers ---------------------------------------------------------------------------

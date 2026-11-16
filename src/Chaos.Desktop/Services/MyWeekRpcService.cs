@@ -9,7 +9,7 @@ namespace Chaos.Desktop.Services;
 public sealed record WeekTaskDto(TaskResponse Task, string ContainerName, bool ContainerArchived);
 public sealed record WeekPlacementDto(string TaskId, string? Day, string Origin);
 public sealed record WeekGoalDto(string Id, string Title, string? ProjectId, string? ProjectName, IReadOnlyList<string> TaskIds, string Outcome, int DoneCount, int CountedCount, string Version);
-public sealed record WeekDayDto(string Date, int AvailableMinutes, int? WorkAllowanceMinutes, bool IsOverride, int PlannedMinutes, int WorkMinutes, int UnknownEstimates, int OpenCount, bool OverTotal, bool OverWork);
+public sealed record WeekDayDto(string Date, int AvailableMinutes, int? WorkAllowanceMinutes, bool IsOverride, int PlannedMinutes, int WorkMinutes, int UnknownEstimates, int OpenCount, bool OverTotal, bool OverWork, int BusyMinutes = 0);
 public sealed record WeekLoadDto(int PlannedMinutes, int WorkMinutes, int UnknownEstimates, int OpenCount);
 public sealed record WeekBoardDto(IReadOnlyList<WeekGoalDto> Goals, IReadOnlyList<WeekPlacementDto> Placements, IReadOnlyList<WeekDayDto> Days, WeekLoadDto Pool);
 public sealed record WeekDraftGoalDto(string Id, string Title, string? ProjectId, IReadOnlyList<string> TaskIds, string Outcome);
@@ -178,7 +178,7 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
         [.. board.Goals.Select(Map)],
         [.. board.Placements.Select(item => new WeekPlacementDto(item.TaskId, OptionalText(item.Day), item.Origin.ToString()))],
         [.. board.Days.Select(day => new WeekDayDto(StorageFormats.Date(day.Date), day.Availability.TotalMinutes, day.Availability.WorkMinutes, day.IsOverride,
-            day.Load.PlannedMinutes, day.Load.WorkMinutes, day.Load.UnknownEstimates, day.Load.OpenCount, day.Load.OverTotal, day.Load.OverWork))],
+            day.Load.PlannedMinutes, day.Load.WorkMinutes, day.Load.UnknownEstimates, day.Load.OpenCount, day.Load.OverTotal, day.Load.OverWork, day.BusyMinutes))],
         new WeekLoadDto(board.Pool.PlannedMinutes, board.Pool.WorkMinutes, board.Pool.UnknownEstimates, board.Pool.OpenCount));
 
     private static WeekGoalDto Map(WeekGoalProgress goal) =>

@@ -97,6 +97,9 @@ public sealed record GoalFact(string GoalId, string Title, WeekGoalOutcome Outco
 public sealed record WeekProgressFact(DateOnly WeekStart, long Revision, int AssignedCount, int DoneCount, int CancelledCount, IReadOnlyList<GoalFact> Goals);
 
 /// <summary>A follow-up due in the period (morning summary).</summary>
+/// <summary>A meeting listed in a summary when the person allowed it (PLAN2 §10.4): title and time only.</summary>
+public sealed record MeetingFact(string Title, DateOnly Date, TimeOnly? Start, TimeOnly? End, bool AllDay);
+
 public sealed record FollowUpFact(SummaryTaskFact Task, string? Person, DateTimeOffset DueAtUtc);
 
 /// <summary>
@@ -122,10 +125,12 @@ public sealed record SummaryFacts
     public IReadOnlyList<SummaryTaskFact> Selected { get; init; } = [];
     public int OverdueCount { get; init; }
     public IReadOnlyList<FollowUpFact> FollowUps { get; init; } = [];
+    /// <summary>Morning: today's meetings; daily: tomorrow's. Empty unless "Include meetings in summaries" is on.</summary>
+    public IReadOnlyList<MeetingFact> Meetings { get; init; } = [];
     /// <summary>True when every list above is empty: shown as a quiet period, not an error.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsQuiet =>
         Completions.Count == 0 && Projects.Count == 0 && Unfinished.Count == 0 && Waiting.Count == 0 && Deadlines.Count == 0
-        && DiaryUpdates.Count == 0 && Suggested.Count == 0 && Selected.Count == 0 && OverdueCount == 0 && FollowUps.Count == 0
+        && DiaryUpdates.Count == 0 && Suggested.Count == 0 && Selected.Count == 0 && OverdueCount == 0 && FollowUps.Count == 0 && Meetings.Count == 0
         && (Week is null || Week.AssignedCount == 0 && Week.Goals.Count == 0);
 }

@@ -5,8 +5,8 @@ import timeGridPlugin from "@fullcalendar/timegrid";
 import listPlugin from "@fullcalendar/list";
 import interactionPlugin, { Draggable } from "@fullcalendar/interaction";
 import type { DatesSetArg, EventClickArg, EventDropArg, EventContentArg, DayHeaderContentArg, DayCellContentArg } from "@fullcalendar/core";
-import { calendarRpc, taskRpc, type CalendarDayDto, type CalendarEntryDto, type CalendarFiltersDto, type ContainerResponse, type QueryRowResponse, type TagResponse, type TaskResponse } from "#neoastra";
-import { ChevronLeft, ChevronRight, Flag, GripVertical, Repeat } from "lucide-react";
+import { calendarRpc, calendarsRpc, markdownRpc, taskRpc, type CalendarDayDto, type CalendarMeetingDto, type CalendarEntryDto, type CalendarFiltersDto, type ContainerResponse, type QueryRowResponse, type TagResponse, type TaskResponse } from "#neoastra";
+import { ChevronLeft, ChevronRight, Flag, GripVertical, Repeat, Video } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,11 +15,13 @@ import { Field, InlineError, SegmentedRadio } from "@/components/common";
 import { friendlyDate } from "./dates";
 import { minutesText } from "./MyWeek";
 import type { Focus } from "./category";
+import { busyText, meetingLink, meetingTime } from "./meetings";
 
 const operationId = () => crypto.randomUUID();
 
 type CalendarApi = typeof calendarRpc;
 type TaskApi = Pick<typeof taskRpc, "get" | "edit">;
+type CalendarsApi = Pick<typeof calendarsRpc, "makeTask">;
 export type CalendarMode = "day" | "week" | "month" | "agenda";
 const viewTypes: Record<CalendarMode, string> = { day: "timeGridDay", week: "timeGridWeek", month: "dayGridMonth", agenda: "agenda" };
 const modes: readonly (readonly [CalendarMode, string])[] = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["agenda", "Agenda"]];
@@ -53,6 +55,25 @@ export function toEvent(entry: CalendarEntryDto) {
   };
 }
 
+/** A meeting as FullCalendar input: read-only, in its calendar's colour, lighter when it is free time. */
+export function toMeetingEvent(meeting: CalendarMeetingDto) {
+  const timed = !meeting.allDay && meeting.start !== null;
+  return {
+    id: `Meeting:${meeting.id}`,
+    title: meeting.title,
+    start: timed ? `${meeting.date}T${meeting.start}:00` : meeting.date,
+    end: timed && meeting.end ? `${meeting.date}T${meeting.end}:00` : undefined,
+    allDay: !timed,
+    editable: false,
+    startEditable: false,
+    durationEditable: false,
+    backgroundColor: meeting.color ?? undefined,
+    borderColor: meeting.color ?? undefined,
+    classNames: ["chaos-event", "chaos-event-meeting", !meeting.busy && "chaos-event-free"].filter((name): name is string => Boolean(name)),
+    extendedProps: { meeting },
+  };
+}
+
 /** The unfinished-planning notes a day header or cell shows: only days over their time get a badge. */
 export function dayBadge(day: CalendarDayDto | undefined) {
   if (!day || !(day.overTotal || day.overWork)) return null;
@@ -64,9 +85,10 @@ export function dayBadge(day: CalendarDayDto | undefined) {
 
 function DayBadge({ day }: { day: CalendarDayDto | undefined }) {
   const badge = dayBadge(day);
-  if (!badge) return null;
-  return <span data-overload={day!.date} title={badge.reason} aria-label={`Overloaded: ${badge.reason}`}
-    className="ml-1 inline-flex rounded-full bg-destructive/15 px-1.5 text-[0.65rem] font-semibold text-destructive">{badge.text}</span>;
+  const busy = day && day.busyMinutes > 0 ? <span data-busy={day.date} className="ml-1 text-[0.65rem] font-normal text-muted-foreground">{busyText(day.busyMinutes)}</span> : null;
+  if (!badge) return busy;
+  return <>{busy}<span data-overload={day!.date} title={badge.reason} aria-label={`Overloaded: ${badge.reason}`}
+    className="ml-1 inline-flex rounded-full bg-destructive/15 px-1.5 text-[0.65rem] font-semibold text-destructive">{badge.text}</span></>;
 }
 
 /** The date and optional time a task is planned for; used from the entry menu and the unscheduled panel (the keyboard way to move). */
@@ -93,6 +115,7 @@ export function MoveDialog({ title, heading, initialDate, initialTime, error, bu
 }
 
 type Selected = { entry: CalendarEntryDto };
+type SelectedMeeting = { meeting: CalendarMeetingDto };
 type Moving = { taskId: string; title: string; date: string; time: string | null };
 
 /** The side panel of open tasks with no planned date: dragged onto the grid or planned with the keyboard. */
@@ -159,16 +182,16 @@ export function UnscheduledPanel({ filters, revision, onOpen, onPlan, api, listR
  * only the planned date (and time) through the ordinary task edit, so it is undoable; the entry menu's
  * "Move to date…" is the keyboard way. `viewId` limits the calendar to one custom view's tasks.
  */
-export function Calendar({ viewId, tags, containers, focus, busy, revision, onOpen, onChanged, api = calendarRpc, taskApi = taskRpc, today: todayProp }: {
+export function Calendar({ viewId, tags, containers, focus, busy, revision, onOpen, onChanged, api = calendarRpc, taskApi = taskRpc, calendarsApi = calendarsRpc, openExternal = (url: string) => void markdownRpc.openExternal({ url }), today: todayProp }: {
   viewId?: string; tags: TagResponse[]; containers: ContainerResponse[]; focus: Focus; busy: boolean; revision: number;
-  onOpen: (task: TaskResponse) => void; onChanged: () => void; api?: CalendarApi; taskApi?: TaskApi; today?: string;
+  onOpen: (task: TaskResponse) => void; onChanged: () => void; api?: CalendarApi; taskApi?: TaskApi; calendarsApi?: CalendarsApi; openExternal?: (url: string) => void; today?: string;
 }) {
   const calendarRef = React.useRef<FullCalendar>(null);
   const regionRef = React.useRef<HTMLDivElement>(null);
   const unscheduledRef = React.useRef<HTMLDivElement>(null);
   const [mode, setMode] = React.useState<CalendarMode>(() => { try { const stored = localStorage.getItem("chaos.calendarMode"); return stored === "day" || stored === "month" || stored === "agenda" ? stored : "week"; } catch { return "week"; } });
   const [range, setRange] = React.useState<{ from: string; to: string; title: string } | null>(null);
-  const [data, setData] = React.useState<{ entries: readonly CalendarEntryDto[]; days: ReadonlyMap<string, CalendarDayDto>; today: string; zoneId: string; truncated: boolean } | null>(null);
+  const [data, setData] = React.useState<{ entries: readonly CalendarEntryDto[]; meetings: readonly CalendarMeetingDto[]; days: ReadonlyMap<string, CalendarDayDto>; today: string; zoneId: string; truncated: boolean } | null>(null);
   const [showPlanned, setShowPlanned] = React.useState(true);
   const [showDue, setShowDue] = React.useState(true);
   const [showMeetings, setShowMeetings] = React.useState(true);
@@ -181,6 +204,8 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
   const [reloads, setReloads] = React.useState(0);
   const [selected, setSelected] = React.useState<Selected | null>(null);
   const [moving, setMoving] = React.useState<Moving | null>(null);
+  const [meeting, setMeeting] = React.useState<SelectedMeeting | null>(null);
+  const [notice, setNotice] = React.useState<{ text: string; task: TaskResponse } | null>(null);
   const [cursorDate, setCursorDate] = React.useState<string | null>(null);
 
   const filters = React.useMemo<CalendarFiltersDto>(() => ({
@@ -196,7 +221,7 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
     void api.range({ from: range.from, to: range.to, filters }).then(result => {
       if (!current) return;
       if (result.ok) {
-        setData({ entries: result.entries, days: new Map(result.days.map(day => [day.date, day])), today: result.today, zoneId: result.zoneId, truncated: result.truncated });
+        setData({ entries: result.entries, meetings: result.meetings, days: new Map(result.days.map(day => [day.date, day])), today: result.today, zoneId: result.zoneId, truncated: result.truncated });
         setError(null);
       } else setError(result.error?.message ?? "Could not load the calendar.");
     }).catch((e: unknown) => { if (current) setError(String(e)); });
@@ -211,7 +236,21 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
     return () => draggable.destroy();
   }, []);
 
-  const events = React.useMemo(() => (data?.entries ?? []).map(toEvent), [data]);
+  const events = React.useMemo(() => [...(data?.entries ?? []).map(toEvent), ...(showMeetings ? data?.meetings ?? [] : []).map(toMeetingEvent)], [data, showMeetings]);
+
+  async function makeTask(picked: CalendarMeetingDto) {
+    setSaving(true);
+    try {
+      const result = await calendarsApi.makeTask({ operationId: operationId(), sourceId: picked.sourceId, eventId: picked.eventId, containerId: null });
+      if (!result.ok || !result.task) { setError(result.error?.message ?? "The task could not be made."); return; }
+      setError(null);
+      setNotice({ text: `Made “${result.task.title}”, planned for ${result.task.plannedDate ?? "later"}.`, task: result.task });
+      setMeeting(null);
+      setReloads(count => count + 1);
+      onChanged();
+    } catch (e) { setError(String(e)); }
+    finally { setSaving(false); }
+  }
 
   async function openTask(taskId: string) {
     try {
@@ -257,6 +296,8 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
 
   function eventClick(info: EventClickArg) {
     info.jsEvent?.preventDefault();
+    const clicked = info.event.extendedProps.meeting as CalendarMeetingDto | undefined;
+    if (clicked) { setMeeting({ meeting: clicked }); setSelected(null); setMoving(null); return; }
     const entry = info.event.extendedProps.entry as CalendarEntryDto | undefined;
     if (!entry) return;
     // A repeat or a deadline opens its task straight away; a planned entry offers the menu (open or move).
@@ -316,6 +357,17 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
     {error && <InlineError>{error}</InlineError>}
     {data?.truncated && <p role="status" className="text-sm text-muted-foreground">Too many entries to show; narrow the range or the filters.</p>}
 
+    {notice && <p role="status" className="flex flex-wrap items-center gap-2 text-sm">{notice.text}<Button type="button" size="xs" variant="outline" onClick={() => onOpen(notice.task)}>Open task</Button><Button type="button" size="xs" variant="ghost" onClick={() => setNotice(null)}>Dismiss</Button></p>}
+    {meeting && <div role="region" aria-label="Selected meeting" className="flex flex-wrap items-center gap-2 rounded-xl border border-l-4 bg-card p-3 text-sm" style={{ borderLeftColor: meeting.meeting.color ?? undefined }}>
+      <span className="font-medium">{meeting.meeting.title}</span>
+      <span className="text-muted-foreground">{friendlyDate(meeting.meeting.date, today)}, {meetingTime(meeting.meeting)}{meeting.meeting.location ? ` · ${meeting.meeting.location}` : ""} · {meeting.meeting.sourceName}{meeting.meeting.busy ? "" : " · free time"}</span>
+      <span className="ml-auto flex gap-2">
+        {(() => { const link = meetingLink(meeting.meeting); return link ? <Button type="button" size="sm" variant="outline" onClick={() => openExternal(link)}><Video/>{meeting.meeting.videoUrl ? "Join" : "Open in browser"}</Button> : null; })()}
+        <Button type="button" size="sm" variant="outline" disabled={busy || saving} onClick={() => void makeTask(meeting.meeting)}>Make a task</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setMeeting(null)}>Close</Button>
+      </span>
+    </div>}
+
     {selectedEntry && !moving && <div role="region" aria-label="Selected entry" className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3 text-sm">
       <span className="font-medium">{selectedEntry.title}</span>
       <span className="text-muted-foreground">{friendlyDate(selectedEntry.date, today)}{selectedEntry.time ? ` at ${selectedEntry.time}` : ""}</span>
@@ -343,6 +395,8 @@ export function Calendar({ viewId, tags, containers, focus, busy, revision, onOp
           dayHeaderContent={(arg: DayHeaderContentArg) => arg.view.type === "dayGridMonth" ? arg.text : <>{arg.text}<DayBadge day={days?.get(localDate(arg.date))}/></>}
           dayCellContent={(arg: DayCellContentArg) => <>{arg.dayNumberText}{arg.view.type === "dayGridMonth" && <DayBadge day={days?.get(localDate(arg.date))}/>}</>}
           eventContent={(arg: EventContentArg) => {
+            const mtg = arg.event.extendedProps.meeting as CalendarMeetingDto | undefined;
+            if (mtg) return <span className="flex min-w-0 items-center gap-1 px-1">{arg.timeText && <span className="shrink-0 text-[0.7rem] opacity-80">{arg.timeText}</span>}<span className="truncate">{mtg.title}</span></span>;
             const entry = arg.event.extendedProps.entry as CalendarEntryDto;
             return <span className="flex min-w-0 items-center gap-1 px-1">
               {entry.kind === "Due" && <Flag className="size-3 shrink-0" aria-label="Due"/>}

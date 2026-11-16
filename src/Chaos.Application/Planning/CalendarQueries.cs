@@ -36,8 +36,25 @@ public sealed record CalendarEntry(
     int? EstimateMinutes,
     CapacityCategory Category);
 
-/// <summary>A meeting from another calendar (P5/P6). Always empty until those packages exist.</summary>
-public sealed record CalendarMeeting(string Id, string Title, DateOnly Date, TimeOnly? Start, TimeOnly? End, string? Color, bool Busy);
+/// <summary>
+/// A meeting from another calendar, read-only. A meeting across midnight or over several days appears once
+/// per local day it touches, clipped to that day; an all-day meeting has no times.
+/// </summary>
+public sealed record CalendarMeeting(
+    string Id,
+    string SourceId,
+    string EventId,
+    string SourceName,
+    string Title,
+    DateOnly Date,
+    TimeOnly? Start,
+    TimeOnly? End,
+    bool AllDay,
+    string? Color,
+    bool Busy,
+    string? Location,
+    string? VideoUrl,
+    string? WebUrl);
 
 /// <summary>One day's load against My Week's availability, from the shared capacity formula.</summary>
 public sealed record CalendarDayTotal(DateOnly Date, DayAvailability Availability, int BusyMinutes, DayLoad Load);
@@ -134,7 +151,8 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
             var projections = await ProjectionsAsync(session, context, from, to, filters, members, token);
             var overrides = await session.Weeks.ListOverridesAsync(context.Profile.Id, from, to, token);
             var rules = await session.Weeks.ListRulesAsync(context.Profile.Id, token);
-            return (context.Today, ZoneId: context.Zone.Id, projections, overrides, rules);
+            var meetings = await MeetingPlanning.LoadAsync(session, context.Zone, from, to, token);
+            return (context.Today, ZoneId: context.Zone.Id, projections, overrides, rules, meetings);
         }, ct);
 
         entries.AddRange(detail.projections);
@@ -154,13 +172,15 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
         for (var date = from; date <= to; date = date.AddDays(1))
         {
             var availability = AvailabilityOn(date, detail.overrides, detail.rules);
-            var load = Capacity.Measure(availability, loadRows
+            var busy = detail.meetings.BusyMinutes(date);
+            var load = Capacity.Measure(availability.AfterMeetings(busy), loadRows
                 .Where(row => row.Task.PlannedDate == date)
                 .Select(row => new CapacityItem(row.Task.EstimateMinutes, row.Task.CapacityCategory, true)));
-            days.Add(new CalendarDayTotal(date, availability, 0, load));
+            days.Add(new CalendarDayTotal(date, availability, busy, load));
         }
 
-        return new CalendarRangeResult(from, to, detail.Today, detail.ZoneId, ordered, [], days, truncated);
+        var shown = filters.ShowMeetings ? detail.meetings.Meetings : [];
+        return new CalendarRangeResult(from, to, detail.Today, detail.ZoneId, ordered, shown, days, truncated);
     }
 
     /// <summary>Open tasks with no planned date, for the side panel (paged, filterable).</summary>

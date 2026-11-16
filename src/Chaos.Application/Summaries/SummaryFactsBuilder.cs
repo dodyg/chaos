@@ -110,7 +110,20 @@ internal sealed class SummaryFactsBuilder
             FollowUps = await FollowUpsDueAsync(period.EndUtc),
             Waiting = await WaitingAsync(),
             Week = await WeekProgressAsync(date, period),
+            Meetings = await MeetingsAsync(date),
         };
+    }
+
+    /// <summary>The day's meetings, only when the profile allows them in summaries.</summary>
+    private async Task<IReadOnlyList<MeetingFact>> MeetingsAsync(DateOnly date)
+    {
+        if (!_context.Profile.IncludeMeetingsInSummaries)
+        {
+            return [];
+        }
+
+        var days = await Chaos.Application.Planning.MeetingPlanning.LoadAsync(_session, _context.Zone, date, date, _token);
+        return [.. days.Meetings.Select(item => new MeetingFact(item.Title, item.Date, item.Start, item.End, item.AllDay)).Take(ListLimit)];
     }
 
     private async Task<SummaryFacts> DailyAsync(SummaryPeriod period)
@@ -131,6 +144,7 @@ internal sealed class SummaryFactsBuilder
             DiaryUpdateCount = diaryCount,
             Suggested = await SuggestAsync(unfinished, deadlines, next, next),
             Week = await WeekProgressAsync(date, period),
+            Meetings = await MeetingsAsync(next),
         };
     }
 

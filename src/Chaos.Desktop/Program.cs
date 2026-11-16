@@ -4,6 +4,8 @@ using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
 using Chaos.Application.Boards;
+using Chaos.Application.Calendar;
+using Chaos.Infrastructure.Calendar;
 using Chaos.Application.Views;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
@@ -115,6 +117,15 @@ internal static class Program
             try { await pauseGitHub(work, ct); }
             finally { githubScheduler.Wake(); }
         };
+        // Calendar feeds (PLAN2 P5): addresses live in the protected secret store, never in the database.
+        var secrets = new FileSecretStore(Path.Combine(dataRoot, "secrets"), new Chaos.Desktop.Windows.Security.DpapiSecretProtector());
+        using var feedClient = new CalendarFeedClient();
+        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System);
+        var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
+        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System);
+        calendarScheduler.Start();
+        var pauseForCalendars = protection.Quiesce;
+        protection.Quiesce = (work, ct) => calendarRefresher.RunPausedAsync(() => pauseForCalendars(work, ct), ct);
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
         var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -158,6 +169,7 @@ internal static class Program
                 rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries, viewAlerts));
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
+                rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -345,6 +357,22 @@ internal static class Program
 [JsonSerializable(typeof(CalendarRangeRequest))]
 [JsonSerializable(typeof(CalendarRangeResponse))]
 [JsonSerializable(typeof(CalendarUnscheduledRequest))]
+[JsonSerializable(typeof(CalendarSourceDto))]
+[JsonSerializable(typeof(CalendarsListRequest))]
+[JsonSerializable(typeof(CalendarsListResponse))]
+[JsonSerializable(typeof(CalendarAddFeedRequest))]
+[JsonSerializable(typeof(CalendarSourceResponse))]
+[JsonSerializable(typeof(CalendarUpdateRequest))]
+[JsonSerializable(typeof(CalendarRemoveRequest))]
+[JsonSerializable(typeof(CalendarOperationResponse))]
+[JsonSerializable(typeof(CalendarRefreshRequest))]
+[JsonSerializable(typeof(CalendarRefreshResultDto))]
+[JsonSerializable(typeof(CalendarRefreshResponse))]
+[JsonSerializable(typeof(CalendarMakeTaskRequest))]
+[JsonSerializable(typeof(CalendarMakeTaskResponse))]
+[JsonSerializable(typeof(CalendarTaskLinksRequest))]
+[JsonSerializable(typeof(CalendarTaskLinkDto))]
+[JsonSerializable(typeof(CalendarTaskLinksResponse))]
 [JsonSerializable(typeof(BoardGetRequest))]
 [JsonSerializable(typeof(BoardSettingsDto))]
 [JsonSerializable(typeof(BoardColumnResponse))]
@@ -559,6 +587,7 @@ internal static class Program
 [JsonSerializable(typeof(GoalFactDto))]
 [JsonSerializable(typeof(WeekProgressDto))]
 [JsonSerializable(typeof(FollowUpFactDto))]
+[JsonSerializable(typeof(MeetingFactDto))]
 [JsonSerializable(typeof(SummaryFactsDto))]
 [JsonSerializable(typeof(SummaryCountsDto))]
 [JsonSerializable(typeof(SummaryHeaderDto))]

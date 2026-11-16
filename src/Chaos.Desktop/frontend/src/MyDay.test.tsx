@@ -27,7 +27,7 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
 const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null });
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
 const summary = (date: string, today: string, open = 0): DaySummaryResponse =>
-  ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open, availableMinutes: 480, workAllowanceMinutes: 60, workMinutes: 0 });
+  ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open, availableMinutes: 480, workAllowanceMinutes: 60, workMinutes: 0, busyMinutes: 0, freeMinutes: 480, meetingsDontFit: false, meetings: [] });
 
 /** A fake day service: one chosen task per date in `days`, suggestions for today, and a log of changes. */
 function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: TaskResponse[] = []) {

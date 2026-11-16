@@ -130,3 +130,10 @@ that distinction. No credential retrieval was run during the offline test gate.
 ## FullCalendar (P4, 2026-11-16, D8)
 
 `@fullcalendar/core`, `@fullcalendar/react`, `@fullcalendar/daygrid`, `@fullcalendar/timegrid`, `@fullcalendar/list` and `@fullcalendar/interaction`, all **6.1.22**, pinned exactly. Licence MIT for every package (checked with `npm view <package> license`). Only standard packages are used; none of the premium (Scheduler) packages are installed.
+
+## Calendar feeds (P5, 2026-11-16)
+
+| Package | Version | Licence | Note |
+| --- | --- | --- | --- |
+| Ical.Net | 5.2.4 | MIT | ICS parsing and recurrence expansion (Chaos.Infrastructure). Brings NodaTime 3.2.2 (Apache-2.0). |
+| System.Security.Cryptography.ProtectedData | 10.0.0 | MIT | DPAPI for the secret store (Chaos.Desktop.Windows). |

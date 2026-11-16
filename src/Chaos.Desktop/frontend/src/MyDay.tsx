@@ -12,6 +12,7 @@ import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { FollowUps } from "./Reminders";
+import { MeetingsToday } from "./meetings";
 import { DayBackgroundSettings, type DayBackground } from "./MyDayBackground";
 import { CategoryEdge, CategoryMenuItems, asCategory, categories, categoryIcon, categoryTone, laneTotals, type Category, type Focus } from "./category";
 
@@ -262,6 +263,8 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
       </div>; })}
       <p className="col-span-2 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">{finished.length} finished · {minutes(totals.minutes)} planned<Against used={totals.minutes} limit={summary.availableMinutes} label="Available time"/></p>
     </div>}
+
+    {summary && <MeetingsToday meetings={summary.meetings ?? []} busyMinutes={summary.busyMinutes} freeMinutes={summary.freeMinutes} doNotFit={summary.meetingsDontFit} remainingMinutes={summary.remainingMinutes}/>}
 
     {open.length === 0
       ? <EmptyState title={editable ? "Nothing chosen yet." : "Nothing was left open on this day."}>

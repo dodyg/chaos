@@ -87,6 +87,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ISummaryStore Summaries => throw new NotSupportedException("This test store does not implement summaries; summaries are tested against SQLite.");
         public IBoardStore Boards { get; } = new FakeBoardStore(owner.BoardSettings, owner.Tasks, owner.Subtasks, owner.TaskTags);
         public ISavedViewStore SavedViews => throw new NotSupportedException("This test store does not implement saved views; they are tested against SQLite.");
+        public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
     }
 }
 

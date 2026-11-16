@@ -115,7 +115,8 @@ function daySummary(date: string): DaySummaryResponse {
   const open = chosen.filter(t => !isFinished(t));
   return { date, clock: clock(), exists: dayPlans.has(date), editable: date >= today, openCount: open.length, finishedCount: chosen.length - open.length,
     remainingMinutes: open.reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0), unknownEstimates: open.filter(t => t.estimateMinutes === null).length,
-    availableMinutes: 480, workAllowanceMinutes: 360, workMinutes: open.filter(t => t.category === "Work").reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0) };
+    availableMinutes: 480, workAllowanceMinutes: 360, workMinutes: open.filter(t => t.category === "Work").reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0),
+    busyMinutes: dayMeetings(date).filter(m => m.busy).length * 60, freeMinutes: Math.max(0, 480 - dayMeetings(date).filter(m => m.busy).length * 60), meetingsDontFit: false, meetings: dayMeetings(date) };
 }
 function clock() { return { today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00Z`, zoneId: "UTC" }; }
 function dayChange(date: string, changed = 1) { return ok({ day: daySummary(date), changed, replayed: false }); }
@@ -127,7 +128,7 @@ function week(): WeekOverviewDto {
   const minutes = (date: string, work: boolean) => (dayPlans.get(date) ?? []).map(find).filter((t): t is TaskResponse => !!t && (!work || t.category === "Work")).reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0);
   const board: WeekBoardDto = { goals: [], placements,
     days: days.map(date => { const planned = minutes(date, false), work = minutes(date, true), weekend = days.indexOf(date) >= 5;
-      return { date, availableMinutes: weekend ? 0 : 480, workAllowanceMinutes: weekend ? null : 360, isOverride: false, plannedMinutes: planned, workMinutes: work, unknownEstimates: 0, openCount: 0, overTotal: planned > (weekend ? 0 : 480), overWork: !weekend && work > 360 }; }),
+      return { date, availableMinutes: weekend ? 0 : 480, workAllowanceMinutes: weekend ? null : 360, isOverride: false, plannedMinutes: planned, workMinutes: work, unknownEstimates: 0, openCount: 0, overTotal: planned > (weekend ? 0 : 480), overWork: !weekend && work > 360, busyMinutes: dayMeetings(date).filter(m => m.busy).length * 60 }; }),
     pool: { plannedMinutes: 0, workMinutes: 0, unknownEstimates: 0, openCount: 0 } };
   return { weekStart: start, weekEnd: days[6], today, firstWeekday: "Monday", planId: "plan", state: "Confirmed", confirmedRevision: "1", confirmedAtUtc: now(),
     editable: true, availabilityConfigured: true, confirmed: board, draft: null, draftRevision: "0", draftBoard: null,
@@ -266,8 +267,57 @@ function viewHandlers(): Record<string, Handler> {
     "views.fromSearch": (r: { search: { text: string | null } }) => ok({ definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "text", op: "contains", value: r.search.text ?? "" }, { field: "status", op: "notIn", value: ["Done", "Cancelled"] }] }) }),
   };
 }
+// Calendar feeds (PLAN2 P5): one sample feed, kept in memory. The address is never kept after adding.
+type PreviewSource = { id: string; provider: string; name: string; color: string; countsAsBusy: boolean; enabled: boolean; ownerEmail: string | null; version: string; lastAttemptUtc: string | null; lastSuccessUtc: string | null; lastError: string | null };
+const calendarSources: PreviewSource[] = [
+  { id: "cal-team", provider: "Feed", name: "Team calendar", color: "#3b82f6", countsAsBusy: true, enabled: true, ownerEmail: null, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null },
+];
+type PreviewMeeting = { sourceId: string; eventId: string; title: string; offset: number; start: string | null; end: string | null; location: string | null; busy: boolean };
+const meetingSamples: PreviewMeeting[] = [
+  { sourceId: "cal-team", eventId: "m1", title: "Stand-up", offset: 0, start: "10:00", end: "11:00", location: "Room 2", busy: true },
+  { sourceId: "cal-team", eventId: "m2", title: "Design review", offset: 0, start: "14:00", end: "15:30", location: null, busy: true },
+  { sourceId: "cal-team", eventId: "m3", title: "Planning", offset: 1, start: "11:00", end: "12:00", location: null, busy: true },
+  { sourceId: "cal-team", eventId: "m4", title: "Company holiday", offset: 3, start: null, end: null, location: null, busy: false },
+];
+function dayMeetings(date: string) {
+  return meetingSamples.flatMap(m => {
+    const source = calendarSources.find(s => s.id === m.sourceId);
+    if (!source || !source.enabled || addDays(today, m.offset) !== date) return [];
+    return [{ id: `${m.sourceId}|${m.eventId}|${date}`, sourceId: m.sourceId, eventId: m.eventId, sourceName: source.name, title: m.title, date, start: m.start, end: m.end, allDay: m.start === null,
+      color: source.color, busy: m.busy && source.countsAsBusy, location: m.location, videoUrl: null, webUrl: m.eventId === "m1" ? "https://example.com/standup" : null }];
+  });
+}
+const meetingTaskLinks = new Map<string, { taskId: string; eventTitle: string; eventStartUtc: string; eventWebUrl: string | null }>();
+function calendarsHandlers(): Record<string, Handler> {
+  return {
+    "calendars.list": () => ok({ sources: calendarSources }),
+    "calendars.addFeed": (r: { address: string; name: string; color: string; countsAsBusy: boolean; ownerEmail: string | null }) => {
+      if (/^http:\/\//i.test(r.address.trim())) return { ok: false, source: null, refreshError: null, error: { kind: "Validation", message: "Calendar feeds must use https://. Plain http:// is not allowed.", fields: [{ fieldPath: "address", message: "Calendar feeds must use https://. Plain http:// is not allowed." }], correlationId: "preview" } };
+      const source: PreviewSource = { id: newId("cal"), provider: "Feed", name: r.name, color: r.color, countsAsBusy: r.countsAsBusy, enabled: true, ownerEmail: r.ownerEmail, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null };
+      calendarSources.push(source);
+      return ok({ source, refreshError: null });
+    },
+    "calendars.update": (r: { sourceId: string; expectedVersion: string; name: string; color: string; countsAsBusy: boolean; enabled: boolean; ownerEmail: string | null }) => {
+      const index = calendarSources.findIndex(s => s.id === r.sourceId);
+      if (index < 0) return { ...fail("That calendar was removed. Refresh and try again."), source: null, refreshError: null };
+      const next = { ...calendarSources[index], name: r.name, color: r.color, countsAsBusy: r.countsAsBusy, enabled: r.enabled, ownerEmail: r.ownerEmail, version: String(Number(calendarSources[index].version) + 1) };
+      calendarSources[index] = next;
+      return ok({ source: next, refreshError: null });
+    },
+    "calendars.remove": (r: { sourceId: string }) => { const index = calendarSources.findIndex(s => s.id === r.sourceId); if (index >= 0) calendarSources.splice(index, 1); return ok({}); },
+    "calendars.refresh": () => { for (const s of calendarSources) { s.lastAttemptUtc = now(); s.lastSuccessUtc = now(); s.lastError = null; } return ok({ results: calendarSources.map(s => ({ sourceId: s.id, ok: true, changed: false, eventCount: 0, error: null })), sources: calendarSources }); },
+    "calendars.makeTask": (r: { sourceId: string; eventId: string }) => {
+      const sample = meetingSamples.find(m => m.sourceId === r.sourceId && m.eventId === r.eventId);
+      const t = task(newId("task"), `Prepare: ${sample?.title ?? "meeting"}`, { plannedDate: addDays(today, (sample?.offset ?? 0) - 1) });
+      tasks.push(t); record(`Make task “${t.title}”`);
+      meetingTaskLinks.set(t.id, { taskId: t.id, eventTitle: sample?.title ?? "meeting", eventStartUtc: now(), eventWebUrl: null });
+      return ok({ task: t, replayed: false });
+    },
+    "calendars.taskLinks": (r: { taskIds: string[] }) => ok({ links: r.taskIds.flatMap(id => meetingTaskLinks.get(id) ?? []) }),
+  };
+}
 function calendarHandlers(): Record<string, Handler> {
-  type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showCompleted?: boolean } | null;
+  type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showMeetings?: boolean; showCompleted?: boolean } | null;
   const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
   const endOf = (time: string, estimate: number | null) => { const [h, m] = time.split(":").map(Number); const total = Math.min(h * 60 + m + (estimate && estimate > 0 ? estimate : 30), 24 * 60 - 1); return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; };
   const entry = (kind: string, t: TaskResponse, date: string, time: string | null) => ({ kind, taskId: t.id, title: t.title, status: t.status, priority: t.priority, containerName: containerName(t.containerId), date, time,
@@ -285,9 +335,9 @@ function calendarHandlers(): Record<string, Handler> {
         const weekend = [0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay()); const available = weekend ? 0 : 480;
         const planned = tasks.filter(t => (!f?.category || t.category === f.category) && t.plannedDate === d && !finished(t));
         const minutes = planned.reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0);
-        days.push({ date: d, availableMinutes: available, workAllowanceMinutes: null, busyMinutes: 0, plannedMinutes: minutes, workMinutes: 0, unknownEstimates: planned.filter(t => t.estimateMinutes === null).length, openCount: planned.length, overTotal: minutes > available || (available === 0 && planned.length > 0), overWork: false });
+        days.push({ date: d, availableMinutes: available, workAllowanceMinutes: null, busyMinutes: dayMeetings(d).filter(m => m.busy).length * 60, plannedMinutes: minutes, workMinutes: 0, unknownEstimates: planned.filter(t => t.estimateMinutes === null).length, openCount: planned.length, overTotal: minutes > available || (available === 0 && planned.length > 0), overWork: false });
       }
-      return ok({ from: r.from, to: r.to, today, zoneId: "UTC", entries, meetings: [], days, truncated: false });
+      return ok({ from: r.from, to: r.to, today, zoneId: "UTC", entries, meetings: f?.showMeetings === false ? [] : (() => { const all: ReturnType<typeof dayMeetings> = []; for (let d = r.from; d <= r.to; d = addDays(d, 1)) all.push(...dayMeetings(d)); return all; })(), days, truncated: false });
     },
     "calendar.unscheduled": (r: { filters: Filters; text: string | null }) => {
       const rows = tasks.filter(t => matches(t, r.filters) && t.plannedDate === null && t.status !== "Done" && t.status !== "Cancelled" && (!r.text || t.title.toLowerCase().includes(r.text.toLowerCase())))
@@ -620,6 +670,7 @@ const handlers: Record<string, Handler> = {
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   ...boardHandlers(),
   ...calendarHandlers(),
+  ...calendarsHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),
