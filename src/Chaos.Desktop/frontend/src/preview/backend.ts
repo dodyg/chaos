@@ -326,9 +326,11 @@ const googleCalendarList = [
 function googleAccountView(account: PreviewGoogleAccount) {
   return { ...account, calendars: calendarSources.filter(s => s.provider === "Google") };
 }
+let googleConfigured = false;
 function googleHandlers(): Record<string, Handler> {
   return {
-    "googleCalendar.status": () => ok({ configured: true, accounts: googleAccounts.map(googleAccountView) }),
+    "googleCalendar.setup": () => { googleConfigured = true; return ok({ revoked: true }); },
+    "googleCalendar.status": () => ok({ configured: googleConfigured, accounts: googleAccounts.map(googleAccountView) }),
     "googleCalendar.connect": () => {
       let account = googleAccounts[0];
       if (!account) { account = { id: "acct-1", email: "you@example.com", signedInHere: true, needsSignIn: false, error: null, lastSuccessUtc: now() }; googleAccounts.push(account); }

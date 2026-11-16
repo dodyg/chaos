@@ -38,6 +38,7 @@ function rig(accounts: GoogleAccountDto[], options: { configured?: boolean; choi
   const calls: { method: string; request: Record<string, unknown> }[] = [];
   const api = {
     status: async () => ({ ok: true, configured: options.configured ?? true, accounts, error: null }),
+    setup: async (request: Record<string, unknown>) => { calls.push({ method: "setup", request }); return { ok: true, revoked: true, error: null }; },
     connect: async (request: Record<string, unknown>) => { calls.push({ method: "connect", request }); return options.connect ? options.connect() : { ok: true, account: account(), error: null }; },
     calendars: async (request: Record<string, unknown>) => { calls.push({ method: "calendars", request }); return { ok: true, calendars: options.choices ?? [choice(), choice({ calendarId: "me@example.com", name: "me@example.com", primary: true, chosen: false, source: null })], error: null }; },
     choose: async (request: Record<string, unknown>) => { calls.push({ method: "choose", request }); return { ok: true, source: source({ version: "2", enabled: Boolean(request.chosen) }), refreshError: null, error: null }; },
@@ -122,11 +123,19 @@ test("disconnect asks first, then removes the account from the list", async () =
   assert.ok(screen.getByRole("button", { name: "Connect Google Calendar" }));
 });
 
-test("when this build has no Google client, Connect is replaced by an explanation", async () => {
-  const { api, sourceApi } = rig([], { configured: false });
+test("without a Google client, Settings asks for it once and then offers Connect", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  const { api, sourceApi, calls } = rig([], { configured: false });
   render(<GoogleCalendarSettings api={api} sourceApi={sourceApi}/>);
-  await screen.findByText(/Google sign-in is not set up in this build/);
+  await screen.findByRole("form", { name: "Set up Google sign-in" });
   assert.equal(screen.queryByRole("button", { name: /Connect/ }), null);
+  await user.type(screen.getByLabelText("Client ID"), "123-abc.apps.googleusercontent.com");
+  await user.type(screen.getByLabelText("Client secret"), "GOCSPX-secret");
+  await user.click(screen.getByRole("button", { name: "Save and continue" }));
+  await waitFor(() => assert.equal(calls.filter(call => call.method === "setup").length, 1));
+  assert.equal(calls.find(call => call.method === "setup")!.request.clientId, "123-abc.apps.googleusercontent.com");
+  await screen.findByRole("button", { name: "Connect Google Calendar" });
+  assert.equal(document.body.textContent?.includes("GOCSPX-secret"), false);
 });
 
 test("a failed sign-in shows the message and adds no account", async () => {

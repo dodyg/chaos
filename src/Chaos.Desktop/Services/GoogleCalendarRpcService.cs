@@ -20,6 +20,7 @@ public sealed record GoogleAccountDto(
 public sealed record GoogleStatusRequest();
 public sealed record GoogleStatusResponse(bool Ok, bool Configured, IReadOnlyList<GoogleAccountDto> Accounts, TaskErrorResponse? Error);
 public sealed record GoogleConnectRequest();
+public sealed record GoogleSetupRequest(string ClientId, string ClientSecret);
 public sealed record GoogleAccountResponse(bool Ok, GoogleAccountDto? Account, TaskErrorResponse? Error);
 public sealed record GoogleCalendarsRequest(string AccountId);
 /// <summary>Color is Google's own colour for the calendar; Source is set once the calendar was chosen at least once, and Chosen says whether it is on now.</summary>
@@ -41,6 +42,14 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     {
         try { return new(true, commands.IsConfigured, [.. (await commands.ListAsync(ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, commands.IsConfigured, [], TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    /// <summary>Saves the pasted OAuth client; the secret is stored protected and never returned.</summary>
+    [NeoRpcMethod("setup")]
+    public async ValueTask<GoogleDisconnectResponse> SetupAsync(GoogleSetupRequest request, CancellationToken ct)
+    {
+        try { await commands.SaveClientAsync(request.ClientId, request.ClientSecret, ct); return new(true, true, null); }
+        catch (AppException error) { return new(false, false, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("connect")]

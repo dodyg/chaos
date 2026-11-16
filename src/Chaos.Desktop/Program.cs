@@ -124,6 +124,7 @@ internal static class Program
         using var googleClient = new GoogleCalendarClient(GoogleOAuthConfig.TryLoad(Path.Combine(AppContext.BaseDirectory, "google-oauth.json")), new Chaos.Desktop.Platform.ShellBrowser());
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
+        googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
         var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
         using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System);
         calendarScheduler.Start();
@@ -366,6 +367,7 @@ internal static class Program
 [JsonSerializable(typeof(GoogleStatusRequest))]
 [JsonSerializable(typeof(GoogleStatusResponse))]
 [JsonSerializable(typeof(GoogleConnectRequest))]
+[JsonSerializable(typeof(GoogleSetupRequest))]
 [JsonSerializable(typeof(GoogleAccountResponse))]
 [JsonSerializable(typeof(GoogleCalendarsRequest))]
 [JsonSerializable(typeof(GoogleCalendarsResponse))]

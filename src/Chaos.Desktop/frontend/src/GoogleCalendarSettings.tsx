@@ -2,9 +2,10 @@ import React from "react";
 import { calendarsRpc, googleCalendarRpc, type CalendarSourceDto, type GoogleAccountDto, type GoogleCalendarChoiceDto } from "#neoastra";
 import { Link2, LogIn, RefreshCw, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { InlineError } from "@/components/common";
+import { Field, InlineError } from "@/components/common";
+import { Input } from "@/components/ui/input";
 
-type Api = Pick<typeof googleCalendarRpc, "status" | "connect" | "calendars" | "choose" | "disconnect">;
+type Api = Pick<typeof googleCalendarRpc, "status" | "setup" | "connect" | "calendars" | "choose" | "disconnect">;
 type SourceApi = Pick<typeof calendarsRpc, "update" | "refresh">;
 
 const when = (instant: string | null) => instant ? new Date(instant).toLocaleString() : "never";
@@ -133,6 +134,36 @@ function AccountCard({ account, api, sourceApi, onChanged, onReplace, onRemoved,
   </li>;
 }
 
+/** One-time setup: paste the Desktop OAuth client from Google Cloud. Stored protected on this computer; the secret is never shown again. */
+function ClientSetup({ api, onSaved, onError }: { api: Api; onSaved: () => void; onError: (message: string | null) => void }) {
+  const [clientId, setClientId] = React.useState("");
+  const [clientSecret, setClientSecret] = React.useState("");
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
+  const [saving, setSaving] = React.useState(false);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true); setFieldErrors({}); onError(null);
+    try {
+      const result = await api.setup({ clientId, clientSecret });
+      if (result.ok) { setClientSecret(""); onSaved(); return; }
+      setFieldErrors(Object.fromEntries((result.error?.fields ?? []).map(field => [field.fieldPath, field.message])));
+      onError(result.error?.message ?? "The Google client was not saved.");
+    } catch (e) { onError(String(e)); } finally { setSaving(false); }
+  }
+
+  return <form className="grid gap-3 rounded-lg border border-dashed p-3" aria-label="Set up Google sign-in" onSubmit={event => void save(event)}>
+    <h4 className="text-sm font-semibold">Set up Google sign-in (once)</h4>
+    <p className="text-sm text-muted-foreground">In Google Cloud Console, turn on the Google Calendar API, then open APIs &amp; Services → Credentials → Create credentials → OAuth client ID and choose “Desktop app”. Paste the client ID and secret here.</p>
+    <Field label="Client ID"><Input value={clientId} required autoComplete="off" spellCheck={false} aria-invalid={!!fieldErrors.clientId} placeholder="123456-abc.apps.googleusercontent.com" onChange={event => setClientId(event.target.value)}/></Field>
+    {fieldErrors.clientId && <p className="text-xs text-destructive" role="alert">{fieldErrors.clientId}</p>}
+    <Field label="Client secret"><Input type="password" value={clientSecret} required autoComplete="off" spellCheck={false} aria-invalid={!!fieldErrors.clientSecret} onChange={event => setClientSecret(event.target.value)}/></Field>
+    {fieldErrors.clientSecret && <p className="text-xs text-destructive" role="alert">{fieldErrors.clientSecret}</p>}
+    <div><Button type="submit" disabled={saving || !clientId.trim() || !clientSecret.trim()}>Save and continue</Button></div>
+  </form>;
+}
+
 /**
  * Settings → Calendars → Google Calendar (PLAN2 §10.3): connect one or more Google accounts, choose calendars and see when each
  * last updated. Access is read-only and the sign-in happens in the person's own browser; the host keeps the token in protected
@@ -182,6 +213,6 @@ export function GoogleCalendarSettings({ api = googleCalendarRpc, sourceApi = ca
         <Button type="button" disabled={connecting} onClick={() => void connect()}>{accounts && accounts.length > 0 ? "Connect another Google account" : "Connect Google Calendar"}</Button>
         {connecting && <p role="status" className="text-sm text-muted-foreground">Finish signing in in your web browser, then come back here.</p>}
       </div>
-      : <p className="text-sm text-muted-foreground">Google sign-in is not set up in this build of Chaos, so it cannot connect. Add the Google client file (google-oauth.json) next to the app.</p>}
+      : <ClientSetup api={api} onSaved={() => setConfigured(true)} onError={setError}/>}
   </section>;
 }

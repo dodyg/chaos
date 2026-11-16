@@ -18,6 +18,8 @@ public sealed class GoogleCalendarTests
     private sealed class FakeGoogle : IGoogleCalendarClient
     {
         public bool IsConfigured { get; set; } = true;
+        public string? ConfiguredId { get; private set; }
+        public void Configure(string clientId, string clientSecret) { ConfiguredId = clientId; IsConfigured = true; }
         public int SignIns { get; private set; }
         public int CalendarCalls { get; private set; }
         public List<string> EventCalls { get; } = [];
@@ -374,6 +376,26 @@ public sealed class GoogleCalendarTests
         await Assert.That(revoked).IsFalse();
         await Assert.That(rig.Secrets.Values).IsEmpty();
         await Assert.That(await rig.Commands.ListAsync()).IsEmpty();
+    }
+
+    [Test]
+    public async Task APastedClient_IsValidated_StoredProtected_AndLoadedAtNextStart()
+    {
+        using var rig = await Rig.StartAsync();
+        rig.Google.IsConfigured = false;
+
+        await Assert.That(async () => await rig.Commands.SaveClientAsync("not-a-client-id", "secret")).Throws<AppException>();
+        await Assert.That(async () => await rig.Commands.SaveClientAsync("1-a.apps.googleusercontent.com", "  ")).Throws<AppException>();
+        await Assert.That(rig.Secrets.Values).IsEmpty();
+
+        await rig.Commands.SaveClientAsync(" 1-a.apps.googleusercontent.com ", "GOCSPX-x");
+        await Assert.That(rig.Google.ConfiguredId).IsEqualTo("1-a.apps.googleusercontent.com");
+        await Assert.That(rig.Secrets.Values.Keys.Single()).IsEqualTo(GoogleCalendarCommands.ClientSecretKey);
+
+        // A fresh client at the next start is configured from the saved secret.
+        var next = new FakeGoogle { IsConfigured = false };
+        await new GoogleCalendarCommands(rig.Host.Store, rig.Secrets, next, rig.Host.Clock).LoadSavedClientAsync();
+        await Assert.That(next.ConfiguredId).IsEqualTo("1-a.apps.googleusercontent.com");
     }
 
     [Test]

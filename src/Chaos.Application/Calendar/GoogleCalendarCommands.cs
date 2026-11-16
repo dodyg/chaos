@@ -31,6 +31,43 @@ public sealed class GoogleCalendarCommands(IApplicationStore store, ISecretStore
 
     public bool IsConfigured => google.IsConfigured;
 
+    /// <summary>Where a client pasted into Settings is kept: the protected secret store, as "id\nsecret".</summary>
+    public const string ClientSecretKey = "chaos/google/oauth-client";
+
+    /// <summary>Loads a client saved earlier, unless the build already has one from google-oauth.json.</summary>
+    public async Task LoadSavedClientAsync(CancellationToken ct = default)
+    {
+        if (google.IsConfigured || await secrets.GetAsync(ClientSecretKey, ct) is not { } saved)
+        {
+            return;
+        }
+
+        var parts = saved.Split('\n');
+        if (parts.Length == 2 && parts[0].Length > 0)
+        {
+            google.Configure(parts[0], parts[1]);
+        }
+    }
+
+    /// <summary>Saves the OAuth client the person created in Google Cloud (a Desktop app client). The secret is never shown again.</summary>
+    public async Task SaveClientAsync(string? clientId, string? clientSecret, CancellationToken ct = default)
+    {
+        var id = (clientId ?? string.Empty).Trim();
+        var secret = (clientSecret ?? string.Empty).Trim();
+        if (id.Length is 0 or > 200 || !id.EndsWith(".apps.googleusercontent.com", StringComparison.Ordinal) || id.Any(char.IsWhiteSpace))
+        {
+            throw AppException.Validation("clientId", "The client ID ends with .apps.googleusercontent.com. Copy it from Google Cloud.");
+        }
+
+        if (secret.Length is 0 or > 200 || secret.Any(char.IsWhiteSpace))
+        {
+            throw AppException.Validation("clientSecret", "Paste the client secret from Google Cloud.");
+        }
+
+        await secrets.SetAsync(ClientSecretKey, id + "\n" + secret, ct);
+        google.Configure(id, secret);
+    }
+
     public async Task<IReadOnlyList<GoogleAccountView>> ListAsync(CancellationToken ct = default)
     {
         var rows = await store.QueryAsync(async (session, token) =>

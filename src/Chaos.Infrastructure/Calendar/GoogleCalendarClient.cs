@@ -58,7 +58,7 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 
     private readonly HttpClient _http;
     private readonly bool _ownsClient;
-    private readonly GoogleOAuthConfig? _config;
+    private volatile GoogleOAuthConfig? _config;
     private readonly ISystemBrowser _browser;
     private readonly TimeProvider _clock;
     private readonly Lock _gate = new();
@@ -74,6 +74,8 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
     }
 
     public bool IsConfigured => _config is not null;
+
+    public void Configure(string clientId, string clientSecret) => _config = new GoogleOAuthConfig(clientId, clientSecret);
 
     public void Dispose()
     {

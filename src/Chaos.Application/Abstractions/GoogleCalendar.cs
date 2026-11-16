@@ -42,6 +42,11 @@ public interface IGoogleCalendarClient
     /// <summary>True when this build has a client id; without one Settings explains instead of offering Connect.</summary>
     bool IsConfigured { get; }
 
+    /// <summary>Sets the OAuth client (id and secret) at run time, for a client the person pasted into Settings.</summary>
+    void Configure(string clientId, string clientSecret)
+    {
+    }
+
     /// <summary>Installed-app flow: the system browser, a loopback redirect and PKCE.</summary>
     /// <exception cref="GoogleCalendarException">Cancelled, timed out, refused, or not configured.</exception>
     Task<GoogleSignIn> SignInAsync(CancellationToken ct);
