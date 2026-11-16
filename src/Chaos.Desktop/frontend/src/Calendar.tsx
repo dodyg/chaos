@@ -55,6 +55,19 @@ export function toEvent(entry: CalendarEntryDto) {
   };
 }
 
+/** Black or white text, whichever reads better on a calendar's own colour (WCAG relative luminance). A colour that is not #rrggbb gets white. */
+export function readableTextOn(color: string | null | undefined): string {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color ?? "");
+  if (!match) return "#ffffff";
+  const [r, g, b] = [match[1], match[2], match[3]].map(part => {
+    const channel = parseInt(part, 16) / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // Choose the text with the higher contrast ratio against this background.
+  return (luminance + 0.05) / 0.05 > 1.05 / (luminance + 0.05) ? "#111111" : "#ffffff";
+}
+
 /** A meeting as FullCalendar input: read-only, in its calendar's colour, lighter when it is free time. */
 export function toMeetingEvent(meeting: CalendarMeetingDto) {
   const timed = !meeting.allDay && meeting.start !== null;
@@ -69,6 +82,7 @@ export function toMeetingEvent(meeting: CalendarMeetingDto) {
     durationEditable: false,
     backgroundColor: meeting.color ?? undefined,
     borderColor: meeting.color ?? undefined,
+    textColor: readableTextOn(meeting.color),
     classNames: ["chaos-event", "chaos-event-meeting", !meeting.busy && "chaos-event-free"].filter((name): name is string => Boolean(name)),
     extendedProps: { meeting },
   };

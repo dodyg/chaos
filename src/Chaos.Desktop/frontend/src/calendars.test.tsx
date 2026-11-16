@@ -22,7 +22,7 @@ Object.defineProperties(globalThis, {
 const { render, screen, waitFor, cleanup, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { CalendarSettings } = await import("./CalendarSettings");
-const { Calendar, localDate, toMeetingEvent } = await import("./Calendar");
+const { Calendar, localDate, toMeetingEvent, readableTextOn } = await import("./Calendar");
 const { MeetingsToday, MeetingTaskNotice } = await import("./meetings");
 
 afterEach(() => cleanup());
@@ -160,4 +160,17 @@ test("a task made from a meeting says which meeting it came from", async () => {
   await screen.findByText(/From meeting Design review,/);
   await user.click(screen.getByRole("button", { name: "Open meeting" }));
   assert.deepEqual(opened, ["https://example.com/m"]);
+});
+
+test("meeting text is dark on light calendar colours and white on dark ones, so no theme loses it", () => {
+  assert.equal(readableTextOn("#ffffff"), "#111111");
+  assert.equal(readableTextOn("#fad165"), "#111111");
+  assert.equal(readableTextOn("#9a9cff"), "#111111");
+  assert.equal(readableTextOn("#16a765"), "#111111");
+  assert.equal(readableTextOn("#3b82f6"), "#111111"); // black has the higher contrast (5.7 against 3.7 for white)
+  assert.equal(readableTextOn("#1d4ed8"), "#ffffff");
+  assert.equal(readableTextOn("#7b1fa2"), "#ffffff");
+  assert.equal(readableTextOn("#000000"), "#ffffff");
+  assert.equal(readableTextOn(null), "#ffffff");
+  assert.equal(toMeetingEvent(meeting({ color: "#fad165" })).textColor, "#111111");
 });

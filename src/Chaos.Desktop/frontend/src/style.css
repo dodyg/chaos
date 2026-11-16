@@ -202,5 +202,11 @@
 .chaos-calendar .chaos-event-done { opacity: 0.55; text-decoration: line-through; }
 .chaos-calendar .chaos-cursor { outline: 2px solid var(--ring); outline-offset: -2px; }
 .chaos-calendar .fc-event:focus-visible { outline: 3px solid var(--ring); outline-offset: 1px; }
-.chaos-calendar .chaos-event-meeting { color: #fff; border-left-width: 4px; cursor: pointer; }
-.chaos-calendar .chaos-event-meeting.chaos-event-free { opacity: 0.55; }
+.chaos-calendar .chaos-event-meeting { border-left-width: 4px; cursor: pointer; }
+.chaos-calendar .chaos-event-meeting.chaos-event-free { opacity: 0.7; }
+/* Agenda rows have no coloured block, only a dot: the row keeps the theme's own text colour and background in every theme.
+   A due task still reads in the destructive colour. */
+.chaos-calendar .fc-list-event.chaos-event:not(.chaos-event-due) { background: transparent !important; color: var(--foreground) !important; border-style: none; }
+.chaos-calendar .fc-list-event.chaos-event.chaos-event-due { background: transparent !important; border-style: none; }
+.chaos-calendar .fc-list-event.chaos-event .fc-list-event-time, .chaos-calendar .fc-list-event.chaos-event .fc-list-event-title { color: inherit; }
+.chaos-calendar .fc-list-event.chaos-event-meeting.chaos-event-free { opacity: 0.8; }
