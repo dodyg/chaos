@@ -1,6 +1,7 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Domain.Tasks;
+using Chaos.Domain.Views;
 
 namespace Chaos.Application.Queries;
 
@@ -103,6 +104,16 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             throw AppException.Validation("tagId", "Choose a tag.");
         }
 
+        if (spec.View == TaskView.Custom && spec.Definition is null)
+        {
+            throw AppException.Validation("definition", "A custom view needs its conditions.");
+        }
+
+        if (spec.Sort is { } sort && !ViewLayout.SortFields.Contains(sort.Field))
+        {
+            throw AppException.Validation("sort", "Sort by due, planned, priority, created, changed, title or manual order.");
+        }
+
         if (spec.Statuses.Any(status => !Enum.IsDefined(status)))
         {
             throw AppException.Validation("statuses", "Choose valid statuses.");
@@ -154,11 +165,14 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
 
         var openOnly = spec.View switch
         {
-            TaskView.RecentlyCompleted => false,
+            TaskView.RecentlyCompleted or TaskView.Custom => false,
             TaskView.Today or TaskView.Upcoming or TaskView.Overdue or TaskView.Waiting => true,
             _ => !spec.IncludeCompleted,
         };
         var isMyDay = spec.View == TaskView.MyDay;
+        var definition = spec.View == TaskView.Custom
+            ? await ViewFields.ResolveAsync(session, context, spec.Definition!, token)
+            : null;
 
         return new TaskQueryCriteria
         {
@@ -187,6 +201,8 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             OverdueBefore = spec.View == TaskView.Overdue ? today : null,
             OverdueZoneCutoffs = cutoffs,
             DayPlanOn = isMyDay ? spec.Day ?? today : null,
+            Definition = definition,
+            Sort = spec.View == TaskView.Custom ? spec.Sort : null,
             Limit = Math.Clamp(spec.Limit, 1, MaxLimit),
             Cursor = string.IsNullOrWhiteSpace(spec.Cursor) ? null : spec.Cursor,
         };

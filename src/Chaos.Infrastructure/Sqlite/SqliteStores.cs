@@ -38,6 +38,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IImportStore Imports { get; } = new SqliteImportStore(connection);
     public IGitHubStore GitHub { get; } = new SqliteGitHubStore(connection);
     public IBoardStore Boards { get; } = new SqliteBoardStore(connection);
+    public ISavedViewStore SavedViews { get; } = new SqliteSavedViewStore(connection);
 }
 
 public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileStore

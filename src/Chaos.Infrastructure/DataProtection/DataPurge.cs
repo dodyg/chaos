@@ -177,6 +177,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
             UPDATE Pages SET ParentPageId = NULL WHERE ParentPageId IN (SELECT Id FROM temp.PurgePages) AND Id NOT IN (SELECT Id FROM temp.PurgePages);
             DELETE FROM Pages WHERE Id IN (SELECT Id FROM temp.PurgePages);
             UPDATE RecurrenceOccurrences SET TaskId = NULL WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
+            DELETE FROM SavedViewMatches WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM NotificationJobs WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ReminderRules WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM FollowUps WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);

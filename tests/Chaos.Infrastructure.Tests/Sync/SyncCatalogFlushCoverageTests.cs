@@ -99,6 +99,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["github_milestone_project"] = GitHub,
 
         ["board_setting"] = Board,
+        ["saved_view"] = Board,
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -391,6 +392,12 @@ public sealed class SyncCatalogFlushCoverageTests
             Op(), BoardTargetKind.Container, list.Id, ExpectedVersion: 0,
             BoardGrouping.Priority, BoardSwimlane.None, null, null, "{\"Low\": 3}", "[]"));
         expected["board_setting"] = settings.Settings.Id;
+
+        // A saved view (P3) rides in the same scenario: one pinned view with a definition.
+        var view = await new Chaos.Application.Views.SavedViewCommands(host.Store, host.Ids, host.Clock).SaveAsync(new(
+            Op(), null, 0, "Flush view", "bug", "blue",
+            "{\"v\":1,\"items\":[{\"field\":\"priority\",\"op\":\"atLeast\",\"value\":\"High\"}]}", null, Pinned: true, AlertsEnabled: false));
+        expected["saved_view"] = view.View.Id;
     }
 
     // ---- Helpers ---------------------------------------------------------------------------

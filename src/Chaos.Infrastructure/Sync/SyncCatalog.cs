@@ -159,6 +159,23 @@ public static class SyncCatalog
             DeterministicIndexes: [new("UX_BoardSettings_Target",
                 "Deterministic ID: both devices derive boardsetting:{targetKind}:{targetId}, so the row upserts onto itself (§7.5).")],
             ApplyOrder: 55),
+        // P3 saved views. The id is random, so two devices can create views with the same name;
+        // there is no unique index on Name and nothing to merge.
+        new SyncTable("SavedViews", "saved_view", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "CreatedAtUtc"]),
+                new("name", ["Name"]),
+                new("look", ["Icon", "Color"]),
+                new("pinned", ["Pinned"]),
+                new("position", ["Position"]),
+                new("definition", ["DefinitionJson"]),
+                new("layout", ["LayoutJson"]),
+                new("alerts", ["AlertsEnabled"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 56),
         new SyncTable("Tasks", "task", SyncMode.Merge, ["Id"],
             Groups:
             [
@@ -507,6 +524,7 @@ public static class SyncCatalog
 
         // ---- Local-only: bookkeeping, per-device state, rebuildable data -----------------------
         new SyncTable("NotificationJobs", "notification_job", SyncMode.LocalOnly, ["Id"], ApplyOrder: 500), // derived per device (§7.4), OS schedule columns included
+        new SyncTable("SavedViewMatches", "saved_view_match", SyncMode.LocalOnly, ["ViewId", "TaskId"], ApplyOrder: 530), // each device evaluates its own alerts (PLAN2 §11.2)
         new SyncTable("UndoEntries", "undo_entry", SyncMode.LocalOnly, ["Id"], ApplyOrder: 501), // undo stays local (§7.10)
         new SyncTable("OperationReceipts", "operation_receipt", SyncMode.LocalOnly, ["ProfileId", "OperationId"], ApplyOrder: 502), // idempotency per device
         new SyncTable("BackupCatalog", "backup_catalog", SyncMode.LocalOnly, ["Id"], ApplyOrder: 503), // this device's backup log

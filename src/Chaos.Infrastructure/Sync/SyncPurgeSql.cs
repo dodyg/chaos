@@ -28,6 +28,7 @@ internal static class SyncPurgeSql
             "DELETE FROM ScratchTaskLinks WHERE TaskId = $k0;",
             "DELETE FROM PageTaskLinks WHERE TaskId = $k0;",
             "UPDATE RecurrenceOccurrences SET TaskId = NULL WHERE TaskId = $k0;",
+            "DELETE FROM SavedViewMatches WHERE TaskId = $k0;",
             "DELETE FROM NotificationJobs WHERE TaskId = $k0;",
             "DELETE FROM ReminderRules WHERE TaskId = $k0;",
             "DELETE FROM FollowUps WHERE TaskId = $k0;",

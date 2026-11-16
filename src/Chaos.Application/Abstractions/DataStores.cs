@@ -35,6 +35,7 @@ public interface IDataSession
     IImportStore Imports { get; }
     IGitHubStore GitHub { get; }
     IBoardStore Boards { get; }
+    ISavedViewStore SavedViews { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
@@ -480,6 +481,24 @@ public interface IBoardStore
     Task<IReadOnlyList<BoardCardRow>> ListCardsAsync(string containerId, CancellationToken ct);
     /// <summary>Active task-tag links of one container's tasks, ordered by (TaskId, TagId).</summary>
     Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct);
+}
+
+/// <summary>
+/// Saved custom views and their device-local alert baseline (PLAN2 P3). Views are a synced
+/// aggregate; the match rows record what this device's alert evaluator has already seen.
+/// </summary>
+public interface ISavedViewStore
+{
+    /// <summary>One view by id, deleted ones included (restore needs them); null when it never existed.</summary>
+    Task<SavedViewRecord?> GetAsync(string id, CancellationToken ct);
+    /// <summary>The space's views ordered by (Position, Id); deleted ones only when asked.</summary>
+    Task<IReadOnlyList<SavedViewRecord>> ListAsync(string spaceId, bool includeDeleted, CancellationToken ct);
+    Task AddAsync(SavedViewRecord view, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<SavedViewRecord?> UpdateAsync(SavedViewRecord updated, long expectedVersion, CancellationToken ct);
+    Task<IReadOnlyList<SavedViewMatchRecord>> ListMatchesAsync(string viewId, CancellationToken ct);
+    /// <summary>Replaces one view's baseline with exactly these rows.</summary>
+    Task ReplaceMatchesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> matches, CancellationToken ct);
 }
 
 /// <summary>
