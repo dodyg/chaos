@@ -3,8 +3,10 @@ using System.Text.Json;
 using Chaos.Application.Abstractions;
 using Chaos.Infrastructure.Search;
 using Chaos.Infrastructure.Sqlite;
+using Chaos.Infrastructure.Sync.UniqueRules;
 using Chaos.Sync;
 using Microsoft.Data.Sqlite;
+using static Chaos.Infrastructure.Sync.SyncRows;
 
 namespace Chaos.Infrastructure.Sync;
 
@@ -574,17 +576,6 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         return command.ExecuteScalar() is not null;
     }
 
-    private static IReadOnlyDictionary<string, string> ParseKey(SyncTable table, string entityKey)
-    {
-        var parts = entityKey.Split('|');
-        if (parts.Length != table.Key.Count)
-        {
-            throw new AppException(AppErrorKind.StorageUnavailable, $"A change for {table.Kind} has a key of the wrong shape.");
-        }
-
-        return table.Key.Select((column, index) => (column, parts[index])).ToDictionary();
-    }
-
     // ---- Purge (§7.4 step 2.1) -----------------------------------------------------------
 
     private static void PurgeEntity(SqliteConnection connection, SyncSchema schema, SyncTable table, string entityKey)
@@ -629,10 +620,6 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         Parked,
     }
 
-    /// <summary>The highest clock among a change's groups: the deterministic clock rule side effects carry.</summary>
-    private static string WinnersClockText(SyncChange change) =>
-        change.Groups.Values.Select(group => group.Hlc).Max().Encode();
-
     private static ConstraintKind Classify(SqliteException error, out IReadOnlyList<string> columns, out string? namedIndex)
     {
         columns = [];
@@ -676,8 +663,9 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     }
 
     /// <summary>
-    /// Resolves one unique-index break with the catalog's rule. The winner is the row with the
-    /// lowest entity key (ordinal string comparison), so every device makes the same choice (§7.6).
+    /// Resolves one unique-index break with the catalog's rule (<see cref="IUniqueRule"/>). The
+    /// winner is the row with the lowest entity key (ordinal string comparison), so every device
+    /// makes the same choice (§7.6).
     /// </summary>
     private async Task<RuleOutcome> ResolveUniqueAsync(
         SqliteConnection connection, SyncSchema schema, SyncTable table, IReadOnlyDictionary<string, string> key, SyncChange change,
@@ -689,42 +677,57 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             columns = schema.NamedIndexColumns(table.Table, namedIndex);
         }
 
-        var rule = index is null ? null : table.UniqueRules.FirstOrDefault(candidate => candidate.Index == index);
-        if (rule is null)
+        var catalogRule = index is null ? null : table.UniqueRules.FirstOrDefault(candidate => candidate.Index == index);
+        if (catalogRule is null)
         {
             park.Park($"two rows claim one unique value of {table.Table} and no rule resolves it", "sync.conflict",
                 $"A change for {table.Table} collided with a local row and no rule resolved it. It waits in the sync inbox.");
             return RuleOutcome.Parked;
         }
 
-        if (rule.Kind == SyncUniqueRuleKind.Adopt)
+        if (catalogRule.Kind == SyncUniqueRuleKind.Adopt)
         {
             park.Park("this row is adopted during device join, never during an ordinary apply", "sync.adopt",
                 "A row arrived that this device can only adopt while joining an account. It waits in the sync inbox.");
             return RuleOutcome.Parked;
         }
 
-        var otherKey = FindConflictingKey(connection, schema, table, rule.Index, columns, merge);
+        var otherKey = FindConflictingKey(connection, schema, table, catalogRule.Index, columns, merge);
         if (otherKey is null)
         {
             park.Park($"the colliding row of {table.Table} could not be found");
             return RuleOutcome.Parked;
         }
 
-        var incomingKey = change.EntityKey;
-        var localKey = string.Join("|", table.Key.Select(column => otherKey[column]));
-        var incomingWins = string.CompareOrdinal(incomingKey, localKey) <= 0;
+        var rule = IUniqueRule.For(catalogRule.Kind);
+        var conflict = new UniqueConflict(
+            connection, schema, table, change, key,
+            LocalKey: string.Join("|", table.Key.Select(column => otherKey[column])),
+            wall,
+            WriteNewRowAsync: (written, token) => WriteWinnersAsync(connection, schema, table, key, exists: false, written, wall, change, token),
+            Attention: (category, kind, entityKey, message) => Attention(connection, category, kind, entityKey, message));
 
-        if (!incomingWins)
+        merge = rule.ResolveLoser(conflict, merge);
+        if (!conflict.IncomingWins)
         {
-            merge = ApplyRuleToLoser(connection, schema, table, rule, incomingWins: false, localKey, incomingKey, merge, key, wall, change);
             // The incoming loser is written in its retired/renamed shape so both devices hold the
             // same rows; its clock is stored so the change does not win again.
-            await WriteLoserAsync(connection, schema, table, rule, key, merge, wall, change, ct);
+            if (table.Kind == "recurrence_occurrence" && OccurrenceIdentityExists(connection, merge))
+            {
+                // The identity index (SeriesId, NominalKey) is not partial: while the loser's
+                // series-and-nominal twin exists here, the loser row cannot, not even tombstoned —
+                // no matter which index the violation named. Its clocks are stored as a watermark
+                // so the change does not come back round after round.
+                StoreLoserClocks(connection, table, change);
+            }
+            else
+            {
+                await rule.WriteIncomingLoserAsync(conflict, merge, ct);
+            }
+
             return RuleOutcome.Resolved;
         }
 
-        merge = ApplyRuleToLoser(connection, schema, table, rule, incomingWins: true, localKey, incomingKey, merge, key, wall, change);
         try
         {
             await WriteWinnersAsync(connection, schema, table, key, RowExists(connection, table, key), merge, wall, change, ct);
@@ -750,50 +753,6 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             throw;
         }
     }
-
-    /// <summary>Runs the rule's effect on the loser; returns the merge when a rule (AppendText) reshaped the winner's groups.</summary>
-    private MergeResult ApplyRuleToLoser(
-        SqliteConnection connection, SyncSchema schema, SyncTable table, SyncUniqueRule rule, bool incomingWins,
-        string localKey, string incomingKey, MergeResult merge, IReadOnlyDictionary<string, string> key, DateTimeOffset wall, SyncChange change)
-    {
-        var loserKey = incomingWins ? localKey : incomingKey;
-        switch (rule.Kind)
-        {
-            case SyncUniqueRuleKind.RenameLoser:
-                RenameLoser(connection, table, loserKey, wall);
-                break;
-            case SyncUniqueRuleKind.MergeTag:
-                MergeTag(connection, incomingWins ? incomingKey : localKey, incomingWins ? localKey : incomingKey, WinnersClockText(change), StorageFormats.Instant(wall));
-                break;
-            case SyncUniqueRuleKind.AppendText:
-                return AppendText(connection, incomingWins, localKey, incomingKey, merge, wall, WinnersClockText(change));
-            case SyncUniqueRuleKind.KeepLowestRetireOther:
-                RetireLoser(connection, schema, table, loserKey, wall, change);
-                break;
-            case SyncUniqueRuleKind.RepointChildren:
-                RepointChildren(connection, schema, table, incomingWins ? localKey : incomingKey, incomingWins ? incomingKey : localKey, wall);
-                if (table.Kind == "recurrence_occurrence")
-                {
-                    // The identity index (SeriesId, NominalKey) is not partial, so a retired
-                    // duplicate cannot even exist as a tombstone: the loser leaves entirely,
-                    // its task retires when nothing active points at it, and the person is told.
-                    // Its clocks stay as a watermark, so a replay of the loser's change cannot
-                    // bring it back round after round.
-                    RetireOccurrenceTask(connection, incomingWins ? localKey : incomingKey, wall, clearTaskId: false);
-                    using var remove = connection.CreateCommand();
-                    remove.CommandText = "DELETE FROM RecurrenceOccurrences WHERE Id = $loser;";
-                    remove.Parameters.AddWithValue("$loser", incomingWins ? localKey : incomingKey);
-                    remove.ExecuteNonQuery();
-                    Attention(connection, "sync.retired", table.Kind, incomingWins ? localKey : incomingKey,
-                        "The same recurrence occurrence was created on two devices. One copy was removed; the other keeps the plan.");
-                }
-
-                break;
-        }
-
-        return merge;
-    }
-
     private static IReadOnlyDictionary<string, string>? FindConflictingKey(
         SqliteConnection connection, SyncSchema schema, SyncTable table, string index, IReadOnlyList<string> columns, MergeResult merge)
     {
@@ -844,278 +803,6 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         _ => string.Empty,
     };
 
-    /// <summary>Containers and templates: the loser is renamed to the first free numbered name.</summary>
-    private static void RenameLoser(SqliteConnection connection, SyncTable table, string loserKey, DateTimeOffset wall)
-    {
-        var loser = ParseKey(table, loserKey);
-        using var read = connection.CreateCommand();
-        read.CommandText = $"SELECT Name, SpaceId FROM {SyncSql.Quote(table.Table)} WHERE {Where(table, loser)};";
-        BindKey(read, table, loser);
-        using var row = read.ExecuteReader();
-        if (!row.Read())
-        {
-            return; // the loser is the incoming row: its rename happens in WriteLoserAsync
-        }
-
-        var (candidate, normalized) = FirstFreeName(connection, table, row.GetString(1), row.GetString(0));
-        using var rename = connection.CreateCommand();
-        rename.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET Name = $name, NormalizedName = $norm, Version = Version + 1, UpdatedAtUtc = $wall WHERE {Where(table, loser)};";
-        rename.Parameters.AddWithValue("$name", candidate);
-        rename.Parameters.AddWithValue("$norm", normalized);
-        rename.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
-        BindKey(rename, table, loser);
-        rename.ExecuteNonQuery();
-    }
-
-    /// <summary>The first free numbered name "<c>name (n)</c>", n from 2, in one space of a named table.</summary>
-    private static (string Name, string Normalized) FirstFreeName(SqliteConnection connection, SyncTable table, string space, string name)
-    {
-        for (var attempt = 2; ; attempt++)
-        {
-            var candidate = $"{name} ({attempt})";
-            var normalized = candidate.Trim().ToLowerInvariant();
-            using var taken = connection.CreateCommand();
-            taken.CommandText = $"SELECT 1 FROM {SyncSql.Quote(table.Table)} WHERE SpaceId = $space AND NormalizedName = $norm LIMIT 1;";
-            taken.Parameters.AddWithValue("$space", space);
-            taken.Parameters.AddWithValue("$norm", normalized);
-            if (taken.ExecuteScalar() is null)
-            {
-                return (candidate, normalized);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Sibling tags (§7.6): the loser's links become the winner's (a link only the loser had is
-    /// copied to the winner and the loser's row tombstoned, so link keys and their clocks stay
-    /// stable across devices), colliding children merge recursively, the rest move, and the loser
-    /// is tombstoned. Mirrors TagCommands.MergeAsync at the data level; every timestamp is the
-    /// change's wall time, so all devices write the same rows. A winner link that was itself
-    /// tombstoned comes back, or the item would end up with no active tag at all.
-    /// </summary>
-    private static void MergeTag(SqliteConnection connection, string winnerKey, string loserKey, string clockText, string wall)
-    {
-        foreach (var (table, kind, first) in new (string Table, string Kind, string First)[]
-        {
-            ("TaskTags", "task_tag", "TaskId"),
-            ("SubtaskTags", "subtask_tag", "SubtaskId"),
-            ("ScratchPadTags", "pad_tag", "PadItemId"),
-            ("PageTags", "page_tag", "PageId"),
-        })
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.CommandText = $"""
-                    INSERT INTO {table} ({first}, TagId) SELECT {first}, $winner FROM {table} WHERE TagId = $loser AND DeletedAtUtc IS NULL
-                    ON CONFLICT ({first}, TagId) DO UPDATE SET DeletedAtUtc = NULL;
-                    UPDATE {table} SET DeletedAtUtc = $wall WHERE TagId = $loser AND DeletedAtUtc IS NULL;
-                    """;
-                command.Parameters.AddWithValue("$winner", winnerKey);
-                command.Parameters.AddWithValue("$loser", loserKey);
-                command.Parameters.AddWithValue("$wall", wall);
-                command.ExecuteNonQuery();
-            }
-
-            // The copied links are new entities; their clock is the merging change's, the same
-            // value on every device, and a later replay never lowers it (HLC strings sort ordinally).
-            using (var clocks = connection.CreateCommand())
-            {
-                clocks.CommandText = $"""
-                    INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc)
-                        SELECT {SyncSql.Literal(kind)}, {first} || '|' || $winner, 'deleted', $hlc FROM {table} WHERE TagId = $winner AND DeletedAtUtc IS NULL
-                    {SyncSql.ClockConflict(onlyIfNewer: true)};
-                    """;
-                clocks.Parameters.AddWithValue("$winner", winnerKey);
-                clocks.Parameters.AddWithValue("$hlc", clockText);
-                clocks.ExecuteNonQuery();
-            }
-        }
-
-        // Children: a child whose normalized name collides with one of the winner's children
-        // merges into it (recursively); the rest move. A child's key is its Id, so a move
-        // changes no entity key.
-        while (true)
-        {
-            using var colliding = connection.CreateCommand();
-            colliding.CommandText = """
-                SELECT l.Id AS LoserId, w.Id AS WinnerId
-                FROM Tags l JOIN Tags w ON w.ParentTagId = $winner AND w.NormalizedName = l.NormalizedName AND w.DeletedAtUtc IS NULL
-                WHERE l.ParentTagId = $loser AND l.DeletedAtUtc IS NULL;
-                """;
-            colliding.Parameters.AddWithValue("$winner", winnerKey);
-            colliding.Parameters.AddWithValue("$loser", loserKey);
-            var pairs = new List<(string Loser, string Winner)>();
-            using (var reader = colliding.ExecuteReader())
-            {
-                while (reader.Read())
-                {
-                    pairs.Add((reader.GetString(0), reader.GetString(1)));
-                }
-            }
-
-            if (pairs.Count == 0)
-            {
-                break;
-            }
-
-            foreach (var (childLoser, childWinner) in pairs)
-            {
-                MergeTag(connection, childWinner, childLoser, clockText, wall);
-            }
-        }
-
-        using (var move = connection.CreateCommand())
-        {
-            move.CommandText = "UPDATE Tags SET ParentTagId = $winner WHERE ParentTagId = $loser AND DeletedAtUtc IS NULL;";
-            move.Parameters.AddWithValue("$winner", winnerKey);
-            move.Parameters.AddWithValue("$loser", loserKey);
-            move.ExecuteNonQuery();
-        }
-
-        using var tombstone = connection.CreateCommand();
-        tombstone.CommandText = "UPDATE Tags SET DeletedAtUtc = $wall, Version = Version + 1, UpdatedAtUtc = $wall WHERE Id = $loser AND DeletedAtUtc IS NULL;";
-        tombstone.Parameters.AddWithValue("$loser", loserKey);
-        tombstone.Parameters.AddWithValue("$wall", wall);
-        tombstone.ExecuteNonQuery();
-    }
-
-    /// <summary>Daily pages (§7.6): the loser's text is appended to the winner, then it is tombstoned and its tags move.</summary>
-    private static MergeResult AppendText(
-        SqliteConnection connection, bool incomingWins, string localKey, string incomingKey, MergeResult merge, DateTimeOffset wall, string clockText)
-    {
-        var separator = $"\n\nFrom another device, {wall.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}\n";
-        string? incomingText = merge.Winners.TryGetValue("text", out var text) && text.Values.Values.TryGetValue("RawMarkdown", out var markdown) ? markdown as string : null;
-
-        if (incomingWins)
-        {
-            // The local row is the loser: its text is appended to the incoming winner when that is
-            // written, and the local row is tombstoned with its links moved.
-            var localText = SyncSql.Text(connection, $"SELECT RawMarkdown FROM Pages WHERE Id = {SyncSql.Literal(localKey)};") ?? string.Empty;
-            var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal);
-            if (winners.TryGetValue("text", out var winnerText))
-            {
-                var values = new Dictionary<string, object?>(winnerText.Values.Values, StringComparer.Ordinal)
-                {
-                    ["RawMarkdown"] = (winnerText.Values.Values.TryGetValue("RawMarkdown", out var incoming) ? incoming as string ?? string.Empty : string.Empty)
-                        + separator
-                        + localText,
-                };
-                winners["text"] = winnerText with { Values = new SyncGroupValues(values) };
-            }
-
-            merge = merge with { Winners = winners };
-
-            // The loser's page tags become the winner's: each active link is copied to the winner
-            // (reviving a tombstoned winner link) and the loser's row tombstoned, so link keys and
-            // clocks stay stable. The loser's rows keep their own key: re-keying them to the
-            // winner would collide with the copies on the (PageId, TagId) key.
-            using var links = connection.CreateCommand();
-            links.CommandText = $"""
-                INSERT INTO PageTags (PageId, TagId) SELECT $winner, TagId FROM PageTags WHERE PageId = $loser AND DeletedAtUtc IS NULL
-                ON CONFLICT (PageId, TagId) DO UPDATE SET DeletedAtUtc = NULL;
-                UPDATE PageTags SET DeletedAtUtc = $wall WHERE PageId = $loser AND DeletedAtUtc IS NULL;
-                INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc)
-                    SELECT 'page_tag', $winner || '|' || TagId, 'deleted', $hlc FROM PageTags WHERE PageId = $winner AND DeletedAtUtc IS NULL
-                {SyncSql.ClockConflict(onlyIfNewer: true)};
-                """;
-            links.Parameters.AddWithValue("$winner", incomingKey);
-            links.Parameters.AddWithValue("$loser", localKey);
-            links.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
-            links.Parameters.AddWithValue("$hlc", clockText);
-            links.ExecuteNonQuery();
-
-            using var tombstone = connection.CreateCommand();
-            tombstone.CommandText = "UPDATE Pages SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now WHERE Id = $loser AND DeletedAtUtc IS NULL;";
-            tombstone.Parameters.AddWithValue("$loser", localKey);
-            tombstone.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
-            tombstone.ExecuteNonQuery();
-            return merge;
-        }
-
-        // The local row is the winner: the incoming loser's text is appended here, and the loser
-        // row itself is inserted tombstoned by WriteLoserAsync on both devices.
-        using var append = connection.CreateCommand();
-        append.CommandText = "UPDATE Pages SET RawMarkdown = RawMarkdown || $tail, Version = Version + 1, UpdatedAtUtc = $wall WHERE Id = $winner;";
-        append.Parameters.AddWithValue("$winner", localKey);
-        append.Parameters.AddWithValue("$tail", separator + (incomingText ?? string.Empty));
-        append.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
-        append.ExecuteNonQuery();
-        return merge;
-    }
-
-    /// <summary>One winner, the other retired (§7.6): the loser is tombstoned (or removed, when its table has no tombstone) and a notice explains.</summary>
-    private void RetireLoser(SqliteConnection connection, SyncSchema schema, SyncTable table, string loserKey, DateTimeOffset wall, SyncChange change)
-    {
-        var loser = ParseKey(table, loserKey);
-        var retire = schema.RetireColumn(table.Table);
-        if (retire is null)
-        {
-            using var delete = connection.CreateCommand();
-            delete.CommandText = $"DELETE FROM {SyncSql.Quote(table.Table)} WHERE {Where(table, loser)};";
-            BindKey(delete, table, loser);
-            delete.ExecuteNonQuery();
-        }
-        else
-        {
-            using var tombstone = connection.CreateCommand();
-            tombstone.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET {SyncSql.Quote(retire)} = $now, Version = Version + 1, UpdatedAtUtc = $now WHERE {Where(table, loser)} AND {SyncSql.Quote(retire)} IS NULL;";
-            tombstone.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
-            BindKey(tombstone, table, loser);
-            tombstone.ExecuteNonQuery();
-        }
-
-        // A retired occurrence takes its task with it (§7.6): a completed duplicate task that no
-        // active occurrence points at would otherwise linger as work to do. The loser's TaskId
-        // is cleared too, or the partial one-task-per-occurrence index would keep blocking the
-        // winner's task claim.
-        if (table.Kind == "recurrence_occurrence")
-        {
-            RetireOccurrenceTask(connection, loserKey, wall, clearTaskId: true);
-        }
-
-        Attention(connection, "sync.retired", table.Kind, loserKey,
-            $"Two devices each kept their own {table.Table} row. The one from {(string.CompareOrdinal(change.EntityKey, loserKey) <= 0 ? "another device" : "this device")} was retired; you can restore it from the trash.");
-    }
-
-    /// <summary>
-    /// Retires the task a retired or removed duplicate occurrence pointed at, when no active
-    /// occurrence still does; <paramref name="clearTaskId"/> also releases the occurrence's task claim.
-    /// </summary>
-    private static void RetireOccurrenceTask(SqliteConnection connection, string occurrenceId, DateTimeOffset wall, bool clearTaskId)
-    {
-        using var task = connection.CreateCommand();
-        task.CommandText = """
-            UPDATE Tasks SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now
-            WHERE Id IN (SELECT TaskId FROM RecurrenceOccurrences WHERE Id = $occurrence AND TaskId IS NOT NULL)
-              AND Id NOT IN (SELECT TaskId FROM RecurrenceOccurrences WHERE TaskId IS NOT NULL AND DeletedAtUtc IS NULL);
-            """ + (clearTaskId ? "\nUPDATE RecurrenceOccurrences SET TaskId = NULL WHERE Id = $occurrence;" : string.Empty);
-        task.Parameters.AddWithValue("$occurrence", occurrenceId);
-        task.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
-        task.ExecuteNonQuery();
-    }
-
-    /// <summary>Legacy duplicates of a natural key (§7.6): the loser's children move to the winner, then it is tombstoned.</summary>
-    private static void RepointChildren(SqliteConnection connection, SyncSchema schema, SyncTable table, string loserKey, string winnerKey, DateTimeOffset wall)
-    {
-        foreach (var sql in SyncRepointSql.For(table.Table, loserKey, winnerKey))
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = sql;
-            command.Parameters.AddWithValue("$loser", loserKey);
-            command.Parameters.AddWithValue("$winner", winnerKey);
-            command.ExecuteNonQuery();
-        }
-
-        if (schema.RetireColumn(table.Table) is { } retire)
-        {
-            using var tombstone = connection.CreateCommand();
-            tombstone.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET {SyncSql.Quote(retire)} = $now, Version = Version + 1, UpdatedAtUtc = $now WHERE Id = $loser;";
-            tombstone.Parameters.AddWithValue("$loser", loserKey);
-            tombstone.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
-            tombstone.ExecuteNonQuery();
-        }
-    }
-
     /// <summary>True when the change's occurrence identity (series and nominal key) already has a row here.</summary>
     private static bool OccurrenceIdentityExists(SqliteConnection connection, MergeResult merge)
     {
@@ -1132,108 +819,6 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         command.Parameters.AddWithValue("$series", series);
         command.Parameters.AddWithValue("$nominal", nominal);
         return command.ExecuteScalar() is not null;
-    }
-
-    /// <summary>Writes an incoming loser in the shape the rule chose, so both devices hold the same row.</summary>
-    private async Task WriteLoserAsync(
-        SqliteConnection connection, SyncSchema schema, SyncTable table, SyncUniqueRule rule, IReadOnlyDictionary<string, string> key,
-        MergeResult merge, DateTimeOffset wall, SyncChange change, CancellationToken ct)
-    {
-        if (table.Kind == "recurrence_occurrence" && OccurrenceIdentityExists(connection, merge))
-        {
-            // The identity index (SeriesId, NominalKey) is not partial: while the loser's
-            // series-and-nominal twin exists here, the loser row cannot, not even tombstoned —
-            // no matter which index the violation named. Its clocks are stored as a watermark
-            // so the change does not come back round after round.
-            StoreLoserClocks(connection, table, change);
-            return;
-        }
-
-        if (table.Kind == "tag")
-        {
-            // The tag merge moved links and tombstoned; insert the loser row itself, tombstoned.
-            var values = WinnerValues(merge);
-
-            using var insert = connection.CreateCommand();
-            insert.CommandText = """
-                INSERT INTO Tags (Id, OwnerProfileId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-                VALUES ($id, $owner, $name, $norm, $parent, $color, $position, 1, $created, $updated, $deleted)
-                ON CONFLICT (Id) DO NOTHING;
-                """;
-            insert.Parameters.AddWithValue("$id", key["Id"]);
-            insert.Parameters.AddWithValue("$owner", values.GetValueOrDefault("OwnerProfileId") ?? string.Empty);
-            insert.Parameters.AddWithValue("$name", values.GetValueOrDefault("DisplayName") ?? string.Empty);
-            insert.Parameters.AddWithValue("$norm", values.GetValueOrDefault("NormalizedName") ?? string.Empty);
-            insert.Parameters.AddWithValue("$parent", values.GetValueOrDefault("ParentTagId") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$color", values.GetValueOrDefault("ColorKey") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$position", values.GetValueOrDefault("Position") ?? 0L);
-            insert.Parameters.AddWithValue("$created", values.GetValueOrDefault("CreatedAtUtc") ?? StorageFormats.Instant(wall));
-            insert.Parameters.AddWithValue("$updated", StorageFormats.Instant(wall));
-            insert.Parameters.AddWithValue("$deleted", StorageFormats.Instant(wall));
-            insert.ExecuteNonQuery();
-
-            // The loser's groups carry the same clocks everywhere, so a replay never re-runs the merge.
-            StoreLoserClocks(connection, table, change);
-        }
-        else if (rule.Kind is SyncUniqueRuleKind.KeepLowestRetireOther or SyncUniqueRuleKind.RepointChildren or SyncUniqueRuleKind.AppendText
-            && schema.RetireColumn(table.Table) is { } retire
-            && table.Groups.Any(group => group.Columns.Contains(retire)))
-        {
-            // Retired losers arrive tombstoned: write the row with the retire column set.
-            var group = table.Groups.First(candidate => candidate.Columns.Contains(retire));
-            var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal);
-            winners[group.Name] = winners.TryGetValue(group.Name, out var state)
-                ? state with { Values = new SyncGroupValues(new Dictionary<string, object?>(state.Values.Values, StringComparer.OrdinalIgnoreCase) { [retire] = StorageFormats.Instant(wall) }) }
-                : new SyncGroupState(change.Groups[group.Name].Hlc, new SyncGroupValues(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { [retire] = StorageFormats.Instant(wall) }));
-            await WriteWinnersAsync(connection, schema, table, key, exists: false, merge with { Winners = winners }, wall, change, ct);
-        }
-        else if (rule.Kind == SyncUniqueRuleKind.RenameLoser)
-        {
-            // A renamed incoming loser lands under the first free numbered name in its own space.
-            var values = WinnerValues(merge);
-            if (values.GetValueOrDefault("Name") is string name && values.GetValueOrDefault("SpaceId") is string space)
-            {
-                var (candidate, normalized) = FirstFreeName(connection, table, space, name);
-                var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal)
-                {
-                    ["name"] = new SyncGroupState(
-                        change.Groups.TryGetValue("name", out var state) ? state.Hlc : change.Groups.Values.First().Hlc,
-                        new SyncGroupValues(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                        {
-                            ["Name"] = candidate,
-                            ["NormalizedName"] = normalized,
-                        })),
-                };
-                await WriteWinnersAsync(connection, schema, table, key, exists: false, merge with { Winners = winners }, wall, change, ct);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Stores an incoming loser's clocks as a watermark, so the change does not win again on a
-    /// replay; a higher stored clock is kept.
-    /// </summary>
-    private static void StoreLoserClocks(SqliteConnection connection, SyncTable table, SyncChange change)
-    {
-        foreach (var (group, state) in change.Groups)
-        {
-            SyncSql.UpsertClock(connection, table.Kind, change.EntityKey, group, state.Hlc.Encode(), onlyIfNewer: true);
-        }
-    }
-
-    /// <summary>The winning groups' values flattened to column → value (each column belongs to one group).</summary>
-    private static Dictionary<string, object?> WinnerValues(MergeResult merge)
-    {
-        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var winner in merge.Winners.Values)
-        {
-            foreach (var (column, value) in winner.Values.Values)
-            {
-                values[column] = value;
-            }
-        }
-
-        return values;
     }
 
     // ---- History (§7.7) ---------------------------------------------------------------------
@@ -1439,23 +1024,5 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         command.Parameters.AddWithValue("$message", message);
         command.Parameters.AddWithValue("$now", StorageFormats.Instant(clock.GetUtcNow()));
         command.ExecuteNonQuery();
-    }
-
-    // ---- SQL helpers ---------------------------------------------------------------------
-
-    private static string Where(SyncTable table, IReadOnlyDictionary<string, string> key) =>
-        string.Join(" AND ", table.Key.Select((column, index) => $"{SyncSql.Quote(column)} = $k{index}"));
-
-    private static void BindKey(SqliteCommand command, SyncTable table, IReadOnlyDictionary<string, string> key)
-    {
-        foreach (var (column, index) in table.Key.Select((column, index) => (column, index)))
-        {
-            command.Parameters.AddWithValue($"$k{index}", key[column]);
-        }
-    }
-
-    private static void Bind(SqliteCommand command, string name, object? value)
-    {
-        command.Parameters.AddWithValue(name, value ?? DBNull.Value);
     }
 }
