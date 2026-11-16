@@ -59,6 +59,7 @@ internal static class Program
         var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
         var viewBoardQueries = new ViewBoardQueries(storage.Store, taskQueries);
+        var viewAlerts = new ViewAlertService(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
@@ -68,7 +69,7 @@ internal static class Program
         var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
         // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
         var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries, viewAlerts);
         reminderEngine.Start();
 
         // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
@@ -153,7 +154,7 @@ internal static class Program
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
-                rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries));
+                rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries, viewAlerts));
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
@@ -328,6 +329,11 @@ internal static class Program
 [JsonSerializable(typeof(ViewContextResponse))]
 [JsonSerializable(typeof(ViewExportRequest))]
 [JsonSerializable(typeof(ViewExportResponse))]
+[JsonSerializable(typeof(ViewAlertsRequest))]
+[JsonSerializable(typeof(ViewAlertDto))]
+[JsonSerializable(typeof(ViewAlertsResponse))]
+[JsonSerializable(typeof(ViewAlertAckRequest))]
+[JsonSerializable(typeof(ViewAlertAckResponse))]
 [JsonSerializable(typeof(ViewGitHubOptionsRequest))]
 [JsonSerializable(typeof(ViewGitHubRepositoryDto))]
 [JsonSerializable(typeof(ViewGitHubOptionsResponse))]

@@ -501,6 +501,18 @@ public interface ISavedViewStore
     Task<IReadOnlyList<SavedViewMatchRecord>> ListMatchesAsync(string viewId, CancellationToken ct);
     /// <summary>Replaces one view's baseline with exactly these rows.</summary>
     Task ReplaceMatchesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> matches, CancellationToken ct);
+    /// <summary>Writes baseline rows that are new or changed (a task seen for the first time, or one that left or returned) and removes the given tasks.</summary>
+    Task ApplyMatchChangesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> upserts, IReadOnlyList<string> removedTaskIds, CancellationToken ct);
+    Task AddAlertAsync(ViewAlertRecord alert, CancellationToken ct);
+    Task<ViewAlertRecord?> GetAlertAsync(string id, CancellationToken ct);
+    /// <summary>The view's pending alert, if one is waiting for its delivery time.</summary>
+    Task<ViewAlertRecord?> FindPendingAlertAsync(string viewId, CancellationToken ct);
+    /// <summary>Writes the alert when it is still in <paramref name="expected"/> state; false when it changed meanwhile.</summary>
+    Task<bool> UpdateAlertAsync(ViewAlertRecord alert, ViewAlertState expected, CancellationToken ct);
+    /// <summary>Pending alerts whose delivery time has come, oldest first.</summary>
+    Task<IReadOnlyList<ViewAlertRecord>> ListDueAlertsAsync(DateTimeOffset now, int limit, CancellationToken ct);
+    /// <summary>Delivered alerts waiting to be dismissed, newest first.</summary>
+    Task<IReadOnlyList<ViewAlertRecord>> ListDeliveredAlertsAsync(int limit, CancellationToken ct);
 }
 
 /// <summary>

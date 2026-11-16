@@ -58,6 +58,11 @@ public sealed record ViewContextResponse(
     TaskErrorResponse? Error);
 public sealed record ViewExportRequest(string ViewId, string? Category = null);
 public sealed record ViewExportResponse(bool Ok, string? FileName, int Rows, TaskErrorResponse? Error);
+public sealed record ViewAlertsRequest();
+public sealed record ViewAlertDto(string Id, string ViewId, string ViewName, bool ViewAvailable, int TaskCount, string FirstTaskTitle, string DeliveredAtUtc);
+public sealed record ViewAlertsResponse(bool Ok, IReadOnlyList<ViewAlertDto> Alerts, TaskErrorResponse? Error);
+public sealed record ViewAlertAckRequest(string AlertId);
+public sealed record ViewAlertAckResponse(bool Ok, TaskErrorResponse? Error);
 public sealed record ViewGitHubOptionsRequest();
 public sealed record ViewGitHubRepositoryDto(string Id, string FullName);
 public sealed record ViewGitHubOptionsResponse(bool Ok, IReadOnlyList<ViewGitHubRepositoryDto> Repositories, TaskErrorResponse? Error);
@@ -66,7 +71,7 @@ public sealed record ViewFromSearchResponse(bool Ok, string? DefinitionJson, Tas
 
 /// <summary>Custom views (PLAN2 P3): saved conditions, layouts, counts, quick-add defaults and CSV export. Errors are returned as data.</summary>
 [NeoRpcService("views", Version = 1)]
-public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries queries)
+public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries queries, ViewAlertService alerts)
 {
     [NeoRpcMethod("list")]
     public async ValueTask<ViewListResponse> ListAsync(ViewListRequest request, CancellationToken ct)
@@ -177,6 +182,26 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     {
         try { return new(true, [.. (await queries.GitHubRepositoriesAsync(ct)).Select(item => new ViewGitHubRepositoryDto(item.Id, item.FullName))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    /// <summary>Delivered alerts waiting to be dismissed (new tasks that matched an alerting view).</summary>
+    [NeoRpcMethod("alerts")]
+    public async ValueTask<ViewAlertsResponse> AlertsAsync(ViewAlertsRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var items = await alerts.ListAsync(20, ct);
+            return new(true, [.. items.Select(item => new ViewAlertDto(item.Alert.Id, item.Alert.ViewId, item.ViewName, item.ViewAvailable, item.Alert.TaskCount, item.Alert.FirstTaskTitle,
+                StorageFormats.Instant(item.Alert.DeliveredAtUtc ?? item.Alert.CreatedAtUtc)))], null);
+        }
+        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    [NeoRpcMethod("acknowledgeAlert")]
+    public async ValueTask<ViewAlertAckResponse> AcknowledgeAlertAsync(ViewAlertAckRequest request, CancellationToken ct)
+    {
+        try { await alerts.AcknowledgeAsync(request.AlertId, ct); return new(true, null); }
+        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("fromSearch")]

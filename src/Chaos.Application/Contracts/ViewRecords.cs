@@ -23,6 +23,28 @@ public sealed record SavedViewRecord : AggregateRecord
 /// <summary>One task's alert baseline entry on this device: when it joined the view and when it left.</summary>
 public sealed record SavedViewMatchRecord(string ViewId, string TaskId, DateTimeOffset FirstSeenUtc, DateTimeOffset? LeftAtUtc);
 
+public enum ViewAlertState { Pending = 0, Delivered = 1, Acknowledged = 2, Cancelled = 4 }
+
+/// <summary>
+/// One grouped alert for a view (PLAN2 §11.2, migration 027): the tasks that newly matched since the
+/// last evaluation, counted once per view. Device-local; delivered after quiet hours.
+/// </summary>
+public sealed record ViewAlertRecord
+{
+    public required string Id { get; init; }
+    public required string ViewId { get; init; }
+    public required int TaskCount { get; init; }
+    public required IReadOnlyList<string> TaskIds { get; init; }
+    public required string FirstTaskTitle { get; init; }
+    public required DateTimeOffset DeliverAtUtc { get; init; }
+    public required ViewAlertState State { get; init; }
+    public DateTimeOffset? DeliveredAtUtc { get; init; }
+    public DateTimeOffset? AcknowledgedAtUtc { get; init; }
+    public NotificationPresentation Presentation { get; init; }
+    public required DateTimeOffset CreatedAtUtc { get; init; }
+    public required DateTimeOffset UpdatedAtUtc { get; init; }
+}
+
 /// <summary>The sort a custom view applies; the field names are fixed by <c>ViewLayout</c>.</summary>
 public sealed record ViewSort(string Field, bool Descending);
 

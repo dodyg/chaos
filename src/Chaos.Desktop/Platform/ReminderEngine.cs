@@ -3,6 +3,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Reminders;
 using Chaos.Application.Summaries;
+using Chaos.Application.Views;
 
 namespace Chaos.Desktop.Platform;
 
@@ -15,7 +16,7 @@ namespace Chaos.Desktop.Platform;
 /// tick generates scheduled plain summaries (PLAN §12) when one is given: morning, evening and
 /// weekly at their times, and missed periods once at the next start.
 /// </summary>
-public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null) : IDisposable
+public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null) : IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
@@ -83,6 +84,14 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
             if (summaries is not null)
             {
                 await summaries.GenerateDueAsync(ct);
+            }
+
+            if (viewAlerts is not null)
+            {
+                // Custom-view alerts (PLAN2 §11.2): compare each alerting view with its baseline, then deliver what is due.
+                // They are shown in the app; delivering one needs no other step.
+                await viewAlerts.EvaluateAsync(ct);
+                await viewAlerts.DeliverDueAsync(ct);
             }
 
             foreach (var delivered in await reminders.DeliverDueAsync(ct))

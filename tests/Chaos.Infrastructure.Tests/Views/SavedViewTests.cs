@@ -19,7 +19,7 @@ namespace Chaos.Infrastructure.Tests.Views;
 /// </summary>
 public sealed class SavedViewTests
 {
-    // The test clock is 2026-11-10 09:00 UTC and the profile zone is UTC.
+    // The test clock is 2026-11-10 09:00 UTC; the profile uses the machine zone, which has the same date at that hour.
     private static readonly DateOnly Today = new(2026, 11, 10);
 
     private sealed class World(DataHost host)

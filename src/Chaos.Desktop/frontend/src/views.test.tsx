@@ -264,6 +264,69 @@ test("a refused inline edit shows the host's message and leaves the row alone", 
   } finally { cleanup(); }
 });
 
+test("the table's tag cell opens the tag picker for that one task and closes it again", async () => {
+  const asked: { targetKind: string; targetId: string }[] = [];
+  const tagApi = { ...tagRpc,
+    targetTags: async (request: { targetKind: string; targetId: string }) => { asked.push(request); return { ok: true, tagIds: ["bug"], error: null }; },
+    suggest: async () => ({ ok: true, tags: [], error: null }),
+  };
+  const row = { ...resultRow(task("a", "Alpha")), tagIds: ["bug"] };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ViewTable rows={[row]} columns={["title", "tags"]} tags={tags} busy={false} tagApi={tagApi} onOpen={() => undefined} onTaskUpdated={() => undefined}/>, { container: dom.window.document.body });
+  try {
+    assert.equal(asked.length, 0, "no picker, so no tag reads, until a cell is edited");
+    await user.click(screen.getByRole("button", { name: "Edit tags of Alpha" }));
+    await waitFor(() => assert.deepEqual(asked, [{ targetKind: "Task", targetId: "a" }]));
+    await user.click(screen.getByRole("button", { name: "Done editing tags" }));
+    assert.ok(screen.getByRole("button", { name: "Edit tags of Alpha" }));
+  } finally { cleanup(); }
+});
+
+// ---- Alerts -------------------------------------------------------------------------------------
+
+function alertApi(alerts: { id: string; viewId: string; viewName: string; viewAvailable: boolean; taskCount: number; firstTaskTitle: string }[]) {
+  const acknowledged: string[] = [];
+  let current = alerts;
+  const api = {
+    alerts: async () => ({ ok: true, alerts: current.map(item => ({ ...item, deliveredAtUtc: "2026-11-10T09:00:00Z" })), error: null }),
+    acknowledgeAlert: async (request: { alertId: string }) => { acknowledged.push(request.alertId); current = current.filter(item => item.id !== request.alertId); return { ok: true, error: null }; },
+  };
+  return { api, acknowledged };
+}
+
+test("a view alert says how many tasks are new, opens the view and is acknowledged", async () => {
+  const { ViewAlertStack } = await import("./ViewAlerts");
+  const { api, acknowledged } = alertApi([{ id: "a1", viewId: "v1", viewName: "My open bugs", viewAvailable: true, taskCount: 3, firstTaskTitle: "Crash on save" }]);
+  const opened: string[] = [];
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ViewAlertStack api={api} intervalMs={600000} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
+  try {
+    const card = await screen.findByRole("article", { name: "View alert: My open bugs" });
+    assert.match(card.textContent ?? "", /3 new tasks in My open bugs/);
+    assert.match(card.textContent ?? "", /Crash on save and 2 more/);
+    await user.click(within(card).getByRole("button", { name: "Open view" }));
+    await waitFor(() => assert.deepEqual(acknowledged, ["a1"]));
+    assert.deepEqual(opened, ["v1"]);
+    await waitFor(() => assert.equal(screen.queryByRole("article", { name: "View alert: My open bugs" }), null));
+  } finally { cleanup(); }
+});
+
+test("dismissing a view alert acknowledges it without opening anything, and a deleted view has no Open button", async () => {
+  const { ViewAlertStack } = await import("./ViewAlerts");
+  const { api, acknowledged } = alertApi([{ id: "a2", viewId: "v2", viewName: "Gone view", viewAvailable: false, taskCount: 1, firstTaskTitle: "Single" }]);
+  const opened: string[] = [];
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ViewAlertStack api={api} intervalMs={600000} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
+  try {
+    const card = await screen.findByRole("article", { name: "View alert: Gone view" });
+    assert.match(card.textContent ?? "", /1 new task in Gone view/);
+    assert.equal(within(card).queryByRole("button", { name: "Open view" }), null);
+    await user.click(within(card).getByRole("button", { name: "Dismiss alert for Gone view" }));
+    await waitFor(() => assert.deepEqual(acknowledged, ["a2"]));
+    assert.deepEqual(opened, []);
+  } finally { cleanup(); }
+});
+
 // ---- The sidebar --------------------------------------------------------------------------------
 
 function appApi(views: ViewDto[], counts: { viewId: string; count: number }[]) {

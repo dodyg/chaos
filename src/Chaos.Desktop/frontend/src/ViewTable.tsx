@@ -1,11 +1,11 @@
 import React from "react";
-import { taskRpc, type QueryRowResponse, type TagResponse, type TaskResponse } from "#neoastra";
+import { taskRpc, tagRpc, type QueryRowResponse, type TagResponse, type TaskResponse } from "#neoastra";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { InlineError, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
-import { TagChip } from "./tags";
+import { TagChip, TagPicker } from "./tags";
 import { tableColumns } from "./viewModel";
 
 export type TableTaskApi = Pick<typeof taskRpc, "edit" | "setStatus">;
@@ -17,6 +17,8 @@ type Props = {
   busy: boolean;
   api?: TableTaskApi;
   selectedTaskId?: string | null;
+  /** Inline tag editing: the tag service, the revision that reloads a picker, and what to do after a tag change (reload the rows and counts). */
+  tagApi?: typeof tagRpc; revision?: number; onTagsChanged?: () => void;
   onOpen: (task: TaskResponse) => void;
   /** A committed inline edit: the row's task is replaced and the sidebar counts reload. */
   onTaskUpdated: (task: TaskResponse) => void;
@@ -49,7 +51,7 @@ function sortValue(row: QueryRowResponse, column: string): string | number | nul
  * command with the row's version, so a stale row is refused rather than overwritten. Header sorting
  * orders the rows already loaded; the view's saved sort decides which rows come first.
  */
-export function ViewTable({ rows, columns, tags, busy, api = taskRpc, selectedTaskId = null, onOpen, onTaskUpdated }: Props) {
+export function ViewTable({ rows, columns, tags, busy, api = taskRpc, selectedTaskId = null, tagApi = tagRpc, revision = 0, onTagsChanged, onOpen, onTaskUpdated }: Props) {
   const [sort, setSort] = React.useState<{ column: string; descending: boolean } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState<string | null>(null);
@@ -118,7 +120,8 @@ export function ViewTable({ rows, columns, tags, busy, api = taskRpc, selectedTa
               <Cell column={column} row={row} byId={byId} disabled={disabled(task)} onOpen={onOpen}
                 onTitle={title => void edit(task, { title })} onStatus={status => void setStatus(task, status)} onPriority={priority => void edit(task, { priority })}
                 onPlanned={date => void edit(task, { plannedDate: date || null })} onDue={date => void edit(task, { dueDate: date || null })}
-                onEstimate={minutes => void edit(task, { estimateMinutes: minutes })}/>
+                onEstimate={minutes => void edit(task, { estimateMinutes: minutes })}
+                tags={tags} tagApi={tagApi} revision={revision} onTagsChanged={() => onTagsChanged?.()}/>
             </td>)}
           </tr>;
         })}</tbody>
@@ -127,7 +130,8 @@ export function ViewTable({ rows, columns, tags, busy, api = taskRpc, selectedTa
   </div>;
 }
 
-function Cell({ column, row, byId, disabled, onOpen, onTitle, onStatus, onPriority, onPlanned, onDue, onEstimate }: {
+function Cell({ column, row, byId, disabled, onOpen, onTitle, onStatus, onPriority, onPlanned, onDue, onEstimate, tags, tagApi, revision, onTagsChanged }: {
+  tags: readonly TagResponse[]; tagApi: typeof tagRpc; revision: number; onTagsChanged: () => void;
   column: string; row: QueryRowResponse; byId: ReadonlyMap<string, TagResponse>; disabled: boolean; onOpen: (task: TaskResponse) => void;
   onTitle: (title: string) => void; onStatus: (status: string) => void; onPriority: (priority: string) => void;
   onPlanned: (date: string) => void; onDue: (date: string) => void; onEstimate: (minutes: number | null) => void;
@@ -143,7 +147,7 @@ function Cell({ column, row, byId, disabled, onOpen, onTitle, onStatus, onPriori
     case "due": return <Input aria-label={`Due date of ${task.title}`} type="date" className="h-8 w-40" value={task.dueDate ?? ""} disabled={disabled} onChange={event => onDue(event.target.value)}/>;
     case "estimate": return <EstimateCell task={task} disabled={disabled} onCommit={onEstimate}/>;
     case "container": return <bdi>{row.containerName}</bdi>;
-    case "tags": return <span className="flex flex-wrap gap-1">{row.tagIds.map(id => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined).map(tag => <TagChip key={tag.id} tag={tag}/>)}</span>;
+    case "tags": return <TagsCell row={row} byId={byId} tags={tags} api={tagApi} revision={revision} disabled={disabled} onChanged={onTagsChanged}/>;
     case "created": return <time dateTime={task.createdAtUtc}>{new Date(task.createdAtUtc).toLocaleDateString()}</time>;
     case "changed": return <time dateTime={task.updatedAtUtc}>{new Date(task.updatedAtUtc).toLocaleDateString()}</time>;
     case "completed": return task.status === "Done" ? <time dateTime={task.updatedAtUtc}>{new Date(task.updatedAtUtc).toLocaleDateString()}</time> : null;
@@ -181,4 +185,20 @@ function EstimateCell({ task, disabled, onCommit }: { task: TaskResponse; disabl
   }
   return <Input aria-label={`Estimate in minutes of ${task.title}`} type="number" min={0} max={10080} className="h-8 w-24" value={draft} disabled={disabled}
     onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.key === "Enter") commit(); }}/>;
+}
+
+/** The tags of a row as chips; Edit opens the same tag picker the task editor uses (suggestions, nested paths) for this one task. */
+function TagsCell({ row, byId, tags, api, revision, disabled, onChanged }: {
+  row: QueryRowResponse; byId: ReadonlyMap<string, TagResponse>; tags: readonly TagResponse[]; api: typeof tagRpc; revision: number; disabled: boolean; onChanged: () => void;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const task = row.task;
+  if (editing) return <span className="grid min-w-56 gap-1">
+    <TagPicker targetKind="Task" targetId={task.id} label={`Tags on ${task.title}`} tags={[...tags]} api={api} revision={revision} onChanged={onChanged}/>
+    <button type="button" className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setEditing(false)}>Done editing tags</button>
+  </span>;
+  return <span className="flex flex-wrap items-center gap-1">
+    {row.tagIds.map(id => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined).map(tag => <TagChip key={tag.id} tag={tag}/>)}
+    <button type="button" className="text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:underline" disabled={disabled} aria-label={`Edit tags of ${task.title}`} onClick={() => setEditing(true)}>Edit</button>
+  </span>;
 }

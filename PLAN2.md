@@ -1842,6 +1842,17 @@ settings across restart, lane assignment, move to Done, subtask progress, delete
 settings save against the view). Still open in P3: alerts, inline tag editing in the table, the
 native desktop run.
 
+**Progress note 2026-11-16 (view alerts, inline tags).** `ViewAlertService` (evaluate, deliver after quiet
+hours, list, acknowledge) over a device-local `ViewAlerts` table (migration 027, LocalOnly in the catalog),
+run from the reminder engine tick; `views.alerts` and `views.acknowledgeAlert`; `ViewAlertStack` in the
+app. Deviations from the plan, all recorded in decisions (2026-11-16): own table instead of
+`NotificationJobs.SavedViewId`, in-app presentation only, a 30-second cadence. Table tags are now
+editable inline with the task editor's picker. Tests: 9 real-SQLite alert tests (silent baseline, one
+alert per new match and no repeat, grouping across evaluations, 24 h return rule both ways, quiet hours,
+cancel on disable, acknowledge idempotence, replacement, restart) and 3 jsdom tests (alert card, dismiss,
+table tag cell). **P3 items now all built;** what remains before the box can be ticked is the native check
+on a running desktop (drag, the table, the board, an alert arriving) and D6/P2's open native checks.
+
 ### [ ] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.

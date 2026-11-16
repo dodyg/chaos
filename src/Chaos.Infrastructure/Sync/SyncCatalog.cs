@@ -525,6 +525,7 @@ public static class SyncCatalog
         // ---- Local-only: bookkeeping, per-device state, rebuildable data -----------------------
         new SyncTable("NotificationJobs", "notification_job", SyncMode.LocalOnly, ["Id"], ApplyOrder: 500), // derived per device (§7.4), OS schedule columns included
         new SyncTable("SavedViewMatches", "saved_view_match", SyncMode.LocalOnly, ["ViewId", "TaskId"], ApplyOrder: 530), // each device evaluates its own alerts (PLAN2 §11.2)
+        new SyncTable("ViewAlerts", "view_alert", SyncMode.LocalOnly, ["Id"], ApplyOrder: 531), // raised and delivered per device (PLAN2 §11.2)
         new SyncTable("UndoEntries", "undo_entry", SyncMode.LocalOnly, ["Id"], ApplyOrder: 501), // undo stays local (§7.10)
         new SyncTable("OperationReceipts", "operation_receipt", SyncMode.LocalOnly, ["ProfileId", "OperationId"], ApplyOrder: 502), // idempotency per device
         new SyncTable("BackupCatalog", "backup_catalog", SyncMode.LocalOnly, ["Id"], ApplyOrder: 503), // this device's backup log
