@@ -24,8 +24,12 @@ public sealed record BoardSettingsResult(BoardSettingsRecord Settings, bool Repl
 
 /// <summary>
 /// Moving one card on a board (PLAN2 §11.1): the field change the target column asks for plus
-/// the within-column reorder, as ONE operation — one receipt, one undo entry. Column values
-/// are status/priority names, section or tag IDs; null means the "No section"/"None" column.
+/// the reorder, as ONE operation — one receipt, one undo entry. Column values are
+/// status/priority names, section or tag IDs; null means the "No section"/"None" column.
+/// The card lands just before <c>BeforeTaskId</c> or just after <c>AfterTaskId</c> (at most
+/// one is set): the neighbouring card the person dropped it next to, so the position stays
+/// right whatever filter, swimlane or hidden column the board showed. Neither keeps the
+/// card's current place in the container's order.
 /// </summary>
 public sealed record MoveBoardCardCommand(
     string OperationId,
@@ -34,7 +38,8 @@ public sealed record MoveBoardCardCommand(
     BoardGrouping GroupBy,
     string? FromColumn,
     string? ToColumn,
-    int? ToIndex,
+    string? BeforeTaskId,
+    string? AfterTaskId,
     OpenSubtaskChoice? OpenSubtaskChoice = null);
 
 public sealed record BoardMoveResult(TaskRecord Task, bool Replayed, string? Warning);
@@ -122,7 +127,22 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
             throw AppException.Validation("groupBy", "Choose how the board groups its columns.");
         }
 
-        var normalized = command with { FromColumn = Blank(command.FromColumn), ToColumn = Blank(command.ToColumn) };
+        var normalized = command with
+        {
+            FromColumn = Blank(command.FromColumn),
+            ToColumn = Blank(command.ToColumn),
+            BeforeTaskId = Blank(command.BeforeTaskId),
+            AfterTaskId = Blank(command.AfterTaskId),
+        };
+        if (normalized.BeforeTaskId is not null && normalized.AfterTaskId is not null)
+        {
+            throw AppException.Validation("beforeTaskId", "Place the card either before or after one other card.");
+        }
+
+        if (normalized.BeforeTaskId == normalized.TaskId || normalized.AfterTaskId == normalized.TaskId)
+        {
+            throw AppException.Validation("beforeTaskId", "A card cannot be placed next to itself.");
+        }
 
         return await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, async (session, profile, now, token) =>
         {
@@ -217,10 +237,13 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
                         }
                     }
 
-                    if (normalized.ToIndex is >= 0)
+                    if ((normalized.BeforeTaskId ?? normalized.AfterTaskId) is { } anchorId)
                     {
-                        current = await ReorderAsync(session, task, current, normalized, now, inner);
-                        fields.Add("Position");
+                        (current, var reordered) = await ReorderAsync(session, current, anchorId, placeAfter: normalized.AfterTaskId is not null, now, inner);
+                        if (reordered)
+                        {
+                            fields.Add("Position");
+                        }
                     }
 
                     if (fields.Count == 0)
@@ -355,45 +378,32 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
     }
 
     /// <summary>
-    /// The within-column reorder (PLAN2 §11.1): the moving card lands at <c>ToIndex</c> among
-    /// the tasks of its new column, through the ordinary rank rules over the container's tasks.
+    /// The board reorder (PLAN2 §11.1): the moving card lands just before or just after the
+    /// anchor card, through the ordinary rank rules over the container's tasks. The anchor is
+    /// the card the person saw beside the drop, so cards the board did not show (another
+    /// focus, a hidden column) never shift where it lands.
     /// </summary>
-    private static async Task<TaskRecord> ReorderAsync(
+    /// <returns>The moved task and whether any rank changed.</returns>
+    private static async Task<(TaskRecord Task, bool Changed)> ReorderAsync(
         IDataSession session,
-        TaskRecord original,
         TaskRecord current,
-        MoveBoardCardCommand normalized,
+        string anchorId,
+        bool placeAfter,
         DateTimeOffset now,
         CancellationToken token)
     {
         var ordered = await session.Tasks.ListByContainerAsync(current.ContainerId, token);
-        bool InColumn(TaskRecord row) => normalized.GroupBy switch
-        {
-            BoardGrouping.Status => row.Status == ParseColumn<TaskItemStatus>(normalized.ToColumn, "toColumn", "Choose a status column."),
-            BoardGrouping.Section => row.SectionId == current.SectionId,
-            BoardGrouping.Priority => row.Priority == ParseColumn<TaskPriority>(normalized.ToColumn, "toColumn", "Choose a priority column."),
-            BoardGrouping.TagGroup => true, // tag columns share the container's rank space
-            _ => true,
-        };
-
-        var members = ordered.Where(row => row.Id != current.Id && InColumn(row)).ToList();
-        if (members.Count == 0)
-        {
-            return current; // the only card in its column: nothing to reorder among
-        }
-
-        var index = Math.Clamp(normalized.ToIndex ?? members.Count, 0, members.Count);
-        // Where the card lands in the container-wide order: just before the card that will
-        // follow it in its column, or just after the last card of the column when appending.
-        var anchor = index < members.Count ? members[index] : members[^1];
         var others = ordered.Where(row => row.Id != current.Id).ToList();
-        var anchorAt = others.FindIndex(row => row.Id == anchor.Id);
-        var insertion = index < members.Count ? anchorAt : anchorAt + 1;
+        var anchorAt = others.FindIndex(row => row.Id == anchorId);
+        if (anchorAt < 0)
+        {
+            throw AppException.NotFound("The card it was placed next to is no longer in this list or project. Refresh and try again.");
+        }
 
         var assignments = RankOrdering.Place(
             [.. ordered.Select(row => (row.Id, row.Position, row.Version))],
             current.Id,
-            insertion);
+            placeAfter ? anchorAt + 1 : anchorAt);
         TaskRecord moved = current;
         foreach (var assignment in assignments)
         {
@@ -401,13 +411,13 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
             var updated = row with { Position = assignment.NewPosition, Version = row.Version + 1, UpdatedAtUtc = now };
             var applied = await session.Tasks.UpdateAsync(updated, row.Version, token)
                 ?? throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
-            if (applied.Id == original.Id)
+            if (applied.Id == current.Id)
             {
                 moved = applied;
             }
         }
 
-        return moved;
+        return (moved, assignments.Count > 0);
     }
 
     private static async Task<TaskRecord> ApplyAsync(IDataSession session, DateTimeOffset now, TaskRecord updated, CancellationToken token)

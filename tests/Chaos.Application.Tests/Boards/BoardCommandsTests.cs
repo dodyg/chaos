@@ -33,7 +33,7 @@ public sealed class BoardCommandsTests
             .AddAsync(new("sub", task.Id, "Open child", null));
 
         var error = await CatchAsync(() => NewCommands(store).MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null)));
+            "move", task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null, null)));
         await Assert.That(error!.Kind).IsEqualTo(AppErrorKind.Validation);
         await Assert.That(error.Fields.Single().FieldPath).IsEqualTo("openSubtaskChoice");
     }
@@ -47,7 +47,7 @@ public sealed class BoardCommandsTests
         var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
 
         var moved = await NewCommands(store).MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null));
+            "move", task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null, null));
 
         await Assert.That(moved.Task.Status).IsEqualTo(TaskItemStatus.Done);
         await Assert.That(moved.Replayed).IsFalse();
@@ -65,7 +65,7 @@ public sealed class BoardCommandsTests
         var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
 
         var moved = await NewCommands(store).MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.Urgent), null));
+            "move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.Urgent), null, null));
 
         await Assert.That(moved.Task.Priority).IsEqualTo(TaskPriority.Urgent);
         await Assert.That((await tasks.GetAsync(task.Id))!.Priority).IsEqualTo(TaskPriority.Urgent);
@@ -83,7 +83,7 @@ public sealed class BoardCommandsTests
         var task = (await tasks.CaptureAsync(new("capture", "list-1", "Card", null))).Task;
 
         var moved = await NewCommands(store).MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.Section, null, "section-1", null));
+            "move", task.Id, task.Version, BoardGrouping.Section, null, "section-1", null, null));
 
         await Assert.That(moved.Task.SectionId).IsEqualTo("section-1");
     }
@@ -101,7 +101,7 @@ public sealed class BoardCommandsTests
         store.TaskTags.Add((task.Id, "tag-a"));
 
         var moved = await NewCommands(store).MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.TagGroup, "tag-a", "tag-b", null));
+            "move", task.Id, task.Version, BoardGrouping.TagGroup, "tag-a", "tag-b", null, null));
 
         await Assert.That(moved.Task.Id).IsEqualTo(task.Id);
         await Assert.That(store.TaskTags.Contains((task.Id, "tag-a"))).IsFalse();
@@ -117,7 +117,7 @@ public sealed class BoardCommandsTests
         var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
         var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
         var commands = NewCommands(store);
-        var command = new MoveBoardCardCommand("move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.High), null);
+        var command = new MoveBoardCardCommand("move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.High), null, null);
 
         var first = await commands.MoveAsync(command);
         var second = await commands.MoveAsync(command);
@@ -135,12 +135,32 @@ public sealed class BoardCommandsTests
         var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
         var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
         var commands = NewCommands(store);
-        await commands.MoveAsync(new("move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.High), null));
+        await commands.MoveAsync(new("move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.High), null, null));
 
         var error = await CatchAsync(() => commands.MoveAsync(new(
-            "move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.Low), null)));
+            "move", task.Id, task.Version, BoardGrouping.Priority, null, nameof(TaskPriority.Low), null, null)));
 
         await Assert.That(error!.Kind).IsEqualTo(AppErrorKind.OperationConflict);
+    }
+
+    [Test]
+    public async Task MoveAsync_InvalidAnchors_AreRefused()
+    {
+        var store = new InMemoryStore();
+        TaskCommandsTests.Seed(store);
+        var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
+        var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
+        var other = (await tasks.CaptureAsync(new("capture-2", "", "Other", null))).Task;
+        var commands = NewCommands(store);
+        var status = nameof(TaskItemStatus.NotStarted);
+
+        var both = await CatchAsync(() => commands.MoveAsync(new("both", task.Id, task.Version, BoardGrouping.Status, status, status, other.Id, other.Id)));
+        var self = await CatchAsync(() => commands.MoveAsync(new("self", task.Id, task.Version, BoardGrouping.Status, status, status, task.Id, null)));
+        var missing = await CatchAsync(() => commands.MoveAsync(new("missing", task.Id, task.Version, BoardGrouping.Status, status, status, "no-such-task", null)));
+
+        await Assert.That(both!.Kind).IsEqualTo(AppErrorKind.Validation);
+        await Assert.That(self!.Kind).IsEqualTo(AppErrorKind.Validation);
+        await Assert.That(missing!.Kind).IsEqualTo(AppErrorKind.NotFound);
     }
 
     [Test]

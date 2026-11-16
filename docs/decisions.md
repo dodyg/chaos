@@ -860,6 +860,13 @@ plan provides one, and each blocking package stays unticked until the owner conf
   OperationId, so it produces exactly one receipt and one undo entry ("Move task on board").
   The status-change core was extracted from `TaskCommands.SetStatusAsync` into
   `TaskCommands.ApplyStatusAsync` and reused; behaviour of the existing command is unchanged.
+- **A move names its neighbour card, not an index.** `board.move` takes `beforeTaskId` or
+  `afterTaskId` (neither keeps the card's place in the container order). An index counted
+  among the cards the board shows disagrees with the server's count whenever the board hides
+  tasks — the Work/Personal focus, hidden columns, tag columns sharing the container's rank
+  space — and the card landed in the wrong place. The neighbour is what the person saw.
+- **A dragged card keeps its swimlane.** Other lanes refuse the drop instead of accepting it
+  and leaving the card in its old lane: the lane is a task field `board.move` does not change.
 - **Board rows come from the board store, not the query specification.** A board's within-
   column order is the container's manual rank order, which the query store does not return;
   `IBoardStore.ListCardsAsync` joins tasks with subtask progress, tag links and the GitHub

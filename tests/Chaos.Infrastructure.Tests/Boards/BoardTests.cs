@@ -30,7 +30,7 @@ public sealed class BoardTests
             taskId = task.Id;
             operationId = DataHost.Op();
             var moved = await new BoardCommands(host.Store, host.Ids, host.Clock).MoveAsync(new(
-                operationId, task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null));
+                operationId, task.Id, task.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.Done), null, null));
             await Assert.That(moved.Task.Status).IsEqualTo(TaskItemStatus.Done);
         }
 
@@ -46,7 +46,7 @@ public sealed class BoardTests
     }
 
     [Test]
-    public async Task MoveAsync_ReorderWithinColumn_RanksCardAmongColumnMembersOnly()
+    public async Task MoveAsync_BeforeAnchor_LandsJustBeforeIt()
     {
         using var host = await DataHost.StartAsync();
         var boards = new BoardCommands(host.Store, host.Ids, host.Clock);
@@ -54,13 +54,50 @@ public sealed class BoardTests
         var second = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Second", null))).Task;
         var third = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Third", null))).Task;
 
-        // Move "Third" above "First" in the Not started column.
+        // Drop "Third" above "First" in the Not started column.
+        var status = nameof(TaskItemStatus.NotStarted);
         var moved = await boards.MoveAsync(new(
-            DataHost.Op(), third.Id, third.Version, BoardGrouping.Status, null, nameof(TaskItemStatus.NotStarted), 0));
+            DataHost.Op(), third.Id, third.Version, BoardGrouping.Status, status, status, first.Id, null));
 
-        var order = (await host.Tasks.ListAsync(first.ContainerId)).Select(task => task.Id).ToList();
-        await Assert.That(order).IsEquivalentTo([third.Id, first.Id, second.Id]);
+        var order = string.Join(",", (await host.Tasks.ListAsync(first.ContainerId)).Select(task => task.Id));
+        await Assert.That(order).IsEqualTo(string.Join(",", third.Id, first.Id, second.Id));
         await Assert.That(moved.Task.Id).IsEqualTo(third.Id);
+    }
+
+    [Test]
+    public async Task MoveAsync_AfterAnchorInAnotherColumn_ChangesColumnAndLandsJustAfterIt()
+    {
+        using var host = await DataHost.StartAsync();
+        var boards = new BoardCommands(host.Store, host.Ids, host.Clock);
+        var doing = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Doing", null))).Task;
+        var between = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Between", null))).Task;
+        var card = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Card", null))).Task;
+        doing = (await host.Tasks.SetStatusAsync(new(DataHost.Op(), doing.Id, doing.Version, TaskItemStatus.InProgress, null))).Task;
+
+        // Drop "Card" below "Doing", the last card of In progress: "Between" (another column)
+        // must not shift where it lands.
+        var moved = await boards.MoveAsync(new(
+            DataHost.Op(), card.Id, card.Version, BoardGrouping.Status,
+            nameof(TaskItemStatus.NotStarted), nameof(TaskItemStatus.InProgress), null, doing.Id));
+
+        await Assert.That(moved.Task.Status).IsEqualTo(TaskItemStatus.InProgress);
+        var order = string.Join(",", (await host.Tasks.ListAsync(doing.ContainerId)).Select(task => task.Id));
+        await Assert.That(order).IsEqualTo(string.Join(",", doing.Id, card.Id, between.Id));
+    }
+
+    [Test]
+    public async Task MoveAsync_DropOnItsOwnPlace_WritesNothing()
+    {
+        using var host = await DataHost.StartAsync();
+        var boards = new BoardCommands(host.Store, host.Ids, host.Clock);
+        var first = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "First", null))).Task;
+        var second = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Second", null))).Task;
+
+        var status = nameof(TaskItemStatus.NotStarted);
+        var moved = await boards.MoveAsync(new(
+            DataHost.Op(), second.Id, second.Version, BoardGrouping.Status, status, status, null, first.Id));
+
+        await Assert.That(moved.Task.Version).IsEqualTo(second.Version);
     }
 
     [Test]

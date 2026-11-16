@@ -55,7 +55,8 @@ public sealed record BoardMoveRequest(
     string GroupBy,
     string? FromColumn,
     string? ToColumn,
-    int? ToIndex,
+    string? BeforeTaskId,
+    string? AfterTaskId,
     string? SubtaskChoice = null);
 public sealed record BoardMoveResponse(bool Ok, TaskResponse? Task, TaskErrorResponse? Error, string? Warning = null);
 
@@ -108,7 +109,8 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
                 ParseEnum<BoardGrouping>(request.GroupBy, "groupBy"),
                 Blank(request.FromColumn),
                 Blank(request.ToColumn),
-                request.ToIndex < 0 ? null : request.ToIndex,
+                request.BeforeTaskId,
+                request.AfterTaskId,
                 request.SubtaskChoice is null ? null : ParseEnum<OpenSubtaskChoice>(request.SubtaskChoice, "subtaskChoice")), ct);
             sync?.RequestTaskSync(result.Task.Id);
             return new(true, TaskRpcService.ToResponse(result.Task), null, result.Warning);

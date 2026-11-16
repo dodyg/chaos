@@ -176,11 +176,6 @@ function laneKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
   if (s.swimlaneBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.swimlaneTagId && ids.includes(tag.id))?.id ?? ""; }
   return "";
 }
-function inColumn(s: PreviewBoardSettings, t: TaskResponse, column: string | null): boolean {
-  if (s.groupBy === "Section") return column === null ? t.sectionId === null : t.sectionId === column;
-  if (s.groupBy === "TagGroup") return true; // tag columns share the container's rank space
-  return columnKeyOf(s, t) === column;
-}
 function boardHandlers(): Record<string, Handler> {
   return {
     "board.get": (r: { containerId: string; category: string | null; showCancelled: boolean }) => {
@@ -206,10 +201,15 @@ function boardHandlers(): Record<string, Handler> {
       record("Change board settings");
       return ok({ settings: settingsDto(saved) });
     },
-    "board.move": (r: { taskId: string; expectedVersion: string; groupBy: string; fromColumn: string | null; toColumn: string | null; toIndex: number | null; subtaskChoice: string | null }) => {
+    "board.move": (r: { taskId: string; expectedVersion: string; groupBy: string; fromColumn: string | null; toColumn: string | null; beforeTaskId: string | null; afterTaskId: string | null; subtaskChoice: string | null }) => {
       const t = find(r.taskId);
       if (!t) return { ...fail("That task no longer exists."), task: null, warning: null };
       if (t.version !== r.expectedVersion) return { ...fail("This task changed elsewhere while you were working. Refresh and try again."), task: null, warning: null };
+      // The card lands next to the anchor card the person dropped it beside (as BoardCommands).
+      const anchor = r.beforeTaskId ?? r.afterTaskId;
+      if (anchor && !orderedTasks(t.containerId).some(row => row.id === anchor && row.id !== t.id)) {
+        return { ...fail("The card it was placed next to is no longer in this list or project. Refresh and try again."), task: null, warning: null };
+      }
       if (r.groupBy === "Status" && r.toColumn === "Done" && r.subtaskChoice === null
         && subtasks.some(sub => sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled")) {
         return { ok: false, task: null, warning: null, error: { kind: "Validation", message: "Open subtasks", fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }], correlationId: "preview" } };
@@ -223,14 +223,9 @@ function boardHandlers(): Record<string, Handler> {
         taskTags.set(r.taskId, links);
         record(`Retag “${t.title}”`);
       }
-      if (r.toIndex !== null && r.toIndex >= 0) {
-        const settings = { ...(boardSettings.get(t.containerId) ?? boardDefaults()), groupBy: r.groupBy }; // rank among the column the move named
-        const members = orderedTasks(t.containerId).filter(row => row.id !== t.id && inColumn(settings, row, r.toColumn));
-        const anchor = members[Math.min(r.toIndex, members.length - 1)] ?? members[members.length - 1];
-        const at = anchor ? taskOrder.indexOf(anchor.id) + (r.toIndex >= members.length ? 1 : 0) : taskOrder.length;
-        const from = taskOrder.indexOf(t.id);
-        if (from >= 0) taskOrder.splice(from, 1);
-        taskOrder.splice(Math.max(0, Math.min(at, taskOrder.length)), 0, t.id);
+      if (anchor) {
+        taskOrder.splice(taskOrder.indexOf(t.id), 1);
+        taskOrder.splice(taskOrder.indexOf(anchor) + (r.afterTaskId ? 1 : 0), 0, t.id);
         update(r.taskId, {}, "Reorder");
       }
       return ok({ task: find(r.taskId), warning: null });

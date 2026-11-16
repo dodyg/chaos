@@ -1,6 +1,6 @@
 import React from "react";
 import { boardRpc, type BoardCardResponse, type BoardColumnResponse, type BoardLaneResponse, type BoardSettingsDto, type TagResponse, type TaskResponse } from "#neoastra";
-import { CalendarDays, CheckSquare, Clock, MoreHorizontal, Settings2 } from "lucide-react";
+import { CalendarDays, CheckSquare, Clock, GripVertical, MoreHorizontal, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,6 @@ import { Count, Field, InlineError } from "@/components/common";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagDot } from "./tags";
-import { useDragReorder } from "./dragReorder";
 import { CategoryEdge, type Focus } from "./category";
 
 const operationId = () => crypto.randomUUID();
@@ -70,25 +69,61 @@ function draftFrom(settings: BoardSettingsDto, columnKeys: readonly string[]): S
 }
 
 /**
+ * Where a moved card goes, as board.move takes it: just before or just after the neighbouring
+ * card the person saw, or neither to keep its place in the container's order.
+ */
+export type Placement = { beforeTaskId: string | null; afterTaskId: string | null };
+
+const keepPlace: Placement = { beforeTaskId: null, afterTaskId: null };
+
+/**
+ * The placement of a card dropped into one board cell (a column within a swimlane). `cell` is
+ * the cell's card IDs top to bottom, `slot` the drop position among them once the dragged
+ * card is left out (0 = top, their count = bottom). Null when the card is already there.
+ */
+export function dropPlacement(cell: readonly string[], draggedId: string, slot: number): Placement | null {
+  if (cell.indexOf(draggedId) === slot) return null;
+  const others = cell.filter(id => id !== draggedId);
+  if (slot < others.length) return { beforeTaskId: others[slot], afterTaskId: null };
+  return others.length > 0 ? { beforeTaskId: null, afterTaskId: others[others.length - 1] } : keepPlace;
+}
+
+/** The custom drag type: only this board accepts it, so a dropped card never types into a field. */
+const cardDragType = "application/x-chaos-board-card";
+
+type Dragged = { cardId: string; columnKey: string; laneKey: string };
+
+const cellKey = (laneKey: string, columnKey: string) => `${laneKey}|${columnKey}`;
+
+/**
  * A Kanban board for one list or project (PLAN2 §11.1): columns from the board settings,
  * optional swimlanes, cards dragged or keyboard-moved between and within columns, WIP limit
  * warnings and a settings popover. Every move is one board.move call with the task's version.
+ *
+ * Dragging is native HTML drag and drop: the whole card is the drag source and each cell (a
+ * column within a swimlane) is a drop zone that shows where the card will land. A card keeps
+ * its swimlane (a lane is a task field board.move does not change), so other lanes refuse it.
  */
 export function Board({ containerId, tags, focus, busy, revision, onOpen, onChanged, api = boardRpc }: {
   containerId: string; tags: TagResponse[]; focus: Focus; busy: boolean; revision: number;
   onOpen: (task: TaskResponse, viewing: boolean) => void; onChanged: () => void; api?: BoardApi;
 }) {
   const [board, setBoard] = React.useState<{ columns: readonly BoardColumnResponse[]; lanes: readonly BoardLaneResponse[]; cards: readonly BoardCardResponse[]; settings: BoardSettingsDto; totalCount: number; truncated: boolean } | null>(null);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [reloads, setReloads] = React.useState(0);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [showCancelled, setShowCancelled] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
   const [draft, setDraft] = React.useState<SettingsDraft | null>(null);
   const [moving, setMoving] = React.useState(false);
-  const [choice, setChoice] = React.useState<{ card: BoardCardResponse; toColumn: string; toIndex: number | null } | null>(null);
+  const [choice, setChoice] = React.useState<{ card: BoardCardResponse; toColumn: string; placement: Placement } | null>(null);
   const [menu, setMenu] = React.useState<{ cardId: string; page: "main" | "columns" } | null>(null);
   const [focusCardId, setFocusCardId] = React.useState<string | null>(null);
-  const drag = useDragReorder();
+  // The drag in progress: the ref is read by the drop handlers, the state only styles the card.
+  const dragged = React.useRef<Dragged | null>(null);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
+  const [dropAt, setDropAt] = React.useState<{ cell: string; slot: number } | null>(null);
   const cardRefs = React.useRef(new Map<string, HTMLElement>());
 
   const disabled = busy || moving;
@@ -97,11 +132,11 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     let current = true;
     void api.get({ containerId, category: focus, showCancelled }).then(result => {
       if (!current) return;
-      if (result.ok) { setBoard(result); setError(null); setDraft(null); }
-      else setError(result.error?.message ?? "Could not load the board.");
-    }).catch((e: unknown) => { if (current) setError(String(e)); });
+      if (result.ok) { setBoard(result); setLoadError(null); setDraft(null); }
+      else setLoadError(result.error?.message ?? "Could not load the board.");
+    }).catch((e: unknown) => { if (current) setLoadError(String(e)); });
     return () => { current = false; };
-  }, [api, containerId, focus, showCancelled, revision]);
+  }, [api, containerId, focus, showCancelled, revision, reloads]);
 
   const settings = board?.settings;
   const hiddenKeys = new Set(parseJson<string[]>(settings?.hiddenColumnsJson, []));
@@ -111,32 +146,41 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   const multipleLanes = lanes.length > 1;
   const cards = board?.cards ?? [];
   const tagById = React.useMemo(() => new Map(tags.map(tag => [tag.id, tag])), [tags]);
-  // Cards of one column in board order (the container's manual order) — the reorder index space.
-  const columnCards = React.useMemo(() => {
-    const byColumn = new Map<string, BoardCardResponse[]>();
-    for (const column of columns) byColumn.set(column.key, cards.filter(card => card.columnKey === column.key));
-    return byColumn;
-  }, [columns, cards]);
+  // The cards of one cell top to bottom (board order is the container's manual order).
+  const cellCards = new Map<string, BoardCardResponse[]>();
+  for (const card of cards) {
+    const key = cellKey(card.laneKey, card.columnKey);
+    cellCards.set(key, [...(cellCards.get(key) ?? []), card]);
+  }
+  const cellOf = (card: BoardCardResponse) => cellCards.get(cellKey(card.laneKey, card.columnKey)) ?? [];
+  // A column's cards as drawn: lane by lane, top to bottom.
+  const columnOrder = (columnKey: string) => lanes.flatMap(lane => cellCards.get(cellKey(lane.key, columnKey)) ?? []);
 
-  async function moveCard(card: BoardCardResponse, toColumn: string, toIndex: number | null, subtaskChoice: string | null = null) {
+  async function moveCard(card: BoardCardResponse, toColumn: string, placement: Placement, subtaskChoice: string | null = null) {
     if (disabled) return;
     setMoving(true);
+    setError(null);
     try {
       const result = await api.move({
         operationId: operationId(), taskId: card.task.id, expectedVersion: card.task.version,
-        groupBy: settings?.groupBy ?? "Status", fromColumn: card.columnKey, toColumn, toIndex, subtaskChoice,
+        groupBy: settings?.groupBy ?? "Status", fromColumn: card.columnKey, toColumn, ...placement, subtaskChoice,
       });
       if (!result.ok) {
         // Moving to Done with open subtasks is a question, not a failure: ask and retry.
         if (result.error?.fields.some(field => field.fieldPath === "openSubtaskChoice")) {
-          setChoice({ card, toColumn, toIndex });
+          setChoice({ card, toColumn, placement });
           return;
         }
+        // The board was stale (a version conflict, a card gone): show why and read it again.
         setError(result.error?.message ?? "Could not move the task.");
+        setReloads(count => count + 1);
         return;
       }
-      setNotice(null);
-      if (result.warning) setNotice(result.warning);
+      setNotice(result.warning ?? null);
+      // Read the board again: the move bumped the versions of this card and any card it was
+      // reranked past, and onChanged need not change `revision`, so without this the next
+      // move would send a stale version and hit a version conflict.
+      setReloads(count => count + 1);
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -148,6 +192,7 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   async function saveSettings(next: SettingsDraft) {
     if (disabled || !board) return;
     setMoving(true);
+    setError(null);
     try {
       const limits = Object.fromEntries(Object.entries(next.wip).filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)]));
       const result = await api.updateSettings({
@@ -162,6 +207,7 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
       }
       setDraft(null);
       setShowSettings(false);
+      setReloads(count => count + 1); // the next save needs the new settings version
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -178,24 +224,24 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
 
   function cardKeyDown(event: React.KeyboardEvent<HTMLElement>, card: BoardCardResponse) {
     if (event.target !== event.currentTarget) return; // the title button and menu handle their own keys
-    const columnList = columnCards.get(card.columnKey) ?? [];
-    const index = columnList.findIndex(item => item.task.id === card.task.id);
-    const columnIndex = columns.findIndex(column => column.key === card.columnKey);
     switch (event.key) {
       case "ArrowDown":
       case "ArrowUp": {
+        // Down the column as drawn, crossing into the next swimlane at a cell's end.
         event.preventDefault();
-        const next = columnList[index + (event.key === "ArrowDown" ? 1 : -1)];
-        focusCard(next?.task.id);
+        const column = columnOrder(card.columnKey);
+        focusCard(column[column.findIndex(item => item.task.id === card.task.id) + (event.key === "ArrowDown" ? 1 : -1)]?.task.id);
         break;
       }
       case "ArrowRight":
       case "ArrowLeft": {
+        // The next column's card at the same height in the same swimlane, else its first card.
         event.preventDefault();
-        const nextColumn = columns[columnIndex + (event.key === "ArrowRight" ? 1 : -1)];
+        const nextColumn = columns[columns.findIndex(column => column.key === card.columnKey) + (event.key === "ArrowRight" ? 1 : -1)];
         if (!nextColumn) return;
-        const nextList = columnCards.get(nextColumn.key) ?? [];
-        focusCard((nextList[Math.min(index, nextList.length - 1)] ?? nextList[0])?.task.id);
+        const index = cellOf(card).findIndex(item => item.task.id === card.task.id);
+        const sameLane = cellCards.get(cellKey(card.laneKey, nextColumn.key)) ?? [];
+        focusCard((sameLane[Math.min(index, sameLane.length - 1)] ?? columnOrder(nextColumn.key)[0])?.task.id);
         break;
       }
       case "Enter":
@@ -228,37 +274,96 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
 
   function cardMenu(card: BoardCardResponse) {
     if (menu?.cardId !== card.task.id) return null;
-    const columnList = columnCards.get(card.columnKey) ?? [];
-    const index = columnList.findIndex(item => item.task.id === card.task.id);
+    // Up and down move within the card's cell, as dragging does.
+    const cell = cellOf(card);
+    const index = cell.findIndex(item => item.task.id === card.task.id);
     const item = "flex w-full cursor-default rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50";
     return <div role="menu" aria-label={`Actions for ${card.task.title}`} className="absolute top-full right-0 z-30 mt-1 grid min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
       onKeyDown={event => { if (event.key === "Escape") setMenu(null); }}>
       {menu.page === "main" ? <>
         <button type="button" role="menuitem" className={item} disabled={columns.length < 2} onClick={() => setMenu({ cardId: card.task.id, page: "columns" })}>Move to column…</button>
-        <button type="button" role="menuitem" className={item} disabled={disabled || index <= 0} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, index - 1); }}>Move up</button>
-        <button type="button" role="menuitem" className={item} disabled={disabled || index >= columnList.length - 1} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, index + 1); }}>Move down</button>
+        <button type="button" role="menuitem" className={item} disabled={disabled || index <= 0} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: cell[index - 1].task.id, afterTaskId: null }); }}>Move up</button>
+        <button type="button" role="menuitem" className={item} disabled={disabled || index >= cell.length - 1} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: null, afterTaskId: cell[index + 1].task.id }); }}>Move down</button>
       </> : <>
-        {columns.filter(column => column.key !== card.columnKey).map(column => <button key={column.key} type="button" role="menuitem" className={item} disabled={disabled} onClick={() => { setMenu(null); void moveCard(card, column.key, null); }}>Move to {column.title}</button>)}
+        {columns.filter(column => column.key !== card.columnKey).map(column => <button key={column.key} type="button" role="menuitem" className={item} disabled={disabled} onClick={() => { setMenu(null); void moveCard(card, column.key, keepPlace); }}>Move to {column.title}</button>)}
         <button type="button" role="menuitem" className={item} onClick={() => setMenu({ cardId: card.task.id, page: "main" })}>Back</button>
       </>}
     </div>;
   }
 
-  function renderCard(card: BoardCardResponse, order: readonly string[], index: number) {
+  function startDrag(event: React.DragEvent<HTMLElement>, card: BoardCardResponse) {
+    // A link or image inside the card drags itself, not the card.
+    if (event.target !== event.currentTarget || disabled) return;
+    const started: Dragged = { cardId: card.task.id, columnKey: card.columnKey, laneKey: card.laneKey };
+    dragged.current = started;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(cardDragType, card.task.id);
+    // Chromium (WebView2) cancels a drag whose source changes during dragstart: restyle after it.
+    window.setTimeout(() => {
+      if (dragged.current !== started) return;
+      setDraggingId(started.cardId);
+      setMenu(null);
+    }, 0);
+  }
+
+  function endDrag() {
+    dragged.current = null;
+    setDraggingId(null);
+    setDropAt(null);
+  }
+
+  /** Drop-zone props for one cell: it shows where the card will land and moves it there on drop. */
+  function cellDrop(column: BoardColumnResponse, lane: BoardLaneResponse, cell: readonly BoardCardResponse[]) {
+    const key = cellKey(lane.key, column.key);
+    const ids = cell.map(card => card.task.id);
+    const accepted = () => !disabled && dragged.current !== null && dragged.current.laneKey === lane.key ? dragged.current : null;
+    // How many of the cell's other cards sit above the pointer: midpoints, top to bottom.
+    const slotAt = (source: Dragged, clientY: number) => ids.filter(id => {
+      if (id === source.cardId) return false;
+      const box = cardRefs.current.get(id)?.getBoundingClientRect();
+      return box !== undefined && clientY > box.top + box.height / 2;
+    }).length;
+    return {
+      onDragOver: (event: React.DragEvent<HTMLElement>) => {
+        const source = accepted();
+        if (!source) return; // not preventing the default refuses the drop
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        const slot = slotAt(source, event.clientY);
+        setDropAt(current => current?.cell === key && current.slot === slot ? current : { cell: key, slot });
+      },
+      onDragLeave: (event: React.DragEvent<HTMLElement>) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return; // into a child
+        setDropAt(current => current?.cell === key ? null : current);
+      },
+      onDrop: (event: React.DragEvent<HTMLElement>) => {
+        const source = accepted();
+        if (!source) return;
+        event.preventDefault();
+        const placement = dropPlacement(ids, source.cardId, slotAt(source, event.clientY));
+        endDrag();
+        const card = cards.find(item => item.task.id === source.cardId);
+        if (card && placement) void moveCard(card, column.key, placement);
+      },
+    };
+  }
+
+  function renderCard(card: BoardCardResponse, mark: "before" | "after" | null) {
     const task = card.task;
     return <li key={task.id}
       ref={element => { if (element) cardRefs.current.set(task.id, element); else cardRefs.current.delete(task.id); }}
       tabIndex={focusCardId === null || focusCardId === task.id ? 0 : -1}
       aria-label={task.title}
-      className={cn("group/card relative grid gap-1 rounded-lg border bg-card p-2 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", moving && "opacity-60")}
+      draggable={!disabled}
+      className={cn("group/card relative grid gap-1 rounded-lg border bg-card p-2 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        !disabled && "cursor-grab active:cursor-grabbing", moving && "opacity-60", draggingId === task.id && "opacity-40")}
       onKeyDown={event => cardKeyDown(event, card)}
-      {...drag.target(order, index, `${card.laneKey}::${card.columnKey}`, disabled, (id, insertionIndex) => {
-        const dropped = cards.find(item => item.task.id === id);
-        if (dropped && !(dropped.columnKey === card.columnKey && insertionIndex === order.indexOf(id))) void moveCard(dropped, card.columnKey, insertionIndex);
-      }, { foreign: true })}>
+      onDragStart={event => startDrag(event, card)}
+      onDragEnd={endDrag}>
+      {mark && <span aria-hidden="true" className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-primary", mark === "before" ? "-top-1" : "-bottom-1")}/>}
       <div className="flex items-start">
         <CategoryEdge category={task.category}/>
-        {drag.handle(task.id, `${card.laneKey}::${card.columnKey}`, disabled, "py-0.5")}
+        <GripVertical aria-hidden="true" className={cn("mt-1 size-4 shrink-0 text-muted-foreground opacity-40 transition-opacity group-hover/card:opacity-90", disabled && "invisible")}/>
         <div className="grid min-w-0 flex-1 gap-1">{cardFace(card)}</div>
         <div className="relative">
           <Button variant="ghost" size="icon-sm" className="text-muted-foreground opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 [@media(hover:none)]:opacity-100"
@@ -272,27 +377,32 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   }
 
   function renderColumn(column: BoardColumnResponse, lane: BoardLaneResponse) {
-    const wholeColumn = columnCards.get(column.key) ?? [];
-    const inLane = cards.filter(card => card.columnKey === column.key && card.laneKey === lane.key);
+    const count = cards.filter(card => card.columnKey === column.key).length;
+    const key = cellKey(lane.key, column.key);
+    const inLane = cellCards.get(key) ?? [];
     const limit = wipLimits[column.key];
-    const over = limit !== undefined && wholeColumn.length > limit;
-    return <section key={`${lane.key}|${column.key}`} aria-label={`${lane.title} · ${column.title} column`}
-      className={cn("flex w-64 shrink-0 grid-cols-1 flex-col gap-1.5 rounded-lg bg-muted/40 p-2 outline-none", menu === null && "focus-within:ring-1 focus-within:ring-primary/40")}
-      {...drag.zone(disabled, id => {
-        const dropped = cards.find(card => card.task.id === id);
-        if (dropped && dropped.columnKey !== column.key) void moveCard(dropped, column.key, null);
-      })}>
+    const over = limit !== undefined && count > limit;
+    // The drop marker: a line before the card the dragged one would precede, or after the
+    // last card. None while the drop would leave the card where it is.
+    const target = dropAt?.cell === key && draggingId !== null && dropPlacement(inLane.map(card => card.task.id), draggingId, dropAt.slot);
+    const markOf = (card: BoardCardResponse) => !target ? null
+      : target.beforeTaskId === card.task.id ? "before" as const
+        : target.afterTaskId === card.task.id ? "after" as const : null;
+    return <section key={key} aria-label={`${lane.title} · ${column.title} column`}
+      className={cn("flex w-64 shrink-0 grid-cols-1 flex-col gap-1.5 rounded-lg bg-muted/40 p-2 outline-none transition-colors",
+        menu === null && "focus-within:ring-1 focus-within:ring-primary/40", target && "bg-primary/10 ring-1 ring-primary/40")}
+      {...cellDrop(column, lane, inLane)}>
       <h4 className="flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none">
         <span className="min-w-0 truncate">{column.title}</span>
         <span className="tabular-nums">{limit !== undefined
-          ? <span className={over ? "font-medium text-amber-600 dark:text-amber-400" : undefined}>{wholeColumn.length} / {limit}</span>
-          : wholeColumn.length}</span>
+          ? <span className={over ? "font-medium text-amber-600 dark:text-amber-400" : undefined}>{count} / {limit}</span>
+          : count}</span>
         {over && <span className="sr-only">over its WIP limit</span>}
       </h4>
       <ul className="grid content-start gap-1.5" aria-label={`${column.title} cards`}>
-        {inLane.map(card => renderCard(card, wholeColumn.map(item => item.task.id), wholeColumn.findIndex(item => item.task.id === card.task.id)))}
+        {inLane.map(card => renderCard(card, markOf(card)))}
       </ul>
-      {inLane.length === 0 && <p className="px-1 py-2 text-xs text-muted-foreground italic">No cards.</p>}
+      {inLane.length === 0 && <p className="px-1 py-2 text-xs text-muted-foreground italic">{target ? "Drop here." : "No cards."}</p>}
     </section>;
   }
 
@@ -353,9 +463,9 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
       {board && board.truncated && <p role="status" className="text-xs text-muted-foreground">{board.cards.length} of {board.totalCount} shown, filter to see more</p>}
     </div>
     {settingsPanel()}
-    {error && <InlineError>{error}</InlineError>}
+    {(loadError ?? error) && <InlineError>{loadError ?? error}</InlineError>}
     {notice && <div role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">{notice}</div>}
-    {board && !error && <div className="-mx-1 overflow-x-auto px-1 pb-1">
+    {board && !loadError && <div className="-mx-1 overflow-x-auto px-1 pb-1">
       <div className="grid w-max min-w-full gap-4">
         {lanes.map(lane => <section key={lane.key} aria-label={multipleLanes ? `${lane.title} swimlane` : "Board lanes"} className="grid gap-1.5">
           {multipleLanes && <h3 className="flex items-center px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{lane.title}<Count>{cards.filter(card => card.laneKey === lane.key).length}</Count></h3>}
@@ -371,8 +481,8 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
         <h2 id="board-subtasks-title" className="font-semibold">Complete open subtasks too?</h2>
         <p className="text-sm">“{choice.card.task.title}” has open subtasks.</p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={disabled} onClick={() => { const pending = choice; setChoice(null); if (pending) void moveCard(pending.card, pending.toColumn, pending.toIndex, "CompleteAll"); }}>Complete them too</Button>
-          <Button type="button" variant="outline" disabled={disabled} onClick={() => { const pending = choice; setChoice(null); if (pending) void moveCard(pending.card, pending.toColumn, pending.toIndex, "KeepOpen"); }}>Keep them open</Button>
+          <Button type="button" disabled={disabled} onClick={() => { const pending = choice; setChoice(null); if (pending) void moveCard(pending.card, pending.toColumn, pending.placement, "CompleteAll"); }}>Complete them too</Button>
+          <Button type="button" variant="outline" disabled={disabled} onClick={() => { const pending = choice; setChoice(null); if (pending) void moveCard(pending.card, pending.toColumn, pending.placement, "KeepOpen"); }}>Keep them open</Button>
           <Button type="button" variant="ghost" onClick={() => setChoice(null)}>Cancel</Button>
         </div>
       </div>

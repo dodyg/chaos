@@ -1680,7 +1680,7 @@ the owner answers it.
 2. In Application, add `BoardCommands`:
    - get or create settings
    - update grouping and limits
-   - `MoveCard(taskId, expectedVersion, toColumn, toIndex, operationId)`
+   - `MoveCard(taskId, expectedVersion, toColumn, beforeTaskId | afterTaskId, operationId)`
    
    `MoveCard` translates the move into the existing commands, using **one** OperationId, so it
    produces one receipt and one undo entry. A status move to Done with open subtasks returns the
@@ -1692,7 +1692,7 @@ the owner answers it.
 5. Frontend:
    - `Board.tsx`, with a view switch (List / Board) on list and project pages. The choice is
      remembered per container in local storage.
-   - Drag between columns and within a column, with `dragReorder.tsx` generalized for two axes.
+   - Native drag between columns and within a column, with a drop marker.
    - The card menu with "Move to column…".
    - WIP header warnings and a settings popover.
    - Extend the preview backend.
@@ -1721,17 +1721,19 @@ receipt, one undo entry ("Move task on board"), the open-subtask question surfac
 the list's. `BoardQueries` builds columns, swimlanes and cards (tags, subtask progress, GitHub
 mark, 500-card cap with truncation flag); `board` RPC exposes get/updateSettings/move.
 Frontend: `Board.tsx` (columns, swimlanes, WIP warnings, hidden columns, show-cancelled,
-settings popover, open-subtask dialog), `dragReorder.tsx` generalized to two axes with
-cross-column drops, a List/Board switch on list and project pages remembered per container,
+settings popover, open-subtask dialog), native drag and drop with the whole card as the source,
+each column-in-lane cell as a drop zone with a drop marker, a List/Board switch on list and project pages remembered per container,
 roving-tabindex keyboard moves with a card menu, a preview-backend model, and a Help update.
 Gate (Release): Domain 192/192, Application 57/57, Infrastructure 492/492, Sync 26/26, Desktop
 88/89 in the sandbox — the one failure (LaunchRouting named-pipe IPC) is the same known
 sandbox denial P1 recorded; it passes outside. Frontend `npm test` 144/144 (131 pre-existing +
 13 new). Slopwatch clean. Not done: the native pointer-drag check on a running desktop and
 the installed-package checks need an interactive Windows session this environment does not
-have (as in P0); drag between swimlanes of one column only reorders — changing a lane field is
-a task edit, since `board.move` changes one grouping field. The box stays unticked until the
-native check runs.
+have (as in P0); a card keeps its swimlane — other lanes refuse the drop, since changing a lane
+field is a task edit and `board.move` changes one grouping field. A move places the card just
+before or after the neighbouring card the person saw (`beforeTaskId`/`afterTaskId`), not at an
+index, so cards the board hides (focus, hidden columns, other tag columns) never shift where
+it lands. The box stays unticked until the native check runs.
 
 ### [ ] P3 — Custom views, alerts and spreadsheet export
 

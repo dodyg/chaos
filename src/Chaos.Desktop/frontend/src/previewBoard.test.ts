@@ -5,7 +5,7 @@ import { handle } from "./preview/backend";
 type Any = Record<string, any>;
 
 const get = async (request: Any) => await handle("board.get", request) as Any;
-const move = async (request: Any) => await handle("board.move", { operationId: crypto.randomUUID(), subtaskChoice: null, fromColumn: "NotStarted", toIndex: null, ...request }) as Any;
+const move = async (request: Any) => await handle("board.move", { operationId: crypto.randomUUID(), subtaskChoice: null, fromColumn: "NotStarted", beforeTaskId: null, afterTaskId: null, ...request }) as Any;
 const updateSettings = async (request: Any) => await handle("board.updateSettings", { operationId: crypto.randomUUID(), columnTagId: null, swimlaneTagId: null, wipLimitsJson: "{}", hiddenColumnsJson: "[]", ...request }) as Any;
 
 test("the preview board serves the sprint container with status columns and card details", async () => {
