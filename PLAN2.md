@@ -1804,6 +1804,27 @@ Views, table layout, board layout on a view, Save as view on search, quick-add p
 the editor/table/pin jsdom tests. Gate (`eng/verify.ps1`, Slopwatch, `npm test`) not yet run on
 this slice. Smallest next action: the `views` RPC service, so the frontend can start.
 
+**Progress note 2026-11-16 (RPC and frontend slice).** Done: `ViewRpcService` (`views`: list, get, save,
+duplicate, setPinned, delete, restore, reorder, run, preview, counts, contextDefaults, export,
+fromSearch); `SavedViewQueries` (run, draft preview, pinned counts from the same specification,
+CSV build); `ViewExport` (UTF-8 BOM, RFC 4180, formula neutralizing, safe file names);
+`ViewFromSearch`; the preview backend model; Help text. Frontend: `viewModel.ts`, `ViewEditor`
+(condition rows, nested all/any groups to depth 4, relative dates, layout, pin, alerts flag, live
+preview count), `ViewTable` (sortable headers over the loaded rows, inline edit of title, status,
+priority, planned, due and estimate through the ordinary commands with the row version), the
+sidebar Views section (pinned views with icon, colour and count, New view), the view header (Edit,
+Duplicate, Export, Delete with Undo), list grouping, Save as view on search, and quick add inside a
+view that pre-fills what the top-level all conditions fix (status is applied by a follow-up
+set-status call, since capture drafts carry no status). Checked in the browser preview.
+Tests: solution 963/963 (Domain 248, Application 74, Infrastructure 546 incl. 24 view tests,
+Sync 26, Desktop 89), frontend `npm test` 163/163 (10 new: model round trips, editor build and
+save, host refusal keeps text and reuses the operation, table inline edit and sort, refused edit,
+pinned views in the sidebar), Slopwatch clean. **Still not done:** the D7 GitHub field group;
+alerts (`ViewAlertEvaluator`, the `ViewAlert` notification kind with the `NotificationJobs` rebuild,
+the host timer); the board layout on a view; inline tag editing in the table; table header sort is
+client-side over loaded rows; the section field is not offered in the editor; the native desktop
+run was not done. The package stays unticked. Smallest next action: alerts.
+
 ### [ ] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.

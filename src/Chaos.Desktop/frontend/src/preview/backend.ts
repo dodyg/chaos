@@ -176,6 +176,93 @@ function laneKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
   if (s.swimlaneBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.swimlaneTagId && ids.includes(tag.id))?.id ?? ""; }
   return "";
 }
+
+// Custom views (PLAN2 P3): an in-memory list and a small evaluator for the common fields, so the
+// view screens render in the preview. The desktop host is the real implementation.
+type PreviewView = { id: string; name: string; icon: string; color: string | null; pinned: boolean; position: number; definitionJson: string; layoutJson: string; alertsEnabled: boolean; version: string; deleted: boolean };
+const savedViews: PreviewView[] = [{
+  id: "view-1", name: "Open high priority", icon: "flag", color: "red", pinned: true, position: 0, alertsEnabled: false, version: "1", deleted: false,
+  definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "status", op: "notIn", value: ["Done", "Cancelled"] }, { field: "priority", op: "atLeast", value: "High" }] }),
+  layoutJson: JSON.stringify({ v: 1, kind: "table", group: "none", sort: { field: "due", dir: "asc" }, columns: ["title", "status", "priority", "due", "estimate"] }),
+}];
+const priorityOrder = ["None", "Low", "Normal", "High", "Urgent"];
+function relativeRange(value: any): [string | null, string | null] {
+  if (typeof value === "string") return [value, value];
+  if (value && typeof value === "object" && typeof value.relative === "string") {
+    switch (value.relative) {
+      case "today": return [today, today];
+      case "tomorrow": return [addDays(today, 1), addDays(today, 1)];
+      case "yesterday": return [addDays(today, -1), addDays(today, -1)];
+      case "next": return [today, addDays(today, value.days - 1)];
+      case "last": return [addDays(today, -(value.days - 1)), today];
+      case "overdue": return [null, addDays(today, -1)];
+      default: return [today, addDays(today, 6)];
+    }
+  }
+  return [value?.from ?? null, value?.to ?? null];
+}
+function previewMatch(t: TaskResponse, node: any): boolean {
+  if (Array.isArray(node.items)) {
+    const results = node.items.map((item: any) => previewMatch(t, item));
+    return results.length === 0 || (node.match === "any" ? results.some(Boolean) : results.every(Boolean));
+  }
+  const date = (v: string | null) => {
+    if (node.op === "isEmpty") return v === null;
+    if (node.op === "isNotEmpty") return v !== null;
+    if (v === null) return false;
+    const [from, to] = relativeRange(node.value);
+    if (node.op === "before") return from !== null && v < from;
+    if (node.op === "after") return to !== null && v > to;
+    return (from === null || v >= from) && (to === null || v <= to);
+  };
+  switch (node.field) {
+    case "status": return node.op === "in" ? node.value.includes(t.status) : !node.value.includes(t.status);
+    case "priority": { const a = priorityOrder.indexOf(t.priority), b = priorityOrder.indexOf(node.value); return node.op === "atLeast" ? a >= b : node.op === "atMost" ? a <= b : a === b; }
+    case "container": return node.op === "isNot" ? t.containerId !== node.value : ([] as string[]).concat(node.value).includes(t.containerId);
+    case "category": return t.category === node.value;
+    case "due": return date(t.dueDate);
+    case "planned": return date(t.plannedDate);
+    case "estimate": return node.op === "isEmpty" ? t.estimateMinutes === null : t.estimateMinutes !== null && (node.op === "lessThan" ? t.estimateMinutes < node.value : t.estimateMinutes > node.value);
+    case "text": return `${t.title} ${t.notes}`.toLowerCase().includes(String(node.value).toLowerCase());
+    case "tag": { const ids = taskTags.get(t.id) ?? []; const wanted: string[] = node.value; return node.op === "hasAllOf" ? wanted.every(id => ids.includes(id)) : node.op === "hasNone" ? !wanted.some(id => ids.includes(id)) : wanted.some(id => ids.includes(id)); }
+    default: return true;
+  }
+}
+function viewRows(definitionJson: string, category: string | null) {
+  const definition = JSON.parse(definitionJson);
+  return tasks.filter(t => (!category || t.category === category) && previewMatch(t, definition)).map(t => row(t));
+}
+function viewHandlers(): Record<string, Handler> {
+  const find = (id: string) => savedViews.find(v => v.id === id);
+  const missing = { ...fail("That view no longer exists."), view: null };
+  return {
+    "views.list": (r: { includeDeleted: boolean }) => ok({ views: savedViews.filter(v => r.includeDeleted || !v.deleted).sort((a, b) => a.position - b.position), icons: ["list", "star", "flag", "bug", "calendar", "clock", "inbox", "briefcase", "home", "user", "users", "tag", "bookmark", "heart", "target", "zap", "bell", "square-check", "folder", "sun"] }),
+    "views.get": (r: { viewId: string }) => { const v = find(r.viewId); return v ? ok({ view: v }) : missing; },
+    "views.save": (r: { viewId: string | null; name: string; icon: string | null; color: string | null; definitionJson: string; layoutJson: string | null; pinned: boolean; alertsEnabled: boolean }) => {
+      if (!r.name.trim()) return { ...fail("Give the view a name of 1 to 80 characters."), view: null };
+      try { JSON.parse(r.definitionJson); } catch { return { ...fail("The view definition is not valid JSON."), view: null }; }
+      const existing = r.viewId ? find(r.viewId) : undefined;
+      if (r.viewId && !existing) return missing;
+      const next: PreviewView = { id: existing?.id ?? newId("view"), name: r.name.trim(), icon: r.icon ?? "list", color: r.color, pinned: r.pinned, position: existing?.position ?? savedViews.length, definitionJson: r.definitionJson, layoutJson: r.layoutJson ?? "{\"v\":1}", alertsEnabled: r.alertsEnabled, version: existing ? bump(existing.version) : "1", deleted: false };
+      if (existing) savedViews[savedViews.indexOf(existing)] = next; else savedViews.push(next);
+      return ok({ view: next });
+    },
+    "views.duplicate": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; const copy = { ...v, id: newId("view"), name: `${v.name} (copy)`, position: savedViews.length, alertsEnabled: false, version: "1" }; savedViews.push(copy); return ok({ view: copy }); },
+    "views.setPinned": (r: { viewId: string; pinned: boolean }) => { const v = find(r.viewId); if (!v) return missing; v.pinned = r.pinned; v.version = bump(v.version); return ok({ view: v }); },
+    "views.delete": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; v.deleted = true; v.version = bump(v.version); return ok({ view: v }); },
+    "views.restore": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; v.deleted = false; v.version = bump(v.version); return ok({ view: v }); },
+    "views.reorder": (r: { viewIds: string[] }) => { r.viewIds.forEach((id, index) => { const v = find(id); if (v) v.position = index; }); return ok({ views: [...savedViews].sort((a, b) => a.position - b.position), icons: [] }); },
+    "views.run": (r: { viewId: string; category: string | null }) => { const v = find(r.viewId); if (!v || v.deleted) return { ...fail("That view no longer exists."), rows: [], totalCount: 0, nextCursor: null, layoutJson: null }; const rows = viewRows(v.definitionJson, r.category); return ok({ rows, totalCount: rows.length, nextCursor: null, layoutJson: v.layoutJson }); },
+    "views.preview": (r: { definitionJson: string; layoutJson: string | null; category: string | null; limit: number | null }) => {
+      try { const rows = viewRows(r.definitionJson, r.category); return ok({ rows: rows.slice(0, r.limit ?? 5), totalCount: rows.length, nextCursor: null, layoutJson: r.layoutJson }); }
+      catch { return { ...fail("This view cannot be previewed."), rows: [], totalCount: 0, nextCursor: null, layoutJson: null }; }
+    },
+    "views.counts": (r: { category: string | null }) => ok({ counts: savedViews.filter(v => v.pinned && !v.deleted).map(v => ({ viewId: v.id, count: viewRows(v.definitionJson, r.category).length })) }),
+    "views.contextDefaults": () => ok({ containerId: null, status: null, priority: null, category: null, tagIds: [], plannedDate: null, dueDate: null }),
+    "views.export": (r: { viewId: string }) => { const v = find(r.viewId); return v ? ok({ fileName: `${v.name} preview.csv`, rows: viewRows(v.definitionJson, null).length }) : { ...fail("That view no longer exists."), fileName: null, rows: 0 }; },
+    "views.fromSearch": (r: { search: { text: string | null } }) => ok({ definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "text", op: "contains", value: r.search.text ?? "" }, { field: "status", op: "notIn", value: ["Done", "Cancelled"] }] }) }),
+  };
+}
 function boardHandlers(): Record<string, Handler> {
   return {
     "board.get": (r: { containerId: string; category: string | null; showCancelled: boolean }) => {
@@ -483,6 +570,7 @@ const handlers: Record<string, Handler> = {
   "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   ...boardHandlers(),
+  ...viewHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),

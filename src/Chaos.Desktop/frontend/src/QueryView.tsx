@@ -1,7 +1,7 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { DateText, friendlyDate, useToday } from "./dates";
-import { queryRpc, recurrenceRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import { queryRpc, recurrenceRpc, viewRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -14,9 +14,11 @@ import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagChip, taskDragType } from "./tags";
 import { CategoryEdge, CategoryMenuItems, type Category, type Focus } from "./category";
 import { ContextMenu } from "radix-ui";
+import { ViewTable, type TableTaskApi } from "./ViewTable";
+import { defaultLayout, layoutFromJson, type Layout } from "./viewModel";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
-export type QueryState = { view: string; tagId?: string; text?: string; day?: string };
+export type QueryState = { view: string; tagId?: string; text?: string; day?: string; viewId?: string };
 
 export const builtInViews = [
   { view: "Today", title: "Today", hint: "Open tasks planned or due today." },
@@ -44,9 +46,11 @@ function request(query: QueryState, filters: Filters, cursor: string | null, foc
  * (nothing is saved). Pages are fetched with the server's cursor; the total comes from the
  * same query, so it matches the sidebar count for the unfiltered view.
  */
-export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, onOpen, header, focus = null, onSetCategory }: {
+export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, viewApi = viewRpc, tableApi, onTaskUpdated, onOpen, header, focus = null, onSetCategory }: {
   query: QueryState; tags: TagResponse[]; revision: number; selectedTaskId: string | null; busy: boolean;
-  api?: typeof queryRpc; recurrenceApi?: typeof recurrenceRpc; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
+  api?: typeof queryRpc; recurrenceApi?: typeof recurrenceRpc;
+  /** Custom views (PLAN2 P3): a saved view's rows come from here, not from the built-in query. */
+  viewApi?: Pick<typeof viewRpc, "run">; tableApi?: TableTaskApi; onTaskUpdated?: (task: TaskResponse) => void; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
   /** Work/Personal focus; null shows both. */
   focus?: Focus; onSetCategory?: (task: TaskResponse, category: Category) => void;
 }) {
@@ -58,7 +62,19 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   const [error, setError] = React.useState<string | null>(null);
   const [projected, setProjected] = React.useState<readonly UpcomingRecurrenceDto[]>([]);
   const requests = React.useRef(createLatestRequest());
-  const key = `${query.view}|${query.tagId ?? ""}|${query.text ?? ""}|${focus ?? ""}`;
+  const [layout, setLayout] = React.useState<Layout>(defaultLayout);
+  const isCustom = query.view === "Custom";
+  const key = `${query.view}|${query.tagId ?? ""}|${query.text ?? ""}|${query.viewId ?? ""}|${focus ?? ""}`;
+
+  /** One page of the open view: a saved custom view through views.run, anything else through queries.run. */
+  const fetchPage = React.useCallback(async (cursor: string | null) => {
+    if (isCustom) {
+      const result = await viewApi.run({ viewId: query.viewId ?? "", category: focus, limit: null, cursor });
+      return { ok: result.ok, rows: result.rows, totalCount: result.totalCount, nextCursor: result.nextCursor, error: result.error, layoutJson: result.layoutJson };
+    }
+    const result = await api.run(request(query, filters, cursor, focus));
+    return { ok: result.ok, rows: result.rows, totalCount: result.totalCount, nextCursor: result.nextCursor, error: result.error, layoutJson: null };
+  }, [api, viewApi, key, filters]);
 
   React.useEffect(() => { setFilters(noFilters); }, [key]);
   React.useEffect(() => {
@@ -75,19 +91,20 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   React.useEffect(() => {
     const isCurrent = requests.current.begin();
     setLoading(true); setError(null);
-    void api.run(request(query, filters, null, focus)).then(result => {
+    void fetchPage(null).then(result => {
       if (!isCurrent()) return;
       if (!result.ok) { setError(result.error?.message ?? "Could not load this view."); setRows([]); setTotal(0); setCursor(null); return; }
+      if (result.layoutJson) setLayout(layoutFromJson(result.layoutJson));
       setRows([...result.rows]); setTotal(result.totalCount); setCursor(result.nextCursor);
     }).catch((e: unknown) => { if (isCurrent()) setError(String(e)); }).finally(() => { if (isCurrent()) setLoading(false); });
-  }, [api, key, filters, revision]);
+  }, [fetchPage, revision]);
 
   async function loadMore() {
     if (!cursor) return;
     const isCurrent = requests.current.begin();
     setLoading(true);
     try {
-      const result = await api.run(request(query, filters, cursor, focus));
+      const result = await fetchPage(cursor);
       if (!isCurrent()) return;
       if (!result.ok) throw new Error(result.error?.message ?? "Could not load more tasks.");
       setRows(current => [...current, ...result.rows]); setTotal(result.totalCount); setCursor(result.nextCursor);
@@ -96,6 +113,10 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   }
 
   const today = useToday();
+  // A list layout's grouping orders the rows already loaded; the saved sort still decides which come first.
+  const shown = React.useMemo(
+    () => isCustom && layout.kind === "list" && layout.group !== "none" ? [...rows].sort((a, b) => listGroup(a, layout.group, today).order - listGroup(b, layout.group, today).order) : rows,
+    [rows, isCustom, layout.kind, layout.group, today]);
   const byId = new Map(tags.map(tag => [tag.id, tag]));
   const change = (patch: Partial<Filters>) => setFilters(current => ({ ...current, ...patch }));
   const grouped = query.view === "Upcoming" || query.view === "Overdue";
@@ -103,7 +124,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
 
   return <>
     {header}
-    <form className="flex flex-wrap items-end gap-3 rounded-xl border bg-muted/40 p-3" aria-label="Filters" onSubmit={event => event.preventDefault()}>
+    {!isCustom && <form className="flex flex-wrap items-end gap-3 rounded-xl border bg-muted/40 p-3" aria-label="Filters" onSubmit={event => event.preventDefault()}>
       <Field label="Status" className="w-40"><NativeSelect value={filters.status} onChange={e => change({ status: e.target.value })}>
         <NativeSelectOption value="">Any status</NativeSelectOption>
         {statuses.map(status => <NativeSelectOption key={status} value={status}>{label(status)}</NativeSelectOption>)}
@@ -117,7 +138,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
       {showCompletedToggle && <label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" checked={filters.includeCompleted} onChange={e => change({ includeCompleted: e.target.checked })}/>Include completed</label>}
       <label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" checked={filters.includeArchived} onChange={e => change({ includeArchived: e.target.checked })}/>Include archived lists</label>
       {JSON.stringify(filters) !== JSON.stringify(noFilters) && <Button type="button" variant="ghost" onClick={() => setFilters(noFilters)}>Clear filters</Button>}
-    </form>
+    </form>}
 
     {error && <InlineError>{error}</InlineError>}
     <p className="text-sm text-muted-foreground" role="status" aria-live="polite">{loading && rows.length === 0 ? "Loading…" : `${total} ${total === 1 ? "task" : "tasks"}`}</p>
@@ -125,12 +146,17 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
       {query.view === "Search" ? <span className="inline-flex items-center gap-1"><SearchX className="size-4"/>Try fewer words, or include completed tasks and archived lists.</span> : "Tasks appear here as soon as they match."}
     </EmptyState>}
     {projected.length > 0 && <section className="grid gap-2" aria-label="Projected repetitions"><h3 className="font-semibold">Projected repetitions</h3><p className="text-xs text-muted-foreground">These are read-only estimates. A task becomes available after its current occurrence is finished.</p><ol className="grid gap-1">{projected.map(item => <li key={`${item.sourceTaskId}|${item.nominalLocal}`} className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">{item.title} · {item.nominalLocal.replace("T", " ")} <Badge variant="outline">Projected</Badge></li>)}</ol></section>}
-    {rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{rows.map((row, index) => {
-      const heading = grouped && row.groupDate && row.groupDate !== rows[index - 1]?.groupDate;
-      const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== rows[index - 1]?.waitingPerson);
+    {isCustom && layout.kind === "table" && rows.length > 0 && <ViewTable rows={rows} columns={layout.columns} tags={tags} busy={busy} api={tableApi} selectedTaskId={selectedTaskId} onOpen={onOpen}
+      onTaskUpdated={task => { setRows(current => current.map(item => item.task.id === task.id ? { ...item, task } : item)); onTaskUpdated?.(task); }}/>}
+    {!(isCustom && layout.kind === "table") && rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{shown.map((row, index) => {
+      const heading = grouped && row.groupDate && row.groupDate !== shown[index - 1]?.groupDate;
+      const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== shown[index - 1]?.waitingPerson);
+      const group = listGroup(row, layout.group, today);
+      const customHeading = isCustom && layout.group !== "none" && (index === 0 || group.key !== listGroup(shown[index - 1], layout.group, today).key);
       const task = row.task;
       return <React.Fragment key={task.id}>
         {heading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><CalendarDays className="size-3.5"/>{friendlyDate(row.groupDate, today)}<span className="font-normal normal-case tracking-normal">· {row.groupDate}</span></li>}
+        {customHeading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><bdi>{group.label}</bdi></li>}
         {personHeading && <li aria-hidden="true" className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"><UserRound className="size-3.5"/><bdi>{row.waitingPerson ?? "No person named"}</bdi></li>}
         <li data-task-row={task.id}><ContextMenu.Root><ContextMenu.Trigger asChild><div draggable={!busy} onDragStart={event => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData(taskDragType, task.id); event.dataTransfer.setData("text/plain", task.title); }}
           className={cn("flex min-h-11 items-center gap-2 rounded-lg border bg-card py-1.5 pr-2 pl-1.5 shadow-xs hover:border-input", selectedTaskId === task.id && "border-primary ring-1 ring-primary", isFinished(task.status) && "[&_[data-slot=row-title]]:text-muted-foreground [&_[data-slot=row-title]]:line-through")}>
@@ -161,4 +187,23 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
     })}</ol>}
     {cursor && <Button type="button" variant="outline" className="justify-self-center" disabled={loading} onClick={() => void loadMore()}>Load more ({total - rows.length} more)</Button>}
   </>;
+}
+
+/** Where a row sits under a custom list's "group by": a stable key, the heading and the heading's order. */
+export function listGroup(row: QueryRowResponse, group: string, today: string): { key: string; label: string; order: number } {
+  const task = row.task;
+  switch (group) {
+    case "container": return { key: row.containerName, label: row.containerName, order: 0 };
+    case "status": return { key: task.status, label: label(task.status), order: statuses.indexOf(task.status) };
+    case "priority": return { key: task.priority, label: task.priority, order: priorities.length - priorities.indexOf(task.priority) };
+    case "due": {
+      if (!task.dueDate) return { key: "none", label: "No due date", order: 4 };
+      if (task.dueDate < today) return { key: "overdue", label: "Overdue", order: 0 };
+      if (task.dueDate === today) return { key: "today", label: "Today", order: 1 };
+      const [y, m, d] = today.split("-").map(Number);
+      const week = new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
+      return task.dueDate <= week ? { key: "week", label: "Next 7 days", order: 2 } : { key: "later", label: "Later", order: 3 };
+    }
+    default: return { key: "", label: "", order: 0 };
+  }
 }

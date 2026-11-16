@@ -268,6 +268,19 @@ public sealed class SavedViewCommands(IApplicationStore store, IIdGenerator ids,
     private static AppException ConflictError() =>
         AppException.VersionConflict("This view changed elsewhere. Reload it and try again.");
 
+    internal static bool CanParseDefinition(string json)
+    {
+        try
+        {
+            ViewDefinition.Parse(json);
+            return true;
+        }
+        catch (DomainValidationException)
+        {
+            return false;
+        }
+    }
+
     internal static ViewDefinition ParseDefinition(string json)
     {
         try

@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
 using Chaos.Application.Boards;
+using Chaos.Application.Views;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
@@ -54,6 +55,9 @@ internal static class Program
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var boards = new BoardCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var boardQueries = new BoardQueries(storage.Store);
+        var taskQueries = new TaskQueries(storage.Store, TimeProvider.System);
+        var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
@@ -147,7 +151,8 @@ internal static class Program
                 rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
-                rpc.AddQueryRpcService(new QueryRpcService(new TaskQueries(storage.Store, TimeProvider.System)));
+                rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
+                rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries));
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, githubEngine));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
@@ -302,6 +307,28 @@ internal static class Program
 [JsonSerializable(typeof(TagLinkRequest))]
 [JsonSerializable(typeof(TagUnlinkRequest))]
 [JsonSerializable(typeof(TagIdsResponse))]
+[JsonSerializable(typeof(ViewDto))]
+[JsonSerializable(typeof(ViewListRequest))]
+[JsonSerializable(typeof(ViewListResponse))]
+[JsonSerializable(typeof(ViewGetRequest))]
+[JsonSerializable(typeof(ViewSaveRequest))]
+[JsonSerializable(typeof(ViewResponse))]
+[JsonSerializable(typeof(ViewDuplicateRequest))]
+[JsonSerializable(typeof(ViewPinRequest))]
+[JsonSerializable(typeof(ViewDeleteRequest))]
+[JsonSerializable(typeof(ViewReorderRequest))]
+[JsonSerializable(typeof(ViewRunRequest))]
+[JsonSerializable(typeof(ViewPreviewRequest))]
+[JsonSerializable(typeof(ViewRunResponse))]
+[JsonSerializable(typeof(SavedViewCountsRequest))]
+[JsonSerializable(typeof(ViewCountEntry))]
+[JsonSerializable(typeof(SavedViewCountsResponse))]
+[JsonSerializable(typeof(ViewContextRequest))]
+[JsonSerializable(typeof(ViewContextResponse))]
+[JsonSerializable(typeof(ViewExportRequest))]
+[JsonSerializable(typeof(ViewExportResponse))]
+[JsonSerializable(typeof(ViewFromSearchRequest))]
+[JsonSerializable(typeof(ViewFromSearchResponse))]
 [JsonSerializable(typeof(BoardGetRequest))]
 [JsonSerializable(typeof(BoardSettingsDto))]
 [JsonSerializable(typeof(BoardColumnResponse))]
