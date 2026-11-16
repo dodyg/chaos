@@ -437,7 +437,8 @@ export function Board({ containerId = "", viewId, tags, focus, busy, revision, o
           : count}</span>
         {over && <span className="sr-only">over its WIP limit</span>}
       </h4>
-      <ul className="grid content-start gap-1.5" aria-label={`${column.title} cards`}>
+      {/* Capped to the window so a long column scrolls on its own and every column's header stays in reach as a drop target. */}
+      <ul className="-mx-1 -my-1 grid max-h-[calc(100vh-14rem)] content-start gap-1.5 overflow-y-auto px-1 py-1" aria-label={`${column.title} cards`}>
         {inLane.map(card => renderCard(card, markOf(card)))}
       </ul>
       {inLane.length === 0 && <p className="px-1 py-2 text-xs text-muted-foreground italic">{target ? "Drop here." : "No cards."}</p>}
