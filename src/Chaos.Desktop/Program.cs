@@ -59,6 +59,7 @@ internal static class Program
         var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
         var viewBoardQueries = new ViewBoardQueries(storage.Store, taskQueries);
+        var calendarQueries = new CalendarQueries(storage.Store, taskQueries, TimeProvider.System);
         var viewAlerts = new ViewAlertService(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
@@ -156,6 +157,7 @@ internal static class Program
                 rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
                 rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries, viewAlerts));
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
+                rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -340,6 +342,9 @@ internal static class Program
 [JsonSerializable(typeof(ViewFromSearchRequest))]
 [JsonSerializable(typeof(ViewFromSearchResponse))]
 [JsonSerializable(typeof(BoardViewGetRequest))]
+[JsonSerializable(typeof(CalendarRangeRequest))]
+[JsonSerializable(typeof(CalendarRangeResponse))]
+[JsonSerializable(typeof(CalendarUnscheduledRequest))]
 [JsonSerializable(typeof(BoardGetRequest))]
 [JsonSerializable(typeof(BoardSettingsDto))]
 [JsonSerializable(typeof(BoardColumnResponse))]

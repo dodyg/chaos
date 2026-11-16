@@ -1,7 +1,7 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
 import { DateText, friendlyDate, useToday } from "./dates";
-import { queryRpc, recurrenceRpc, viewRpc, boardRpc, tagRpc, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import { queryRpc, recurrenceRpc, viewRpc, boardRpc, calendarRpc, tagRpc, type ContainerResponse, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,7 @@ import { CategoryEdge, CategoryMenuItems, type Category, type Focus } from "./ca
 import { ContextMenu } from "radix-ui";
 import { ViewTable, type TableTaskApi } from "./ViewTable";
 import { Board } from "./Board";
+import { Calendar } from "./Calendar";
 import { defaultLayout, layoutFromJson, type Layout } from "./viewModel";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
@@ -47,7 +48,7 @@ function request(query: QueryState, filters: Filters, cursor: string | null, foc
  * (nothing is saved). Pages are fetched with the server's cursor; the total comes from the
  * same query, so it matches the sidebar count for the unfiltered view.
  */
-export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, viewApi = viewRpc, tableApi, onTaskUpdated, boardApi, onChanged, tagApi, onOpen, header, focus = null, onSetCategory }: {
+export function QueryView({ query, tags, revision, selectedTaskId, busy, api = queryRpc, recurrenceApi = recurrenceRpc, viewApi = viewRpc, tableApi, onTaskUpdated, boardApi, onChanged, tagApi, onOpen, header, focus = null, onSetCategory, containers, calendarApi }: {
   query: QueryState; tags: TagResponse[]; revision: number; selectedTaskId: string | null; busy: boolean;
   api?: typeof queryRpc; recurrenceApi?: typeof recurrenceRpc;
   /** Custom views (PLAN2 P3): a saved view's rows come from here, not from the built-in query. */
@@ -56,6 +57,8 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
   boardApi?: typeof boardRpc; onChanged?: () => void; tagApi?: typeof tagRpc; onOpen: (task: TaskResponse) => void; header: React.ReactNode;
   /** Work/Personal focus; null shows both. */
   focus?: Focus; onSetCategory?: (task: TaskResponse, category: Category) => void;
+  /** The calendar layout of a view filters by list and reads through the calendar service. */
+  containers?: ContainerResponse[]; calendarApi?: typeof calendarRpc;
 }) {
   const [filters, setFilters] = React.useState<Filters>(noFilters);
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
@@ -150,9 +153,10 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
     </EmptyState>}
     {projected.length > 0 && <section className="grid gap-2" aria-label="Projected repetitions"><h3 className="font-semibold">Projected repetitions</h3><p className="text-xs text-muted-foreground">These are read-only estimates. A task becomes available after its current occurrence is finished.</p><ol className="grid gap-1">{projected.map(item => <li key={`${item.sourceTaskId}|${item.nominalLocal}`} className="rounded-lg border bg-muted/40 px-3 py-2 text-sm">{item.title} · {item.nominalLocal.replace("T", " ")} <Badge variant="outline">Projected</Badge></li>)}</ol></section>}
     {isCustom && layout.kind === "board" && query.viewId && <Board viewId={query.viewId} tags={tags} focus={focus} busy={busy} revision={revision} api={boardApi} onChanged={() => onChanged?.()} onOpen={task => onOpen(task)}/>}
+    {isCustom && layout.kind === "calendar" && query.viewId && <Calendar viewId={query.viewId} tags={tags} containers={containers ?? []} focus={focus} busy={busy} revision={revision} api={calendarApi} onChanged={() => onChanged?.()} onOpen={task => onOpen(task)}/>}
     {isCustom && layout.kind === "table" && rows.length > 0 && <ViewTable rows={rows} columns={layout.columns} tags={tags} busy={busy} api={tableApi} tagApi={tagApi} revision={revision} onTagsChanged={() => onChanged?.()} selectedTaskId={selectedTaskId} onOpen={onOpen}
       onTaskUpdated={task => { setRows(current => current.map(item => item.task.id === task.id ? { ...item, task } : item)); onTaskUpdated?.(task); }}/>}
-    {!(isCustom && (layout.kind === "table" || layout.kind === "board")) && rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{shown.map((row, index) => {
+    {!(isCustom && (layout.kind === "table" || layout.kind === "board" || layout.kind === "calendar")) && rows.length > 0 && <ol className="grid gap-1" aria-label="Results">{shown.map((row, index) => {
       const heading = grouped && row.groupDate && row.groupDate !== shown[index - 1]?.groupDate;
       const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== shown[index - 1]?.waitingPerson);
       const group = listGroup(row, layout.group, today);

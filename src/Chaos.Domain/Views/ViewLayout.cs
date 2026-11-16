@@ -3,12 +3,11 @@ using Chaos.Domain.Validation;
 
 namespace Chaos.Domain.Views;
 
-public enum ViewLayoutKind { List, Table, Board }
+public enum ViewLayoutKind { List, Table, Board, Calendar }
 
 /// <summary>
 /// How a custom view is shown (PLAN2 §11.2): the layout, the list grouping, the sort and the
-/// table's columns. The calendar layout arrives with the calendar view (P4) and is refused until
-/// then rather than stored half-working. Version 1.
+/// table's columns. The calendar layout (P4) shows the view's tasks on the calendar. Version 1.
 /// </summary>
 public sealed record ViewLayout(
     ViewLayoutKind Kind,
@@ -52,7 +51,8 @@ public sealed record ViewLayout(
             null or "list" => ViewLayoutKind.List,
             "table" => ViewLayoutKind.Table,
             "board" => ViewLayoutKind.Board,
-            _ => throw new DomainValidationException("Choose the list, table or board layout."),
+            "calendar" => ViewLayoutKind.Calendar,
+            _ => throw new DomainValidationException("Choose the list, table, board or calendar layout."),
         };
 
         var group = Text(root, "group") ?? "none";

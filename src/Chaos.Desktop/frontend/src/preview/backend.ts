@@ -266,6 +266,36 @@ function viewHandlers(): Record<string, Handler> {
     "views.fromSearch": (r: { search: { text: string | null } }) => ok({ definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "text", op: "contains", value: r.search.text ?? "" }, { field: "status", op: "notIn", value: ["Done", "Cancelled"] }] }) }),
   };
 }
+function calendarHandlers(): Record<string, Handler> {
+  type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showCompleted?: boolean } | null;
+  const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
+  const endOf = (time: string, estimate: number | null) => { const [h, m] = time.split(":").map(Number); const total = Math.min(h * 60 + m + (estimate && estimate > 0 ? estimate : 30), 24 * 60 - 1); return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; };
+  const entry = (kind: string, t: TaskResponse, date: string, time: string | null) => ({ kind, taskId: t.id, title: t.title, status: t.status, priority: t.priority, containerName: containerName(t.containerId), date, time,
+    endTime: kind === "Planned" && time ? endOf(time, t.estimateMinutes) : null, isBlock: kind === "Planned" && !!time && t.estimateMinutes !== null, isEstimated: t.estimateMinutes !== null, estimateMinutes: t.estimateMinutes, category: t.category });
+  return {
+    "calendar.range": (r: { from: string; to: string; filters: Filters }) => {
+      const f = r.filters; const finished = (t: TaskResponse) => t.status === "Done" || t.status === "Cancelled";
+      const inRange = (d: string | null) => d !== null && d >= r.from && d <= r.to;
+      const entries = [
+        ...(f?.showPlanned === false ? [] : tasks.filter(t => matches(t, f) && inRange(t.plannedDate) && (f?.showCompleted ? t.status !== "Cancelled" : !finished(t))).map(t => entry("Planned", t, t.plannedDate!, t.plannedTime))),
+        ...(f?.showDue === false ? [] : tasks.filter(t => matches(t, f) && inRange(t.dueDate) && (f?.showCompleted ? t.status !== "Cancelled" : !finished(t))).map(t => entry("Due", t, t.dueDate!, t.dueTime))),
+      ].sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? "").localeCompare(b.time ?? ""));
+      const days: unknown[] = [];
+      for (let d = r.from; d <= r.to; d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)) {
+        const weekend = [0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay()); const available = weekend ? 0 : 480;
+        const planned = tasks.filter(t => (!f?.category || t.category === f.category) && t.plannedDate === d && !finished(t));
+        const minutes = planned.reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0);
+        days.push({ date: d, availableMinutes: available, workAllowanceMinutes: null, busyMinutes: 0, plannedMinutes: minutes, workMinutes: 0, unknownEstimates: planned.filter(t => t.estimateMinutes === null).length, openCount: planned.length, overTotal: minutes > available || (available === 0 && planned.length > 0), overWork: false });
+      }
+      return ok({ from: r.from, to: r.to, today, zoneId: "UTC", entries, meetings: [], days, truncated: false });
+    },
+    "calendar.unscheduled": (r: { filters: Filters; text: string | null }) => {
+      const rows = tasks.filter(t => matches(t, r.filters) && t.plannedDate === null && t.status !== "Done" && t.status !== "Cancelled" && (!r.text || t.title.toLowerCase().includes(r.text.toLowerCase())))
+        .map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: [...(taskTags.get(t.id) ?? [])], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null }));
+      return ok({ rows, totalCount: rows.length, nextCursor: null });
+    },
+  };
+}
 function boardHandlers(): Record<string, Handler> {
   return {
     "board.get": (r: { containerId: string; category: string | null; showCancelled: boolean }) => {
@@ -589,6 +619,7 @@ const handlers: Record<string, Handler> = {
   "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   ...boardHandlers(),
+  ...calendarHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),

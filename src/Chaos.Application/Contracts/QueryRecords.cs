@@ -45,6 +45,8 @@ public sealed record TaskQuerySpec
     public LocalDateRange? Planned { get; init; }
     public LocalDateRange? Due { get; init; }
     public LocalDateRange? Completed { get; init; }
+    /// <summary>Only tasks with no planned date (the calendar's unscheduled panel).</summary>
+    public bool Unscheduled { get; init; }
     /// <summary>Show Done/Cancelled tasks too. Ignored when an explicit status filter is given.</summary>
     public bool IncludeCompleted { get; init; }
     /// <summary>Show tasks of archived lists/projects (they are hidden by default).</summary>
@@ -88,6 +90,7 @@ public sealed record TaskQueryCriteria
     public DateOnly? PlannedTo { get; init; }
     public DateOnly? DueFrom { get; init; }
     public DateOnly? DueTo { get; init; }
+    public bool Unscheduled { get; init; }
     public DateTimeOffset? CompletedFromUtc { get; init; }
     public DateTimeOffset? CompletedBeforeUtc { get; init; }
     /// <summary>Today view: planned or due on this local date.</summary>

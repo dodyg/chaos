@@ -198,7 +198,7 @@ export function isComplete(node: Node): boolean {
 
 // ---- Layout ------------------------------------------------------------------------------------
 
-export type LayoutKind = "list" | "table" | "board";
+export type LayoutKind = "list" | "table" | "board" | "calendar";
 export type Layout = { kind: LayoutKind; group: string; sortField: string; sortDescending: boolean; columns: string[] };
 
 export const tableColumns = [
@@ -217,7 +217,7 @@ export function layoutFromJson(json: string | null | undefined): Layout {
     const raw = JSON.parse(json ?? "") as Record<string, unknown>;
     const sort = (raw.sort ?? {}) as Record<string, unknown>;
     return {
-      kind: raw.kind === "table" ? "table" : raw.kind === "board" ? "board" : "list",
+      kind: raw.kind === "table" ? "table" : raw.kind === "board" ? "board" : raw.kind === "calendar" ? "calendar" : "list",
       group: typeof raw.group === "string" && groupOptions.some(option => option.value === raw.group) ? raw.group : "none",
       sortField: typeof sort.field === "string" ? sort.field : "due",
       sortDescending: sort.dir === "desc",

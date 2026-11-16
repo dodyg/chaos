@@ -313,6 +313,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             if (criteria.PlannedTo is { } plannedTo) where.Add($"t.PlannedDate <= {builder.P(StorageFormats.Date(plannedTo))}");
             if (criteria.DueFrom is { } dueFrom) where.Add($"t.DueDate >= {builder.P(StorageFormats.Date(dueFrom))}");
             if (criteria.DueTo is { } dueTo) where.Add($"t.DueDate <= {builder.P(StorageFormats.Date(dueTo))}");
+            if (criteria.Unscheduled) where.Add("t.PlannedDate IS NULL");
             if (criteria.CompletedFromUtc is { } completedFrom) where.Add($"t.CompletedAtUtc >= {builder.P(StorageFormats.Instant(completedFrom))}");
             if (criteria.CompletedBeforeUtc is { } completedBefore) where.Add($"t.CompletedAtUtc < {builder.P(StorageFormats.Instant(completedBefore))}");
 

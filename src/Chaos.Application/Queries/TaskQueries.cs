@@ -193,6 +193,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             PlannedTo = spec.Planned?.To,
             DueFrom = spec.Due?.From,
             DueTo = spec.Due?.To,
+            Unscheduled = spec.Unscheduled,
             CompletedFromUtc = completedFrom,
             CompletedBeforeUtc = completedBefore,
             PlannedOrDueOn = spec.View == TaskView.Today ? today : null,

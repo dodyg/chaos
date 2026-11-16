@@ -23,6 +23,7 @@ import { Pages, type PageFocus, type PageRequest } from "./Pages";
 import { MyDay, useDayClock } from "./MyDay";
 import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
+import { Calendar } from "./Calendar";
 import { AlertStack, NotificationCenter } from "./Reminders";
 import { Summaries, SummaryPrompts } from "./Summaries";
 import { DataSettings } from "./DataSettings";
@@ -40,7 +41,7 @@ import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities,
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
 type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; pageRpc?: typeof pageRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc; viewRpc?: typeof viewRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "pages" | "daily" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help" | "viewedit";
+type View = "tasks" | "templates" | "query" | "pad" | "pages" | "daily" | "myday" | "myweek" | "calendar" | "notifications" | "summaries" | "data" | "settings" | "help" | "viewedit";
 
 /** This computer's date (yyyy-MM-dd), used until the profile's day clock has loaded. */
 function localToday(): string {
@@ -600,6 +601,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     return [
       { id: "view:myday", group: "Go to", label: "My Day", icon: <Sun/>, run: go("myday"), keywords: "today plan" },
       { id: "view:myweek", group: "Go to", label: "My Week", icon: <CalendarDays/>, run: go("myweek"), keywords: "plan week" },
+      { id: "view:calendar", group: "Go to", label: "Calendar", icon: <CalendarRange/>, run: go("calendar"), keywords: "schedule month agenda planner" },
       { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
       ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
       { id: "view:pages", group: "Go to", label: "Pages", icon: <FileText/>, run: () => openPages(null), keywords: "notes writing wiki documents" },
@@ -736,6 +738,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           <Sun/>My Day{(viewCounts.get("MyDay") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>}
         </Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myweek" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myweek"); }}><CalendarDays/>My Week</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "calendar" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("calendar"); }}><CalendarRange/>Calendar</Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox{(containerCounts.get(containers.find(c => c.kind === "Inbox")?.id ?? "") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{containerCounts.get(containers.find(c => c.kind === "Inbox")!.id)}</span>}</Button>
         <SidebarSection id="views" title="Views">
           {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
@@ -802,7 +805,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : view === "calendar" ? "max-w-7xl px-[clamp(1rem,3vw,2rem)] pt-6 pb-10" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
@@ -817,6 +820,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           onOpenTask={taskId => void openLinkedTask(taskId)} onOpenSummary={id => { setSummaryOpenId(id); setView("summaries"); }} onCreateTag={async path => { const created = await createTag(path); if (created) changed(); return created; }} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}
           dailyPages={dailyPageDates} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
+      : view === "calendar" ? <Calendar tags={tags} containers={containers.filter(c => !c.archived)} focus={focus} busy={busy} revision={revision} today={dayClock?.today} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed}/>
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
@@ -826,7 +830,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       : view === "viewedit" && viewDraft ? <ViewEditor key={viewDraft.view?.id ?? "new"} view={viewDraft.view} initialDefinitionJson={viewDraft.definitionJson} initialName={viewDraft.name} icons={viewIconNames} tags={tags} containers={containers.filter(c => !c.archived)} focus={focus} api={viewApi}
           onSaved={saved => { setViewDraft(null); void refreshMeta().catch((e: unknown) => setError(String(e))); openSavedView(saved); }}
           onCancel={() => { const back = viewDraft.view; setViewDraft(null); if (back) openSavedView(back); else openQuery({ view: "Today" }); }}/>
-      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} viewApi={viewApi} tagApi={tagApi} onChanged={changed} onTaskUpdated={() => changed()} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} viewApi={viewApi} tagApi={tagApi} onChanged={changed} onTaskUpdated={() => changed()} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory} containers={containers.filter(c => !c.archived)}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <ListPage tasks={tasks} deleted={deleted} sections={sections} setSections={setSections} containers={containers} containerId={containerId} selected={selected}
           busy={busy} setBusy={setBusy} setError={setError} run={run} runContainer={runContainer} refresh={refresh} changed={changed} refreshContainers={refreshContainers}

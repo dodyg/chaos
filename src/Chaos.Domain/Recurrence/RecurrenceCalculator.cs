@@ -48,6 +48,21 @@ public static class RecurrenceCalculator
         return result;
     }
 
+    /// <summary>
+    /// Fixed-schedule slots after the active occurrence's nominal key, inside an inclusive local-date range
+    /// (PLAN2 §10.1). The slots are local calendar values, so a daylight-saving change cannot move or drop
+    /// one. <paramref name="remaining"/> is how many actionable occurrences the rule still allows.
+    /// </summary>
+    public static IReadOnlyList<DateTime> ProjectRange(RecurrenceRule rule, DateTime previousNominal, DateOnly from, DateOnly through, int remaining)
+    {
+        if (remaining <= 0 || rule.Mode != RecurrenceMode.FixedSchedule || from > through) return [];
+        var start = DateOnly.FromDateTime(previousNominal);
+        if (start < from) start = from;
+        if (start > through) return [];
+        return [.. Expand(rule, start, through, (int)Math.Min(remaining + 1L, 10000))
+            .Where(slot => slot > previousNominal).Take(remaining)];
+    }
+
     /// <summary>Advance from the local completion or skip time, clamping month and year arithmetic.</summary>
     public static DateTime? AfterCompletion(RecurrenceRule rule, DateTime localCompletion)
     {

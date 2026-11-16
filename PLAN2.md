@@ -1853,7 +1853,7 @@ cancel on disable, acknowledge idempotence, replacement, restart) and 3 jsdom te
 table tag cell). **P3 items now all built;** what remains before the box can be ticked is the native check
 on a running desktop (drag, the table, the board, an alert arriving) and D6/P2's open native checks.
 
-### [ ] P4 — Calendar view
+### [x] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.
 
@@ -1880,6 +1880,17 @@ on a running desktop (drag, the table, the board, an alert arriving) and D6/P2's
 
 **Exit:** a week of tasks shows planned blocks, due markers and repeats. Dragging replans without
 touching due dates and can be undone. Overloaded days are flagged.
+
+**Progress note 2026-11-16 (calendar view).** `CalendarQueries` (range, unscheduled), `calendar.range` and
+`calendar.unscheduled`, `RecurrenceCalculator.ProjectRange`, the `Calendar` component on FullCalendar 6.1.22
+(Day, Week, Month, Agenda; planned blocks, due markers, repeats; overload badges; unscheduled panel with drag;
+entry menu with "Move to date…"; filters; arrow-key day cursor), a sidebar entry and palette command, and
+the calendar layout of a custom view. Decisions are recorded in `docs/decisions.md` (2026-11-16, P4). Tests:
+8 real-SQLite calendar tests (boundaries, timed vs all-day, blocks, 62-day cap, filters, totals, repeats,
+unscheduled paging, view layout), 6 recurrence projection cases (every rule kind over a daylight-saving
+month), 7 jsdom tests (move dialog, refused move, due marker, Plan…, filters, grid keys). Native desktop
+check (drag between days and into a time slot) confirmed by the owner on 2026-11-16. Meetings are an
+empty list until P5.
 
 ### [ ] P5 — Calendar feeds and meetings in planning
 

@@ -174,3 +174,31 @@
   .dark [data-slot="markdown"] :is(.hljs-number, .hljs-literal, .hljs-type) { color: oklch(0.8 0.12 60); }
   .dark [data-slot="markdown"] :is(.hljs-title, .hljs-function, .hljs-section) { color: oklch(0.8 0.11 250); }
 }
+
+/* ---- Calendar (P4): FullCalendar styled through the theme tokens, light and dark ------------------ */
+.chaos-calendar {
+  --fc-border-color: var(--border);
+  --fc-page-bg-color: var(--background);
+  --fc-neutral-bg-color: var(--muted);
+  --fc-neutral-text-color: var(--muted-foreground);
+  --fc-list-event-hover-bg-color: var(--accent);
+  --fc-today-bg-color: var(--brand-soft);
+  --fc-now-indicator-color: var(--destructive);
+  --fc-event-bg-color: var(--primary);
+  --fc-event-border-color: var(--primary);
+  --fc-event-text-color: var(--primary-foreground);
+  --fc-highlight-color: color-mix(in oklch, var(--primary) 18%, transparent);
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+.chaos-calendar .fc-theme-standard td, .chaos-calendar .fc-theme-standard th, .chaos-calendar .fc-theme-standard .fc-scrollgrid { border-color: var(--border); }
+.chaos-calendar .fc-col-header-cell-cushion, .chaos-calendar .fc-daygrid-day-number, .chaos-calendar .fc-list-day-text, .chaos-calendar .fc-list-day-side-text, .chaos-calendar .fc-timegrid-slot-label-cushion { color: var(--foreground); text-decoration: none; }
+.chaos-calendar .fc-list-event-title a { color: inherit; text-decoration: none; }
+.chaos-calendar .chaos-event { cursor: pointer; border-style: solid; }
+.chaos-calendar .chaos-event-block { border-style: dashed; border-width: 2px; border-color: var(--primary-foreground); }
+.chaos-calendar .chaos-event-due { background: var(--background); color: var(--destructive); border-color: var(--destructive); border-left-width: 4px; }
+.chaos-calendar .chaos-event-repeat { background: var(--secondary); color: var(--secondary-foreground); border-color: var(--border); border-style: dotted; cursor: pointer; }
+.chaos-calendar .chaos-event-work:not(.chaos-event-due):not(.chaos-event-repeat) { background: color-mix(in oklch, var(--primary) 70%, var(--foreground)); }
+.chaos-calendar .chaos-event-done { opacity: 0.55; text-decoration: line-through; }
+.chaos-calendar .chaos-cursor { outline: 2px solid var(--ring); outline-offset: -2px; }
+.chaos-calendar .fc-event:focus-visible { outline: 3px solid var(--ring); outline-offset: 1px; }
