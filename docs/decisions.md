@@ -878,3 +878,39 @@ plan provides one, and each blocking package stays unticked until the owner conf
   `DataPurge` does not remove it, so purging a list leaves an inert settings row that still
   syncs. Harmless (it is keyed by target id and re-created lazily); P3 should decide whether
   view settings share the fate of their target.
+
+## 2026-11-16 (PLAN2 P3, backend slice)
+
+- **The condition compiler is split across three layers.** `ViewFieldCatalog` (Domain) holds each
+  field's type and legal operators, because validation lives in the domain; `ViewFields`
+  (Application) resolves a validated tree into `ResolvedViewGroup` (names to stored integers,
+  relative dates to dates or UTC instants in the profile zone and first weekday); the store's
+  `ViewPredicateCompiler` turns that into parameterized SQL inside the same candidate CTE the
+  built-in views use. The plan's single "ViewFields with an SQL compiler" would have put SQL
+  in Application. Counts and rows therefore come from one specification.
+- **Relative dates.** "Next N days" is today through N−1 days ahead and "last N days" is N−1
+  days back through today (today counts); weeks start on the profile's first weekday. `before`,
+  `after` and `on` accept any relative phrase and use its start, end or whole range. `overdue`
+  is valid only as `inRange` on the due field; it shares one SQL builder
+  (`ViewPredicateCompiler.Overdue`) with the built-in Overdue view, and parity tests pin it.
+  A definition equal to the built-in Overdue also needs the open-status condition, as that view
+  adds it implicitly.
+- **Fields not offered yet.** `space` (there is one personal space), `has attachment` (P9) and
+  the GitHub group (D7 default yes; not built in this slice) are absent from the registry rather
+  than listed and unanswerable. "Page mention" means a task made from a page selection
+  (`PageTaskLinks`), "pad link" one made from a pad selection (`ScratchTaskLinks`), "recurring"
+  a task that is an occurrence of a series. `text` matches the task's own title and notes (search
+  document kind 1), not its subtasks or diary.
+- **Custom views include archived lists' tasks only when asked** (as built-in views do) and do
+  not imply "open": the definition's own status condition decides.
+- **Layouts.** `ViewLayout` v1 allows list, table and board; calendar is refused until P4.
+  "Manual" sort needs exactly one container fixed by a top-level `all` condition. A custom
+  view's board will reuse `BoardSettings` with `TargetKind = View`.
+- **Delete is a tombstone and Undo is Restore.** There is no operation-history entry for views;
+  the toast's Undo calls `restore` with the delete's version. Restoring a view with alerts
+  re-baselines it, as does enabling alerts or changing the definition of an alerting view, so a
+  change never notifies about tasks that already matched.
+- **Alert baseline rows stay for 24 h after a task leaves** (`SavedViewMatches.LeftAtUtc`) so the
+  "leaves and returns notifies only after 24 h" rule is a lookup, not a timer.
+- **Purge.** Task purge deletes the task's `SavedViewMatches` rows in both purge paths. Saved
+  views themselves have no purge path yet (like board settings).

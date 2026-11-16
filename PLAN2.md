@@ -1785,6 +1785,25 @@ others", grouped by person; "Book club this month" as a calendar once P4 exists;
 bugs" if D7). Their sidebar counts equal their rows, and an alert fires once for a newly matching
 task.
 
+**Progress note 2026-11-16 (backend slice, commit 38e5ae8).** Done: migration 026
+(`SavedViews` synced, `SavedViewMatches` local-only, both in the catalog and the task purge
+paths; flush-coverage scenario for `saved_view`); `Chaos.Domain.Views` (`ViewDefinition` parse,
+validate and canonical JSON, depth 4 / 50 conditions, `ViewFieldCatalog`, relative-date
+resolution, `ViewLayout`); `ViewFields` resolver and `ViewPredicateCompiler` (parameterized SQL
+in the existing candidate query, custom sorts with undated tasks last, `TaskView.Custom`);
+`SavedViewCommands` (save, duplicate, pin, delete, restore, reorder, `ContextDefaults`) with
+silent alert baselines on enable. Tests: Domain 248/248 (56 new), Infrastructure view tests
+21/21 including parity with the built-in Overdue, Today, list, tag, Waiting and Recently
+completed views, a per-field matrix, nested any/all, paging and hostile-value binding; full
+Infrastructure run 520/520 after the catalog fixes, Application 61/61. Decisions are in
+`docs/decisions.md` (2026-11-16). **Not done yet** (items 5–10): the D7 GitHub field group;
+`ViewAlertEvaluator`, the `ViewAlert` notification kind (needs the nullable `SavedViewId` and a
+rebuild of `NotificationJobs` in migration 026) and the host timer; `ViewExport` CSV; the
+`views` RPC service, preview backend and Help text; every frontend item (`ViewEditor`, sidebar
+Views, table layout, board layout on a view, Save as view on search, quick-add pre-fill); and
+the editor/table/pin jsdom tests. Gate (`eng/verify.ps1`, Slopwatch, `npm test`) not yet run on
+this slice. Smallest next action: the `views` RPC service, so the frontend can start.
+
 ### [ ] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.
