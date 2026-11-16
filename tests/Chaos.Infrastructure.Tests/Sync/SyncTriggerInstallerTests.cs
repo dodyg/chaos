@@ -5,6 +5,7 @@ using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
 using Microsoft.Data.Sqlite;
+using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
 namespace Chaos.Infrastructure.Tests.Sync;
 
@@ -15,13 +16,6 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// </summary>
 public sealed class SyncTriggerInstallerTests
 {
-    private static string Op() => Guid.NewGuid().ToString();
-
-    private static async Task<long> CountAsync(DataHost host, string sql) => await host.CountAsync(sql);
-
-    private static async Task<TaskRecord> CaptureTaskAsync(DataHost host, string title = "Trigger thing") =>
-        (await host.Tasks.CaptureAsync(new(Op(), string.Empty, title, null))).Task;
-
     [Test]
     public async Task Startup_installs_a_trigger_triple_for_every_synced_table()
     {

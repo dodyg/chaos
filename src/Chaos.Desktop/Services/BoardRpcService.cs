@@ -73,7 +73,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
             return new(true, Map(board.Settings), [.. board.Columns.Select(Map)], [.. board.Lanes.Select(Map)],
                 [.. board.Cards.Select(Map)], board.TotalCount, board.Truncated, null);
         }
-        catch (AppException error) { return new(false, new("Status", "None", null, null, "{}", "[]", "0", true), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
+        catch (AppException error) { return new(false, Map(BoardCommands.Defaults(BoardTargetKind.Container, request.ContainerId)), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("updateSettings")]
@@ -113,7 +113,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
                 request.AfterTaskId,
                 request.SubtaskChoice is null ? null : ParseEnum<OpenSubtaskChoice>(request.SubtaskChoice, "subtaskChoice")), ct);
             sync?.RequestTaskSync(result.Task.Id);
-            return new(true, TaskRpcService.ToResponse(result.Task), null, result.Warning);
+            return new(true, TaskRpcService.ToResponse(result.Task), null);
         }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }

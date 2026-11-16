@@ -214,20 +214,43 @@ function boardHandlers(): Record<string, Handler> {
         && subtasks.some(sub => sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled")) {
         return { ok: false, task: null, warning: null, error: { kind: "Validation", message: "Open subtasks", fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }], correlationId: "preview" } };
       }
-      if (r.groupBy === "Status") update(r.taskId, { status: r.toColumn ?? "NotStarted" }, "Change status of");
-      else if (r.groupBy === "Section") update(r.taskId, { sectionId: r.toColumn || null }, "Move");
-      else if (r.groupBy === "Priority") update(r.taskId, { priority: r.toColumn ?? "Normal" }, "Edit");
-      else if (r.groupBy === "TagGroup" && r.fromColumn !== r.toColumn) {
+      // One field change, one reorder, one history entry for the whole move (as BoardCommands).
+      const patch: { -readonly [K in keyof TaskResponse]?: TaskResponse[K] } = {};
+      if (r.groupBy === "Status") {
+        if (!boardColumns(boardDefaults(), t.containerId, true).some(column => column.key === r.toColumn)) return { ...fail("That column is not a status."), task: null, warning: null };
+        if (r.toColumn !== t.status) patch.status = r.toColumn!;
+        if (r.toColumn === "Done" && r.subtaskChoice === "CompleteAll") {
+          subtasks.forEach((sub, index) => {
+            if (sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled") subtasks[index] = { ...sub, status: "Done", version: bump(sub.version) };
+          });
+        }
+      } else if (r.groupBy === "Section") {
+        if ((r.toColumn || null) !== t.sectionId) patch.sectionId = r.toColumn || null;
+      } else if (r.groupBy === "Priority") {
+        if (r.toColumn && r.toColumn !== t.priority) patch.priority = r.toColumn;
+      }
+      let retagged = false;
+      if (r.groupBy === "TagGroup" && r.fromColumn !== r.toColumn) {
         const links = (taskTags.get(r.taskId) ?? []).filter(id => id !== r.fromColumn);
         if (r.toColumn) links.push(r.toColumn);
         taskTags.set(r.taskId, links);
-        record(`Retag “${t.title}”`);
+        retagged = true;
       }
+      const before = orderedTasks(t.containerId).map(row => row.id);
       if (anchor) {
         taskOrder.splice(taskOrder.indexOf(t.id), 1);
         taskOrder.splice(taskOrder.indexOf(anchor) + (r.afterTaskId ? 1 : 0), 0, t.id);
-        update(r.taskId, {}, "Reorder");
       }
+      const after = orderedTasks(t.containerId).map(row => row.id);
+      // Every reranked card gets a new version, as the real reorder bumps its neighbours.
+      const reranked = new Set(after.filter((id, index) => before[index] !== id));
+      const changed = Object.keys(patch).length > 0 || retagged || reranked.has(t.id);
+      if (!changed) return ok({ task: t, warning: null });
+      for (const id of new Set([...reranked, t.id])) {
+        const index = tasks.findIndex(row => row.id === id);
+        tasks[index] = { ...tasks[index], ...(id === t.id ? patch : {}), version: bump(tasks[index].version), updatedAtUtc: now() };
+      }
+      record(`Move “${t.title}”`);
       return ok({ task: find(r.taskId), warning: null });
     },
   };

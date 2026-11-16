@@ -1,11 +1,14 @@
 using System.Text.Json;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
+using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Sync;
+using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
 namespace Chaos.Infrastructure.Tests.Sync;
 
@@ -17,14 +20,7 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// </summary>
 public sealed class SyncFlushTests
 {
-    private static string Op() => Guid.NewGuid().ToString();
-
-    private static async Task<TaskRecord> CaptureTaskAsync(DataHost host, string title = "Flushed thing") =>
-        (await host.Tasks.CaptureAsync(new(Op(), string.Empty, title, null))).Task;
-
     private static Task EnableSync(DataHost host) => SyncTestHelpers.EnableSyncAsync(host);
-
-    private static async Task<long> CountAsync(DataHost host, string sql) => await host.CountAsync(sql);
 
     private static async Task<JsonElement> OutboxPayloadAsync(DataHost host, string kind, string? op = null)
     {
@@ -89,7 +85,7 @@ public sealed class SyncFlushTests
         // Each group's values carry the row's current values and the change's clock.
         var payload = await OutboxPayloadAsync(host, "task");
         var title = payload.GetProperty("groups").GetProperty("title").GetProperty("values").GetProperty("Title").GetString();
-        await Assert.That(title).IsEqualTo("Flushed thing");
+        await Assert.That(title).IsEqualTo("Synced thing");
         var clockText = payload.GetProperty("groups").GetProperty("title").GetProperty("hlc").GetString()!;
         await Assert.That(Hlc.TryParse(clockText, out _)).IsTrue();
 
@@ -141,5 +137,69 @@ public sealed class SyncFlushTests
 
         var payload = await OutboxPayloadAsync(host, "task", op: "purge");
         await Assert.That(payload.GetProperty("op").GetString()).IsEqualTo("purge");
+    }
+
+    [Test]
+    public async Task A_row_deleted_and_reinserted_in_one_transaction_travels_as_an_upsert_of_every_group()
+    {
+        using var host = await DataHost.StartAsync();
+        await EnableSync(host);
+        await new TagCommands(host.Store, host.Ids, host.Clock).CreateAsync(new(Op(), "errands", null, null));
+        var tagId = await SyncTestHelpers.TextAsync(host, "SELECT Id FROM Tags WHERE NormalizedName = 'errands';");
+
+        // The week plan store replaces content this way: delete, then insert the same ids.
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = """
+                CREATE TEMP TABLE ReplacedTag AS SELECT * FROM Tags WHERE Id = $id;
+                DELETE FROM Tags WHERE Id = $id;
+                INSERT INTO Tags SELECT * FROM ReplacedTag;
+                DROP TABLE ReplacedTag;
+                """;
+            command.Parameters.AddWithValue("$id", tagId);
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        }, CancellationToken.None);
+
+        var changes = await SyncTestHelpers.ChangesAsync(host, "tag", tagId);
+        var expected = SyncCatalog.Find("Tags")!.Groups.Select(group => group.Name).Order(StringComparer.Ordinal).ToList();
+        await Assert.That(changes.Count).IsEqualTo(2);
+        await Assert.That(changes[1].Op).IsEqualTo("upsert");
+        await Assert.That(changes[1].Groups.Order(StringComparer.Ordinal).ToList()).IsEquivalentTo(expected);
+        var purges = await CountAsync(host, $"SELECT count(*) FROM SyncOutbox WHERE Kind = 'tag' AND EntityKey = '{tagId}' AND Op = 'purge';");
+        await Assert.That(purges).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task The_outbox_change_id_is_the_payload_change_id()
+    {
+        using var host = await DataHost.StartAsync();
+        await EnableSync(host);
+        var task = await CaptureTaskAsync(host);
+        var current = (await host.Tasks.GetAsync(task.Id))!;
+        await host.Tasks.DeleteAsync(new(Op(), task.Id, current.Version));
+        await host.Purge.PurgeAsync(task.Id, CancellationToken.None);
+
+        var mismatched = 0L;
+        await host.Store.QueryAsync(async (session, token) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "SELECT ChangeId, Op, PayloadJson FROM SyncOutbox;";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var payload = JsonDocument.Parse(reader.GetString(2)).RootElement;
+                if (payload.GetProperty("changeId").GetString() != reader.GetString(0)
+                    || payload.GetProperty("op").GetString() != reader.GetString(1))
+                {
+                    mismatched++;
+                }
+            }
+
+            return 0;
+        }, CancellationToken.None);
+
+        await Assert.That(mismatched).IsEqualTo(0L);
     }
 }

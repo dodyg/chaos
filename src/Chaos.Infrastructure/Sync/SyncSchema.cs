@@ -152,11 +152,3 @@ internal sealed class SyncSchema(SqliteConnection connection)
         _facts[table] = entries;
     }
 }
-
-/// <summary>Identifier quoting and value literals for the applier's generated SQL.</summary>
-internal static class SyncSql
-{
-    public static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-
-    public static string Literal(string text) => "'" + text.Replace("'", "''", StringComparison.Ordinal) + "'";
-}

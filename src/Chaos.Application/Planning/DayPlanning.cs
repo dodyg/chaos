@@ -27,7 +27,7 @@ internal static class DayPlanning
         var created = await session.DayPlans.TryAddAsync(new DayPlanRecord
         {
             // §7.5: the id is the day's natural key, so two devices opening the same day make one row.
-            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DayPlan(profileId, date))),
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.DayPlan(profileId, date)),
             ProfileId = profileId,
             LocalDate = date,
             SeededWeekPlanId = week?.Id,
@@ -94,7 +94,7 @@ internal static class DayPlanning
         await session.DayPlans.AddItemAsync(new DayPlanItemRecord
         {
             // §7.5: dayplanitem:{dayPlanId}:{taskId}; re-adding a removed task revives the same row id.
-            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DayPlanItem(plan.Id, taskId))),
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.DayPlanItem(plan.Id, taskId)),
             DayPlanId = plan.Id,
             TaskId = taskId,
             Position = position,

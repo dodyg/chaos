@@ -16,9 +16,12 @@ public static class SyncChangeParser
         var changeId = RequireString(root, "changeId");
         var kind = RequireString(root, "kind");
         var key = RequireString(root, "key");
-        var op = RequireString(root, "op") is "purge" ? SyncOp.Purge
-            : root.GetProperty("op").GetString() == "upsert" ? SyncOp.Upsert
-            : throw new FormatException($"A change for {kind} has an unknown op.");
+        var op = RequireString(root, "op") switch
+        {
+            "purge" => SyncOp.Purge,
+            "upsert" => SyncOp.Upsert,
+            _ => throw new FormatException($"A change for {kind} has an unknown op."),
+        };
 
         var groups = new Dictionary<string, SyncGroupState>(StringComparer.Ordinal);
         foreach (var property in root.GetProperty("groups").EnumerateObject())

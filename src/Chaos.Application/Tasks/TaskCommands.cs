@@ -551,7 +551,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         await session.Tasks.GetAsync(taskId, token)
         ?? throw AppException.NotFound("That task no longer exists. Refresh and try again.");
 
-    private static void RequireCurrentVersion(TaskRecord task, long expectedVersion)
+    internal static void RequireCurrentVersion(TaskRecord task, long expectedVersion)
     {
         if (task.Version != expectedVersion)
         {
@@ -559,7 +559,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         }
     }
 
-    private static async Task<TaskRecord> ApplyTaskUpdateAsync(IDataSession session, TaskRecord updated, long expectedVersion, CancellationToken token) =>
+    internal static async Task<TaskRecord> ApplyTaskUpdateAsync(IDataSession session, TaskRecord updated, long expectedVersion, CancellationToken token) =>
         await session.Tasks.UpdateAsync(updated, expectedVersion, token)
         ?? throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
 
@@ -611,7 +611,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         }
     }
 
-    private static string EventKindForStatusChange(TaskItemStatus before, TaskItemStatus after) => after switch
+    internal static string EventKindForStatusChange(TaskItemStatus before, TaskItemStatus after) => after switch
     {
         TaskItemStatus.Done => "task.completed",
         TaskItemStatus.Cancelled => "task.cancelled",
@@ -622,7 +622,9 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
     /// <summary>
     /// The status change itself, without its history write, so one operation can compose it
     /// with other field changes (the board's card move, PLAN2 P2) and still write one
-    /// history entry and one undo entry for the whole move.
+    /// history entry and one undo entry for the whole move. Reopening a finished task
+    /// normally restores its previous open status (PLAN §6); a board drop names the exact
+    /// column, so it passes <paramref name="restorePreviousStatus"/> false.
     /// </summary>
     internal static async Task<TaskRecord> ApplyStatusAsync(
         IDataSession session,
@@ -632,13 +634,14 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         OpenSubtaskChoice? choice,
         DateTimeOffset now,
         IReadOnlyList<SubtaskRecord> subtasks,
-        CancellationToken token)
+        CancellationToken token,
+        bool restorePreviousStatus = true)
     {
         if (task.RecurrenceOccurrenceKey is not null && (task.IsTerminal || status == TaskItemStatus.Cancelled))
             throw AppException.Validation("status", "Use the recurrence controls to reconcile or end this series.");
 
         // Reopening restores the previous nonterminal status when history knows it (PLAN §6).
-        var targetStatus = TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(status)
+        var targetStatus = restorePreviousStatus && TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(status)
             ? await TaskMutationSupport.PreviousNonterminalStatusAsync(session, task.Id, subtaskId: null, token)
             : status;
 

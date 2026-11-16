@@ -19,6 +19,9 @@ public static class StorageFormats
 {
     public static string Id(Guid id) => id.ToString("D");
 
+    /// <summary>The stored id of a natural-key row (PLAN2 §7.5): the same name gives the same id on every device.</summary>
+    public static string NameBasedId(string name) => Id(Chaos.Sync.NameBasedId.Create(name));
+
     public static string Instant(DateTimeOffset instant) => instant.UtcDateTime.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
 
     public static string Date(DateOnly date) => date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);

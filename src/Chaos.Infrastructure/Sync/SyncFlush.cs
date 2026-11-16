@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Chaos.Application.Abstractions;
@@ -22,17 +21,17 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
 
     public void Flush(SqliteConnection connection)
     {
-        var enabled = Scalar(connection, "SELECT Enabled FROM SyncState WHERE Id = 1;");
+        var enabled = SyncSql.Scalar(connection, "SELECT Enabled FROM SyncState WHERE Id = 1;");
         if (enabled == 0)
         {
-            Execute(connection, "DELETE FROM SyncPending;");
+            SyncSql.Execute(connection, "DELETE FROM SyncPending;");
             return;
         }
 
-        var device = Text(connection, "SELECT Value FROM DeviceSettings WHERE Key = 'DeviceId';")
+        var device = SyncSql.Text(connection, "SELECT Value FROM DeviceSettings WHERE Key = 'DeviceId';")
             ?? throw new AppException(AppErrorKind.StorageUnavailable, "This data root has no device identity, so changes cannot be captured for sync.");
         var clockState = new HybridClock(Guid.Parse(device), clock);
-        var last = Text(connection, "SELECT LastHlc FROM SyncState WHERE Id = 1;");
+        var last = SyncSql.Text(connection, "SELECT LastHlc FROM SyncState WHERE Id = 1;");
         if (last is not null)
         {
             clockState.Restore(Hlc.Parse(last));
@@ -62,30 +61,40 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
         }
 
         var now = StorageFormats.Instant(clock.GetUtcNow());
-        foreach (var (kind, key, groups) in entities)
+        foreach (var (kind, key, pended) in entities)
         {
-            if (groups.Contains(SyncTriggerInstaller.PurgeGroup))
+            var table = TablesByKind[kind];
+            IReadOnlySet<string> groups = pended;
+            if (pended.Contains(SyncTriggerInstaller.PurgeGroup))
             {
-                // A hard delete in the same transaction outranks anything the row's inserts and
-                // updates pended: the whole entity travels as a purge. Its clocks stay as a
-                // watermark, so a replayed older change cannot resurrect the row, while a
-                // genuinely newer insert (the row re-created) still wins.
-                WriteOutbox(connection, NewChangeId(), kind, key, "purge", PurgePayload(kind, key), now);
-                continue;
+                if (!RowExists(connection, table, key))
+                {
+                    // A hard delete in the same transaction outranks anything the row's inserts
+                    // and updates pended: the whole entity travels as a purge. Its clocks stay as
+                    // a watermark, so a replayed older change cannot resurrect the row, while a
+                    // genuinely newer insert (the row re-created) still wins.
+                    var purgeId = NewChangeId();
+                    WriteOutbox(connection, purgeId, kind, key, "purge", PurgePayload(purgeId, kind, key), now);
+                    continue;
+                }
+
+                // Deleted and re-inserted under the same key in one transaction (a week plan's
+                // content is replaced that way): the row still exists, so it travels whole as an
+                // upsert of every group; a purge would delete it on every other device.
+                groups = table.Groups.Select(group => group.Name).ToHashSet(StringComparer.Ordinal);
             }
 
+            var changeId = NewChangeId();
             var changeClock = clockState.TickLocal().Encode();
-            var table = TablesByKind[kind];
-            var payload = EntityPayload(table, key, groups, changeClock, connection);
-            WriteOutbox(connection, NewChangeId(), kind, key, "upsert", payload, now);
-            foreach (var group in groups)
+            var (op, payload) = EntityPayload(table, key, groups, changeId, changeClock, connection);
+            WriteOutbox(connection, changeId, kind, key, op, payload, now);
+            if (op == "upsert")
             {
-                using var upsert = connection.CreateCommand();
-                upsert.CommandText = $"""
-                    INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc) VALUES ({Literal(kind)}, {Literal(key)}, {Literal(group)}, {Literal(changeClock)})
-                    ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc;
-                    """;
-                upsert.ExecuteNonQuery();
+                foreach (var group in groups)
+                {
+                    // The flush just issued this clock: it always replaces the stored one.
+                    SyncSql.UpsertClock(connection, kind, key, group, changeClock, onlyIfNewer: false);
+                }
             }
         }
 
@@ -94,22 +103,16 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
         state.Parameters.AddWithValue("$hlc", clockState.Last.Encode());
         state.ExecuteNonQuery();
 
-        Execute(connection, "DELETE FROM SyncPending;");
+        SyncSql.Execute(connection, "DELETE FROM SyncPending;");
     }
 
-    private static void WriteOutbox(SqliteConnection connection, string changeId, string kind, string key, string op, string payload, string createdAtUtc)
+    private static bool RowExists(SqliteConnection connection, SyncTable table, string key)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            INSERT INTO SyncOutbox (ChangeId, Kind, EntityKey, Op, PayloadJson, CreatedAtUtc)
-            VALUES ({Literal(changeId)}, {Literal(kind)}, {Literal(key)}, {Literal(op)}, $payload, {Literal(createdAtUtc)});
-            """;
-        command.Parameters.AddWithValue("$payload", payload);
-        command.ExecuteNonQuery();
+        using var select = SelectByKey(connection, table, key, "1");
+        return select.ExecuteScalar() is not null;
     }
 
-    /// <summary>The pended groups with the row's current values and the change's clock, in the §7.12 change shape.</summary>
-    private static string EntityPayload(SyncTable table, string key, IReadOnlySet<string> groups, string changeClock, SqliteConnection connection)
+    private static SqliteCommand SelectByKey(SqliteConnection connection, SyncTable table, string key, string columns)
     {
         var keyValues = key.Split('|');
         if (keyValues.Length != table.Key.Count)
@@ -117,32 +120,54 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
             throw new AppException(AppErrorKind.StorageUnavailable, $"A pending change for {table.Kind} has a key of the wrong shape.");
         }
 
-        using var select = connection.CreateCommand();
-        var where = string.Join(" AND ", table.Key.Select((column, index) => $"{Quote(column)} = $k{index}"));
-        select.CommandText = $"SELECT * FROM {Quote(table.Table)} WHERE {where};";
+        var select = connection.CreateCommand();
+        var where = string.Join(" AND ", table.Key.Select((column, index) => $"{SyncSql.Quote(column)} = $k{index}"));
+        select.CommandText = $"SELECT {columns} FROM {SyncSql.Quote(table.Table)} WHERE {where};";
         for (var index = 0; index < keyValues.Length; index++)
         {
             select.Parameters.AddWithValue($"$k{index}", keyValues[index]);
         }
 
+        return select;
+    }
+
+    private static void WriteOutbox(SqliteConnection connection, string changeId, string kind, string key, string op, string payload, string createdAtUtc)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            INSERT INTO SyncOutbox (ChangeId, Kind, EntityKey, Op, PayloadJson, CreatedAtUtc)
+            VALUES ({SyncSql.Literal(changeId)}, {SyncSql.Literal(kind)}, {SyncSql.Literal(key)}, {SyncSql.Literal(op)}, $payload, {SyncSql.Literal(createdAtUtc)});
+            """;
+        command.Parameters.AddWithValue("$payload", payload);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// The pended groups with the row's current values and the change's clock, in the §7.12 change
+    /// shape, with the op the outbox row must carry (a purge when the row is gone).
+    /// </summary>
+    private static (string Op, string Payload) EntityPayload(
+        SyncTable table, string key, IReadOnlySet<string> groups, string changeId, string changeClock, SqliteConnection connection)
+    {
+        using var select = SelectByKey(connection, table, key, "*");
         using var reader = select.ExecuteReader();
         if (!reader.Read())
         {
             // The row the triggers captured is gone: something deleted it later in the same
             // transaction, so the change is a purge, not an upsert.
-            return PurgePayload(table.Kind, key);
+            return ("purge", PurgePayload(changeId, table.Kind, key));
         }
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("changeId", Guid.NewGuid().ToString());
+            writer.WriteString("changeId", changeId);
             writer.WriteString("kind", table.Kind);
             writer.WriteString("key", key);
             writer.WriteString("op", "upsert");
             writer.WriteStartObject("groups");
-            foreach (var groupName in groups)
+            foreach (var groupName in groups.Order(StringComparer.Ordinal))
             {
                 var group = table.Groups.First(candidate => candidate.Name == groupName);
                 writer.WriteStartObject(group.Name);
@@ -161,16 +186,16 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
             writer.WriteEndObject();
         }
 
-        return Encoding.UTF8.GetString(stream.ToArray());
+        return ("upsert", Encoding.UTF8.GetString(stream.ToArray()));
     }
 
-    private static string PurgePayload(string kind, string key)
+    private static string PurgePayload(string changeId, string kind, string key)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("changeId", Guid.NewGuid().ToString());
+            writer.WriteString("changeId", changeId);
             writer.WriteString("kind", kind);
             writer.WriteString("key", key);
             writer.WriteString("op", "purge");
@@ -200,29 +225,4 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
     }
 
     private static string NewChangeId() => Guid.NewGuid().ToString();
-
-    private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-
-    private static string Literal(string text) => "'" + text.Replace("'", "''", StringComparison.Ordinal) + "'";
-
-    private static long Scalar(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-    }
-
-    private static string? Text(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        return command.ExecuteScalar() as string;
-    }
-
-    private static void Execute(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 }

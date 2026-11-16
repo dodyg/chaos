@@ -109,7 +109,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
         // The current device's DeviceSettings survive a restore (PLAN2 §7.1): they are read
         // while the live database is still open and written into the file that replaces it.
         var deviceSettings = await store.QueryAsync(async (session, token) =>
-            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection), ct);
+            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection, token), ct);
         try
         {
             await Quiesce(async () =>
@@ -264,13 +264,13 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
         return (version, BackupManager.ReadCounts(connection));
     }
 
-    private static async Task<IReadOnlyList<(string Key, string Value)>> ReadDeviceSettingsAsync(SqliteConnection connection)
+    private static async Task<IReadOnlyList<(string Key, string Value)>> ReadDeviceSettingsAsync(SqliteConnection connection, CancellationToken ct)
     {
         var rows = new List<(string Key, string Value)>();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT Key, Value FROM DeviceSettings;";
-        using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
+        using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
         {
             rows.Add((reader.GetString(0), reader.GetString(1)));
         }

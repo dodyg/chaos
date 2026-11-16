@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Count, Field, InlineError } from "@/components/common";
+import { Count, Field, InlineError, SegmentedRadio } from "@/components/common";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagDot } from "./tags";
@@ -110,12 +110,12 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
 }) {
   const [board, setBoard] = React.useState<{ columns: readonly BoardColumnResponse[]; lanes: readonly BoardLaneResponse[]; cards: readonly BoardCardResponse[]; settings: BoardSettingsDto; totalCount: number; truncated: boolean } | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [reloads, setReloads] = React.useState(0);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [showCancelled, setShowCancelled] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
-  const [draft, setDraft] = React.useState<SettingsDraft | null>(null);
   const [moving, setMoving] = React.useState(false);
   const [choice, setChoice] = React.useState<{ card: BoardCardResponse; toColumn: string; placement: Placement } | null>(null);
   const [menu, setMenu] = React.useState<{ cardId: string; page: "main" | "columns" } | null>(null);
@@ -125,18 +125,31 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const [dropAt, setDropAt] = React.useState<{ cell: string; slot: number } | null>(null);
   const cardRefs = React.useRef(new Map<string, HTMLElement>());
+  // The card to focus once the board has been read again after a move (its element may be new).
+  const pendingFocus = React.useRef<string | null>(null);
 
-  const disabled = busy || moving;
+  // `loading` keeps the board inert until a read lands, so no move goes out with the versions
+  // of the board as it was before the last move.
+  const disabled = busy || moving || loading;
 
   React.useEffect(() => {
     let current = true;
+    setLoading(true);
     void api.get({ containerId, category: focus, showCancelled }).then(result => {
       if (!current) return;
-      if (result.ok) { setBoard(result); setLoadError(null); setDraft(null); }
+      if (result.ok) { setBoard(result); setLoadError(null); }
       else setLoadError(result.error?.message ?? "Could not load the board.");
-    }).catch((e: unknown) => { if (current) setLoadError(String(e)); });
+      setLoading(false);
+    }).catch((e: unknown) => { if (current) { setLoadError(String(e)); setLoading(false); } });
     return () => { current = false; };
   }, [api, containerId, focus, showCancelled, revision, reloads]);
+
+  React.useEffect(() => {
+    const id = pendingFocus.current;
+    if (id === null || loading) return;
+    pendingFocus.current = null;
+    focusCard(id);
+  }, [board, loading]);
 
   const settings = board?.settings;
   const hiddenKeys = new Set(parseJson<string[]>(settings?.hiddenColumnsJson, []));
@@ -147,20 +160,45 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   const cards = board?.cards ?? [];
   const tagById = React.useMemo(() => new Map(tags.map(tag => [tag.id, tag])), [tags]);
   // The cards of one cell top to bottom (board order is the container's manual order).
-  const cellCards = new Map<string, BoardCardResponse[]>();
-  for (const card of cards) {
-    const key = cellKey(card.laneKey, card.columnKey);
-    cellCards.set(key, [...(cellCards.get(key) ?? []), card]);
-  }
+  const cellCards = React.useMemo(() => {
+    const cells = new Map<string, BoardCardResponse[]>();
+    for (const card of board?.cards ?? []) {
+      const key = cellKey(card.laneKey, card.columnKey);
+      const cell = cells.get(key);
+      if (cell) cell.push(card); else cells.set(key, [card]);
+    }
+    return cells;
+  }, [board]);
   const cellOf = (card: BoardCardResponse) => cellCards.get(cellKey(card.laneKey, card.columnKey)) ?? [];
   // A column's cards as drawn: lane by lane, top to bottom.
   const columnOrder = (columnKey: string) => lanes.flatMap(lane => cellCards.get(cellKey(lane.key, columnKey)) ?? []);
+  const visibleColumnKeys = new Set(columns.map(column => column.key));
+  // The one card in the Tab order: the last focused card while it is still on the board.
+  const tabStop = cards.some(card => card.task.id === focusCardId && visibleColumnKeys.has(card.columnKey))
+    ? focusCardId
+    : cards.find(card => visibleColumnKeys.has(card.columnKey))?.task.id ?? null;
 
-  async function moveCard(card: BoardCardResponse, toColumn: string, placement: Placement, subtaskChoice: string | null = null) {
+  /** One board write: inert while it runs, its error shown, the board read again after it. */
+  async function mutate(write: () => Promise<boolean>) {
     if (disabled) return;
     setMoving(true);
     setError(null);
     try {
+      if (await write()) {
+        // The write bumped versions (the moved card, cards reranked past it, the settings row):
+        // read the board again so the next write does not send a stale version.
+        setReloads(count => count + 1);
+        onChanged();
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  function moveCard(card: BoardCardResponse, toColumn: string, placement: Placement, subtaskChoice: string | null = null) {
+    return mutate(async () => {
       const result = await api.move({
         operationId: operationId(), taskId: card.task.id, expectedVersion: card.task.version,
         groupBy: settings?.groupBy ?? "Status", fromColumn: card.columnKey, toColumn, ...placement, subtaskChoice,
@@ -169,51 +207,39 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
         // Moving to Done with open subtasks is a question, not a failure: ask and retry.
         if (result.error?.fields.some(field => field.fieldPath === "openSubtaskChoice")) {
           setChoice({ card, toColumn, placement });
-          return;
+          return false;
         }
         // The board was stale (a version conflict, a card gone): show why and read it again.
         setError(result.error?.message ?? "Could not move the task.");
         setReloads(count => count + 1);
-        return;
+        return false;
       }
       setNotice(result.warning ?? null);
-      // Read the board again: the move bumped the versions of this card and any card it was
-      // reranked past, and onChanged need not change `revision`, so without this the next
-      // move would send a stale version and hit a version conflict.
-      setReloads(count => count + 1);
-      onChanged();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setMoving(false);
-    }
+      pendingFocus.current = card.task.id;
+      return true;
+    });
   }
 
-  async function saveSettings(next: SettingsDraft) {
-    if (disabled || !board) return;
-    setMoving(true);
-    setError(null);
-    try {
+  function saveSettings(next: SettingsDraft) {
+    if (!board) return;
+    const expectedVersion = board.settings.version;
+    return mutate(async () => {
       const limits = Object.fromEntries(Object.entries(next.wip).filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)]));
       const result = await api.updateSettings({
-        operationId: operationId(), targetKind: "Container", targetId: containerId, expectedVersion: board.settings.version,
+        operationId: operationId(), targetKind: "Container", targetId: containerId, expectedVersion,
         groupBy: next.groupBy, swimlaneBy: next.swimlaneBy,
         columnTagId: next.columnTagId || null, swimlaneTagId: next.swimlaneTagId || null,
         wipLimitsJson: JSON.stringify(limits), hiddenColumnsJson: JSON.stringify(next.hidden),
       });
       if (!result.ok || !result.settings) {
         setError(result.error?.message ?? "Could not save the board settings.");
-        return;
+        return false;
       }
-      setDraft(null);
       setShowSettings(false);
-      setReloads(count => count + 1); // the next save needs the new settings version
-      onChanged();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setMoving(false);
-    }
+      // Cancelled cards only have a column (and a checkbox to hide them) when grouping by status.
+      if (next.groupBy !== "Status") setShowCancelled(false);
+      return true;
+    });
   }
 
   function focusCard(id: string | undefined) {
@@ -279,7 +305,11 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     const index = cell.findIndex(item => item.task.id === card.task.id);
     const item = "flex w-full cursor-default rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50";
     return <div role="menu" aria-label={`Actions for ${card.task.title}`} className="absolute top-full right-0 z-30 mt-1 grid min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
-      onKeyDown={event => { if (event.key === "Escape") setMenu(null); }}>
+      onKeyDown={event => {
+        if (event.key !== "Escape") return;
+        setMenu(null);
+        (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); // back to the actions button
+      }}>
       {menu.page === "main" ? <>
         <button type="button" role="menuitem" className={item} disabled={columns.length < 2} onClick={() => setMenu({ cardId: card.task.id, page: "columns" })}>Move to column…</button>
         <button type="button" role="menuitem" className={item} disabled={disabled || index <= 0} onClick={() => { setMenu(null); void moveCard(card, card.columnKey, { beforeTaskId: cell[index - 1].task.id, afterTaskId: null }); }}>Move up</button>
@@ -352,11 +382,12 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     const task = card.task;
     return <li key={task.id}
       ref={element => { if (element) cardRefs.current.set(task.id, element); else cardRefs.current.delete(task.id); }}
-      tabIndex={focusCardId === null || focusCardId === task.id ? 0 : -1}
+      tabIndex={tabStop === task.id ? 0 : -1}
       aria-label={task.title}
       draggable={!disabled}
       className={cn("group/card relative grid gap-1 rounded-lg border bg-card p-2 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
         !disabled && "cursor-grab active:cursor-grabbing", moving && "opacity-60", draggingId === task.id && "opacity-40")}
+      onFocus={event => { if (event.target === event.currentTarget) setFocusCardId(task.id); }}
       onKeyDown={event => cardKeyDown(event, card)}
       onDragStart={event => startDrag(event, card)}
       onDragEnd={endDrag}>
@@ -406,69 +437,24 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
     </section>;
   }
 
-  function settingsPanel() {
-    if (!showSettings || !board) return null;
-    const current = draft ?? draftFrom(board.settings, board.columns.map(column => column.key));
-    const parents = tags.filter(tag => tags.some(child => child.parentId === tag.id));
-    const set = (patch: Partial<SettingsDraft>) => setDraft({ ...current, ...patch });
-    return <div id="board-settings" className="grid gap-4 rounded-xl border bg-muted/50 p-4">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Group columns by"><NativeSelect value={current.groupBy} disabled={disabled} onChange={e => set({ groupBy: e.target.value })}>
-          {groupByChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
-        </NativeSelect></Field>
-        <Field label="Swimlanes"><NativeSelect value={current.swimlaneBy} disabled={disabled} onChange={e => set({ swimlaneBy: e.target.value })}>
-          {swimlaneChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
-        </NativeSelect></Field>
-        {current.groupBy === "TagGroup" && <Field label="Column parent tag"><NativeSelect value={current.columnTagId} disabled={disabled} onChange={e => set({ columnTagId: e.target.value })}>
-          <NativeSelectOption value="">Choose a parent tag…</NativeSelectOption>
-          {parents.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>{tag.path}</NativeSelectOption>)}
-        </NativeSelect></Field>}
-        {current.swimlaneBy === "TagGroup" && <Field label="Swimlane parent tag"><NativeSelect value={current.swimlaneTagId} disabled={disabled} onChange={e => set({ swimlaneTagId: e.target.value })}>
-          <NativeSelectOption value="">Choose a parent tag…</NativeSelectOption>
-          {parents.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>{tag.path}</NativeSelectOption>)}
-        </NativeSelect></Field>}
-      </div>
-      <fieldset className="grid gap-2 rounded-lg border p-3 pt-2">
-        <legend className="px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">WIP limits and hidden columns</legend>
-        <ul className="grid gap-1.5">
-          {board.columns.map(column => <li key={column.key} className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="min-w-0 flex-1 truncate">{column.title}</span>
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              WIP limit
-              <Input type="number" min={1} max={9999} className="h-7 w-20" aria-label={`WIP limit for ${column.title}`} disabled={disabled}
-                value={current.wip[column.key] ?? ""} onChange={e => set({ wip: { ...current.wip, [column.key]: e.target.value } })}/>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs">
-              <input type="checkbox" className="size-4 accent-primary" checked={current.hidden.includes(column.key)} disabled={disabled}
-                aria-label={`Hide ${column.title}`} onChange={e => set({ hidden: e.target.checked ? [...current.hidden, column.key] : current.hidden.filter(key => key !== column.key) })}/>
-              Hide
-            </label>
-          </li>)}
-        </ul>
-      </fieldset>
-      <div className="flex gap-2">
-        <Button type="button" disabled={disabled || (current.groupBy === "TagGroup" && !current.columnTagId) || (current.swimlaneBy === "TagGroup" && !current.swimlaneTagId)} onClick={() => void saveSettings(current)}>Save board settings</Button>
-        <Button type="button" variant="outline" disabled={disabled} onClick={() => { setDraft(null); setShowSettings(false); }}>Cancel</Button>
-      </div>
-    </div>;
-  }
-
   return <div className="grid gap-3" aria-label="Board">
     <div className="flex flex-wrap items-center gap-3">
-      <Button type="button" variant={showSettings ? "secondary" : "outline"} disabled={disabled} aria-expanded={showSettings} aria-controls="board-settings" onClick={() => { setShowSettings(v => !v); setDraft(null); }}><Settings2/>{showSettings ? "Hide settings" : "Board settings"}</Button>
+      <Button type="button" variant={showSettings ? "secondary" : "outline"} disabled={disabled} aria-expanded={showSettings} aria-controls="board-settings" onClick={() => setShowSettings(v => !v)}><Settings2/>{showSettings ? "Hide settings" : "Board settings"}</Button>
       {settings?.groupBy === "Status" && <label className="flex items-center gap-1.5 text-xs">
         <input type="checkbox" className="size-4 accent-primary" checked={showCancelled} disabled={disabled} onChange={e => setShowCancelled(e.target.checked)}/>
         Show cancelled
       </label>}
       {board && board.truncated && <p role="status" className="text-xs text-muted-foreground">{board.cards.length} of {board.totalCount} shown, filter to see more</p>}
     </div>
-    {settingsPanel()}
+    {/* Keyed by the settings version: a newer row (saved here or elsewhere) starts a fresh draft. */}
+    {showSettings && board && <BoardSettingsPanel key={board.settings.version} settings={board.settings} columns={board.columns} tags={tags} disabled={disabled}
+      onSave={next => void saveSettings(next)} onCancel={() => setShowSettings(false)}/>}
     {(loadError ?? error) && <InlineError>{loadError ?? error}</InlineError>}
     {notice && <div role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">{notice}</div>}
     {board && !loadError && <div className="-mx-1 overflow-x-auto px-1 pb-1">
       <div className="grid w-max min-w-full gap-4">
         {lanes.map(lane => <section key={lane.key} aria-label={multipleLanes ? `${lane.title} swimlane` : "Board lanes"} className="grid gap-1.5">
-          {multipleLanes && <h3 className="flex items-center px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{lane.title}<Count>{cards.filter(card => card.laneKey === lane.key).length}</Count></h3>}
+          {multipleLanes && <h3 className="flex items-center px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{lane.title}<Count>{cards.filter(card => card.laneKey === lane.key && visibleColumnKeys.has(card.columnKey)).length}</Count></h3>}
           <div className="flex items-start gap-3">
             {columns.map(column => renderColumn(column, lane))}
             {columns.length === 0 && <p className="p-2 text-sm text-muted-foreground">Every column is hidden. Unhide them in the board settings.</p>}
@@ -490,12 +476,59 @@ export function Board({ containerId, tags, focus, busy, revision, onOpen, onChan
   </div>;
 }
 
+/** The board settings editor: a local draft of the saved settings, saved as one board.updateSettings call. */
+function BoardSettingsPanel({ settings, columns, tags, disabled, onSave, onCancel }: {
+  settings: BoardSettingsDto; columns: readonly BoardColumnResponse[]; tags: TagResponse[]; disabled: boolean;
+  onSave: (draft: SettingsDraft) => void; onCancel: () => void;
+}) {
+  const [current, setDraft] = React.useState(() => draftFrom(settings, columns.map(column => column.key)));
+  const parents = tags.filter(tag => tags.some(child => child.parentId === tag.id));
+  const set = (patch: Partial<SettingsDraft>) => setDraft(draft => ({ ...draft, ...patch }));
+  return <div id="board-settings" className="grid gap-4 rounded-xl border bg-muted/50 p-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Group columns by"><NativeSelect value={current.groupBy} disabled={disabled} onChange={e => set({ groupBy: e.target.value })}>
+          {groupByChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
+        </NativeSelect></Field>
+        <Field label="Swimlanes"><NativeSelect value={current.swimlaneBy} disabled={disabled} onChange={e => set({ swimlaneBy: e.target.value })}>
+          {swimlaneChoices.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}
+        </NativeSelect></Field>
+        {current.groupBy === "TagGroup" && <Field label="Column parent tag"><NativeSelect value={current.columnTagId} disabled={disabled} onChange={e => set({ columnTagId: e.target.value })}>
+          <NativeSelectOption value="">Choose a parent tag…</NativeSelectOption>
+          {parents.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>{tag.path}</NativeSelectOption>)}
+        </NativeSelect></Field>}
+        {current.swimlaneBy === "TagGroup" && <Field label="Swimlane parent tag"><NativeSelect value={current.swimlaneTagId} disabled={disabled} onChange={e => set({ swimlaneTagId: e.target.value })}>
+          <NativeSelectOption value="">Choose a parent tag…</NativeSelectOption>
+          {parents.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>{tag.path}</NativeSelectOption>)}
+        </NativeSelect></Field>}
+      </div>
+      <fieldset className="grid gap-2 rounded-lg border p-3 pt-2">
+        <legend className="px-1 text-[0.7rem] font-semibold tracking-wider text-muted-foreground uppercase">WIP limits and hidden columns</legend>
+        <ul className="grid gap-1.5">
+          {columns.map(column => <li key={column.key} className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="min-w-0 flex-1 truncate">{column.title}</span>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              WIP limit
+              <Input type="number" min={1} max={9999} className="h-7 w-20" aria-label={`WIP limit for ${column.title}`} disabled={disabled}
+                value={current.wip[column.key] ?? ""} onChange={e => set({ wip: { ...current.wip, [column.key]: e.target.value } })}/>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" className="size-4 accent-primary" checked={current.hidden.includes(column.key)} disabled={disabled}
+                aria-label={`Hide ${column.title}`} onChange={e => set({ hidden: e.target.checked ? [...current.hidden, column.key] : current.hidden.filter(key => key !== column.key) })}/>
+              Hide
+            </label>
+          </li>)}
+        </ul>
+      </fieldset>
+      <div className="flex gap-2">
+        <Button type="button" disabled={disabled || (current.groupBy === "TagGroup" && !current.columnTagId) || (current.swimlaneBy === "TagGroup" && !current.swimlaneTagId)} onClick={() => onSave(current)}>Save board settings</Button>
+        <Button type="button" variant="outline" disabled={disabled} onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>;
+}
+
+const layoutChoices = [["list", "List"], ["board", "Board"]] as const;
 
 /** The List / Board switch shared by the list and project pages; never changes tasks. */
 export function LayoutSwitch({ layout, onLayout, disabled }: { layout: BoardLayout; onLayout: (layout: BoardLayout) => void; disabled?: boolean }) {
-  return <div role="radiogroup" aria-label="Layout" className="inline-flex rounded-md border bg-muted/40 p-0.5 text-xs">
-    {([["list", "List"], ["board", "Board"]] as const).map(([value, name]) => <button key={value} type="button" role="radio" aria-checked={layout === value} disabled={disabled}
-      className={cn("rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50", layout === value && "bg-background text-foreground shadow-xs")}
-      onClick={() => onLayout(value)}>{name}</button>)}
-  </div>;
+  return <SegmentedRadio label="Layout" value={layout} options={layoutChoices} onChange={onLayout} disabled={disabled}/>;
 }

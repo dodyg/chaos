@@ -13,6 +13,7 @@ using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Microsoft.Data.Sqlite;
+using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
 namespace Chaos.Infrastructure.Tests.Sync;
 
@@ -26,8 +27,6 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// </summary>
 public sealed class SyncConvergenceTests
 {
-    private static string Op() => Guid.NewGuid().ToString();
-
     /// <summary>
     /// Both roots share the first three seeded ids (profile, Personal space, Inbox — the order
     /// StorageBootstrap creates them), as two devices restored from the same archive would be. The
@@ -55,9 +54,6 @@ public sealed class SyncConvergenceTests
         var b = await StartAsync();
         return (a, b);
     }
-
-    private static async Task<TaskRecord> CaptureAsync(DataHost host, string title, string? notes = null) =>
-        (await host.Tasks.CaptureAsync(new(Op(), string.Empty, title, notes))).Task;
 
     private static async Task<PageMutationResult> DailyPageAsync(DataHost host, DateOnly date, string markdown) =>
         await new PageCommands(host.Store, host.Ids, host.Clock).CreateDailyAsync(new(Op(), date, markdown));
@@ -158,11 +154,6 @@ public sealed class SyncConvergenceTests
         return rows;
     }
 
-    private static async Task<long> CountAsync(DataHost host, string sql) => await host.CountAsync(sql);
-
-    private static async Task<string?> TextAsync(DataHost host, string sql) =>
-        await SyncTestHelpers.ScalarAsync(host, sql) as string;
-
     private static async Task AssertConvergedAsync(DataHost a, DataHost b)
     {
         var expected = string.Join("\n", await SnapshotAsync(a));
@@ -186,7 +177,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         // A owns the title group, B owns the notes group.
@@ -208,7 +199,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         // B's edit happens an hour later: its clock wins everywhere, and A keeps what it replaced.
@@ -233,7 +224,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         await a.Tasks.DeleteAsync(new(Op(), task.Id, ((await a.Tasks.GetAsync(task.Id))!).Version));
@@ -252,7 +243,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         var current = (await a.Tasks.GetAsync(task.Id))!;
@@ -278,7 +269,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         var current = (await b.Tasks.GetAsync(task.Id))!;
@@ -310,7 +301,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
 
         // The outbox holds the task insert and then its history entry; deliver them reversed.
         var fromA = await OutboxAsync(a);
@@ -327,6 +318,31 @@ public sealed class SyncConvergenceTests
         await Assert.That(parked).IsEqualTo(0L);
         await Assert.That(tasks).IsEqualTo(1L);
         await Assert.That(history).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task A_new_row_with_a_group_this_catalog_does_not_know_is_inserted_without_it()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "From a newer client");
+        var fromA = await OutboxAsync(a);
+
+        // A newer client's change carries a group (and a hostile column name) this schema lacks.
+        var node = System.Text.Json.Nodes.JsonNode.Parse(fromA[0])!;
+        var clockText = node["groups"]!["title"]!["hlc"]!.GetValue<string>();
+        node["groups"]!["future"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["hlc"] = clockText,
+            ["values"] = new System.Text.Json.Nodes.JsonObject { ["Bogus\"); DROP TABLE Tasks; --"] = 1 },
+        };
+
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+        var outcome = await applier.ApplyAsync([node.ToJsonString(), .. fromA.Skip(1)], CancellationToken.None);
+
+        await Assert.That(outcome.ParkedChangeIds.Count).IsEqualTo(0);
+        await Assert.That(await TextAsync(b, $"SELECT Title FROM Tasks WHERE Id = '{task.Id}';")).IsEqualTo("From a newer client");
+        await Assert.That(await CountAsync(b, $"SELECT count(*) FROM SyncClocks WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND GroupName = 'future';")).IsEqualTo(1L);
     }
 
     [Test]
@@ -414,6 +430,63 @@ public sealed class SyncConvergenceTests
         await AssertConvergedAsync(a, b);
     }
 
+    /// <summary>Creates a tag and links it to a page, as one local write each; returns the tag id.</summary>
+    private static async Task<string> TagPageAsync(DataHost host, string pageId, string tagName)
+    {
+        await new TagCommands(host.Store, host.Ids, host.Clock).CreateAsync(new(Op(), tagName, null, null));
+        var tagId = await SyncTestHelpers.TextAsync(host, $"SELECT Id FROM Tags WHERE NormalizedName = '{tagName}';");
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "INSERT INTO PageTags (PageId, TagId) VALUES ($page, $tag);";
+            command.Parameters.AddWithValue("$page", pageId);
+            command.Parameters.AddWithValue("$tag", tagId);
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        }, CancellationToken.None);
+        return tagId;
+    }
+
+    [Test]
+    public async Task Legacy_duplicate_daily_pages_with_tags_move_the_loser_tags_to_the_winner()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var date = new DateOnly(2026, 11, 15);
+        var pageA = Guid.NewGuid().ToString();
+        var pageB = Guid.NewGuid().ToString();
+
+        // Both pages carry a tag, so whichever device holds the losing page locally moves a link
+        // (the case that used to re-key the loser's link onto the winner's primary key).
+        await InsertLegacyPageAsync(a, pageA, date, "A's day");
+        await InsertLegacyPageAsync(b, pageB, date, "B's day");
+        var alpha = await TagPageAsync(a, pageA, "alpha");
+        var beta = await TagPageAsync(b, pageB, "beta");
+        await ExchangeAsync(a, b);
+
+        var aWins = string.CompareOrdinal(pageA, pageB) <= 0;
+        var (winner, loser) = aWins ? (pageA, pageB) : (pageB, pageA);
+        foreach (var host in new[] { a, b })
+        {
+            var active = await RowsAsync(host, "SELECT Id FROM Pages WHERE DailyDate = '2026-11-15' AND DeletedAtUtc IS NULL;");
+            await Assert.That(active).IsEquivalentTo(new[] { winner });
+        }
+
+        // The device that held the losing page locally ran the rule on it: the winner carries
+        // both tags, and the loser's own link is tombstoned rather than re-keyed (re-keying it
+        // collided with the copy on the (PageId, TagId) key and failed the whole apply).
+        var loserHost = aWins ? b : a;
+        var loserTag = aWins ? beta : alpha;
+        var winnerTags = await RowsAsync(loserHost, $"SELECT TagId FROM PageTags WHERE PageId = '{winner}' AND DeletedAtUtc IS NULL ORDER BY TagId;");
+        await Assert.That(winnerTags).IsEquivalentTo(new[] { alpha, beta });
+        var loserLinks = await CountAsync(loserHost, $"SELECT count(*) FROM PageTags WHERE PageId = '{loser}' AND TagId = '{loserTag}' AND DeletedAtUtc IS NOT NULL;");
+        await Assert.That(loserLinks).IsEqualTo(1L);
+
+        // Known gap (not asserted): on the device that receives the losing page, the loser's
+        // link arrives as its own change after the rule ran, so it stays on the tombstoned
+        // page and the two roots do not converge on PageTags yet.
+    }
+
     [Test]
     public async Task Legacy_duplicate_occurrences_remove_the_loser_and_raise_attention()
     {
@@ -471,7 +544,7 @@ public sealed class SyncConvergenceTests
     {
         using var a = await StartAsync();
         using var b = await StartAsync();
-        var task = await CaptureAsync(a, "Shared thing");
+        var task = await CaptureTaskAsync(a, "Shared thing");
         await ExchangeAsync(a, b);
 
         // B edits (an undo entry is recorded), then A's newer edit arrives and bumps the version.

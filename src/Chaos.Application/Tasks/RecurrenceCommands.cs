@@ -159,7 +159,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         {
             // §7.5: occurrence:{seriesId}:{nominalKey}. The first task predates the series and keeps
             // its random id; only materialized successors take occurrencetask ids.
-            Id = NameBasedId.Create(NameBasedId.Names.Occurrence(series.Id, Key(first))).ToString(),
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.Occurrence(series.Id, Key(first))),
             SeriesId = series.Id, TaskId = task.Id, NominalKey = Key(first), ScheduleKey = Key(first),
             EffectiveLocal = Key(first), State = OccurrenceState.Active, SeriesRevision = 1,
             Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
@@ -381,11 +381,11 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         var nominalKey = Key(next.Value);
         // §7.5: the successor task and its occurrence row are named after the series and slot, so two
         // devices completing the same occurrence make the same rows. A retired prior row keeps its id.
-        var taskId = NameBasedId.Create(NameBasedId.Names.OccurrenceTask(series.Id, nominalKey)).ToString();
+        var taskId = StorageFormats.NameBasedId(NameBasedId.Names.OccurrenceTask(series.Id, nominalKey));
         var priorOccurrence = await session.Recurrence.FindByKeyAsync(series.Id, nominalKey, ct);
         if (priorOccurrence is { DeletedAtUtc: null })
             throw AppException.VersionConflict("That occurrence already exists. Refresh and reconcile the series.");
-        var occurrenceId = priorOccurrence?.Id ?? NameBasedId.Create(NameBasedId.Names.Occurrence(series.Id, nominalKey)).ToString();
+        var occurrenceId = priorOccurrence?.Id ?? StorageFormats.NameBasedId(NameBasedId.Names.Occurrence(series.Id, nominalKey));
         var dayDelta = DateOnly.FromDateTime(next.Value).DayNumber - rule.AnchorDate.DayNumber;
         DateOnly? Shift(DateOnly? date) => date?.AddDays(dayDelta);
         var anchor = rule.AnchorDate.ToDateTime(rule.AnchorTime ?? TimeOnly.MinValue);
@@ -433,7 +433,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         {
             var child = template.Subtasks[templateIndex];
             // §7.5: occurrencesubtask:{occurrenceTaskId}:{templateIndex} — the copy's place in the template.
-            var newChild = child with { Id = NameBasedId.Create(NameBasedId.Names.OccurrenceSubtask(taskId, templateIndex)).ToString(), TaskId = taskId, Status = TaskItemStatus.NotStarted,
+            var newChild = child with { Id = StorageFormats.NameBasedId(NameBasedId.Names.OccurrenceSubtask(taskId, templateIndex)), TaskId = taskId, Status = TaskItemStatus.NotStarted,
                 CompletedAtUtc = null, CancelledAtUtc = null, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, DeletedAtUtc = null };
             // As the successor above: a deterministic id may still exist as an undo's tombstone.
             if (await session.Subtasks.GetIncludingDeletedAsync(newChild.Id, ct) is { } priorChild)

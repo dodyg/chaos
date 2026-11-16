@@ -14,13 +14,30 @@ public readonly record struct Hlc(long WallMillis, int Counter, string DeviceId)
     /// <summary>Accepted clock skew: a remote clock further ahead is kept but reported (PLAN2 §P1).</summary>
     public static readonly TimeSpan MaxAcceptedSkew = TimeSpan.FromHours(24);
 
-    public static readonly string DeviceFormat = "N";
+    public const string DeviceFormat = "N";
+
+    /// <summary>The largest wall time the 13-digit encoding holds.</summary>
+    public const long MaxWallMillis = 9_999_999_999_999;
+
+    /// <summary>The largest counter the 5-digit encoding holds; a tick past it moves the wall on by 1 ms.</summary>
+    public const int MaxCounter = 99_999;
 
     private const int EncodedLength = 13 + 1 + 5 + 1 + 32;
 
-    /// <summary>Throws when the device ID is not a 32-digit hex GUID, or the counter does not fit 5 digits.</summary>
-    public static Hlc Create(long wallMillis, int counter, Guid deviceId) =>
-        new(wallMillis, counter, ToDevice(deviceId));
+    /// <summary>Throws when the device ID is empty, the wall time does not fit 13 digits, or the counter does not fit 5 digits.</summary>
+    public static Hlc Create(long wallMillis, int counter, Guid deviceId)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(wallMillis);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(wallMillis, MaxWallMillis);
+        ArgumentOutOfRangeException.ThrowIfNegative(counter);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(counter, MaxCounter);
+        if (deviceId == Guid.Empty)
+        {
+            throw new ArgumentException("A clock needs a device ID.", nameof(deviceId));
+        }
+
+        return new(wallMillis, counter, ToDevice(deviceId));
+    }
 
     public static string ToDevice(Guid deviceId) => deviceId.ToString(DeviceFormat);
 
@@ -119,6 +136,14 @@ public sealed class HybridClock(Guid deviceId, TimeProvider? timeProvider = null
     {
         var wall = Math.Max(nowMillis, Last.WallMillis);
         var counter = wall == Last.WallMillis ? Last.Counter + 1 : 0;
+        if (counter > Hlc.MaxCounter)
+        {
+            // The counter no longer fits its five digits: borrow the next millisecond instead,
+            // which still sorts after every clock issued before.
+            wall++;
+            counter = 0;
+        }
+
         return Last = new Hlc(wall, counter, Last.DeviceId);
     }
 
@@ -135,12 +160,4 @@ public sealed class HybridClock(Guid deviceId, TimeProvider? timeProvider = null
             : 0;
         return new Hlc(wall, counter, Last.DeviceId);
     }
-}
-
-/// <summary>Parses and formats fixed-width clock strings from storage.</summary>
-public static class HlcText
-{
-    public static string Encode(Hlc clock) => clock.Encode();
-
-    public static Hlc Decode(string text) => Hlc.Parse(text);
 }

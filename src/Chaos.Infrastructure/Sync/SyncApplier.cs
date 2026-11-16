@@ -32,7 +32,7 @@ public sealed record SyncApplyOutcome(
 /// </summary>
 public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock, IIdGenerator ids)
 {
-    private const string MergedEventKind = "sync.merged";
+    private const string ChangeSavepoint = "sync_change";
 
     public async Task<SyncApplyOutcome> ApplyAsync(IReadOnlyList<string> changePayloads, CancellationToken ct = default, long? throughSequence = null)
     {
@@ -40,32 +40,41 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         var applied = 0L;
         var purged = 0L;
         var skipped = 0L;
+        var changes = changePayloads.Select(payload => (Change: SyncChangeParser.Parse(payload), Payload: payload)).ToList();
 
         await store.ExecuteAsync(async (session, token) =>
         {
             var connection = ((SqliteDataSession)session).Connection;
             var schema = new SyncSchema(connection);
-            Execute(connection, "UPDATE SyncApplyState SET Applying = 1 WHERE Id = 1;");
-            Execute(connection, "PRAGMA defer_foreign_keys = ON;");
+            SyncSql.Execute(connection, "UPDATE SyncApplyState SET Applying = 1 WHERE Id = 1;");
+            SyncSql.Execute(connection, "PRAGMA defer_foreign_keys = ON;");
             try
             {
-                foreach (var payload in changePayloads)
+                // Progress (applied + purged) when each change of this pass was parked: retrying
+                // it is only worth it once something else landed after it.
+                var parkedAtProgress = new Dictionary<string, long>(StringComparer.Ordinal);
+                foreach (var (change, payload) in changes)
                 {
-                    var change = SyncChangeParser.Parse(payload);
-                    var outcome = await ApplyOneAsync(connection, schema, change, payload, token);
-                    if (outcome != StepResult.Skipped)
-                    {
-                    }
-
+                    var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
                     Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
+                    if (outcome is StepResult.Parked)
+                    {
+                        parkedAtProgress[change.ChangeId] = applied + purged;
+                    }
                 }
 
                 // §7.8: after each batch, parked changes are retried; a parent that arrived in
-                // this batch lets its children through.
+                // this batch lets its children through. A change parked in this pass with nothing
+                // applied since is not retried: it would only park again.
                 foreach (var (changeId, payload) in ReadParked(connection))
                 {
+                    if (parkedAtProgress.TryGetValue(changeId, out var progress) && progress == applied + purged)
+                    {
+                        continue;
+                    }
+
                     var change = SyncChangeParser.Parse(payload);
-                    var outcome = await ApplyOneAsync(connection, schema, change, payload, token);
+                    var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
                     if (outcome is StepResult.Parked)
                     {
                         BumpParkedCycles(connection, changeId);
@@ -76,6 +85,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                     }
                     else
                     {
+                        parked.Remove(changeId);
                         Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
                         DeleteParked(connection, changeId);
                     }
@@ -83,44 +93,14 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
                 if (throughSequence is { } sequence)
                 {
-                    Execute(connection, $"UPDATE SyncState SET Cursor = MAX(Cursor, {sequence.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
+                    SyncSql.Execute(connection, $"UPDATE SyncState SET Cursor = MAX(Cursor, {sequence.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
                 }
 
-                // §7.1 receive: the local clock learns every applied change's clock, so the next
-                // local edit ticks past everything that arrived — without it, a device that only
-                // applied changes would keep issuing clocks older than what it received.
-                var received = changePayloads
-                    .Select(SyncChangeParser.Parse)
-                    .SelectMany(change => change.Groups.Values.Select(group => group.Hlc))
-                    .ToList();
-                if (received.Count > 0)
-                {
-                    var highest = received.Max();
-                    var device = Text(connection, "SELECT Value FROM DeviceSettings WHERE Key = 'DeviceId';");
-                    if (device is null)
-                    {
-                        throw new AppException(AppErrorKind.StorageUnavailable, "This data root has no device identity, so changes cannot be applied.");
-                    }
-
-                    // Receive keeps this device's id on the clock (§7.1): only the wall and counter
-                    // advance, so two devices never issue the same clock for different changes.
-                    var learned = new Hlc(highest.WallMillis, highest.Counter, device);
-                    var clockText = Text(connection, "SELECT LastHlc FROM SyncState WHERE Id = 1;");
-                    var current = clockText is null ? default : Hlc.Parse(clockText);
-                    var advance = current == default || learned.WallMillis > current.WallMillis
-                        || (learned.WallMillis == current.WallMillis && learned.Counter > current.Counter);
-                    if (advance)
-                    {
-                        using var updateClock = connection.CreateCommand();
-                        updateClock.CommandText = "UPDATE SyncState SET LastHlc = $hlc WHERE Id = 1;";
-                        updateClock.Parameters.AddWithValue("$hlc", learned.Encode());
-                        updateClock.ExecuteNonQuery();
-                    }
-                }
+                ReceiveClocks(connection, changes.Select(entry => entry.Change));
             }
             finally
             {
-                Execute(connection, "UPDATE SyncApplyState SET Applying = 0 WHERE Id = 1;");
+                SyncSql.Execute(connection, "UPDATE SyncApplyState SET Applying = 0 WHERE Id = 1;");
             }
 
             return 0;
@@ -146,6 +126,48 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         }
     }
 
+    /// <summary>
+    /// §7.1 receive: the local clock learns the highest received clock, so the next local edit
+    /// ticks past everything that arrived; without it, a device that only applied changes would
+    /// keep issuing clocks older than what it received. A clock further ahead than
+    /// <see cref="Hlc.MaxAcceptedSkew"/> is kept (it already won its merge everywhere) but
+    /// reported once per sending device, as PLAN2 §P1 asks.
+    /// </summary>
+    private void ReceiveClocks(SqliteConnection connection, IEnumerable<SyncChange> changes)
+    {
+        var received = changes.SelectMany(change => change.Groups.Values.Select(group => group.Hlc)).ToList();
+        if (received.Count == 0)
+        {
+            return;
+        }
+
+        var device = SyncSql.Text(connection, "SELECT Value FROM DeviceSettings WHERE Key = 'DeviceId';")
+            ?? throw new AppException(AppErrorKind.StorageUnavailable, "This data root has no device identity, so changes cannot be applied.");
+
+        // Receive keeps this device's id on the clock (§7.1): only the wall and counter advance,
+        // so two devices never issue the same clock for different changes.
+        var hybrid = new HybridClock(Guid.Parse(device), clock);
+        if (SyncSql.Text(connection, "SELECT LastHlc FROM SyncState WHERE Id = 1;") is { } last)
+        {
+            hybrid.Restore(Hlc.Parse(last));
+        }
+
+        var highest = received.Max();
+        var result = hybrid.Receive(highest);
+        using (var update = connection.CreateCommand())
+        {
+            update.CommandText = "UPDATE SyncState SET LastHlc = $hlc WHERE Id = 1;";
+            update.Parameters.AddWithValue("$hlc", result.Clock.Encode());
+            update.ExecuteNonQuery();
+        }
+
+        if (result.SkewBeyondCap && !OpenAttentionExists(connection, "sync.clock_skew", highest.DeviceId))
+        {
+            Attention(connection, "sync.clock_skew", null, highest.DeviceId,
+                "Another device's clock is more than a day ahead of this one. Its changes were kept; check the date and time settings on both devices.");
+        }
+    }
+
     private enum StepResult
     {
         Applied,
@@ -154,7 +176,48 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         Parked,
     }
 
-    private async Task<StepResult> ApplyOneAsync(SqliteConnection connection, SyncSchema schema, SyncChange change, string payload, CancellationToken ct)
+    /// <summary>
+    /// Why a change must wait in the inbox (§7.8), and the attention item that goes with it. The
+    /// apply code fills it in; <see cref="ApplyStepAsync"/> writes it after rolling back whatever
+    /// the failed attempt already wrote.
+    /// </summary>
+    private sealed class ParkSlip
+    {
+        public string Reason { get; private set; } = "the change could not be applied yet";
+
+        public (string Category, string Message)? Notice { get; private set; }
+
+        public void Park(string reason, string? category = null, string? message = null)
+        {
+            Reason = reason;
+            Notice = category is null || message is null ? null : (category, message);
+        }
+    }
+
+    /// <summary>
+    /// Applies one change inside a savepoint. A parked change rolls back to it first, so history
+    /// rows and rule side effects of the failed attempt do not stay behind; only the parked row
+    /// (and, the first time, its attention item) remain.
+    /// </summary>
+    private async Task<StepResult> ApplyStepAsync(SqliteConnection connection, SyncSchema schema, SyncChange change, string payload, CancellationToken ct)
+    {
+        var slip = new ParkSlip();
+        SyncSql.Execute(connection, $"SAVEPOINT {ChangeSavepoint};");
+        var outcome = await ApplyOneAsync(connection, schema, change, slip, ct);
+        if (outcome is StepResult.Parked)
+        {
+            SyncSql.Execute(connection, $"ROLLBACK TO {ChangeSavepoint};");
+            if (Park(connection, change, payload, slip.Reason) && slip.Notice is { } notice)
+            {
+                Attention(connection, notice.Category, change.Kind, change.EntityKey, notice.Message);
+            }
+        }
+
+        SyncSql.Execute(connection, $"RELEASE {ChangeSavepoint};");
+        return outcome;
+    }
+
+    private async Task<StepResult> ApplyOneAsync(SqliteConnection connection, SyncSchema schema, SyncChange change, ParkSlip park, CancellationToken ct)
     {
         var table = SyncCatalog.Tables.FirstOrDefault(candidate => candidate.Kind == change.Kind);
         if (table is null || table.Mode == SyncMode.LocalOnly)
@@ -178,12 +241,12 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             return StepResult.Purged;
         }
 
-        return await ApplyUpsertAsync(connection, schema, table, change, payload, ct);
+        return await ApplyUpsertAsync(connection, schema, table, change, park, ct);
     }
 
     // ---- Upsert (§7.4 step 2.2) -----------------------------------------------------------
 
-    private async Task<StepResult> ApplyUpsertAsync(SqliteConnection connection, SyncSchema schema, SyncTable table, SyncChange change, string payload, CancellationToken ct)
+    private async Task<StepResult> ApplyUpsertAsync(SqliteConnection connection, SyncSchema schema, SyncTable table, SyncChange change, ParkSlip park, CancellationToken ct)
     {
         var key = ParseKey(table, change.EntityKey);
         var exists = RowExists(connection, table, key);
@@ -211,7 +274,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         var missing = MissingForeignKeyTarget(connection, schema, table, key, merge, exists);
         if (missing is not null)
         {
-            Park(connection, change, payload, $"the change references '{missing}', which has not arrived yet");
+            park.Park($"the change references '{missing}', which has not arrived yet");
             return StepResult.Parked;
         }
 
@@ -224,18 +287,17 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             switch (Classify(error, out var columns, out var namedIndex))
             {
                 case ConstraintKind.Unique:
-                    return await ResolveUniqueAsync(connection, schema, table, key, change, merge, columns, wall, payload, namedIndex, ct) == RuleOutcome.Resolved
+                    return await ResolveUniqueAsync(connection, schema, table, key, change, merge, columns, wall, park, namedIndex, ct) == RuleOutcome.Resolved
                         ? StepResult.Applied
                         : StepResult.Parked;
                 case ConstraintKind.ForeignKey:
-                    Park(connection, change, payload, "the change references something that has not arrived yet");
+                    park.Park("the change references something that has not arrived yet");
                     return StepResult.Parked;
                 case ConstraintKind.NotNull:
-                    Park(connection, change, payload, "the change does not carry every required column of a new row");
+                    park.Park("the change does not carry every required column of a new row");
                     return StepResult.Parked;
                 case ConstraintKind.Check:
-                    Park(connection, change, payload, "the change's values fail a database check");
-                    Attention(connection, "sync.invalid", change.Kind, change.EntityKey,
+                    park.Park("the change's values fail a database check", "sync.invalid",
                         "A change from another device could not be applied because its values are not valid here.");
                     return StepResult.Parked;
                 default:
@@ -251,15 +313,12 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         SqliteConnection connection, SyncSchema schema, SyncTable table, IReadOnlyDictionary<string, string> key, bool exists,
         MergeResult merge, DateTimeOffset wall, SyncChange change, CancellationToken ct)
     {
-        var columns = schema.Columns(table.Table);
-        var changedColumns = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var winner in merge.Winners.Values)
-        {
-            foreach (var (column, value) in winner.Values.Values)
-            {
-                changedColumns[column] = value;
-            }
-        }
+        // Only columns this schema has are written: a group from a newer catalog (§7.3) keeps its
+        // clock but has nowhere to land, and a name from a change never reaches the SQL unchecked.
+        var changedColumns = WinnerValues(merge)
+            .Where(pair => schema.HasColumn(table.Table, pair.Key))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         if (exists)
         {
@@ -269,20 +328,16 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                 RecordReplacedValues(connection, table, key, merge.Replaced, merge.Winners, change);
             }
 
-            var sets = new List<string>();
-            foreach (var column in changedColumns.Keys.Where(columns.Contains).Order(StringComparer.OrdinalIgnoreCase))
-            {
-                sets.Add($"{SyncSql.Quote(column)} = $v_{column}");
-            }
+            var sets = changedColumns.Select((pair, index) => $"{SyncSql.Quote(pair.Key)} = $p{index}").ToList();
 
             // Local bookkeeping columns: the version bump invalidates stale undo entries and open
             // editors (§7.10); UpdatedAtUtc is max(local, change wall time) (§7.2 rule 2).
-            if (columns.Contains("Version"))
+            if (schema.HasColumn(table.Table, "Version"))
             {
                 sets.Add("Version = Version + 1");
             }
 
-            if (columns.Contains("UpdatedAtUtc"))
+            if (schema.HasColumn(table.Table, "UpdatedAtUtc"))
             {
                 sets.Add("UpdatedAtUtc = MAX(UpdatedAtUtc, $wall)");
             }
@@ -292,9 +347,9 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                 using var update = connection.CreateCommand();
                 update.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET {string.Join(", ", sets)} WHERE {Where(table, key)};";
                 BindKey(update, table, key);
-                foreach (var (column, value) in changedColumns.Where(pair => columns.Contains(pair.Key, StringComparer.OrdinalIgnoreCase)))
+                for (var index = 0; index < changedColumns.Count; index++)
                 {
-                    Bind(update, $"$v_{column}", value);
+                    Bind(update, $"$p{index}", changedColumns[index].Value);
                 }
 
                 update.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
@@ -314,12 +369,12 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                 insert[column] = value;
             }
 
-            if (columns.Contains("Version"))
+            if (schema.HasColumn(table.Table, "Version"))
             {
                 insert["Version"] = 1L;
             }
 
-            if (columns.Contains("UpdatedAtUtc"))
+            if (schema.HasColumn(table.Table, "UpdatedAtUtc"))
             {
                 insert["UpdatedAtUtc"] = StorageFormats.Instant(wall);
             }
@@ -336,11 +391,11 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             }
 
             using var command = connection.CreateCommand();
-            var names = insert.Keys.Order(StringComparer.OrdinalIgnoreCase).ToList();
-            command.CommandText = $"INSERT INTO {SyncSql.Quote(table.Table)} ({string.Join(", ", names.Select(SyncSql.Quote))}) VALUES ({string.Join(", ", names.Select(name => "$p_" + name))});";
-            foreach (var (column, value) in insert)
+            var names = insert.Keys.Where(name => schema.HasColumn(table.Table, name)).Order(StringComparer.OrdinalIgnoreCase).ToList();
+            command.CommandText = $"INSERT INTO {SyncSql.Quote(table.Table)} ({string.Join(", ", names.Select(SyncSql.Quote))}) VALUES ({string.Join(", ", names.Select((_, index) => $"$p{index}"))});";
+            for (var index = 0; index < names.Count; index++)
             {
-                Bind(command, "$p_" + column, value);
+                Bind(command, $"$p{index}", insert[names[index]]);
             }
 
             command.ExecuteNonQuery();
@@ -348,16 +403,8 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
         foreach (var (group, winner) in merge.Winners)
         {
-            using var upsert = connection.CreateCommand();
-            upsert.CommandText = """
-                INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc) VALUES ($kind, $key, $group, $hlc)
-                ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc;
-                """;
-            upsert.Parameters.AddWithValue("$kind", table.Kind);
-            upsert.Parameters.AddWithValue("$key", change.EntityKey);
-            upsert.Parameters.AddWithValue("$group", group);
-            upsert.Parameters.AddWithValue("$hlc", winner.Hlc.Encode());
-            upsert.ExecuteNonQuery();
+            // The merge decided these groups win: their clocks replace the stored ones.
+            SyncSql.UpsertClock(connection, table.Kind, change.EntityKey, group, winner.Hlc.Encode(), onlyIfNewer: false);
         }
 
         await RefreshSearchDocumentAsync(connection, table, key, ct);
@@ -448,6 +495,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             return null;
         }
 
+        var winnerValues = WinnerValues(merge);
         foreach (var (columns, parentTable, parentColumns) in schema.ForeignKeys(table.Table))
         {
             // A foreign key is satisfied when any of its child columns is NULL (SQLite MATCH
@@ -463,19 +511,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                     continue;
                 }
 
-                object? value = null;
-                var known = false;
-                foreach (var winner in merge.Winners.Values)
-                {
-                    if (winner.Values.Values.TryGetValue(column, out var candidate))
-                    {
-                        value = candidate;
-                        known = true;
-                        break;
-                    }
-                }
-
-                if (known)
+                if (winnerValues.TryGetValue(column, out var value))
                 {
                     values[index] = value;
                 }
@@ -645,7 +681,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     /// </summary>
     private async Task<RuleOutcome> ResolveUniqueAsync(
         SqliteConnection connection, SyncSchema schema, SyncTable table, IReadOnlyDictionary<string, string> key, SyncChange change,
-        MergeResult merge, IReadOnlyList<string> columns, DateTimeOffset wall, string payload, string? namedIndex, CancellationToken ct)
+        MergeResult merge, IReadOnlyList<string> columns, DateTimeOffset wall, ParkSlip park, string? namedIndex, CancellationToken ct, int depth = 0)
     {
         var index = namedIndex ?? schema.FindUniqueIndex(table.Table, columns);
         if (namedIndex is not null && columns.Count == 0)
@@ -656,24 +692,22 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         var rule = index is null ? null : table.UniqueRules.FirstOrDefault(candidate => candidate.Index == index);
         if (rule is null)
         {
-            Park(connection, change, payload, $"two rows claim one unique value of {table.Table} and no rule resolves it");
-            Attention(connection, "sync.conflict", change.Kind, change.EntityKey,
+            park.Park($"two rows claim one unique value of {table.Table} and no rule resolves it", "sync.conflict",
                 $"A change for {table.Table} collided with a local row and no rule resolved it. It waits in the sync inbox.");
             return RuleOutcome.Parked;
         }
 
         if (rule.Kind == SyncUniqueRuleKind.Adopt)
         {
-            Attention(connection, "sync.adopt", change.Kind, change.EntityKey,
+            park.Park("this row is adopted during device join, never during an ordinary apply", "sync.adopt",
                 "A row arrived that this device can only adopt while joining an account. It waits in the sync inbox.");
-            Park(connection, change, payload, "this row is adopted during device join, never during an ordinary apply");
             return RuleOutcome.Parked;
         }
 
         var otherKey = FindConflictingKey(connection, schema, table, rule.Index, columns, merge);
         if (otherKey is null)
         {
-            Park(connection, change, payload, $"the colliding row of {table.Table} could not be found");
+            park.Park($"the colliding row of {table.Table} could not be found");
             return RuleOutcome.Parked;
         }
 
@@ -691,37 +725,34 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         }
 
         merge = ApplyRuleToLoser(connection, schema, table, rule, incomingWins: true, localKey, incomingKey, merge, key, wall, change);
-        for (var attempt = 0; ; attempt++)
+        try
         {
-            try
+            await WriteWinnersAsync(connection, schema, table, key, RowExists(connection, table, key), merge, wall, change, ct);
+            return RuleOutcome.Resolved;
+        }
+        catch (SqliteException retry)
+        {
+            var kind = Classify(retry, out var retryColumns, out var retryIndex);
+            if (kind == ConstraintKind.ForeignKey)
             {
-                await WriteWinnersAsync(connection, schema, table, key, RowExists(connection, table, key), merge, wall, change, ct);
-                return RuleOutcome.Resolved;
+                park.Park("the change references something that has not arrived yet");
+                return RuleOutcome.Parked;
             }
-            catch (SqliteException retry)
+
+            // Resolving one duplicate can surface the next (an occurrence's identity and its
+            // task claim resolve one after the other): resolve them in turn, within reason.
+            // The nested resolution writes the row itself, so its outcome is ours.
+            if (kind == ConstraintKind.Unique && depth < 2)
             {
-                var kind = Classify(retry, out var retryColumns, out var retryIndex);
-                if (kind == ConstraintKind.ForeignKey)
-                {
-                    Park(connection, change, payload, "the change references something that has not arrived yet");
-                    return RuleOutcome.Parked;
-                }
-
-                // Resolving one duplicate can surface the next (an occurrence's identity and its
-                // task claim resolve one after the other): resolve them in turn, within reason.
-                if (kind == ConstraintKind.Unique && attempt < 2
-                    && await ResolveUniqueAsync(connection, schema, table, key, change, merge, retryColumns, wall, payload, retryIndex, ct) == RuleOutcome.Resolved)
-                {
-                    continue;
-                }
-
-                throw;
+                return await ResolveUniqueAsync(connection, schema, table, key, change, merge, retryColumns, wall, park, retryIndex, ct, depth + 1);
             }
+
+            throw;
         }
     }
 
     /// <summary>Runs the rule's effect on the loser; returns the merge when a rule (AppendText) reshaped the winner's groups.</summary>
-    private static MergeResult ApplyRuleToLoser(
+    private MergeResult ApplyRuleToLoser(
         SqliteConnection connection, SyncSchema schema, SyncTable table, SyncUniqueRule rule, bool incomingWins,
         string localKey, string incomingKey, MergeResult merge, IReadOnlyDictionary<string, string> key, DateTimeOffset wall, SyncChange change)
     {
@@ -748,7 +779,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                     // its task retires when nothing active points at it, and the person is told.
                     // Its clocks stay as a watermark, so a replay of the loser's change cannot
                     // bring it back round after round.
-                    RetireOccurrenceTask(connection, incomingWins ? localKey : incomingKey, wall);
+                    RetireOccurrenceTask(connection, incomingWins ? localKey : incomingKey, wall, clearTaskId: false);
                     using var remove = connection.CreateCommand();
                     remove.CommandText = "DELETE FROM RecurrenceOccurrences WHERE Id = $loser;";
                     remove.Parameters.AddWithValue("$loser", incomingWins ? localKey : incomingKey);
@@ -768,25 +799,25 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     {
         // An expression index column (the tag sibling index's COALESCE) reaches us as its
         // expression text; only real columns can be looked up, and they identify the row.
-        columns = [.. columns.Where(schema.Columns(table.Table).Contains)];
-        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        columns = [.. columns.Where(column => schema.HasColumn(table.Table, column))];
+        var winnerValues = WinnerValues(merge);
+        var values = new List<object?>();
         foreach (var column in columns)
         {
-            var fromChange = merge.Winners.Values.SelectMany(winner => winner.Values.Values).FirstOrDefault(pair => pair.Key.Equals(column, StringComparison.OrdinalIgnoreCase));
-            if (fromChange.Key is null)
+            if (!winnerValues.TryGetValue(column, out var value))
             {
                 return null; // the incoming change does not even carry the conflicting column
             }
 
-            values[column] = fromChange.Value;
+            values.Add(value);
         }
 
         using var command = connection.CreateCommand();
-        var where = string.Join(" AND ", columns.Select(column => $"{SyncSql.Quote(column)} = $c_{column}"));
+        var where = string.Join(" AND ", columns.Select((column, position) => $"{SyncSql.Quote(column)} = $c{position}"));
         command.CommandText = $"SELECT {string.Join(", ", table.Key.Select(SyncSql.Quote))} FROM {SyncSql.Quote(table.Table)} WHERE {where}{PartialIndexPredicate(index)} LIMIT 1;";
-        foreach (var (column, value) in values)
+        for (var position = 0; position < values.Count; position++)
         {
-            command.Parameters.AddWithValue($"$c_{column}", value ?? DBNull.Value);
+            command.Parameters.AddWithValue($"$c{position}", values[position] ?? DBNull.Value);
         }
 
         using var reader = command.ExecuteReader();
@@ -826,8 +857,19 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             return; // the loser is the incoming row: its rename happens in WriteLoserAsync
         }
 
-        var name = row.GetString(0);
-        var space = row.GetString(1);
+        var (candidate, normalized) = FirstFreeName(connection, table, row.GetString(1), row.GetString(0));
+        using var rename = connection.CreateCommand();
+        rename.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET Name = $name, NormalizedName = $norm, Version = Version + 1, UpdatedAtUtc = $wall WHERE {Where(table, loser)};";
+        rename.Parameters.AddWithValue("$name", candidate);
+        rename.Parameters.AddWithValue("$norm", normalized);
+        rename.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
+        BindKey(rename, table, loser);
+        rename.ExecuteNonQuery();
+    }
+
+    /// <summary>The first free numbered name "<c>name (n)</c>", n from 2, in one space of a named table.</summary>
+    private static (string Name, string Normalized) FirstFreeName(SqliteConnection connection, SyncTable table, string space, string name)
+    {
         for (var attempt = 2; ; attempt++)
         {
             var candidate = $"{name} ({attempt})";
@@ -838,14 +880,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             taken.Parameters.AddWithValue("$norm", normalized);
             if (taken.ExecuteScalar() is null)
             {
-                using var rename = connection.CreateCommand();
-                rename.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET Name = $name, NormalizedName = $norm, Version = Version + 1, UpdatedAtUtc = $wall WHERE {Where(table, loser)};";
-                rename.Parameters.AddWithValue("$name", candidate);
-                rename.Parameters.AddWithValue("$norm", normalized);
-                rename.Parameters.AddWithValue("$wall", StorageFormats.Instant(wall));
-                BindKey(rename, table, loser);
-                rename.ExecuteNonQuery();
-                return;
+                return (candidate, normalized);
             }
         }
     }
@@ -855,7 +890,8 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     /// copied to the winner and the loser's row tombstoned, so link keys and their clocks stay
     /// stable across devices), colliding children merge recursively, the rest move, and the loser
     /// is tombstoned. Mirrors TagCommands.MergeAsync at the data level; every timestamp is the
-    /// change's wall time, so all devices write the same rows.
+    /// change's wall time, so all devices write the same rows. A winner link that was itself
+    /// tombstoned comes back, or the item would end up with no active tag at all.
     /// </summary>
     private static void MergeTag(SqliteConnection connection, string winnerKey, string loserKey, string clockText, string wall)
     {
@@ -870,7 +906,8 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             using (var command = connection.CreateCommand())
             {
                 command.CommandText = $"""
-                    INSERT OR IGNORE INTO {table} ({first}, TagId) SELECT {first}, $winner FROM {table} WHERE TagId = $loser AND DeletedAtUtc IS NULL;
+                    INSERT INTO {table} ({first}, TagId) SELECT {first}, $winner FROM {table} WHERE TagId = $loser AND DeletedAtUtc IS NULL
+                    ON CONFLICT ({first}, TagId) DO UPDATE SET DeletedAtUtc = NULL;
                     UPDATE {table} SET DeletedAtUtc = $wall WHERE TagId = $loser AND DeletedAtUtc IS NULL;
                     """;
                 command.Parameters.AddWithValue("$winner", winnerKey);
@@ -885,8 +922,8 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             {
                 clocks.CommandText = $"""
                     INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc)
-                        SELECT '{kind}', {first} || '|' || $winner, 'deleted', $hlc FROM {table} WHERE TagId = $winner AND DeletedAtUtc IS NULL
-                    ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc WHERE excluded.Hlc > SyncClocks.Hlc;
+                        SELECT {SyncSql.Literal(kind)}, {first} || '|' || $winner, 'deleted', $hlc FROM {table} WHERE TagId = $winner AND DeletedAtUtc IS NULL
+                    {SyncSql.ClockConflict(onlyIfNewer: true)};
                     """;
                 clocks.Parameters.AddWithValue("$winner", winnerKey);
                 clocks.Parameters.AddWithValue("$hlc", clockText);
@@ -941,6 +978,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         tombstone.Parameters.AddWithValue("$wall", wall);
         tombstone.ExecuteNonQuery();
     }
+
     /// <summary>Daily pages (§7.6): the loser's text is appended to the winner, then it is tombstoned and its tags move.</summary>
     private static MergeResult AppendText(
         SqliteConnection connection, bool incomingWins, string localKey, string incomingKey, MergeResult merge, DateTimeOffset wall, string clockText)
@@ -952,7 +990,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         {
             // The local row is the loser: its text is appended to the incoming winner when that is
             // written, and the local row is tombstoned with its links moved.
-            var localText = Text(connection, $"SELECT RawMarkdown FROM Pages WHERE Id = {SyncSql.Literal(localKey)};") ?? string.Empty;
+            var localText = SyncSql.Text(connection, $"SELECT RawMarkdown FROM Pages WHERE Id = {SyncSql.Literal(localKey)};") ?? string.Empty;
             var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal);
             if (winners.TryGetValue("text", out var winnerText))
             {
@@ -967,15 +1005,18 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
             merge = merge with { Winners = winners };
 
-            // The loser's page tags become the winner's: a link only the loser had is copied to
-            // the winner and the loser's row tombstoned, so link keys and clocks stay stable.
+            // The loser's page tags become the winner's: each active link is copied to the winner
+            // (reviving a tombstoned winner link) and the loser's row tombstoned, so link keys and
+            // clocks stay stable. The loser's rows keep their own key: re-keying them to the
+            // winner would collide with the copies on the (PageId, TagId) key.
             using var links = connection.CreateCommand();
-            links.CommandText = """
-                INSERT OR IGNORE INTO PageTags (PageId, TagId) SELECT $winner, TagId FROM PageTags WHERE PageId = $loser AND DeletedAtUtc IS NULL;
+            links.CommandText = $"""
+                INSERT INTO PageTags (PageId, TagId) SELECT $winner, TagId FROM PageTags WHERE PageId = $loser AND DeletedAtUtc IS NULL
+                ON CONFLICT (PageId, TagId) DO UPDATE SET DeletedAtUtc = NULL;
                 UPDATE PageTags SET DeletedAtUtc = $wall WHERE PageId = $loser AND DeletedAtUtc IS NULL;
                 INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc)
                     SELECT 'page_tag', $winner || '|' || TagId, 'deleted', $hlc FROM PageTags WHERE PageId = $winner AND DeletedAtUtc IS NULL
-                ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc WHERE excluded.Hlc > SyncClocks.Hlc;
+                {SyncSql.ClockConflict(onlyIfNewer: true)};
                 """;
             links.Parameters.AddWithValue("$winner", incomingKey);
             links.Parameters.AddWithValue("$loser", localKey);
@@ -984,13 +1025,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             links.ExecuteNonQuery();
 
             using var tombstone = connection.CreateCommand();
-            tombstone.CommandText = """
-                UPDATE Pages SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now WHERE Id = $loser AND DeletedAtUtc IS NULL;
-                UPDATE PageTags SET PageId = $winner, DeletedAtUtc = COALESCE(DeletedAtUtc, $now)
-                    WHERE PageId = $loser AND TagId IN (SELECT TagId FROM PageTags WHERE PageId = $winner);
-                UPDATE PageTags SET PageId = $winner WHERE PageId = $loser;
-                """;
-            tombstone.Parameters.AddWithValue("$winner", incomingKey);
+            tombstone.CommandText = "UPDATE Pages SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now WHERE Id = $loser AND DeletedAtUtc IS NULL;";
             tombstone.Parameters.AddWithValue("$loser", localKey);
             tombstone.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
             tombstone.ExecuteNonQuery();
@@ -1009,7 +1044,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     }
 
     /// <summary>One winner, the other retired (§7.6): the loser is tombstoned (or removed, when its table has no tombstone) and a notice explains.</summary>
-    private static void RetireLoser(SqliteConnection connection, SyncSchema schema, SyncTable table, string loserKey, DateTimeOffset wall, SyncChange change)
+    private void RetireLoser(SqliteConnection connection, SyncSchema schema, SyncTable table, string loserKey, DateTimeOffset wall, SyncChange change)
     {
         var loser = ParseKey(table, loserKey);
         var retire = schema.RetireColumn(table.Table);
@@ -1035,31 +1070,25 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         // winner's task claim.
         if (table.Kind == "recurrence_occurrence")
         {
-            using var task = connection.CreateCommand();
-            task.CommandText = """
-                UPDATE Tasks SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now
-                WHERE Id IN (SELECT TaskId FROM RecurrenceOccurrences WHERE Id = $occurrence AND TaskId IS NOT NULL)
-                  AND Id NOT IN (SELECT TaskId FROM RecurrenceOccurrences WHERE TaskId IS NOT NULL AND DeletedAtUtc IS NULL);
-                UPDATE RecurrenceOccurrences SET TaskId = NULL WHERE Id = $occurrence;
-                """;
-            task.Parameters.AddWithValue("$occurrence", loserKey);
-            task.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
-            task.ExecuteNonQuery();
+            RetireOccurrenceTask(connection, loserKey, wall, clearTaskId: true);
         }
 
         Attention(connection, "sync.retired", table.Kind, loserKey,
             $"Two devices each kept their own {table.Table} row. The one from {(string.CompareOrdinal(change.EntityKey, loserKey) <= 0 ? "another device" : "this device")} was retired; you can restore it from the trash.");
     }
 
-    /// <summary>Retires the task a removed duplicate occurrence pointed at, when no active occurrence still does.</summary>
-    private static void RetireOccurrenceTask(SqliteConnection connection, string occurrenceId, DateTimeOffset wall)
+    /// <summary>
+    /// Retires the task a retired or removed duplicate occurrence pointed at, when no active
+    /// occurrence still does; <paramref name="clearTaskId"/> also releases the occurrence's task claim.
+    /// </summary>
+    private static void RetireOccurrenceTask(SqliteConnection connection, string occurrenceId, DateTimeOffset wall, bool clearTaskId)
     {
         using var task = connection.CreateCommand();
         task.CommandText = """
             UPDATE Tasks SET DeletedAtUtc = $now, Version = Version + 1, UpdatedAtUtc = $now
             WHERE Id IN (SELECT TaskId FROM RecurrenceOccurrences WHERE Id = $occurrence AND TaskId IS NOT NULL)
               AND Id NOT IN (SELECT TaskId FROM RecurrenceOccurrences WHERE TaskId IS NOT NULL AND DeletedAtUtc IS NULL);
-            """;
+            """ + (clearTaskId ? "\nUPDATE RecurrenceOccurrences SET TaskId = NULL WHERE Id = $occurrence;" : string.Empty);
         task.Parameters.AddWithValue("$occurrence", occurrenceId);
         task.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
         task.ExecuteNonQuery();
@@ -1090,21 +1119,9 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     /// <summary>True when the change's occurrence identity (series and nominal key) already has a row here.</summary>
     private static bool OccurrenceIdentityExists(SqliteConnection connection, MergeResult merge)
     {
-        object? series = null;
-        object? nominal = null;
-        foreach (var winner in merge.Winners.Values)
-        {
-            if (winner.Values.Values.TryGetValue("SeriesId", out var candidate) && series is null)
-            {
-                series = candidate;
-            }
-
-            if (winner.Values.Values.TryGetValue("NominalKey", out var keyCandidate) && nominal is null)
-            {
-                nominal = keyCandidate;
-            }
-        }
-
+        var values = WinnerValues(merge);
+        var series = values.GetValueOrDefault("SeriesId");
+        var nominal = values.GetValueOrDefault("NominalKey");
         if (series is null || nominal is null)
         {
             return false;
@@ -1128,34 +1145,14 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             // series-and-nominal twin exists here, the loser row cannot, not even tombstoned —
             // no matter which index the violation named. Its clocks are stored as a watermark
             // so the change does not come back round after round.
-            foreach (var (group, state) in change.Groups)
-            {
-                using var clocks = connection.CreateCommand();
-                clocks.CommandText = """
-                    INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc) VALUES ($kind, $key, $group, $hlc)
-                    ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc WHERE excluded.Hlc > SyncClocks.Hlc;
-                    """;
-                clocks.Parameters.AddWithValue("$kind", table.Kind);
-                clocks.Parameters.AddWithValue("$key", change.EntityKey);
-                clocks.Parameters.AddWithValue("$group", group);
-                clocks.Parameters.AddWithValue("$hlc", state.Hlc.Encode());
-                clocks.ExecuteNonQuery();
-            }
-
+            StoreLoserClocks(connection, table, change);
             return;
         }
 
         if (table.Kind == "tag")
         {
             // The tag merge moved links and tombstoned; insert the loser row itself, tombstoned.
-            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var winner in merge.Winners.Values)
-            {
-                foreach (var (column, value) in winner.Values.Values)
-                {
-                    values[column] = value;
-                }
-            }
+            var values = WinnerValues(merge);
 
             using var insert = connection.CreateCommand();
             insert.CommandText = """
@@ -1176,18 +1173,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             insert.ExecuteNonQuery();
 
             // The loser's groups carry the same clocks everywhere, so a replay never re-runs the merge.
-            foreach (var (group, state) in change.Groups)
-            {
-                using var clocks = connection.CreateCommand();
-                clocks.CommandText = """
-                    INSERT INTO SyncClocks (Kind, EntityKey, GroupName, Hlc) VALUES ('tag', $key, $group, $hlc)
-                    ON CONFLICT (Kind, EntityKey, GroupName) DO UPDATE SET Hlc = excluded.Hlc WHERE excluded.Hlc > SyncClocks.Hlc;
-                    """;
-                clocks.Parameters.AddWithValue("$key", change.EntityKey);
-                clocks.Parameters.AddWithValue("$group", group);
-                clocks.Parameters.AddWithValue("$hlc", state.Hlc.Encode());
-                clocks.ExecuteNonQuery();
-            }
+            StoreLoserClocks(connection, table, change);
         }
         else if (rule.Kind is SyncUniqueRuleKind.KeepLowestRetireOther or SyncUniqueRuleKind.RepointChildren or SyncUniqueRuleKind.AppendText
             && schema.RetireColumn(table.Table) is { } retire
@@ -1204,43 +1190,50 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         else if (rule.Kind == SyncUniqueRuleKind.RenameLoser)
         {
             // A renamed incoming loser lands under the first free numbered name in its own space.
-            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var winner in merge.Winners.Values)
+            var values = WinnerValues(merge);
+            if (values.GetValueOrDefault("Name") is string name && values.GetValueOrDefault("SpaceId") is string space)
             {
-                foreach (var (column, value) in winner.Values.Values)
+                var (candidate, normalized) = FirstFreeName(connection, table, space, name);
+                var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal)
                 {
-                    values[column] = value;
-                }
-            }
-
-            if (values.TryGetValue("Name", out var rawName) && rawName is string name && values.GetValueOrDefault("SpaceId") is string space)
-            {
-                for (var attempt = 2; ; attempt++)
-                {
-                    var candidate = $"{name} ({attempt})";
-                    var normalized = candidate.Trim().ToLowerInvariant();
-                    using var taken = connection.CreateCommand();
-                    taken.CommandText = $"SELECT 1 FROM {SyncSql.Quote(table.Table)} WHERE SpaceId = $space AND NormalizedName = $norm LIMIT 1;";
-                    taken.Parameters.AddWithValue("$space", space);
-                    taken.Parameters.AddWithValue("$norm", normalized);
-                    if (taken.ExecuteScalar() is null)
-                    {
-                        var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal)
+                    ["name"] = new SyncGroupState(
+                        change.Groups.TryGetValue("name", out var state) ? state.Hlc : change.Groups.Values.First().Hlc,
+                        new SyncGroupValues(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
                         {
-                            ["name"] = new SyncGroupState(
-                                change.Groups.TryGetValue("name", out var state) ? state.Hlc : change.Groups.Values.First().Hlc,
-                                new SyncGroupValues(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                                {
-                                    ["Name"] = candidate,
-                                    ["NormalizedName"] = normalized,
-                                })),
-                        };
-                        await WriteWinnersAsync(connection, schema, table, key, exists: false, merge with { Winners = winners }, wall, change, ct);
-                        return;
-                    }
-                }
+                            ["Name"] = candidate,
+                            ["NormalizedName"] = normalized,
+                        })),
+                };
+                await WriteWinnersAsync(connection, schema, table, key, exists: false, merge with { Winners = winners }, wall, change, ct);
             }
         }
+    }
+
+    /// <summary>
+    /// Stores an incoming loser's clocks as a watermark, so the change does not win again on a
+    /// replay; a higher stored clock is kept.
+    /// </summary>
+    private static void StoreLoserClocks(SqliteConnection connection, SyncTable table, SyncChange change)
+    {
+        foreach (var (group, state) in change.Groups)
+        {
+            SyncSql.UpsertClock(connection, table.Kind, change.EntityKey, group, state.Hlc.Encode(), onlyIfNewer: true);
+        }
+    }
+
+    /// <summary>The winning groups' values flattened to column → value (each column belongs to one group).</summary>
+    private static Dictionary<string, object?> WinnerValues(MergeResult merge)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var winner in merge.Winners.Values)
+        {
+            foreach (var (column, value) in winner.Values.Values)
+            {
+                values[column] = value;
+            }
+        }
+
+        return values;
     }
 
     // ---- History (§7.7) ---------------------------------------------------------------------
@@ -1266,7 +1259,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         switch (table.Kind)
         {
             case "task" or "subtask":
-                var taskId = table.Kind == "task" ? key["Id"] : Text(connection, $"SELECT TaskId FROM Subtasks WHERE Id = {SyncSql.Literal(key["Id"])};");
+                var taskId = table.Kind == "task" ? key["Id"] : SyncSql.Text(connection, $"SELECT TaskId FROM Subtasks WHERE Id = {SyncSql.Literal(key["Id"])};");
                 if (taskId is null)
                 {
                     return;
@@ -1274,7 +1267,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
                 using (var history = connection.CreateCommand())
                 {
-                    var version = Scalar(connection, $"SELECT Version FROM Tasks WHERE Id = {SyncSql.Literal(taskId)};");
+                    var version = SyncSql.Scalar(connection, $"SELECT Version FROM Tasks WHERE Id = {SyncSql.Literal(taskId)};");
                     history.CommandText = """
                         INSERT INTO TaskHistory (Id, TaskId, OperationId, EffectiveAtUtc, Actor, EventKind, ChangedFields, SnapshotBefore, SnapshotAfter, AggregateVersion, RecordedAtUtc)
                         VALUES ($id, $task, $operation, $effective, 'sync', 'sync.merged', $changed, $before, $after, $aggregate, $recorded);
@@ -1296,9 +1289,9 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                 // §7.7: the replaced text becomes a page revision, so "Versions" shows it.
                 using (var revision = connection.CreateCommand())
                 {
-                    var number = Scalar(connection, $"SELECT COALESCE(MAX(Number), 0) + 1 FROM PageRevisions WHERE PageId = {SyncSql.Literal(key["Id"])};");
-                    var title = Text(connection, $"SELECT Title FROM Pages WHERE Id = {SyncSql.Literal(key["Id"])};") ?? string.Empty;
-                    var markdown = Text(connection, $"SELECT RawMarkdown FROM Pages WHERE Id = {SyncSql.Literal(key["Id"])};") ?? string.Empty;
+                    var number = SyncSql.Scalar(connection, $"SELECT COALESCE(MAX(Number), 0) + 1 FROM PageRevisions WHERE PageId = {SyncSql.Literal(key["Id"])};");
+                    var title = SyncSql.Text(connection, $"SELECT Title FROM Pages WHERE Id = {SyncSql.Literal(key["Id"])};") ?? string.Empty;
+                    var markdown = SyncSql.Text(connection, $"SELECT RawMarkdown FROM Pages WHERE Id = {SyncSql.Literal(key["Id"])};") ?? string.Empty;
                     revision.CommandText = """
                         INSERT INTO PageRevisions (PageId, Number, Title, RawMarkdown, CreatedAtUtc, UpdatedAtUtc)
                         VALUES ($page, $number, $title, $markdown, $created, $updated);
@@ -1363,8 +1356,17 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
     // ---- Parking and attention (§7.8, §7.9) --------------------------------------------------
 
-    private static void Park(SqliteConnection connection, SyncChange change, string payload, string reason)
+    /// <summary>Parks a change (§7.8); true when it was not parked before, so its attention item is raised only once.</summary>
+    private bool Park(SqliteConnection connection, SyncChange change, string payload, string reason)
     {
+        bool isNew;
+        using (var exists = connection.CreateCommand())
+        {
+            exists.CommandText = "SELECT 1 FROM SyncInboxParked WHERE ChangeId = $id;";
+            exists.Parameters.AddWithValue("$id", change.ChangeId);
+            isNew = exists.ExecuteScalar() is null;
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO SyncInboxParked (ChangeId, Kind, EntityKey, Op, PayloadJson, Reason, FirstParkedAtUtc, PullCycles)
@@ -1377,8 +1379,9 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         command.Parameters.AddWithValue("$op", change.Op == SyncOp.Purge ? "purge" : "upsert");
         command.Parameters.AddWithValue("$payload", payload);
         command.Parameters.AddWithValue("$reason", reason);
-        command.Parameters.AddWithValue("$now", StorageFormats.Instant(DateTimeOffset.UtcNow));
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(clock.GetUtcNow()));
         command.ExecuteNonQuery();
+        return isNew;
     }
 
     private static List<(string ChangeId, string Payload)> ReadParked(SqliteConnection connection)
@@ -1413,7 +1416,16 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         command.ExecuteNonQuery();
     }
 
-    private static void Attention(SqliteConnection connection, string category, string? kind, string? entityKey, string message)
+    private static bool OpenAttentionExists(SqliteConnection connection, string category, string entityKey)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM SyncAttention WHERE Category = $category AND EntityKey = $key AND ResolvedAtUtc IS NULL LIMIT 1;";
+        command.Parameters.AddWithValue("$category", category);
+        command.Parameters.AddWithValue("$key", entityKey);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private void Attention(SqliteConnection connection, string category, string? kind, string? entityKey, string message)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -1425,7 +1437,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$key", (object?)entityKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$message", message);
-        command.Parameters.AddWithValue("$now", StorageFormats.Instant(DateTimeOffset.UtcNow));
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(clock.GetUtcNow()));
         command.ExecuteNonQuery();
     }
 
@@ -1445,26 +1457,5 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     private static void Bind(SqliteCommand command, string name, object? value)
     {
         command.Parameters.AddWithValue(name, value ?? DBNull.Value);
-    }
-
-    private static string? Text(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        return command.ExecuteScalar() as string;
-    }
-
-    private static long Scalar(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-    }
-
-    private static void Execute(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
     }
 }

@@ -1,12 +1,24 @@
 using System.Text.Json;
+using Chaos.Application.Contracts;
 using Chaos.Infrastructure.Sqlite;
 using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Tests.Sync;
 
-/// <summary>Sync-enabled observation helpers for the capture tests (PLAN2 §7.3).</summary>
+/// <summary>
+/// Shared helpers of the sync and link tests (PLAN2 §7.3): operation ids, task capture, sync
+/// enablement and one-value queries. Test classes import them with <c>using static</c>.
+/// </summary>
 internal static class SyncTestHelpers
 {
+    /// <summary>A fresh operation id for a command.</summary>
+    public static string Op() => Guid.NewGuid().ToString();
+
+    public static async Task<TaskRecord> CaptureTaskAsync(DataProtection.DataHost host, string title = "Synced thing", string? notes = null) =>
+        (await host.Tasks.CaptureAsync(new(Op(), string.Empty, title, notes))).Task;
+
+    public static Task<long> CountAsync(DataProtection.DataHost host, string sql) => host.CountAsync(sql);
+
     /// <summary>Turns sync on; the flush then turns pended groups into outbox changes.</summary>
     public static Task EnableSyncAsync(DataProtection.DataHost host) =>
         host.Store.ExecuteAsync(async (session, token) =>

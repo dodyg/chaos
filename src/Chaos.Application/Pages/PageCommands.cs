@@ -434,11 +434,6 @@ public sealed partial class PageCommands(IApplicationStore store, IIdGenerator i
                     return new PagesResult([page], Replayed: false);
                 }
 
-                if (page.DailyDate is { } date && await session.Pages.FindDailyAsync(page.SpaceId, date, inner) is not null)
-                {
-                    throw AppException.Validation("pageId", "That day already has a daily page. Copy what you need from the deleted page's versions instead.");
-                }
-
                 var parentActive = page.ParentPageId is null || await session.Pages.GetAsync(page.ParentPageId, inner) is not null;
                 var deleted = await session.Pages.ListDeletedBySpaceAsync(page.SpaceId, inner);
                 var changed = new List<PageRecord>();
@@ -646,11 +641,25 @@ public sealed partial class PageCommands(IApplicationStore store, IIdGenerator i
 
     private async Task<PageRecord> AddPageAsync(IDataSession session, string spaceId, string? parentId, string title, string markdown, DateOnly? daily, DateTimeOffset now, CancellationToken token)
     {
+        // §7.5: a daily page's id is its natural key (one page per space and date); ordinary
+        // pages have no natural key and keep random ids.
+        var id = daily is { } date ? StorageFormats.NameBasedId(NameBasedId.Names.DailyPage(spaceId, date)) : ids.NewId().ToString();
+
+        // A deleted daily page keeps its row (and so its id) for restore and undo: writing that
+        // day again revives the row with the new text instead of inserting a second one. Its
+        // earlier text stays in the version trail.
+        if (daily is not null && await session.Pages.GetIncludingDeletedAsync(id, token) is { DeletedAtUtc: not null } deleted)
+        {
+            var revived = await session.Pages.UpdateAsync(
+                deleted with { Title = title, RawMarkdown = markdown, DeletedAtUtc = null, DraftVersion = deleted.DraftVersion + 1, Version = deleted.Version + 1, UpdatedAtUtc = now },
+                deleted.Version, token) ?? throw Conflict();
+            await RecordRevisionAsync(session, revived, now, forceNew: true, token);
+            return revived;
+        }
+
         var page = new PageRecord
         {
-            // §7.5: a daily page's id is its natural key (one page per space and date); ordinary
-            // pages have no natural key and keep random ids.
-            Id = daily is { } date ? StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.DailyPage(spaceId, date))) : ids.NewId().ToString(),
+            Id = id,
             SpaceId = spaceId,
             ParentPageId = parentId,
             Title = title,

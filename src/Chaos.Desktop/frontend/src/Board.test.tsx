@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
@@ -19,7 +19,7 @@ Object.defineProperties(globalThis, {
   requestAnimationFrame: { value: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), configurable: true },
   cancelAnimationFrame: { value: (handle: number) => clearTimeout(handle), configurable: true },
 });
-const { render, screen, waitFor, cleanup, fireEvent, createEvent } = await import("@testing-library/react");
+const { render, screen, waitFor, cleanup, fireEvent, createEvent, act } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { Board, dropPlacement, loadLayout, saveLayout } = await import("./Board");
 
@@ -87,6 +87,21 @@ function dropAt(element: HTMLElement, clientY: number) {
 
 const placementOf = (request: Record<string, unknown>) => ({ beforeTaskId: request.beforeTaskId, afterTaskId: request.afterTaskId });
 
+afterEach(() => cleanup());
+
+/**
+ * The focused element's accessible label. Compare labels, not elements: a failed assertion on
+ * two jsdom elements makes node:assert inspect the whole DOM, which stalls a retrying waitFor.
+ */
+const focusedLabel = () => dom.window.document.activeElement?.getAttribute("aria-label") ?? null;
+
+/** A card's actions button once the board is usable again (a write reads the board again first). */
+async function actionsOf(title: string) {
+  const button = screen.getByRole("button", { name: `Actions for ${title}` }) as HTMLButtonElement;
+  await waitFor(() => assert.equal(button.disabled, false));
+  return button;
+}
+
 function mount(api: Parameters<typeof Board>[0]["api"], onOpen: (task: TaskResponse) => void = () => {}) {
   return render(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={onOpen} onChanged={() => {}} api={api}/>, { container: dom.window.document.body });
 }
@@ -111,14 +126,12 @@ test("columns and cards render, and a column over its WIP limit shows count / li
   assert.ok(screen.getByText("First"));
   const warning = screen.getByText("2 / 1");
   assert.equal(warning.closest("h4")?.textContent?.includes("In progress"), true);
-  cleanup();
 });
 
 test("a truncated board says how much is hidden", async () => {
   const { api } = fakes({ cards: [card(task("a", "Only one"))], truncated: true, totalCount: 12 });
   mount(api);
   assert.ok(await screen.findByText("1 of 12 shown, filter to see more"));
-  cleanup();
 });
 
 test("a drop is placed next to the card seen beside it, or nowhere when the card is already there", () => {
@@ -148,7 +161,6 @@ test("dragging a card into another column calls board.move with the columns and 
   assert.equal(request.groupBy, "Status");
   assert.ok(typeof request.operationId === "string" && request.operationId.length > 0);
   assert.equal(request.expectedVersion, "1");
-  cleanup();
 });
 
 test("after a move the board reads itself again, so the next move sends the new version", async () => {
@@ -170,19 +182,19 @@ test("after a move the board reads itself again, so the next move sends the new 
     },
     updateSettings: async () => ({ ok: true, settings: defaultSettings, error: null }),
   } as unknown as Parameters<typeof Board>[0]["api"];
-  mount(api); // onChanged does not change `revision`, as in the list page
+  mount(api); // onChanged here does not change `revision`: the board reads itself again
   await screen.findByText("First");
   const menuOf = (title: string) => screen.getByRole("button", { name: `Actions for ${title}` });
   await user.click(menuOf("First"));
   await user.click(screen.getByRole("menuitem", { name: "Move down" }));
   await waitFor(() => assert.equal(moves.length, 1));
   await waitFor(() => assert.equal(reads, 2, "the board was read again after the move"), { timeout: 3000 });
+  await waitFor(() => assert.equal((menuOf("Second") as HTMLButtonElement).disabled, false, "the board is usable once the read lands"));
   await user.click(menuOf("Second"));
   await user.click(screen.getByRole("menuitem", { name: "Move up" }));
   await waitFor(() => assert.equal(moves.length, 2));
   assert.equal(moves[1].expectedVersion, "2");
   assert.equal(screen.queryByText(/changed elsewhere/), null);
-  cleanup();
 });
 
 test("dropping below the last card of another column places it after that card", async () => {
@@ -195,7 +207,6 @@ test("dropping below the last card of another column places it after that card",
   dropAt(screen.getByRole("region", { name: /In progress column/ }), 1);
   await waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual(placementOf(calls[0].request), { beforeTaskId: null, afterTaskId: "b" });
-  cleanup();
 });
 
 test("dragging within a column reorders it, and dropping on the same place moves nothing", async () => {
@@ -212,7 +223,6 @@ test("dragging within a column reorders it, and dropping on the same place moves
   assert.deepEqual(
     { taskId: calls[0].request.taskId, fromColumn: calls[0].request.fromColumn, toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) },
     { taskId: "b", fromColumn: "NotStarted", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null });
-  cleanup();
 });
 
 test("an empty cell shows where the dragged card will land, and ending the drag clears it", async () => {
@@ -226,7 +236,6 @@ test("an empty cell shows where the dragged card will land, and ending the drag 
   assert.ok(await screen.findByText("Drop here."));
   fireEvent.dragEnd(screen.getByLabelText("First"), { dataTransfer: dataTransfer() });
   await waitFor(() => assert.equal(screen.queryByText("Drop here."), null));
-  cleanup();
 });
 
 test("a card keeps its swimlane: another lane refuses the drop", async () => {
@@ -245,7 +254,6 @@ test("a card keeps its swimlane: another lane refuses the drop", async () => {
   dropAt(screen.getByRole("region", { name: "High · In progress column" }), 0);
   await waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual({ toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) }, { toColumn: "InProgress", beforeTaskId: null, afterTaskId: null });
-  cleanup();
 });
 
 test("a refused move keeps the board on screen and says why", async () => {
@@ -257,7 +265,6 @@ test("a refused move keeps the board on screen and says why", async () => {
   dropAt(screen.getByRole("region", { name: /In progress column/ }), 0);
   assert.ok(await screen.findByText(/changed elsewhere/));
   assert.ok(screen.getByText("First"), "the board stays drawn");
-  cleanup();
 });
 
 test("arrow keys walk the cards across columns and Enter opens the task", async () => {
@@ -276,7 +283,6 @@ test("arrow keys walk the cards across columns and Enter opens the task", async 
   assert.equal(dom.window.document.activeElement, screen.getByLabelText("First"));
   fireEvent.keyDown(screen.getByLabelText("First"), { key: "Enter" });
   assert.deepEqual(opened.map(item => item.id), ["a"]);
-  cleanup();
 });
 
 test("the card menu moves a card up and to another column", async () => {
@@ -291,12 +297,11 @@ test("the card menu moves a card up and to another column", async () => {
   await waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual({ taskId: calls[0].request.taskId, toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) }, { taskId: "b", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null });
 
-  await user.click(screen.getByRole("button", { name: "Actions for First" }));
+  await user.click(await actionsOf("First"));
   await user.click(screen.getByRole("menuitem", { name: "Move to column…" }));
   await user.click(screen.getByRole("menuitem", { name: "Move to In progress" }));
   await waitFor(() => assert.equal(calls.length, 2));
   assert.deepEqual({ taskId: calls[1].request.taskId, toColumn: calls[1].request.toColumn, ...placementOf(calls[1].request) }, { taskId: "a", toColumn: "InProgress", beforeTaskId: null, afterTaskId: null });
-  cleanup();
 });
 
 test("moving to Done with open subtasks asks and retries with the chosen handling", async () => {
@@ -313,7 +318,6 @@ test("moving to Done with open subtasks asks and retries with the chosen handlin
   await waitFor(() => assert.equal(calls.length, 2));
   assert.equal(calls[1].request.subtaskChoice, "KeepOpen");
   assert.equal(calls[1].request.toColumn, "Done");
-  cleanup();
 });
 
 test("board settings save grouping, WIP limits and hidden columns in one updateSettings call", async () => {
@@ -335,7 +339,6 @@ test("board settings save grouping, WIP limits and hidden columns in one updateS
   assert.equal(request.expectedVersion, "3", "the settings version, 0 meaning create");
   assert.equal(request.wipLimitsJson, '{"InProgress":2}');
   assert.equal(request.hiddenColumnsJson, '["InProgress"]');
-  cleanup();
 });
 
 test("hidden columns are not drawn until they are unhidden in the settings", async () => {
@@ -347,5 +350,37 @@ test("hidden columns are not drawn until they are unhidden in the settings", asy
   mount(api);
   assert.ok(await screen.findByText("First"));
   assert.equal(screen.queryByRole("heading", { level: 4, name: /Done/ }), null, "the hidden column is not drawn");
-  cleanup();
+});
+
+test("after a menu move the moved card has the focus, and Escape in a menu returns to its button", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  const { api } = fakes({ cards: [card(task("a", "First")), card(task("b", "Second"))] });
+  mount(api);
+  await screen.findByText("Second");
+  await user.click(await actionsOf("Second"));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(focusedLabel(), "Actions for Second");
+
+  await user.click(await actionsOf("Second"));
+  await user.click(screen.getByRole("menuitem", { name: "Move up" }));
+  await waitFor(() => assert.equal(focusedLabel(), "Second"));
+});
+
+test("one card is always in the Tab order, even when the last focused card has left the board", async () => {
+  let cards = [card(task("a", "First")), card(task("b", "Second"))];
+  const api = {
+    get: async () => ({ ok: true, error: null, settings: defaultSettings, columns: statusColumns, lanes: [{ key: "", title: "All tasks", isNone: true }], cards, totalCount: cards.length, truncated: false }),
+    move: async () => ({ ok: true, task: null, error: null, warning: null }),
+    updateSettings: async () => ({ ok: true, settings: defaultSettings, error: null }),
+  } as unknown as Parameters<typeof Board>[0]["api"];
+  const view = render(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={() => {}} onChanged={() => {}} api={api}/>, { container: dom.window.document.body });
+  await screen.findByText("Second");
+  act(() => screen.getByLabelText("Second").focus());
+  assert.equal(screen.getByLabelText("Second").tabIndex, 0);
+  assert.equal(screen.getByLabelText("First").tabIndex, -1);
+  cards = [cards[0]];
+  view.rerender(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={1} onOpen={() => {}} onChanged={() => {}} api={api}/>);
+  await waitFor(() => assert.equal(screen.queryByLabelText("Second"), null));
+  assert.equal(screen.getByLabelText("First").tabIndex, 0, "the first card takes the Tab stop");
 });

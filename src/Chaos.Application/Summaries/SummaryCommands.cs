@@ -411,7 +411,7 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
         {
             // §7.5: summary:{profileId}:{kind}:{periodStart}:{revision}; kind spells the enum name and
             // revisions count regenerations, so they stay small (int in the name).
-            Id = StorageFormats.Id(NameBasedId.Create(NameBasedId.Names.Summary(context.Profile.Id, kind.ToString(), start, (int)revision))),
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.Summary(context.Profile.Id, kind.ToString(), start, (int)revision)),
             ProfileId = context.Profile.Id,
             Kind = kind,
             PeriodStart = start,

@@ -10,6 +10,7 @@ using Chaos.Infrastructure.Tests.Testing;
 using Chaos.Infrastructure.Transfer;
 using System.Security.Cryptography;
 using System.Text.Json;
+using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
 namespace Chaos.Infrastructure.Tests;
 
@@ -21,11 +22,6 @@ namespace Chaos.Infrastructure.Tests;
 /// </summary>
 public sealed class LinkTombstoneTests
 {
-    private static string Op() => Guid.NewGuid().ToString();
-
-    private static async Task<TaskRecord> CaptureTaskAsync(DataHost host, string title = "Tagged thing") =>
-        (await host.Tasks.CaptureAsync(new(Op(), string.Empty, title, null))).Task;
-
     private static async Task<TagRecord> TagAsync(DataHost host, string path)
     {
         var tags = new TagCommands(host.Store, host.Ids, host.Clock);
@@ -43,17 +39,6 @@ public sealed class LinkTombstoneTests
         var tags = new TagCommands(host.Store, host.Ids, host.Clock);
         await tags.UnlinkAsync(new(Op(), kind, targetId, tagId));
     }
-
-    private static async Task<long> CountAsync(DataHost host, string sql) => await host.CountAsync(sql);
-
-    private static async Task<string> TextAsync(DataHost host, string sql) =>
-        await host.Store.QueryAsync(async (session, token) =>
-        {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
-            command.CommandText = sql;
-            var value = await command.ExecuteScalarAsync(token);
-            return value as string ?? throw new InvalidOperationException($"No text result for: {sql}");
-        });
 
     private static async Task<IReadOnlyList<string>> ListPageTagIdsAsync(DataHost host, string pageId) =>
         await host.Store.QueryAsync((session, token) => session.Pages.ListTagIdsAsync(pageId, token));

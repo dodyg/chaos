@@ -56,3 +56,18 @@ test("the preview board keeps settings per container, versioned from zero", asyn
   const other = await get({ containerId: "home", category: null, showCancelled: false });
   assert.equal(other.settings.groupBy, "Status", "another container keeps the defaults");
 });
+
+test("a preview move writes one history entry and bumps the cards it reranks, like the real command", async () => {
+  const board = await get({ containerId: "sprint", category: null, showCancelled: false });
+  const [first, second] = board.cards.map((c: Any) => c.task);
+  assert.ok(first && second, "the sprint container has two cards to reorder");
+  const undoBefore = (await handle("undo.list", { limit: 100 }) as Any).entries.length;
+  const result = await move({ taskId: second.id, expectedVersion: second.version, groupBy: "Status", fromColumn: second.status, toColumn: second.status, beforeTaskId: first.id });
+  assert.equal(result.ok, true);
+  assert.equal((await handle("undo.list", { limit: 100 }) as Any).entries.length, undoBefore + 1, "one entry for the whole move");
+  const after = await get({ containerId: "sprint", category: null, showCancelled: false });
+  assert.notEqual(after.cards.find((c: Any) => c.task.id === first.id).task.version, first.version, "the card it was reranked past has a new version");
+
+  const unknown = await move({ taskId: second.id, expectedVersion: result.task.version, groupBy: "Status", toColumn: "Nowhere" });
+  assert.equal(unknown.ok, false, "a column that is not a status is refused");
+});

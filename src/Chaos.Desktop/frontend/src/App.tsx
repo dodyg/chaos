@@ -744,7 +744,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <ListPage tasks={tasks} deleted={deleted} sections={sections} setSections={setSections} containers={containers} containerId={containerId} selected={selected}
-          busy={busy} setBusy={setBusy} setError={setError} run={run} runContainer={runContainer} refresh={refresh} refreshContainers={refreshContainers}
+          busy={busy} setBusy={setBusy} setError={setError} run={run} runContainer={runContainer} refresh={refresh} changed={changed} refreshContainers={refreshContainers}
           onDeleted={async () => { if (selectedContainer.current === containerId) selectContainer(""); await refreshContainers(); }}
           isStillSelected={id => selectedContainer.current === id}
           editingId={editing?.id ?? null} setEditing={setEditing} onOpen={(task, viewing) => { setViewingTask(viewing); setEditing(task); }}

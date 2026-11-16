@@ -82,13 +82,14 @@ public sealed class SqliteBoardStore(SqliteConnection connection) : IBoardStore
         command.CommandText = """
             SELECT Tasks.*,
                 (SELECT COUNT(*) FROM Subtasks s WHERE s.TaskId = Tasks.Id AND s.DeletedAtUtc IS NULL) AS Subtotal,
-                (SELECT COUNT(*) FROM Subtasks s WHERE s.TaskId = Tasks.Id AND s.DeletedAtUtc IS NULL AND s.Status = 4) AS Subdone,
+                (SELECT COUNT(*) FROM Subtasks s WHERE s.TaskId = Tasks.Id AND s.DeletedAtUtc IS NULL AND s.Status = $done) AS Subdone,
                 EXISTS (SELECT 1 FROM GitHubIssueLinks l WHERE l.TaskId = Tasks.Id) AS HasIssue
             FROM Tasks
             WHERE Tasks.ContainerId = $container AND Tasks.DeletedAtUtc IS NULL
             ORDER BY Tasks.Position, Tasks.Id;
             """;
         command.Parameters.AddWithValue("$container", containerId);
+        command.Parameters.AddWithValue("$done", (int)TaskItemStatus.Done);
         using var reader = await command.ExecuteReaderAsync(ct);
         var rows = new List<BoardCardRow>();
         while (await reader.ReadAsync(ct))
@@ -110,6 +111,7 @@ public sealed class SqliteBoardStore(SqliteConnection connection) : IBoardStore
             SELECT tt.TaskId, tt.TagId
             FROM TaskTags tt
             JOIN Tasks t ON t.Id = tt.TaskId
+            JOIN Tags g ON g.Id = tt.TagId AND g.DeletedAtUtc IS NULL
             WHERE t.ContainerId = $container AND t.DeletedAtUtc IS NULL AND tt.DeletedAtUtc IS NULL
             ORDER BY tt.TaskId, tt.TagId;
             """;

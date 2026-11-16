@@ -123,7 +123,7 @@ public static class SyncTriggerInstaller
 
         foreach (var name in names)
         {
-            Execute(connection, transaction, "DROP TRIGGER IF EXISTS " + Quote(name) + ";");
+            Execute(connection, transaction, "DROP TRIGGER IF EXISTS " + SyncSql.Quote(name) + ";");
         }
     }
 
@@ -135,11 +135,10 @@ public static class SyncTriggerInstaller
     {
         var body = string.Join("\n  ", table.Groups.Select(group =>
         {
-            var key = Key("NEW", table.Key);
-            return $"INSERT INTO SyncPending (Kind, EntityKey, GroupName) SELECT '{table.Kind}', {key}, '{group.Name}' WHERE NOT EXISTS (SELECT 1 FROM SyncPending WHERE Kind = '{table.Kind}' AND EntityKey = {key} AND GroupName = '{group.Name}');";
+            return PendingInsert(table, Key("NEW", table.Key), group.Name, condition: null);
         }));
         return $"""
-            CREATE TRIGGER {TriggerPrefix}{table.Table}_Insert AFTER INSERT ON {Quote(table.Table)}
+            CREATE TRIGGER {TriggerName(table, "Insert")} AFTER INSERT ON {SyncSql.Quote(table.Table)}
                 WHEN (SELECT Applying FROM SyncApplyState WHERE Id = 1) = 0
             BEGIN
               {body}
@@ -151,12 +150,11 @@ public static class SyncTriggerInstaller
     {
         var body = string.Join("\n  ", table.Groups.Select(group =>
         {
-            var changed = string.Join(" OR ", group.Columns.Select(column => $"OLD.{Quote(column)} IS NOT NEW.{Quote(column)}"));
-            var key = Key("NEW", table.Key);
-            return $"INSERT INTO SyncPending (Kind, EntityKey, GroupName) SELECT '{table.Kind}', {key}, '{group.Name}' WHERE ({changed}) AND NOT EXISTS (SELECT 1 FROM SyncPending WHERE Kind = '{table.Kind}' AND EntityKey = {key} AND GroupName = '{group.Name}');";
+            var changed = string.Join(" OR ", group.Columns.Select(column => $"OLD.{SyncSql.Quote(column)} IS NOT NEW.{SyncSql.Quote(column)}"));
+            return PendingInsert(table, Key("NEW", table.Key), group.Name, condition: changed);
         }));
         return $"""
-            CREATE TRIGGER {TriggerPrefix}{table.Table}_Update AFTER UPDATE ON {Quote(table.Table)}
+            CREATE TRIGGER {TriggerName(table, "Update")} AFTER UPDATE ON {SyncSql.Quote(table.Table)}
                 WHEN (SELECT Applying FROM SyncApplyState WHERE Id = 1) = 0
             BEGIN
               {body}
@@ -166,21 +164,29 @@ public static class SyncTriggerInstaller
 
     private static string CreateDeleteTrigger(SyncTable table)
     {
-        var key = Key("OLD", table.Key);
         return $"""
-            CREATE TRIGGER {TriggerPrefix}{table.Table}_Delete AFTER DELETE ON {Quote(table.Table)}
+            CREATE TRIGGER {TriggerName(table, "Delete")} AFTER DELETE ON {SyncSql.Quote(table.Table)}
                 WHEN (SELECT Applying FROM SyncApplyState WHERE Id = 1) = 0
             BEGIN
-              INSERT INTO SyncPending (Kind, EntityKey, GroupName) SELECT '{table.Kind}', {key}, '{PurgeGroup}' WHERE NOT EXISTS (SELECT 1 FROM SyncPending WHERE Kind = '{table.Kind}' AND EntityKey = {key} AND GroupName = '{PurgeGroup}');
+              {PendingInsert(table, Key("OLD", table.Key), PurgeGroup, condition: null)}
             END;
             """;
     }
 
+    private static string TriggerName(SyncTable table, string verb) => SyncSql.Quote($"{TriggerPrefix}{table.Table}_{verb}");
+
+    /// <summary>One deduplicated SyncPending insert of a trigger body; kind and group are escaped literals.</summary>
+    private static string PendingInsert(SyncTable table, string key, string group, string? condition)
+    {
+        var kind = SyncSql.Literal(table.Kind);
+        var groupLiteral = SyncSql.Literal(group);
+        var where = condition is null ? string.Empty : $"({condition}) AND ";
+        return $"INSERT INTO SyncPending (Kind, EntityKey, GroupName) SELECT {kind}, {key}, {groupLiteral} WHERE {where}NOT EXISTS (SELECT 1 FROM SyncPending WHERE Kind = {kind} AND EntityKey = {key} AND GroupName = {groupLiteral});";
+    }
+
     /// <summary>The entity key: the primary key, or the composite key joined with '|' (§7.3).</summary>
     private static string Key(string prefix, IReadOnlyList<string> key) =>
-        string.Join(" || '|' || ", key.Select(column => $"{prefix}.{Quote(column)}"));
-
-    private static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+        string.Join(" || '|' || ", key.Select(column => $"{prefix}.{SyncSql.Quote(column)}"));
 
     private static void Execute(SqliteConnection connection, SqliteTransaction transaction, string sql)
     {

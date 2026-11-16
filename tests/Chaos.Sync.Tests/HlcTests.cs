@@ -167,6 +167,31 @@ public sealed class HlcTests
     }
 
     [Test]
+    public async Task TickLocal_CounterAtItsMaximum_MovesTheWallOnInsteadOfOverflowing()
+    {
+        var clock = new HybridClock(Guid.NewGuid(), new FixedTimeProvider(Now));
+        clock.Restore(new Hlc(NowMillis, Hlc.MaxCounter, clock.Last.DeviceId));
+
+        var next = clock.TickLocal();
+        await Assert.That(next.WallMillis).IsEqualTo(NowMillis + 1);
+        await Assert.That(next.Counter).IsEqualTo(0);
+        await Assert.That(next.Encode().Length).IsEqualTo(52);
+        await Assert.That(string.CompareOrdinal(next.Encode(), new Hlc(NowMillis, Hlc.MaxCounter, next.DeviceId).Encode())).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task Create_RejectsValuesTheEncodingCannotHold()
+    {
+        var device = Guid.NewGuid();
+        await Assert.That(Hlc.Create(NowMillis, 3, device).Encode()).IsEqualTo(new Hlc(NowMillis, 3, device.ToString("N")).Encode());
+        await Assert.That(() => Hlc.Create(NowMillis, Hlc.MaxCounter + 1, device)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => Hlc.Create(NowMillis, -1, device)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => Hlc.Create(-1, 0, device)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => Hlc.Create(Hlc.MaxWallMillis + 1, 0, device)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => Hlc.Create(NowMillis, 0, Guid.Empty)).Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task Restore_ContinuesFromThePersistedClock()
     {
         var provider = new FixedAdvancingClock(Now);

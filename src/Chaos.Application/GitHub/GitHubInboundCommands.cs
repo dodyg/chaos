@@ -83,7 +83,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 {
                     // §7.5: githubtask:{connectionId}:{repositoryId}:{issueNumber}; two devices importing
                     // the same issue make one task (issue numbers fit an int in the name).
-                    task = new TaskRecord { Id = NameBasedId.Create(NameBasedId.Names.GitHubTask(connection.Id, repo.RepositoryId, (int)issue.Number)).ToString(),
+                    task = new TaskRecord { Id = StorageFormats.NameBasedId(NameBasedId.Names.GitHubTask(connection.Id, repo.RepositoryId, (int)issue.Number)),
                         SpaceId = space.Id, ContainerId = placement.ContainerId, SectionId = placement.SectionId,
                         Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = remote.MilestoneDue, CapacityCategory = repo.TaskCategory,
                         CompletedAtUtc = status == TaskItemStatus.Done ? now : null, CancelledAtUtc = status == TaskItemStatus.Cancelled ? now : null,

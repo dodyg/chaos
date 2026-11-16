@@ -51,20 +51,16 @@ public sealed class BoardQueries(IApplicationStore store)
             var settings = await session.Boards.GetAsync(BoardTargetKind.Container, container.Id, token)
                 ?? BoardCommands.Defaults(BoardTargetKind.Container, container.Id);
 
-            var profile = await session.Profiles.GetPrimaryAsync(token)
-                ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet. Restart Chaos to complete first-run setup.");
-
             var sections = await session.Sections.ListByContainerAsync(container.Id, token);
-            var tags = await session.Tags.ListByOwnerAsync(profile.Id, token);
-            var columnTags = settings.GroupBy == BoardGrouping.TagGroup && settings.ColumnTagId is { } parentId
-                ? tags.Where(tag => tag.ParentTagId == parentId).ToList()
+            IReadOnlyList<TagRecord> columnTags = settings.GroupBy == BoardGrouping.TagGroup && settings.ColumnTagId is { } parentId
+                ? await session.Tags.ListChildrenAsync(parentId, token)
                 : [];
-            var laneTags = settings.SwimlaneBy == BoardSwimlane.TagGroup && settings.SwimlaneTagId is { } laneParentId
-                ? tags.Where(tag => tag.ParentTagId == laneParentId).ToList()
+            IReadOnlyList<TagRecord> laneTags = settings.SwimlaneBy == BoardSwimlane.TagGroup && settings.SwimlaneTagId is { } laneParentId
+                ? await session.Tags.ListChildrenAsync(laneParentId, token)
                 : [];
 
             var columns = ColumnsFor(settings, sections, columnTags, showCancelled);
-            var lanes = LanesFor(settings, tags, laneTags);
+            var lanes = LanesFor(settings, laneTags);
 
             var rows = await session.Boards.ListCardsAsync(container.Id, token);
             var links = await session.Boards.ListCardTagsAsync(container.Id, token);
@@ -138,7 +134,7 @@ public sealed class BoardQueries(IApplicationStore store)
         }
     }
 
-    private static IReadOnlyList<BoardLaneDto> LanesFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> tags, IReadOnlyList<TagRecord> laneTags) =>
+    private static IReadOnlyList<BoardLaneDto> LanesFor(BoardSettingsRecord settings, IReadOnlyList<TagRecord> laneTags) =>
         settings.SwimlaneBy switch
         {
             BoardSwimlane.Priority =>
@@ -156,7 +152,7 @@ public sealed class BoardQueries(IApplicationStore store)
                 new(nameof(CapacityCategory.Work), "Work", IsNone: false),
                 new(nameof(CapacityCategory.Personal), "Personal", IsNone: false),
             ],
-            BoardSwimlane.Container => [new(string.Empty, "All tasks", IsNone: true)],
+            // BoardSwimlane.Container lanes belong to custom views (P3); a container board has one lane.
             _ => [new(string.Empty, "All tasks", IsNone: true)],
         };
 

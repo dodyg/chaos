@@ -91,13 +91,7 @@ public sealed class BoardCommandsTests
     [Test]
     public async Task MoveAsync_TagColumn_SwapsColumnTagsAsOneOperation()
     {
-        var store = new InMemoryStore();
-        TaskCommandsTests.Seed(store);
-        var now = Now;
-        store.Tags.Add(NewTag(store, "tag-a", "Alpha", null));
-        store.Tags.Add(NewTag(store, "tag-b", "Beta", null));
-        var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
-        var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
+        var (store, task) = await SeedTagBoardAsync();
         store.TaskTags.Add((task.Id, "tag-a"));
 
         var moved = await NewCommands(store).MoveAsync(new(
@@ -107,6 +101,69 @@ public sealed class BoardCommandsTests
         await Assert.That(store.TaskTags.Contains((task.Id, "tag-a"))).IsFalse();
         await Assert.That(store.TaskTags.Contains((task.Id, "tag-b"))).IsTrue();
         await Assert.That(store.Undo.Count(row => row.OperationId == "move")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task MoveAsync_TagColumnWithStaleFromColumn_LeavesExactlyTheTargetColumnTag()
+    {
+        // Retagged elsewhere since the board was read: the card is on tag-c, the client says tag-a.
+        var (store, task) = await SeedTagBoardAsync();
+        store.TaskTags.Add((task.Id, "tag-c"));
+        store.TaskTags.Add((task.Id, "other"));
+
+        await NewCommands(store).MoveAsync(new(
+            "move", task.Id, task.Version, BoardGrouping.TagGroup, "tag-a", "tag-b", null, null));
+
+        await Assert.That(store.TaskTags.Contains((task.Id, "tag-b"))).IsTrue();
+        await Assert.That(store.TaskTags.Contains((task.Id, "tag-c"))).IsFalse();
+        await Assert.That(store.TaskTags.Contains((task.Id, "other"))).IsTrue(); // not a column tag
+    }
+
+    [Test]
+    public async Task MoveAsync_TagColumnOutsideTheBoardsColumnTag_IsRefused()
+    {
+        var (store, task) = await SeedTagBoardAsync();
+
+        var error = await CatchAsync(() => NewCommands(store).MoveAsync(new(
+            "move", task.Id, task.Version, BoardGrouping.TagGroup, null, "other", null, null)));
+
+        await Assert.That(error!.Kind).IsEqualTo(AppErrorKind.NotFound);
+        await Assert.That(store.TaskTags.Contains((task.Id, "other"))).IsFalse();
+    }
+
+    [Test]
+    public async Task MoveAsync_DoneCardToAnOpenColumn_LandsInThatColumn()
+    {
+        // Reopening through the list restores the previous open status; a board drop names the column.
+        var store = new InMemoryStore();
+        TaskCommandsTests.Seed(store);
+        var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
+        var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
+        task = (await tasks.SetStatusAsync(new("progress", task.Id, task.Version, TaskItemStatus.InProgress, null))).Task;
+        task = (await tasks.SetStatusAsync(new("done", task.Id, task.Version, TaskItemStatus.Done, null))).Task;
+
+        var moved = await NewCommands(store).MoveAsync(new(
+            "move", task.Id, task.Version, BoardGrouping.Status, nameof(TaskItemStatus.Done), nameof(TaskItemStatus.NeedsReview), null, null));
+
+        await Assert.That(moved.Task.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        await Assert.That(moved.Task.CompletedAtUtc).IsNull();
+    }
+
+    /// <summary>A board grouped by the children of "parent" (tag-a, tag-b, tag-c), plus an unrelated tag and one card.</summary>
+    private static async Task<(InMemoryStore Store, TaskRecord Task)> SeedTagBoardAsync()
+    {
+        var store = new InMemoryStore();
+        TaskCommandsTests.Seed(store);
+        store.Tags.Add(NewTag(store, "parent", "Stage", null));
+        store.Tags.Add(NewTag(store, "tag-a", "Alpha", "parent"));
+        store.Tags.Add(NewTag(store, "tag-b", "Beta", "parent"));
+        store.Tags.Add(NewTag(store, "tag-c", "Gamma", "parent"));
+        store.Tags.Add(NewTag(store, "other", "Other", null));
+        var tasks = new TaskCommands(store, new SequentialIdGenerator(), new FixedTimeProvider(Now));
+        var task = (await tasks.CaptureAsync(new("capture", "", "Card", null))).Task;
+        await NewCommands(store).UpdateSettingsAsync(new(
+            "settings", BoardTargetKind.Container, task.ContainerId, 0, BoardGrouping.TagGroup, BoardSwimlane.None, "parent", null, "{}", "[]"));
+        return (store, task);
     }
 
     [Test]
