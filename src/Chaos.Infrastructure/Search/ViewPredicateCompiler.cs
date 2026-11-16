@@ -14,6 +14,7 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
 {
     private const int MaxTagDepth = 16;
     private int _cte;
+    private int _alias;
 
     public static string Compile(ResolvedViewGroup root, Func<object, string> p, List<string> ctes, string profileId) =>
         new ViewPredicateCompiler(p, ctes, profileId).Group(root);
@@ -94,8 +95,49 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
             "hasPadLink" => Flag("EXISTS (SELECT 1 FROM ScratchTaskLinks sl WHERE sl.TaskId = t.Id)", c.Numbers[0] == 1),
             "hasPageMention" => Flag("EXISTS (SELECT 1 FROM PageTaskLinks pl WHERE pl.TaskId = t.Id)", c.Numbers[0] == 1),
             "recurring" => Flag("EXISTS (SELECT 1 FROM RecurrenceOccurrences rc WHERE rc.TaskId = t.Id AND rc.DeletedAtUtc IS NULL)", c.Numbers[0] == 1),
+            "githubRepository" or "githubState" or "githubLabel" or "githubMilestone" or "githubAssignee" => GitHub(c),
             _ => throw new InvalidOperationException($"No SQL for view field {c.Field}."),
         };
+    }
+
+    /// <summary>
+    /// The GitHub field group (PLAN2 D7). Every condition reads the task's issue link; the issue's labels,
+    /// milestone, state and assignees come from the stored baseline (the last state the sync saw), so the
+    /// answer is the same offline. Positive conditions need a link; "is not" on a repository also matches
+    /// tasks that are not from GitHub. Label and assignee text is matched as a case-insensitive substring.
+    /// </summary>
+    private string GitHub(ResolvedViewCondition c)
+    {
+        var gl = $"gl{_alias++}";
+        var link = $"SELECT 1 FROM GitHubIssueLinks {gl} WHERE {gl}.TaskId = t.Id";
+        var payload = $"{gl}.BaseJson";
+        switch (c.Field)
+        {
+            case "githubRepository":
+            {
+                var ids = string.Join(", ", c.Ids.Select(id => p(id)));
+                var inside = $"EXISTS ({link} AND {gl}.RepositorySubscriptionId IN ({ids}))";
+                return c.Operator == "notIn" ? $"NOT {inside}" : inside;
+            }
+            case "githubState":
+                return $"EXISTS ({link} AND json_extract({payload}, '$.payload.open') = {(c.Ids[0] == "Open" ? 1 : 0)})";
+            case "githubLabel":
+            {
+                var labels = $"SELECT 1 FROM json_each({payload}, '$.payload.labelIds') je JOIN GitHubLabelTags lt ON lt.RepositorySubscriptionId = {gl}.RepositorySubscriptionId AND lt.LabelId = je.value";
+                return c.Operator == "isEmpty"
+                    ? $"EXISTS ({link} AND NOT EXISTS ({labels}))"
+                    : $"EXISTS ({link} AND EXISTS ({labels} WHERE instr(lower(lt.LabelName), {p(c.Text!.ToLowerInvariant())}) > 0))";
+            }
+            case "githubMilestone":
+                // Titles are known only for repositories that map milestones to projects; "is empty" works for every repository.
+                return c.Operator == "isEmpty"
+                    ? $"EXISTS ({link} AND json_extract({payload}, '$.payload.milestoneNumber') IS NULL)"
+                    : $"EXISTS ({link} AND EXISTS (SELECT 1 FROM GitHubMilestoneProjects mp WHERE mp.RepositorySubscriptionId = {gl}.RepositorySubscriptionId AND mp.MilestoneNumber = json_extract({payload}, '$.payload.milestoneNumber') AND instr(lower(mp.BaseTitle), {p(c.Text!.ToLowerInvariant())}) > 0))";
+            default: // githubAssignee
+                return c.Operator == "isEmpty"
+                    ? $"EXISTS ({link} AND json_array_length(COALESCE(json_extract({payload}, '$.payload.assigneeIds'), '[]')) = 0)"
+                    : $"EXISTS ({link} AND EXISTS (SELECT 1 FROM json_each({payload}, '$.payload.assigneeLogins') ja WHERE instr(lower(ja.value), {p(c.Text!.ToLowerInvariant())}) > 0))";
+        }
     }
 
     private static string Flag(string exists, bool expected) => expected ? exists : $"NOT {exists}";

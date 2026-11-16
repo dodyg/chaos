@@ -157,6 +157,41 @@ test("an existing view opens with its conditions and saves with its version", as
   } finally { cleanup(); }
 });
 
+test("the GitHub conditions appear when a repository is connected and save the repository id", async () => {
+  const { api, saves } = editorApi();
+  const withGitHub = { ...api, gitHubOptions: async () => ({ ok: true, repositories: [{ id: "repo-1", fullName: "person/chaos" }], error: null }) };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ViewEditor view={null} icons={icons} tags={tags} containers={[]} api={withGitHub} onSaved={() => undefined} onCancel={() => undefined}/>, { container: dom.window.document.body });
+  try {
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "My open GitHub bugs");
+    await user.click(screen.getByRole("button", { name: "Add condition" }));
+    const row = screen.getByRole("group", { name: "Condition on Status" });
+    await waitFor(() => assert.ok(within(row).getByRole("option", { name: "GitHub repository" })));
+    await user.selectOptions(within(row).getByRole("combobox", { name: "Field" }), "githubRepository");
+    const repoRow = await screen.findByRole("group", { name: "Condition on GitHub repository" });
+    await user.selectOptions(within(repoRow).getByRole("combobox", { name: "GitHub repository" }), "repo-1");
+    await user.click(screen.getByRole("button", { name: "Add condition" }));
+    const next = screen.getByRole("group", { name: "Condition on Status" });
+    await user.selectOptions(within(next).getByRole("combobox", { name: "Field" }), "githubState");
+    await user.click(screen.getByRole("button", { name: "Save view" }));
+    await waitFor(() => assert.equal(saves.length, 1));
+    const items = JSON.parse(saves[0].definitionJson).items;
+    assert.deepEqual(items[0], { field: "githubRepository", op: "is", value: "repo-1" });
+    assert.deepEqual(items[1], { field: "githubState", op: "is", value: "Open" });
+  } finally { cleanup(); }
+});
+
+test("without a GitHub connection the GitHub fields are not offered", async () => {
+  const { api } = editorApi();
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ViewEditor view={null} icons={icons} tags={tags} containers={[]} api={api} onSaved={() => undefined} onCancel={() => undefined}/>, { container: dom.window.document.body });
+  try {
+    await user.click(screen.getByRole("button", { name: "Add condition" }));
+    const row = screen.getByRole("group", { name: "Condition on Status" });
+    assert.equal(within(row).queryByRole("option", { name: "GitHub repository" }), null);
+  } finally { cleanup(); }
+});
+
 // ---- The table ----------------------------------------------------------------------------------
 
 function tableApi() {

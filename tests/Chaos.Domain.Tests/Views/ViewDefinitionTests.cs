@@ -69,6 +69,11 @@ public sealed class ViewDefinitionTests
     [Arguments("{\"field\":\"source\",\"op\":\"is\",\"value\":\"Agent\"}")]
     [Arguments("{\"field\":\"container\",\"op\":\"is\",\"value\":[\"a\",\"b\"]}")]
     [Arguments("{\"field\":\"status\",\"op\":\"in\",\"value\":[\"Done\"],\"descendants\":true}")]
+    [Arguments("{\"field\":\"githubState\",\"op\":\"is\",\"value\":\"Merged\"}")]
+    [Arguments("{\"field\":\"githubState\",\"op\":\"in\",\"value\":[\"Open\"]}")]
+    [Arguments("{\"field\":\"githubLabel\",\"op\":\"is\",\"value\":\"bug\"}")]
+    [Arguments("{\"field\":\"githubAuthor\",\"op\":\"contains\",\"value\":\"x\"}")]
+    [Arguments("{\"field\":\"githubRepository\",\"op\":\"is\",\"value\":[\"a\",\"b\"]}")]
     [Arguments("{\"field\":\"tag\",\"op\":\"hasAnyOf\"}")]
     public async Task Parse_BadCondition_IsRejected(string condition)
     {
@@ -88,6 +93,11 @@ public sealed class ViewDefinitionTests
     [Arguments("{\"field\":\"hasPadLink\",\"op\":\"is\",\"value\":true}")]
     [Arguments("{\"field\":\"container\",\"op\":\"in\",\"value\":[\"a\",\"b\"]}")]
     [Arguments("{\"field\":\"source\",\"op\":\"is\",\"value\":\"GitHub\"}")]
+    [Arguments("{\"field\":\"githubState\",\"op\":\"is\",\"value\":\"Open\"}")]
+    [Arguments("{\"field\":\"githubRepository\",\"op\":\"in\",\"value\":[\"a\",\"b\"]}")]
+    [Arguments("{\"field\":\"githubLabel\",\"op\":\"contains\",\"value\":\"bug\"}")]
+    [Arguments("{\"field\":\"githubMilestone\",\"op\":\"isEmpty\"}")]
+    [Arguments("{\"field\":\"githubAssignee\",\"op\":\"contains\",\"value\":\"octocat\"}")]
     [Arguments("{\"field\":\"tag\",\"op\":\"hasNone\",\"value\":[\"x\"]}")]
     public async Task Parse_GoodCondition_IsAccepted(string condition)
     {

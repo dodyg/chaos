@@ -72,7 +72,7 @@ internal static class ViewFields
                 ViewFieldType.Ordinal => new ResolvedViewCondition(field.Name, op) { Numbers = [(long)Enum.Parse<TaskPriority>(condition.Values[0])] },
                 ViewFieldType.TagSet => new ResolvedViewCondition(field.Name, op) { Ids = condition.Values, Descendants = condition.Descendants },
                 ViewFieldType.Category => new ResolvedViewCondition(field.Name, "is") { Numbers = [(long)Enum.Parse<CapacityCategory>(condition.Values[0])] },
-                ViewFieldType.Source => new ResolvedViewCondition(field.Name, "is") { Ids = condition.Values },
+                ViewFieldType.Source or ViewFieldType.Choice => new ResolvedViewCondition(field.Name, "is") { Ids = condition.Values },
                 ViewFieldType.Minutes => new ResolvedViewCondition(field.Name, op) { Numbers = [condition.Number!.Value] },
                 ViewFieldType.Text => new ResolvedViewCondition(field.Name, "contains") { Text = condition.Text },
                 ViewFieldType.Flag => new ResolvedViewCondition(field.Name, "is") { Numbers = [condition.Flag == true ? 1 : 0] },

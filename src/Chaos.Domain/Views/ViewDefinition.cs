@@ -8,10 +8,10 @@ using Chaos.Domain.Validation;
 namespace Chaos.Domain.Views;
 
 /// <summary>The value type a field holds; it decides which operators and value shapes are legal (PLAN2 §11.2).</summary>
-public enum ViewFieldType { Id, StatusSet, Ordinal, TagSet, Category, Date, Instant, Minutes, Text, Source, Flag }
+public enum ViewFieldType { Id, StatusSet, Ordinal, TagSet, Category, Date, Instant, Minutes, Text, Source, Flag, Choice }
 
 /// <summary>One searchable attribute: its stable name, type and the operators it accepts.</summary>
-public sealed record ViewFieldInfo(string Name, ViewFieldType Type, IReadOnlyList<string> Operators);
+public sealed record ViewFieldInfo(string Name, ViewFieldType Type, IReadOnlyList<string> Operators, IReadOnlyList<string>? Choices = null);
 
 /// <summary>
 /// The field registry's type table (PLAN2 §11.2). Validation needs it in the domain; the
@@ -43,6 +43,14 @@ public static class ViewFieldCatalog
         new("hasPadLink", ViewFieldType.Flag, ["is"]),
         new("hasPageMention", ViewFieldType.Flag, ["is"]),
         new("recurring", ViewFieldType.Flag, ["is"]),
+        // GitHub group (D7, personal views): answered from the stored issue baseline and the label and
+        // milestone mappings, so only what the app already keeps. Author and linked pull requests are
+        // not stored by the sync and are therefore not offered.
+        new("githubRepository", ViewFieldType.Id, ["is", "isNot", "in"]),
+        new("githubState", ViewFieldType.Choice, ["is"], ["Open", "Closed"]),
+        new("githubLabel", ViewFieldType.Text, ["contains", "isEmpty"]),
+        new("githubMilestone", ViewFieldType.Text, ["contains", "isEmpty"]),
+        new("githubAssignee", ViewFieldType.Text, ["contains", "isEmpty"]),
     ];
 
     public static ViewFieldInfo? Find(string name) => All.FirstOrDefault(field => field.Name == name);
@@ -237,6 +245,7 @@ public sealed record ViewDefinition(ViewGroup Root)
             ViewFieldType.TagSet => new ViewCondition(fieldName, op, Strings(fieldName, value, many: true, ids: true), Descendants: descendants),
             ViewFieldType.Category => new ViewCondition(fieldName, op, Names<CapacityCategory>(fieldName, value, many: false)),
             ViewFieldType.Source => new ViewCondition(fieldName, op, OneOf(fieldName, value, "App", "GitHub")),
+            ViewFieldType.Choice => new ViewCondition(fieldName, op, OneOf(fieldName, value, [.. field.Choices!])),
             ViewFieldType.Date or ViewFieldType.Instant => new ViewCondition(fieldName, op, [], Date: ParseDate(field, op, value)),
             ViewFieldType.Minutes => new ViewCondition(fieldName, op, [], Number: ParseMinutes(fieldName, value)),
             ViewFieldType.Text => new ViewCondition(fieldName, op, [], Text: ParseText(fieldName, value)),
@@ -424,7 +433,7 @@ public sealed record ViewDefinition(ViewGroup Root)
                 ViewFieldType.Id when condition.Operator is "is" or "isNot" => JsonValue.Create(condition.Values[0]),
                 ViewFieldType.Id or ViewFieldType.StatusSet or ViewFieldType.TagSet =>
                     new JsonArray([.. condition.Values.Select(v => (JsonNode?)JsonValue.Create(v))]),
-                ViewFieldType.Ordinal or ViewFieldType.Category or ViewFieldType.Source => JsonValue.Create(condition.Values[0]),
+                ViewFieldType.Ordinal or ViewFieldType.Category or ViewFieldType.Source or ViewFieldType.Choice => JsonValue.Create(condition.Values[0]),
                 ViewFieldType.Date or ViewFieldType.Instant => DateToNode(condition.Date!),
                 ViewFieldType.Minutes => JsonValue.Create(condition.Number),
                 ViewFieldType.Text => JsonValue.Create(condition.Text),

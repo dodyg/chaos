@@ -56,6 +56,24 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
         return counts;
     }
 
+    /// <summary>The GitHub repositories the person subscribed to, for the repository picker of the GitHub condition group.</summary>
+    public async Task<IReadOnlyList<(string Id, string FullName)>> GitHubRepositoriesAsync(CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
+            var connection = await session.GitHub.GetConnectionForSpaceAsync(context.Space.Id, token);
+            if (connection is null)
+            {
+                return (IReadOnlyList<(string Id, string FullName)>)[];
+            }
+
+            var repositories = await session.GitHub.ListSubscriptionsAsync(connection.Id, token);
+            return [.. repositories
+                .Where(repository => repository.DeletedAtUtc is null)
+                .OrderBy(repository => repository.FullName, StringComparer.OrdinalIgnoreCase)
+                .Select(repository => (repository.Id, repository.FullName))];
+        }, ct);
+
     /// <summary>Builds the CSV for a view's layout columns (rows up to <see cref="MaxExportRows"/>).</summary>
     public async Task<(string Csv, string FileName, int Rows)> BuildCsvAsync(string viewId, CapacityCategory? category, CancellationToken ct = default)
     {

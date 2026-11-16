@@ -58,6 +58,9 @@ public sealed record ViewContextResponse(
     TaskErrorResponse? Error);
 public sealed record ViewExportRequest(string ViewId, string? Category = null);
 public sealed record ViewExportResponse(bool Ok, string? FileName, int Rows, TaskErrorResponse? Error);
+public sealed record ViewGitHubOptionsRequest();
+public sealed record ViewGitHubRepositoryDto(string Id, string FullName);
+public sealed record ViewGitHubOptionsResponse(bool Ok, IReadOnlyList<ViewGitHubRepositoryDto> Repositories, TaskErrorResponse? Error);
 public sealed record ViewFromSearchRequest(TaskQueryRequest Search);
 public sealed record ViewFromSearchResponse(bool Ok, string? DefinitionJson, TaskErrorResponse? Error);
 
@@ -166,6 +169,14 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
         catch (AppException error) { return new(false, null, 0, TaskRpcService.ToErrorResponse(error)); }
         catch (IOException) { return new(false, null, 0, TaskRpcService.ToErrorResponse(new AppException(AppErrorKind.StorageUnavailable, "The export could not be written. Check that the exports folder is available."))); }
         catch (UnauthorizedAccessException) { return new(false, null, 0, TaskRpcService.ToErrorResponse(new AppException(AppErrorKind.StorageUnavailable, "The export could not be written. Check that the exports folder is available."))); }
+    }
+
+    /// <summary>The subscribed GitHub repositories, for the GitHub condition group (empty when GitHub is not connected).</summary>
+    [NeoRpcMethod("githubOptions")]
+    public async ValueTask<ViewGitHubOptionsResponse> GitHubOptionsAsync(ViewGitHubOptionsRequest request, CancellationToken ct)
+    {
+        try { return new(true, [.. (await queries.GitHubRepositoriesAsync(ct)).Select(item => new ViewGitHubRepositoryDto(item.Id, item.FullName))], null); }
+        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("fromSearch")]

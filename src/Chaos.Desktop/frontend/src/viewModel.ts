@@ -4,9 +4,9 @@
  * this model only keeps the editor honest (a field's operators, a value of the right shape).
  */
 
-export type ViewFieldType = "id" | "status" | "ordinal" | "tags" | "category" | "date" | "minutes" | "text" | "source" | "flag";
+export type ViewFieldType = "id" | "status" | "ordinal" | "tags" | "category" | "date" | "minutes" | "text" | "source" | "flag" | "choice";
 
-export type ViewFieldInfo = { name: string; label: string; type: ViewFieldType; operators: readonly { op: string; label: string }[] };
+export type ViewFieldInfo = { name: string; label: string; type: ViewFieldType; operators: readonly { op: string; label: string }[]; choices?: readonly string[] };
 
 const dateOps = [
   { op: "on", label: "is on" }, { op: "before", label: "is before" }, { op: "after", label: "is after" }, { op: "inRange", label: "is within" },
@@ -31,7 +31,17 @@ export const viewFields: readonly ViewFieldInfo[] = [
   { name: "hasPadLink", label: "Made from a pad note", type: "flag", operators: [{ op: "is", label: "is" }] },
   { name: "hasPageMention", label: "Made from a page", type: "flag", operators: [{ op: "is", label: "is" }] },
   { name: "recurring", label: "Repeats", type: "flag", operators: [{ op: "is", label: "is" }] },
+  // GitHub group (personal views). Answered from what the app already stores about each issue; the
+  // issue author and linked pull requests are not stored, so they are not offered.
+  { name: "githubRepository", label: "GitHub repository", type: "id", operators: [{ op: "is", label: "is" }, { op: "isNot", label: "is not" }, { op: "in", label: "is one of" }] },
+  { name: "githubState", label: "GitHub issue", type: "choice", choices: ["Open", "Closed"], operators: [{ op: "is", label: "is" }] },
+  { name: "githubLabel", label: "GitHub label", type: "text", operators: [{ op: "contains", label: "contains" }, { op: "isEmpty", label: "has none" }] },
+  { name: "githubMilestone", label: "GitHub milestone", type: "text", operators: [{ op: "contains", label: "contains" }, { op: "isEmpty", label: "has none" }] },
+  { name: "githubAssignee", label: "GitHub assignee", type: "text", operators: [{ op: "contains", label: "contains" }, { op: "isEmpty", label: "has none" }] },
 ];
+
+/** The GitHub fields offered only when a repository is connected. */
+export const isGitHubField = (name: string) => name.startsWith("github");
 
 export const viewField = (name: string) => viewFields.find(field => field.name === name);
 
@@ -76,6 +86,7 @@ function defaultValues(info: ViewFieldInfo): string[] {
     case "ordinal": return ["High"];
     case "category": return ["Work"];
     case "source": return ["App"];
+    case "choice": return [info.choices?.[0] ?? ""];
     case "flag": return ["true"];
     default: return [];
   }
@@ -106,7 +117,7 @@ function conditionToJson(node: ConditionNode): Record<string, unknown> {
     switch (info.type) {
       case "id": out.value = node.op === "in" ? node.values : node.values[0] ?? ""; break;
       case "status": case "tags": out.value = node.values; break;
-      case "ordinal": case "category": case "source": out.value = node.values[0] ?? ""; break;
+      case "ordinal": case "category": case "source": case "choice": out.value = node.values[0] ?? ""; break;
       case "date": out.value = dateToJson(node.date); break;
       case "minutes": out.value = Number(node.values[0] ?? ""); break;
       case "text": out.value = node.values[0] ?? ""; break;

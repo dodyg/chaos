@@ -914,3 +914,10 @@ plan provides one, and each blocking package stays unticked until the owner conf
   "leaves and returns notifies only after 24 h" rule is a lookup, not a timer.
 - **Purge.** Task purge deletes the task's `SavedViewMatches` rows in both purge paths. Saved
   views themselves have no purge path yet (like board settings).
+
+## 2026-11-16 (PLAN2 P3, GitHub fields, D7)
+
+- **D7 is taken as yes, for personal views only**, as the plan defaults. The group is answered purely from what the sync already stores: the issue link, its baseline JSON (state, label ids, milestone number, assignees) and the label and milestone mappings. No GitHub call is made and the conditions work offline.
+- **Offered:** repository (is, is not, one of; picked from the subscribed repositories), issue state (open or closed), label (name contains, or has none), milestone (title contains, or has none) and assignee (login contains, or has none). Positive conditions need an issue link; "repository is not" also matches tasks that are not from GitHub. Label and assignee text is a case-insensitive substring; milestone titles are known only for repositories that map milestones to projects, while "has none" works for every repository.
+- **Not offered, because the data is not stored:** the issue author, linked pull requests and pull request review state. The inbound sync keeps no author and fetches no timeline or pull request data, so a condition on them could only look like it worked. They need the sync to fetch and store them first; that is a change to the GitHub sync, not to views.
+- **The editor shows the group only when a repository is subscribed** (or the view already uses it), so people without GitHub never see fields that cannot match. An older baseline that stored only assignee ids has no logins, so "assignee contains" does not match it until the next sync refreshes it.

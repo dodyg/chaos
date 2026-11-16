@@ -1825,6 +1825,15 @@ the host timer); the board layout on a view; inline tag editing in the table; ta
 client-side over loaded rows; the section field is not offered in the editor; the native desktop
 run was not done. The package stays unticked. Smallest next action: alerts.
 
+**Progress note 2026-11-16 (GitHub fields, D7).** Added the GitHub condition group: repository,
+issue state, label, milestone and assignee, compiled to parameterized SQL over the issue link,
+its stored baseline and the label and milestone mappings (no network). The editor offers the group
+when a repository is subscribed (`views.githubOptions`). Author, linked pull requests and review
+state are NOT built: the sync does not store them (see decisions, 2026-11-16 D7). Tests: Domain
+258/258, GitHub view tests 7/7 against real SQLite (including an unreadable baseline and a "My open
+GitHub bugs" view with a matching sidebar count), frontend views 12/12. Still open in P3: alerts,
+board layout on a view, inline tag editing in the table, the native desktop run.
+
 ### [ ] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.

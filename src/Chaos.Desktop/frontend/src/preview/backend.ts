@@ -260,6 +260,7 @@ function viewHandlers(): Record<string, Handler> {
     "views.counts": (r: { category: string | null }) => ok({ counts: savedViews.filter(v => v.pinned && !v.deleted).map(v => ({ viewId: v.id, count: viewRows(v.definitionJson, r.category).length })) }),
     "views.contextDefaults": () => ok({ containerId: null, status: null, priority: null, category: null, tagIds: [], plannedDate: null, dueDate: null }),
     "views.export": (r: { viewId: string }) => { const v = find(r.viewId); return v ? ok({ fileName: `${v.name} preview.csv`, rows: viewRows(v.definitionJson, null).length }) : { ...fail("That view no longer exists."), fileName: null, rows: 0 }; },
+    "views.githubOptions": () => ok({ repositories: [{ id: "repo-1", fullName: "person/chaos" }] }),
     "views.fromSearch": (r: { search: { text: string | null } }) => ok({ definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "text", op: "contains", value: r.search.text ?? "" }, { field: "status", op: "notIn", value: ["Done", "Cancelled"] }] }) }),
   };
 }

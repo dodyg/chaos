@@ -9,11 +9,14 @@ import { createLatestRequest } from "./latestRequest";
 import { tagColors } from "./tags";
 import {
   defaultLayout, fromDefinitionJson, groupOptions, isComplete, layoutFromJson, layoutToJson, maxConditions, maxDepth, newCondition, newGroup, relativeDates,
-  sortOptions, tableColumns, toDefinitionJson, viewField, viewFields, withField, countConditions,
+  sortOptions, tableColumns, toDefinitionJson, viewField, viewFields, withField, countConditions, isGitHubField,
   type ConditionNode, type DateValue, type GroupNode, type Layout, type Node,
 } from "./viewModel";
 
-export type ViewsApi = Pick<typeof viewRpc, "save" | "preview">;
+export type ViewsApi = Pick<typeof viewRpc, "save" | "preview"> & Partial<Pick<typeof viewRpc, "gitHubOptions">>;
+
+/** The subscribed GitHub repositories; the GitHub condition group is offered only when there are some (or a view already uses it). */
+const GitHubOptions = React.createContext<{ repositories: readonly { id: string; fullName: string }[]; offered: boolean }>({ repositories: [], offered: false });
 
 type Props = {
   /** The view being edited; null makes a new one. */
@@ -49,6 +52,12 @@ export function ViewEditor({ view, initialDefinitionJson, initialName = "", icon
   const [saving, setSaving] = React.useState(false);
   const [preview, setPreview] = React.useState<{ count: number; titles: string[] } | null>(null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
+  const [repositories, setRepositories] = React.useState<readonly { id: string; fullName: string }[]>([]);
+  React.useEffect(() => {
+    let current = true;
+    void api.gitHubOptions?.({}).then(result => { if (current && result.ok) setRepositories(result.repositories); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [api]);
   const requests = React.useRef(createLatestRequest());
   const operation = React.useRef<string | null>(null);
   const definitionJson = React.useMemo(() => toDefinitionJson(root), [root]);
@@ -97,7 +106,9 @@ export function ViewEditor({ view, initialDefinitionJson, initialName = "", icon
     </div>
 
     <fieldset className="grid gap-2"><legend className="mb-1 text-sm font-semibold">Show tasks that match</legend>
+      <GitHubOptions.Provider value={{ repositories, offered: repositories.length > 0 || usesGitHub(root) }}>
       <GroupEditor group={root} depth={1} tags={tags} containers={containers} total={total} onChange={next => setRoot(next)} onRemove={null}/>
+      </GitHubOptions.Provider>
     </fieldset>
 
     <fieldset className="grid gap-2"><legend className="mb-1 text-sm font-semibold">Layout</legend>
@@ -166,12 +177,13 @@ function ConditionRow({ condition, tags, containers, onChange, onRemove }: {
   condition: ConditionNode; tags: readonly TagResponse[]; containers: readonly ContainerResponse[];
   onChange: (condition: ConditionNode) => void; onRemove: () => void;
 }) {
+  const github = React.useContext(GitHubOptions);
   const info = viewField(condition.field) ?? viewFields[0];
   const noValue = condition.op === "isEmpty" || condition.op === "isNotEmpty";
   const set = (patch: Partial<ConditionNode>) => onChange({ ...condition, ...patch });
   return <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`Condition on ${info.label}`}>
     <NativeSelect aria-label="Field" className="w-48" value={condition.field} onChange={event => onChange(withField(condition, event.target.value))}>
-      {viewFields.map(field => <NativeSelectOption key={field.name} value={field.name}>{field.label}</NativeSelectOption>)}</NativeSelect>
+      {viewFields.filter(field => !isGitHubField(field.name) || github.offered || field.name === condition.field).map(field => <NativeSelectOption key={field.name} value={field.name}>{field.label}</NativeSelectOption>)}</NativeSelect>
     <NativeSelect aria-label="Condition" className="w-40" value={condition.op} onChange={event => set({ op: event.target.value, values: info.type === "id" && event.target.value !== "in" ? condition.values.slice(0, 1) : condition.values,
       // Overdue only makes sense as a range on the due date, and a range needs the range operator.
       date: condition.date.mode === "relative" && condition.date.relative === "overdue" && event.target.value !== "inRange" ? { mode: "relative", relative: "today", days: 7 } : condition.date.mode === "range" && event.target.value !== "inRange" ? { mode: "day", day: condition.date.from } : condition.date })}>
@@ -189,6 +201,7 @@ function ValueEditor({ condition, info, tags, containers, onChange }: {
   const toggle = (value: string) => set({ values: condition.values.includes(value) ? condition.values.filter(item => item !== value) : [...condition.values, value] });
   switch (info.type) {
     case "id": {
+      if (condition.field === "githubRepository") return <GitHubRepositoryPicker condition={condition} onChange={onChange}/>;
       const many = condition.op === "in";
       return many
         ? <div className="flex flex-wrap gap-x-3 gap-y-1" role="group" aria-label="Lists and projects">{containers.map(container => <label key={container.id} className="flex items-center gap-1.5 text-sm">
@@ -206,6 +219,8 @@ function ValueEditor({ condition, info, tags, containers, onChange }: {
       <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={condition.descendants} onChange={event => set({ descendants: event.target.checked })}/>Include nested tags</label></div>;
     case "category": return <NativeSelect aria-label="Category" className="w-36" value={condition.values[0] ?? "Work"} onChange={event => set({ values: [event.target.value] })}>
       <NativeSelectOption value="Work">Work</NativeSelectOption><NativeSelectOption value="Personal">Personal</NativeSelectOption></NativeSelect>;
+    case "choice": return <NativeSelect aria-label={info.label} className="w-36" value={condition.values[0] ?? info.choices?.[0] ?? ""} onChange={event => set({ values: [event.target.value] })}>
+      {(info.choices ?? []).map(choice => <NativeSelectOption key={choice} value={choice}>{choice}</NativeSelectOption>)}</NativeSelect>;
     case "source": return <NativeSelect aria-label="Source" className="w-36" value={condition.values[0] ?? "App"} onChange={event => set({ values: [event.target.value] })}>
       <NativeSelectOption value="App">Created in Chaos</NativeSelectOption><NativeSelectOption value="GitHub">From GitHub</NativeSelectOption></NativeSelect>;
     case "flag": return <NativeSelect aria-label="Yes or no" className="w-28" value={condition.values[0] ?? "true"} onChange={event => set({ values: [event.target.value] })}>
@@ -231,4 +246,18 @@ function DateEditor({ condition, date, onChange }: { condition: ConditionNode; d
         {relativeDates.filter(item => item.value !== "overdue" || canOverdue).map(item => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect>
       {(date.relative === "next" || date.relative === "last") && <Input aria-label="Number of days" type="number" min={1} max={3660} className="w-20" value={date.days} onChange={event => onChange({ ...date, days: Number(event.target.value) })}/>}</>}
   </div>;
+}
+
+const usesGitHub = (node: Node): boolean => node.kind === "group" ? node.items.some(usesGitHub) : isGitHubField(node.field);
+
+function GitHubRepositoryPicker({ condition, onChange }: { condition: ConditionNode; onChange: (condition: ConditionNode) => void }) {
+  const { repositories } = React.useContext(GitHubOptions);
+  const many = condition.op === "in";
+  const toggle = (id: string) => onChange({ ...condition, values: condition.values.includes(id) ? condition.values.filter(item => item !== id) : [...condition.values, id] });
+  if (repositories.length === 0) return <span className="text-sm text-muted-foreground">No GitHub repositories are connected.</span>;
+  return many
+    ? <div className="flex flex-wrap gap-x-3 gap-y-1" role="group" aria-label="GitHub repositories">{repositories.map(repository => <label key={repository.id} className="flex items-center gap-1.5 text-sm">
+        <input type="checkbox" checked={condition.values.includes(repository.id)} onChange={() => toggle(repository.id)}/>{repository.fullName}</label>)}</div>
+    : <NativeSelect aria-label="GitHub repository" className="w-56" value={condition.values[0] ?? ""} onChange={event => onChange({ ...condition, values: event.target.value ? [event.target.value] : [] })}>
+        <NativeSelectOption value="">Choose…</NativeSelectOption>{repositories.map(repository => <NativeSelectOption key={repository.id} value={repository.id}>{repository.fullName}</NativeSelectOption>)}</NativeSelect>;
 }
