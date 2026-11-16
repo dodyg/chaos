@@ -178,7 +178,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
 
         {selected && showSettings && <div id="list-settings" className="rounded-xl border bg-muted/50 p-4"><ContainerManagement container={selected} containers={containers} sections={sections} taskRevision={`${subtaskRevision}|${tasks.map(t => `${t.id}:${t.version}`).join("|")}`} onDeleted={onDeleted} onChanged={async () => { await refreshContainers(); const result = await containerApi.sections({ containerId }); if (!isStillSelected(containerId)) return; if (!result.ok) throw new Error(result.error?.message ?? "Could not load sections."); setSections([...result.sections]); await refresh(); }}/></div>}
 
-        <QuickAdd key={containerId} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
+        <QuickAdd key={`quick-add:${containerId}`} api={captureApi} containers={containers} defaultContainerId={containerId} label="Add a task" inputRef={quickAddInput}
           placeholder="Add a task — try “Call Sam tomorrow 3pm #home ~personal”" onSubmit={onCapture}/>
         {newTaskCategory && <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>{categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}{listDefault ? " (list default)" : " (focus)"}</p>}
 
@@ -191,7 +191,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
         {!boardShown && focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>}
-        {boardShown && <Board key={containerId} containerId={containerId} tags={tags} focus={focus} busy={busy} revision={revision} onOpen={onOpen}
+        {boardShown && <Board key={`board:${containerId}`} containerId={containerId} tags={tags} focus={focus} busy={busy} revision={revision} onOpen={onOpen}
           onChanged={() => { refresh().catch((e: unknown) => setError(String(e))); changed(); }}/>}
         {!boardShown && <>
         {(unsectioned.length > 0 || sections.length > 0) && <section className={cn("grid gap-1.5 rounded-lg", sectionDrop === "" && "bg-accent ring-1 ring-primary")} aria-label="Unsectioned tasks" {...sectionDropTarget(null)}>{sections.length > 0 && groupHeading("Unsectioned")}{unsectioned.length > 0 ? taskList(unsectioned, "Unsectioned tasks") : <p className="px-2 py-1 text-muted-foreground italic">No unsectioned tasks.</p>}</section>}
