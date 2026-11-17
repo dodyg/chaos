@@ -1,5 +1,5 @@
 import React from "react";
-import { ArrowRight, BookOpen, CalendarDays, Database, FileText, Keyboard, ListTodo, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarDays, Database, FileText, Keyboard, ListTodo, GitPullRequest, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common";
 import { listShortcuts } from "./listKeyboard";
@@ -66,7 +66,7 @@ function Go({ to, onNavigate, children }: { to: HelpLink; onNavigate: (view: Hel
 function topics(onNavigate: (view: HelpLink) => void): Topic[] {
   return [
     { id: "start", title: "Getting started", icon: <Rocket/>, keywords: "begin first start routine daily workflow overview", body: <>
-      <p>Chaos keeps everything on this computer: no account and no network needed. A simple routine that works well:</p>
+      <p>Chaos keeps everything on this computer: no account and no network needed. Connecting Google Calendar or GitHub is optional (see Calendar and meetings, and GitHub issues). A simple routine that works well:</p>
       <ol className="grid list-decimal gap-1 pl-5">
         <li><strong>Capture</strong> anything the moment it comes up with <kbd>Ctrl+N</kbd>. It lands in the Inbox unless you name a list.</li>
         <li><strong>Plan the week</strong> once, in My Week: carry over what slipped and spread tasks across the days.</li>
@@ -102,6 +102,24 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       <p>If Google says <em>sign in again</em> (your access expired or was revoked), the last meetings stay and a Sign in again button appears. On another device that learns of the account, press <em>Sign in on this device</em>. <em>Disconnect</em> removes the account everywhere and revokes Chaos's access at Google.</p>
       <p>Meetings appear in daily and morning summaries only when <em>Include meetings in summaries</em> is on (in the summary settings on the Summaries page); it is off by default.</p>
       <div className="flex flex-wrap gap-2"><Go to="calendar" onNavigate={onNavigate}>Open Calendar</Go><Go to="settings" onNavigate={onNavigate}>Open Settings</Go></div>
+    </> },
+    { id: "github", title: "GitHub issues", icon: <GitPullRequest/>, keywords: "github issues sync repository gh cli connect label milestone assignee comments diary pull request conflict pause disconnect", body: <>
+      <p>Chaos can bring the issues of your GitHub repositories in as tasks and keep them in step with GitHub. It is off until you connect, and nothing is sent to GitHub before that.</p>
+      <p><strong>Connect.</strong> Install GitHub CLI (2.103.3 or newer) and sign in once in a terminal with <code>gh auth login --hostname github.com</code>. Then open Settings → GitHub and press <em>Connect GitHub</em>. Chaos never asks for or stores your password or token; GitHub CLI keeps your login, and disconnecting leaves it signed in.</p>
+      <p><strong>Add repositories.</strong> Under <em>Add a repository</em>, pick one and choose the list or project new tasks land in, whether they count as Personal or Work, and a filter: labels, milestone, assigned to you, and how many days of closed issues to include. Turn on <em>Use milestones as projects</em> to give each milestone its own project. Changes to the destination only affect issues imported later.</p>
+      <p><strong>What syncs.</strong> A linked task carries a GitHub mark and a link to its issue. These stay in step both ways, on a schedule and shortly after you change a linked task, or straight away with <em>Sync now</em>:</p>
+      <ul className="grid list-disc gap-1 pl-5">
+        <li>Title, notes (the issue text) and open or closed state. Done matches a completed issue and Cancelled a closed “not planned” one.</li>
+        <li>Checklist items in the issue text and the task's subtasks.</li>
+        <li>Labels and tags. Local tags only become labels that already exist, unless you allow creating labels in the settings.</li>
+        <li>Comments and diary updates. Comments arrive as diary updates; tick <em>Also post to GitHub</em> on a new update to send it (the Settings default controls the tick).</li>
+        <li>Assignees are shown on the task; use <em>Assign to me</em> and <em>Unassign me</em> to change your own.</li>
+      </ul>
+      <p>Planned date, estimate, priority, My Day, reminders and waiting stay in Chaos and never go to GitHub. Recurrence is not available on linked tasks.</p>
+      <p><strong>Conflicts.</strong> If you and GitHub change the same title, notes or state, GitHub's version wins. The value you replaced is kept in the task's history and a notice on the task offers to dismiss it.</p>
+      <p><strong>Leaving things.</strong> Deleting a task never changes the issue. An issue that stops matching the filter stays as a task that no longer syncs. <em>Keep as an ordinary task</em> detaches one task; removing a repository or disconnecting keeps all its tasks. Pause stops syncing for the connection or one repository. If GitHub CLI is missing, signed out or on another account, syncing stops with a message and a recheck button.</p>
+      <p>Backups and exports include issue text, including from private repositories. Custom views can filter by repository, issue state, labels, milestone and assignee using the last synced state, so they work offline.</p>
+      <Go to="settings" onNavigate={onNavigate}>Open Settings</Go>
     </> },
     { id: "organise", title: "Lists, projects, tags and views", icon: <ListTodo/>, keywords: "list project section tag view today upcoming overdue waiting subtasks templates drag reorder board kanban column swimlane wip custom view saved search condition filter export csv spreadsheet", body: <>
       <p><strong>Lists</strong> hold open-ended tasks; <strong>projects</strong> have an end and show progress. Create them with the + next to “Lists &amp; projects” in the sidebar, drag to reorder, and group tasks into sections.</p>

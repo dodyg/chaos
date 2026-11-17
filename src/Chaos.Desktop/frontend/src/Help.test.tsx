@@ -42,6 +42,19 @@ test("help search narrows the topics and its links go to the matching page", asy
   cleanup();
 });
 
+test("help covers GitHub issue sync and Google Calendar", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<Help onNavigate={() => {}}/>, { container: dom.window.document.body });
+  assert.ok(screen.getByRole("heading", { name: "GitHub issues" }));
+  await user.type(screen.getByLabelText("Search help"), "gh auth");
+  assert.ok(screen.getByRole("heading", { name: "GitHub issues" }));
+  assert.equal(screen.queryByRole("heading", { name: "Quick add in plain language" }), null);
+  await user.clear(screen.getByLabelText("Search help"));
+  await user.type(screen.getByLabelText("Search help"), "google");
+  assert.ok(screen.getByRole("heading", { name: "Calendar and meetings" }));
+  cleanup();
+});
+
 test("F1 and the sidebar Help button open the help page", async () => {
   const api = {
     taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
