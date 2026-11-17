@@ -4,6 +4,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import { common, createLowlight } from "lowlight";
+import { mount, type Mounted } from "pele";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import type { Root, RootContent, PhrasingContent, ListItem, TableCell } from "mdast";
@@ -533,7 +534,50 @@ function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLi
   return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task, page, list, pad-note and attachment links open.">{children}</span>;
 }
 
+/**
+ * A ```mermaid fence drawn as an SVG diagram by pele. Pele escapes diagram text, filters links
+ * and limits size; invalid source falls back to the plain code block with the reason shown.
+ * Colors come from CSS variables on `.pele` (style.css), so theme changes need no re-render.
+ */
+/**
+ * The app's CSP (`style-src 'self'`) drops inline `style="…"` attributes parsed from markup, which
+ * is where pele defines its colour variables, so fills would fall back to black. Setting the same
+ * declarations through the CSSOM is allowed, so each render copies them across.
+ */
+function reapplyInlineStyles(root: HTMLElement) {
+  for (const element of root.querySelectorAll<SVGElement>("[style]")) {
+    const css = element.getAttribute("style");
+    if (css) element.style.cssText = css;
+  }
+}
+
+function MermaidDiagram({ code }: { code: string }) {
+  const host = React.useRef<HTMLDivElement>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const element = host.current;
+    if (!element) return;
+    setError(null);
+    let mounted: Mounted | undefined;
+    try {
+      mounted = mount(element, code, { onRender: () => reapplyInlineStyles(element), onError: failure => setError(failure instanceof Error ? failure.message : "Could not draw this diagram.") });
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not draw this diagram."); }
+    return () => { mounted?.destroy(); };
+  }, [code]);
+  return <div className="grid gap-1">
+    <div ref={host} data-slot="mermaid" role="img" aria-label="Mermaid diagram" className={cn("overflow-x-auto rounded-md bg-muted/40 p-2", error && "hidden")}/>
+    {error && <>
+      <p role="status" className="text-xs text-muted-foreground">Could not draw this diagram: {error}</p>
+      <HighlightedCode code={code} lang={null}/>
+    </>}
+  </div>;
+}
+
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
+  return lang?.toLowerCase() === "mermaid" ? <MermaidDiagram code={code}/> : <HighlightedCode code={code} lang={lang}/>;
+}
+
+function HighlightedCode({ code, lang }: { code: string; lang: string | null }) {
   const tree = React.useMemo<HastRoot | null>(() => {
     if (!lang || !lowlight.registered(lang)) return null;
     try { return lowlight.highlight(lang, code); } catch { return null; }

@@ -224,3 +224,16 @@
 .chaos-calendar .fc-list-event.chaos-event.chaos-event-due { background: transparent !important; border-style: none; }
 .chaos-calendar .fc-list-event.chaos-event .fc-list-event-time, .chaos-calendar .fc-list-event.chaos-event .fc-list-event-title { color: inherit; }
 .chaos-calendar .fc-list-event.chaos-event-meeting.chaos-event-free { opacity: 0.8; }
+
+/* Mermaid diagrams (pele) follow the app theme; variables resolve live, so no re-render on theme change. */
+.pele {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--card);
+  --pele-surface-alt: var(--muted);
+  --pele-border: var(--border);
+  --pele-accent: var(--primary);
+  --pele-font: inherit;
+}

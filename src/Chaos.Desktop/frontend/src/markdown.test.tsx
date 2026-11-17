@@ -400,3 +400,13 @@ test("the editor expands to fill the window, keeps the caret and text, and Esc b
     assert.equal(area().value, "First line\nSecond line\nThird");
   } finally { cleanup(); }
 });
+
+test("a mermaid fence is drawn as an SVG diagram and bad source falls back to code", async () => {
+  const good = render(<MarkdownPreview source={"```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```"}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  await waitFor(() => assert.ok(good.container.querySelector("[data-slot=mermaid] svg")));
+  assert.match(good.container.querySelector("[data-slot=mermaid]")?.textContent ?? "", /Start/);
+  cleanup();
+  const bad = render(<MarkdownPreview source={"```mermaid\nnot a diagram at all\n```"}/>, { container: dom.window.document.body.appendChild(dom.window.document.createElement("div")) });
+  await waitFor(() => assert.ok(bad.container.querySelector("pre")));
+  assert.match(bad.container.textContent ?? "", /Could not draw this diagram/);
+});
