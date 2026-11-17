@@ -110,7 +110,8 @@ public sealed class SiteNoteTests
     private static string Article(int paragraphs) =>
         string.Join("\n", Enumerable.Range(0, paragraphs).Select(i =>
             $"Rust ownership rules decide when memory is freed, and the borrow checker enforces them at compile time in example {i}. " +
-            $"Because ownership is checked statically, programs avoid whole classes of memory bugs without a garbage collector number {i}."));
+            $"Because ownership is checked statically, programs avoid whole classes of memory bugs without a garbage collector number {i}. " +
+            $"Section{i} covers lifetimes{i}, moves{i}, closures{i}, traits{i}, iterators{i}, pattern{i}, detail{i}, slices{i}, enums{i}, macros{i}, crates{i}, errors{i} and tests{i}."));
 
     [Test]
     public async Task Extractive_SummarizesTagsAndJudgesWithoutAModel()

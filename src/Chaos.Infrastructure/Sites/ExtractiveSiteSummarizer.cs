@@ -119,8 +119,10 @@ public sealed partial class ExtractiveSiteSummarizer : ISiteSummarizer
             return (SiteVerdict.Skip, $"Only about {words.Count} words (quick estimate, no model).");
         }
 
-        var diversity = (double)words.Distinct(StringComparer.Ordinal).Count() / words.Count;
-        if (words.Count >= 600 && diversity >= 0.3 && promo == 0)
+        // Vocabulary variety over a fixed window, so it does not shrink as an article gets longer.
+        var window = words.Take(500).ToList();
+        var diversity = (double)window.Distinct(StringComparer.Ordinal).Count() / window.Count;
+        if (words.Count >= 600 && diversity >= 0.25 && promo == 0)
         {
             return (SiteVerdict.Read, $"Long and varied, about {words.Count} words (quick estimate, no model).");
         }
