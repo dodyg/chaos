@@ -1000,3 +1000,8 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - **Polls removed:** `SyncLogo` (4 s), `GitHubSettings` and `GitHubTaskNotice` (1 s while syncing), `AlertStack` (reminders), `SummaryPrompts` and `ViewAlertStack`. `App`'s 1 s shell-activation poll stays (not a data change).
 - **Known edge.** A summary prompt that becomes visible only because quiet hours end, with no data change, now shows on the next push or focus rather than within a minute.
 - **Not done here:** the native check (My Day updating from the reminder engine or a GitHub sync with no focus change, the logo animating with no status poll) needs the desktop app; see the progress note under P6a.
+
+## 2026-11-17 (PLAN2 P7 and P8 deferred)
+
+- **P7 (AI providers, keys, privacy, summaries) and P8 (AI-drafted week plans) are deferred by the owner.** AI is optional, sits against the offline, local-first promise (section 2.5), and the cost is mostly plumbing (adapters, key storage, privacy screens) for a narrative summary. Skip both when working through the packages; migration 029 is not used for AI settings (029 is already taken by Google accounts, so a revived P7 needs the next free number).
+- **P11 no longer waits on P7.** `ISecretStore` was delivered in P5 over DPAPI, which is all the app lock needed from P7.

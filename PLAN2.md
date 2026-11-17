@@ -256,8 +256,8 @@ feature is unconfigured.
 | Custom views: conditions on any attribute, nested any/all groups, relative dates, list/table/board/calendar layouts, pinned with icon/colour/count, add tasks in context, table inline edit, alerts, export to a spreadsheet file, save a search as a view | P3 | Condition compiler matrix, count/row parity, alert dedupe, CSV fixtures |
 | Calendar: day, week, month and agenda views; planned and due marked differently; recurrence on every date; time blocks; drag to replan; unscheduled side panel; overload per day; filters | P4 | Range query tests, recurrence projection tests, drag/keyboard replan |
 | Other calendars' meetings, read-only: calendar feed (ICS) URLs and Google Calendar; busy time taken off My Week and My Day hours; My Day lists meetings and warns when tasks don't fit; task from event | P5, P6 | Feed parser fixtures, busy-minute calculations, Google fake transport, live check |
-| AI with your own key (DeepSeek, OpenAI, Anthropic, Google, or a local model): AI-written summaries in your language; privacy controls showing which service receives data | P7 | Provider adapter tests with fake HTTP, privacy filter tests, fallback to plain |
-| AI-drafted week plans | P8 | Draft validation tests (unknown IDs, out-of-week dates), no auto-confirm |
+| AI with your own key (DeepSeek, OpenAI, Anthropic, Google, or a local model): AI-written summaries in your language; privacy controls showing which service receives data | P7 (deferred) | Provider adapter tests with fake HTTP, privacy filter tests, fallback to plain |
+| AI-drafted week plans | P8 (deferred) | Draft validation tests (unknown IDs, out-of-week dates), no auto-confirm |
 | Attachments on task notes, diary updates, pad notes and pages; images in place; PDF/video/audio previews; other files as name/type/size; export with attachments; page image backgrounds | P9 | Storage, reference and purge tests; rendering tests; export fixtures |
 | Pad: drawing, photos and voice notes; Make task from part of a drawing | P10 | Drawing persistence, region backlink, recording capability tests |
 | Optional app lock | P11 | Lock state machine tests, Windows Hello live check |
@@ -2171,7 +2171,12 @@ schedulers in `src/Chaos.Desktop/Platform/`, and the frontend files listed in st
   change.
 - The polls listed in step 5 are gone.
 
-### [ ] P7 — AI providers, keys, privacy and AI summaries
+### [ ] P7 — AI providers, keys, privacy and AI summaries (DEFERRED 2026-11-17)
+
+**Deferred by the owner on 2026-11-17.** Not needed for Phase 2: it conflicts with the offline,
+local-first promise and its cost is mostly plumbing. Skip it when working through the packages. If
+it is revived, the steps below stand as written. `ISecretStore` already exists (P5), so only the
+AI parts remain.
 
 **Depends on:** P1 and P0's credential-store result. **Migration:** `029_ai.sql` (`AiSettings`,
 synced; summary narrative columns). **Read:** sections 12.1 and 12.2.
@@ -2214,7 +2219,9 @@ synced; summary narrative columns). **Read:** sections 12.1 and 12.2.
 Removing the key returns to plain summaries with no errors, and "Preview what is sent" matches
 the request byte for byte (fixture test).
 
-### [ ] P8 — AI-drafted week plans
+### [ ] P8 — AI-drafted week plans (DEFERRED 2026-11-17)
+
+**Deferred by the owner on 2026-11-17** with P7, which it depends on. Skip it.
 
 **Depends on:** P7, plus P5 for meetings in available time. **Migration:** none. **Read:** section
 12.3.
@@ -2323,7 +2330,7 @@ never load anything from the internet.
 
 ### [ ] P11 — App lock
 
-**Depends on:** P7 (`ISecretStore`) and P0's Windows Hello result. **Migration:** none. Settings
+**Depends on:** `ISecretStore` (delivered in P5; P7 is deferred) and P0's Windows Hello result. **Migration:** none. Settings
 go in `DeviceSettings`. **Read:** section 13.
 
 1. `Desktop.Windows`: implement `IUserPresenceVerifier`.
