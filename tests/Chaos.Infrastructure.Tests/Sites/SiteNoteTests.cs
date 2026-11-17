@@ -102,6 +102,57 @@ public sealed class SiteNoteTests
         await Assert.That(notInstalled!.Message).Contains("not installed");
     }
 
+    private sealed class ThrowingSummarizer : ISiteSummarizer
+    {
+        public Task<SiteAnalysis> AnalyzeAsync(FetchedPage page, CancellationToken ct) => throw new SiteReadException("down");
+    }
+
+    private static string Article(int paragraphs) =>
+        string.Join("\n", Enumerable.Range(0, paragraphs).Select(i =>
+            $"Rust ownership rules decide when memory is freed, and the borrow checker enforces them at compile time in example {i}. " +
+            $"Because ownership is checked statically, programs avoid whole classes of memory bugs without a garbage collector number {i}."));
+
+    [Test]
+    public async Task Extractive_SummarizesTagsAndJudgesWithoutAModel()
+    {
+        var page = new FetchedPage(new("https://example.com/own"), "Rust ownership", Article(40));
+
+        var result = await new ExtractiveSiteSummarizer().AnalyzeAsync(page, CancellationToken.None);
+
+        await Assert.That(result.Summary).Contains("ownership");
+        await Assert.That(result.Summary.Length).IsLessThanOrEqualTo(ExtractiveSiteSummarizer.MaxSummaryChars + 1);
+        await Assert.That(result.Verdict).IsEqualTo(SiteVerdict.Read);
+        await Assert.That(result.Tags).Contains("ownership");
+        await Assert.That(result.Reason).Contains("no model");
+    }
+
+    [Test]
+    public async Task Extractive_SkipsThinAndPromotionalPages()
+    {
+        var thin = await new ExtractiveSiteSummarizer().AnalyzeAsync(new(new("https://example.com"), "T", "Just a few words on this short page, nothing more."), CancellationToken.None);
+        await Assert.That(thin.Verdict).IsEqualTo(SiteVerdict.Skip);
+        await Assert.That(thin.Summary).IsNotEmpty();
+
+        var promo = string.Concat(Enumerable.Repeat("Subscribe to our newsletter for a free trial and a special offer today for everyone reading this page. ", 30));
+        var sales = await new ExtractiveSiteSummarizer().AnalyzeAsync(new(new("https://example.com"), "Deals", promo), CancellationToken.None);
+        await Assert.That(sales.Verdict).IsEqualTo(SiteVerdict.Skip);
+
+        await Assert.That(async () => await new ExtractiveSiteSummarizer().AnalyzeAsync(new(new("https://example.com"), "T", "  "), CancellationToken.None)).Throws<SiteReadException>();
+    }
+
+    [Test]
+    public async Task Fallback_UsesTheModelWhenItAnswersAndTheExtractiveSummaryWhenNot()
+    {
+        var page = new FetchedPage(new("https://example.com/own"), "Rust ownership", Article(40));
+        var model = new SiteAnalysis("From the model.", SiteVerdict.Skim, "Model.", ["rust"]);
+
+        var viaModel = await new FallbackSiteSummarizer(new FakeSummarizer(model), new ExtractiveSiteSummarizer()).AnalyzeAsync(page, CancellationToken.None);
+        await Assert.That(viaModel.Summary).IsEqualTo("From the model.");
+
+        var viaFallback = await new FallbackSiteSummarizer(new ThrowingSummarizer(), new ExtractiveSiteSummarizer()).AnalyzeAsync(page, CancellationToken.None);
+        await Assert.That(viaFallback.Summary).Contains("ownership");
+    }
+
     [Test]
     public async Task Addresses_AcceptBareHostsAndRefuseOtherSchemes()
     {

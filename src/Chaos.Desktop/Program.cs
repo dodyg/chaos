@@ -162,7 +162,9 @@ internal static class Program
 
         // "New site" (pad): pages are fetched here and summarized by a small local model (Ollama).
         using var siteFetcher = new HttpSitePageFetcher();
-        using var siteSummarizer = new OllamaSiteSummarizer();
+        // Falls back to a model-free extractive summary when Ollama is not running.
+        using var ollamaSummarizer = new OllamaSiteSummarizer();
+        var siteSummarizer = new FallbackSiteSummarizer(ollamaSummarizer, new ExtractiveSiteSummarizer());
         using var releaseFeed = new Chaos.Infrastructure.Updates.GitHubReleaseFeed();
 
         try

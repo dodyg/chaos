@@ -1031,4 +1031,8 @@ plan provides one, and each blocking package stays unticked until the owner conf
   `qwen2.5:3b` at `http://localhost:11434`; override with `CHAOS_LLM_URL` / `CHAOS_LLM_MODEL`).
   The note is stored at once with the address and a "Summarizing in the background" placeholder; the pad polls until the background reader replaces it (or leaves the address with a short failure note and `reading/unread` when the site refuses). It never overwrites a note the person edited meanwhile. The answer (summary, read/skim/skip verdict, reason, up to 3 topic tags) becomes one pad note;
   tags are `reading/worth-it`, `reading/skim` or `reading/skip` plus the topics. No model is
-  bundled: Ollama is a separate install, and a missing server or model gives a readable error.
+  bundled: Ollama is a separate install.
+  When Ollama is not running, the model is missing or it gives no usable answer, `FallbackSiteSummarizer`
+  falls back to `ExtractiveSiteSummarizer`, which needs no model: the top 3-4 sentences by word
+  frequency (in original order), the most frequent content words as tags, and a verdict from length
+  and promotional wording. Its reason says it is a quick estimate; it cannot judge originality.
