@@ -1,5 +1,5 @@
 import React from "react";
-import { RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import { gitHubRpc, markdownRpc, type GitHubTaskSyncResponse } from "#neoastra";
 import { useActivity, useJobChange } from "./activity";
 
@@ -65,7 +65,7 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
   }
   return <div role="status" aria-label="GitHub sync status" className="grid gap-1 rounded-lg border bg-muted/50 px-3 py-2 text-xs">
     <details className="group/gh grid gap-1">
-      <summary className="flex cursor-pointer items-center gap-2 select-none"><span>GitHub · {info.state}</span>{info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}</summary>
+      <summary className="flex cursor-pointer list-none items-center gap-2 select-none [&::-webkit-details-marker]:hidden"><ChevronRight aria-hidden="true" className="size-3.5 text-muted-foreground transition-transform group-open/gh:rotate-90"/><span>GitHub · {info.state}</span>{info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}</summary>
       <div className="mt-1 grid gap-1">
       {info.repository && <span dir="auto">{info.repository}</span>}
       {info.assignees && <span dir="auto">{info.assignees.length ? `Assigned to ${info.assignees.join(", ")}` : "Unassigned"}</span>}
