@@ -2,8 +2,8 @@ import React from "react";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { ContextMenu } from "radix-ui";
-import { myDayRpc, queryRpc, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
-import { AlertTriangle, CalendarArrowUp, ImagePlus, NotebookPen, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
+import { myDayRpc, queryRpc, type CalendarMeetingDto, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import { AlertTriangle, CalendarArrowUp, Check, Copy, ImagePlus, NotebookPen, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { FollowUps } from "./Reminders";
-import { MeetingsToday } from "./meetings";
+import { MeetingsToday, meetingLink, meetingTime, sortMeetings } from "./meetings";
 import { DayBackgroundSettings, type DayBackground } from "./MyDayBackground";
 import { CategoryEdge, CategoryMenuItems, asCategory, categories, categoryIcon, categoryTone, laneTotals, type Category, type Focus } from "./category";
 
@@ -112,6 +112,28 @@ export function laneToDayIndex(day: readonly string[], lane: readonly string[], 
   return laneIndex < laneWithout.length ? dayWithout.indexOf(laneWithout[laneIndex]) : dayWithout.indexOf(laneWithout[laneWithout.length - 1]) + 1;
 }
 
+/** The day's meetings and tasks as a Markdown list, ready to paste into notes or a message. */
+export function dayMarkdown(heading: string, meetings: readonly CalendarMeetingDto[], open: readonly QueryRowResponse[], finished: readonly QueryRowResponse[]) {
+  const text = (value: string) => value.replace(/\s+/g, " ").trim();
+  const lines = [`# ${heading}`];
+  if (meetings.length > 0) {
+    lines.push("", "## Meetings", "");
+    for (const meeting of sortMeetings(meetings)) {
+      const link = meetingLink(meeting);
+      lines.push(`- ${meetingTime(meeting)} ${link ? `[${text(meeting.title)}](${link})` : text(meeting.title)}${meeting.busy ? "" : " (free)"}`);
+    }
+  }
+  const item = (row: QueryRowResponse, mark: string) => {
+    const task = row.task;
+    const details = [row.containerName, task.priority !== "Normal" ? label(task.priority) : "", task.dueDate ? `due ${task.dueDate}${task.dueTime ? ` ${task.dueTime}` : ""}` : "", task.plannedDate ? `planned ${task.plannedDate}${task.plannedTime ? ` ${task.plannedTime}` : ""}` : "", task.estimateMinutes !== null ? minutes(task.estimateMinutes) : ""].filter(Boolean);
+    return `- [${mark}] ${text(task.title)}${details.length ? ` (${details.join(", ")})` : ""}`;
+  };
+  if (open.length > 0) lines.push("", "## Tasks", "", ...open.map(row => item(row, " ")));
+  if (finished.length > 0) lines.push("", "## Finished", "", ...finished.map(row => item(row, "x")));
+  if (lines.length === 1) lines.push("", "Nothing chosen.");
+  return lines.join("\n") + "\n";
+}
+
 /**
  * My Day (PLAN §10): the tasks chosen for one local date in manual order, a collapsible
  * finished section, explicit suggestions that are never added by themselves, and carry-over
@@ -137,6 +159,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const [local, setLocal] = React.useState(0);
   const [laneDrop, setLaneDrop] = React.useState<Category | null>(null);
   const [showBackground, setShowBackground] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
   const requests = React.useRef(createLatestRequest());
   const shownToday = React.useRef(today);
   const drag = useDragReorder();
@@ -189,6 +212,13 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
   const tomorrow = addDays(day, 1);
   const canCarry = tomorrow >= today && open.length > 0;
   const disabled = busy || working;
+  async function copyDay() {
+    try {
+      await navigator.clipboard.writeText(dayMarkdown(`My Day: ${longDate(day!)}`, summary?.meetings ?? [], open, finished));
+      setCopied(true); setError(null);
+      setTimeout(() => setCopied(false), 2500);
+    } catch { setError("Could not copy the day. Select the text and copy it by hand."); }
+  }
   const title = day === today ? "My Day" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : day;
   const add = (taskId: string) => change(() => api.add({ operationId: operationId(), date: day, taskId }), "Could not add the task to My Day.");
   const order = open.map(row => row.task.id);
@@ -240,6 +270,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
         {background && onBackgroundChange && <Button type="button" variant={showBackground ? "secondary" : "ghost"} size="icon-sm" className="mr-1 text-muted-foreground" aria-label="My Day background" title="Change the My Day background"
           aria-expanded={showBackground} aria-controls="day-background-settings" onClick={() => setShowBackground(value => !value)}><ImagePlus/></Button>}
         {onOpenDailyPage && <Button type="button" variant="ghost" size="sm" className="mr-1" title={day === today ? "Write on today's page" : "Open this day's page"} onClick={() => onOpenDailyPage(day)}><NotebookPen/>{day === today ? "Today's page" : "Day page"}</Button>}
+        <Button type="button" variant="ghost" size="sm" className="mr-1" title="Copy this day's meetings and tasks as Markdown" onClick={() => void copyDay()}>{copied ? <Check/> : <Copy/>}{copied ? "Copied" : "Copy"}</Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Previous day" disabled={working} onClick={() => setDay(addDays(day, -1))}><ChevronLeft/></Button>
         <Button type="button" variant={day === today ? "secondary" : "outline"} size="sm" disabled={working || day === today} onClick={() => setDay(today)}>Today</Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="Next day" disabled={working} onClick={() => setDay(addDays(day, 1))}><ChevronRight/></Button>

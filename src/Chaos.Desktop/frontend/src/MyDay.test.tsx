@@ -19,7 +19,7 @@ Object.defineProperties(globalThis, {
 });
 const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
-const { MyDay, addDays, nextCheckDelay, laneToDayIndex } = await import("./MyDay");
+const { MyDay, addDays, nextCheckDelay, laneToDayIndex, dayMarkdown } = await import("./MyDay");
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
   return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
@@ -186,5 +186,29 @@ test("a day mixing work and personal shows lanes with their own totals; a focus 
   assert.equal(screen.queryByRole("list", { name: "Work chosen tasks" }), null);
   assert.ok(await screen.findByText("No work suggestions right now."));
   assert.deepEqual(changed, []);
+  cleanup();
+});
+
+test("dayMarkdown lists meetings and tasks as Markdown", () => {
+  const meetings = [{ id: "m", title: "Standup", start: "09:00", end: "09:30", allDay: false, busy: true, videoUrl: "https://meet.example/x", webUrl: null }] as never;
+  const text = dayMarkdown("My Day: Tuesday", meetings, [row(task("a", "Write\nreport", { priority: "High", dueDate: "2026-11-20", estimateMinutes: 90 })), row(task("b", "Call"))], [row(task("c", "Done thing", { status: "Done" }))]);
+  assert.equal(text, [
+    "# My Day: Tuesday", "", "## Meetings", "", "- 09:00–09:30 [Standup](https://meet.example/x)", "",
+    "## Tasks", "", "- [ ] Write report (Inbox, High, due 2026-11-20, 1 h 30 min)", "- [ ] Call (Inbox)", "",
+    "## Finished", "", "- [x] Done thing (Inbox)", "",
+  ].join("\n"));
+  assert.equal(dayMarkdown("D", [], [], []), "# D\n\nNothing chosen.\n");
+});
+
+test("the Copy button puts the day's Markdown on the clipboard", async () => {
+  const written: string[] = [];
+  const { api, query } = fakes("2026-11-10", { "2026-11-10": [task("a", "Plan the meeting")] });
+  const user = userEvent.setup({ document: dom.window.document });
+  Object.defineProperty(dom.window.navigator, "clipboard", { value: { writeText: async (value: string) => { written.push(value); } }, configurable: true });
+  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  await screen.findByText("Plan the meeting");
+  await user.click(screen.getByRole("button", { name: /Copy/ }));
+  await screen.findByRole("button", { name: /Copied/ });
+  assert.match(written[0], /^# My Day: .*2026\n\n## Tasks\n\n- \[ \] Plan the meeting \(Inbox\)\n$/);
   cleanup();
 });
