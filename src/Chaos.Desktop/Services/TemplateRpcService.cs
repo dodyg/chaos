@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
@@ -23,12 +24,14 @@ public sealed class TemplateRpcService(TemplateCommands commands)
     [NeoRpcMethod("list")]
     public async ValueTask<TemplateListResponse> ListAsync(TemplateListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.list");
         try { return new(true, [.. (await commands.ListAsync(null, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<TemplateListResponse> ListDeletedAsync(TemplateListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.listDeleted");
         try { return new(true, [.. (await commands.ListDeletedAsync(ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -36,6 +39,7 @@ public sealed class TemplateRpcService(TemplateCommands commands)
     [NeoRpcMethod("save")]
     public async ValueTask<TemplateOperationResponse> SaveAsync(TemplateSaveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.save");
         try
         {
             var payload = ToPayload(request.Payload);
@@ -50,12 +54,14 @@ public sealed class TemplateRpcService(TemplateCommands commands)
     [NeoRpcMethod("delete")]
     public async ValueTask<TemplateOperationResponse> DeleteAsync(TemplateDeleteRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.delete");
         try { return new(true, Map((await commands.DeleteAsync(new(request.OperationId, request.TemplateId, Version(request.ExpectedVersion)), ct)).Template), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
     [NeoRpcMethod("restore")]
     public async ValueTask<TemplateOperationResponse> RestoreAsync(TemplateDeleteRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.restore");
         try { return new(true, Map((await commands.RestoreAsync(new(request.OperationId, request.TemplateId, Version(request.ExpectedVersion)), ct)).Template), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -63,6 +69,7 @@ public sealed class TemplateRpcService(TemplateCommands commands)
     [NeoRpcMethod("instantiate")]
     public async ValueTask<TaskOperationResponse> InstantiateAsync(TemplateInstantiateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("templates.instantiate");
         try { var result = await commands.InstantiateAsync(new(request.OperationId, request.TemplateId, request.ContainerId), ct); return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null); }
         catch (AppException error) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(error)); }
     }

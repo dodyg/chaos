@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -57,6 +58,7 @@ public sealed class CalendarRpcService(CalendarQueries queries)
     [NeoRpcMethod("range")]
     public async ValueTask<CalendarRangeResponse> RangeAsync(CalendarRangeRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendar.range");
         try
         {
             var result = await queries.RangeAsync(Date(request.From, "from"), Date(request.To, "to"), ToFilters(request.Filters), ct);
@@ -73,6 +75,7 @@ public sealed class CalendarRpcService(CalendarQueries queries)
     [NeoRpcMethod("unscheduled")]
     public async ValueTask<TaskQueryResponse> UnscheduledAsync(CalendarUnscheduledRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendar.unscheduled");
         try
         {
             var page = await queries.UnscheduledAsync(ToFilters(request.Filters), request.Text, request.Cursor, request.Limit ?? CalendarQueries.MaxUnscheduledPage, ct);

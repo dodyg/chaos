@@ -75,6 +75,10 @@ public static class JsonArchive
         ["SyncOutbox"] = "outgoing sync queue, device-local",
         ["SyncInboxParked"] = "parked remote changes, device-local",
         ["SyncAttention"] = "sync notices, device-local",
+        ["ActivityLog"] = "system event stream, device-local",
+        ["ActivityLogEntities"] = "system event stream, device-local",
+        ["ActivityCursors"] = "event stream consumer positions, device-local",
+        ["JobRuns"] = "background job diagnostics, device-local",
         ["DeviceSettings"] = "this device's identity and device-only settings",
     };
 

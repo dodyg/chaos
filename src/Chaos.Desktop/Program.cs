@@ -1,4 +1,5 @@
 using Chaos.Application.GitHub;
+using Chaos.Application.Activity;
 using Chaos.Infrastructure.GitHub;
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
@@ -54,6 +55,12 @@ internal static class Program
             .StartAsync(StorageOptions.FromDataRoot(dataRoot), AppVersion(), new GuidIdGenerator(), TimeProvider.System, CancellationToken.None)
             .GetAwaiter().GetResult();
 
+        // The activity log (PLAN2 §6.4): the store reports each commit that wrote activity, the publisher coalesces and pushes it to the window.
+        using var activityPublisher = new ActivityPublisher(TimeProvider.System);
+        storage.Store.ActivityNotifier = activityPublisher;
+        var activityFeed = new Chaos.Infrastructure.Activity.ActivityFeed(storage.Store, TimeProvider.System);
+        var jobRuns = new Chaos.Infrastructure.Activity.JobRuns(storage.Store, TimeProvider.System);
+
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var boards = new BoardCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var boardQueries = new BoardQueries(storage.Store);
@@ -72,7 +79,7 @@ internal static class Program
         var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
         // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
         var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries, viewAlerts);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries, viewAlerts, jobRuns);
         reminderEngine.Start();
 
         // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
@@ -88,7 +95,7 @@ internal static class Program
 
             await work();
         }, ct);
-        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System);
+        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System, jobRuns, activityFeed);
         backupScheduler.Start();
         var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System),
             new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store), storage.RecoveryNotice,
@@ -105,7 +112,7 @@ internal static class Program
         using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System),
             async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, TimeProvider.System);
         using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
-        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10));
+        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10), jobRuns);
         var pauseReminders = protection.Quiesce;
         protection.Quiesce = (work, ct) => githubEngine.RunPausedAsync(() => pauseReminders(work, ct), ct);
         var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
@@ -126,7 +133,7 @@ internal static class Program
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
         var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
-        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System);
+        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System, jobRuns);
         calendarScheduler.Start();
         var pauseForCalendars = protection.Quiesce;
         protection.Quiesce = (work, ct) => calendarRefresher.RunPausedAsync(() => pauseForCalendars(work, ct), ct);
@@ -162,6 +169,9 @@ internal static class Program
             app.ConfigureMainWindow((application, window) => shell.ConfigureMainWindow(application, window, initialSettings));
             app.UseRpc(rpc =>
             {
+                var committed = rpc.AddActivityEventsCommittedEvent();
+                activityPublisher.Attach(payload => committed.PublishAsync(payload).AsTask());
+                rpc.AddActivityRpcService(new ActivityRpcService(activityFeed));
                 rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks, githubEngine));
                 rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
@@ -211,6 +221,16 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(ActivityEntityDto))]
+[JsonSerializable(typeof(ActivityEntryDto))]
+[JsonSerializable(typeof(ActivitySinceRequest))]
+[JsonSerializable(typeof(ActivitySinceResponse))]
+[JsonSerializable(typeof(ActivityHeadRequest))]
+[JsonSerializable(typeof(ActivityHeadResponse))]
+[JsonSerializable(typeof(ActivityJobDto))]
+[JsonSerializable(typeof(ActivityJobsRequest))]
+[JsonSerializable(typeof(ActivityJobsResponse))]
+[JsonSerializable(typeof(ActivityCommitted))]
 [JsonSerializable(typeof(GitHubAttachmentRequest))]
 [JsonSerializable(typeof(GitHubAttachmentResponse))]
 [JsonSerializable(typeof(GitHubTaskSyncRequest))]

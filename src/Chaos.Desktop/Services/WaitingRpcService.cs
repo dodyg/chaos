@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Reminders;
 using Chaos.Domain.Reminders;
@@ -37,32 +38,48 @@ public sealed record FollowUpDueResponse(bool Ok, IReadOnlyList<FollowUpItemResp
 public sealed class WaitingRpcService(WaitingCommands waiting)
 {
     [NeoRpcMethod("get")]
-    public ValueTask<WaitingResponse> GetAsync(WaitingRequest request, CancellationToken ct) =>
-        Run(async () => (await waiting.GetAsync(request.TaskId, ct), false));
+    public ValueTask<WaitingResponse> GetAsync(WaitingRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("waiting.get");
+        return Run(async () => (await waiting.GetAsync(request.TaskId, ct), false));
+    }
 
     [NeoRpcMethod("set")]
-    public ValueTask<WaitingResponse> SetAsync(WaitingSetRequest request, CancellationToken ct) =>
-        Run(async () => Unpack(await waiting.SetAsync(new SetWaitingCommand(request.OperationId, request.TaskId, ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"), request.Person,
+    public ValueTask<WaitingResponse> SetAsync(WaitingSetRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("waiting.set");
+        return Run(async () => Unpack(await waiting.SetAsync(new SetWaitingCommand(request.OperationId, request.TaskId, ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"), request.Person,
             request.FollowUp is null ? null : Spec(request.FollowUp)), ct)));
+    }
 
     [NeoRpcMethod("clear")]
-    public ValueTask<WaitingResponse> ClearAsync(WaitingClearRequest request, CancellationToken ct) =>
-        Run(async () => Unpack(await waiting.ClearAsync(new ClearWaitingCommand(request.OperationId, request.TaskId, ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"),
+    public ValueTask<WaitingResponse> ClearAsync(WaitingClearRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("waiting.clear");
+        return Run(async () => Unpack(await waiting.ClearAsync(new ClearWaitingCommand(request.OperationId, request.TaskId, ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"),
             request.NextStatus is null ? null : ReminderRpcService.Parse<TaskItemStatus>(request.NextStatus, "nextStatus")), ct)));
+    }
 
     [NeoRpcMethod("log")]
-    public ValueTask<WaitingResponse> LogAsync(WaitingLogRequest request, CancellationToken ct) =>
-        Run(async () => Unpack(await waiting.LogAsync(new LogFollowUpCommand(request.OperationId, request.TaskId, request.Note), ct)));
+    public ValueTask<WaitingResponse> LogAsync(WaitingLogRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("waiting.log");
+        return Run(async () => Unpack(await waiting.LogAsync(new LogFollowUpCommand(request.OperationId, request.TaskId, request.Note), ct)));
+    }
 
     [NeoRpcMethod("snooze")]
-    public ValueTask<WaitingResponse> SnoozeAsync(FollowUpSnoozeRequest request, CancellationToken ct) =>
-        Run(async () => Unpack(await waiting.SnoozeAsync(new SnoozeFollowUpCommand(request.OperationId, request.TaskId,
+    public ValueTask<WaitingResponse> SnoozeAsync(FollowUpSnoozeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("waiting.snooze");
+        return Run(async () => Unpack(await waiting.SnoozeAsync(new SnoozeFollowUpCommand(request.OperationId, request.TaskId,
             ReminderRpcService.Parse<SnoozeChoice>(request.Choice, "choice"), ReminderRpcService.Instant(request.UntilUtc, "untilUtc")), ct)));
+    }
 
     /// <summary>Follow-ups due by the end of a local date (today when null): My Day's follow-up items.</summary>
     [NeoRpcMethod("due")]
     public async ValueTask<FollowUpDueResponse> DueAsync(FollowUpDueRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("waiting.due");
         try
         {
             DateOnly? date = string.IsNullOrWhiteSpace(request.Date) ? null

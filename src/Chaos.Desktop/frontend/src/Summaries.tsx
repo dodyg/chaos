@@ -1,5 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
+import { useActivity } from "./activity";
 import { summaryRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
 import { BookOpen, CalendarArrowUp, Check, NotebookPen, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export function countsText(header: SummaryHeaderDto) {
  * The "summary ready" prompt (PLAN §12): the newest unseen summary per kind, shown once its
  * time has come and outside quiet hours. Opening or dismissing it marks it seen.
  */
-export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }: { api?: typeof summaryRpc; intervalMs?: number; onOpen: (summaryId: string) => void }) {
+export function SummaryPrompts({ api = summaryRpc, onOpen }: { api?: typeof summaryRpc; onOpen: (summaryId: string) => void }) {
   const [prompts, setPrompts] = React.useState<SummaryHeaderDto[]>([]);
   const load = React.useCallback(async () => {
     try {
@@ -54,9 +55,9 @@ export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }
 
   React.useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), intervalMs);
-    return () => clearInterval(timer);
-  }, [load, intervalMs]);
+  }, [load]);
+  // A summary generated on schedule is a new summary row; its prompt appears without polling.
+  useActivity(["summary"], () => void load());
 
   async function dismiss(prompt: SummaryHeaderDto, open: boolean) {
     setPrompts(current => current.filter(item => item.id !== prompt.id));

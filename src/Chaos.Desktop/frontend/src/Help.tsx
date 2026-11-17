@@ -128,7 +128,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       <div className="flex flex-wrap gap-2"><Go to="pad" onNavigate={onNavigate}>Open the pad</Go><Go to="summaries" onNavigate={onNavigate}>Open Summaries</Go></div>
     </> },
     { id: "reminders", title: "Reminders and waiting", icon: <Bell/>, keywords: "reminder notification alert waiting follow up delegate", body: <>
-      <p>Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date so it comes back to you. Everything that fired is listed under Alerts.</p>
+      <p>Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date so it comes back to you. Everything that fired is listed under Alerts. Alerts, summaries and changes made by background work (reminders, calendar and GitHub sync) appear on their own, without switching windows.</p>
       <p>Windows notifications after Chaos closes need the installed app; you can keep Chaos running in the notification area from Settings.</p>
       <Go to="notifications" onNavigate={onNavigate}>Open Notifications</Go>
     </> },

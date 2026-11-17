@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
@@ -28,12 +29,14 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     [NeoRpcMethod("upcoming")]
     public async ValueTask<UpcomingRecurrenceResponse> UpcomingAsync(UpcomingRecurrenceRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("recurrence.upcoming");
         try { return new(true, [.. (await commands.UpcomingAsync(request.Days, request.Limit, ct)).Select(row => new UpcomingRecurrenceDto(row.SourceTaskId, row.Title, row.NominalLocal.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
     [NeoRpcMethod("get")]
     public async ValueTask<RecurrenceGetResponse> GetAsync(RecurrenceGetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("recurrence.get");
         try
         {
             var detail = await commands.GetForTaskAsync(request.TaskId, ct);
@@ -48,6 +51,7 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     [NeoRpcMethod("preview")]
     public ValueTask<RecurrencePreviewResponse> PreviewAsync(RecurrencePreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("recurrence.preview");
         ct.ThrowIfCancellationRequested();
         try
         {
@@ -77,24 +81,37 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     }
 
     [NeoRpcMethod("start")]
-    public async ValueTask<TaskOperationResponse> StartAsync(RecurrenceRuleRequest request, CancellationToken ct) =>
-        await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.StartAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule)), ct); }, ct);
+    public async ValueTask<TaskOperationResponse> StartAsync(RecurrenceRuleRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.start");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.StartAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule)), ct); }, ct);
+    }
 
     [NeoRpcMethod("revise")]
-    public async ValueTask<TaskOperationResponse> ReviseAsync(RecurrenceRuleRequest request, CancellationToken ct) =>
-        await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.ReviseFutureAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule)), ct); }, ct);
+    public async ValueTask<TaskOperationResponse> ReviseAsync(RecurrenceRuleRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.revise");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.ReviseFutureAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule)), ct); }, ct);
+    }
 
     [NeoRpcMethod("skip")]
-    public async ValueTask<TaskOperationResponse> SkipAsync(RecurrenceActionRequest request, CancellationToken ct) =>
-        await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.SkipAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct); }, ct);
+    public async ValueTask<TaskOperationResponse> SkipAsync(RecurrenceActionRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.skip");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.SkipAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct); }, ct);
+    }
 
     [NeoRpcMethod("end")]
-    public async ValueTask<TaskOperationResponse> EndAsync(RecurrenceActionRequest request, CancellationToken ct) =>
-        await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.EndAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct); }, ct);
+    public async ValueTask<TaskOperationResponse> EndAsync(RecurrenceActionRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.end");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.EndAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct); }, ct);
+    }
 
     [NeoRpcMethod("endAndDelete")]
     public async ValueTask<TaskOperationResponse> EndAndDeleteAsync(RecurrenceActionRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("recurrence.endAndDelete");
         try
         {
             var result = await commands.EndAndDeleteAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct);
@@ -104,8 +121,11 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     }
 
     [NeoRpcMethod("move")]
-    public async ValueTask<TaskOperationResponse> MoveAsync(RecurrenceMoveRequest request, CancellationToken ct) =>
-        await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.MoveAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Date(request.Date, "date"), Time(request.Time)), ct); }, ct);
+    public async ValueTask<TaskOperationResponse> MoveAsync(RecurrenceMoveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.move");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.MoveAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Date(request.Date, "date"), Time(request.Time)), ct); }, ct);
+    }
 
     private async ValueTask<TaskOperationResponse> MutateAsync(string operationId, string taskId, Func<Task> action, CancellationToken ct)
     {

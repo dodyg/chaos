@@ -1,9 +1,10 @@
 import React from "react";
 import { RefreshCw } from "lucide-react";
 import { gitHubRpc, markdownRpc, type GitHubTaskSyncResponse } from "#neoastra";
+import { useActivity, useJobChange } from "./activity";
 
 /** Local metadata only: opening a task never starts authentication or a sync pass. */
-export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, onStatus, onChanged, onSynced, pollIntervalMs = 1000 }: { taskId: string; version: string; revision: number; api?: typeof gitHubRpc; onStatus?: (taskId: string, info: GitHubTaskSyncResponse | null) => void; onChanged?: () => void; onSynced?: () => void; pollIntervalMs?: number }) {
+export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, onStatus, onChanged, onSynced }: { taskId: string; version: string; revision: number; api?: typeof gitHubRpc; onStatus?: (taskId: string, info: GitHubTaskSyncResponse | null) => void; onChanged?: () => void; onSynced?: () => void }) {
   const [info, setInfo] = React.useState<GitHubTaskSyncResponse | null>(null);
   const [failed, setFailed] = React.useState(false);
   const [working, setWorking] = React.useState(false);
@@ -19,19 +20,12 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
       .catch(() => { if (current) setFailed(true); });
     return () => { current = false; };
   }, [api, taskId, version, revision]);
-  React.useEffect(() => {
-    if (!info?.syncing) return;
-    let current = true, inFlight = false;
-    const timer = setInterval(() => {
-      if (inFlight) return;
-      inFlight = true;
-      void api.taskSync({ taskId }).then(result => {
-        if (!current) return;
-        setInfo(result); setFailed(!result.ok);
-      }).catch(() => { if (current) setFailed(true); }).finally(() => { inFlight = false; });
-    }, pollIntervalMs);
-    return () => { current = false; clearInterval(timer); };
-  }, [api, taskId, info?.syncing, pollIntervalMs]);
+  // Background sync passes (pushed by the host) refresh this task's status; no polling while it syncs.
+  const refreshStatus = React.useCallback(() => {
+    void api.taskSync({ taskId: selectedTask.current }).then(result => { setInfo(result); setFailed(!result.ok); }).catch(() => setFailed(true));
+  }, [api]);
+  useJobChange("github.sync", refreshStatus);
+  useActivity([], refreshStatus);
   React.useEffect(() => {
     if (!info?.ok) return;
     const previous = previousInfo.current;

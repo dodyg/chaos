@@ -6,7 +6,7 @@ namespace Chaos.Desktop.Platform;
 public sealed record GitHubSyncActivity(bool Running, DateTimeOffset? StartedAtUtc, DateTimeOffset? FinishedAtUtc, GitHubSyncResult? Result, GitHubErrorKind? GitHubError, AppException? AppError, string? ConnectionId = null);
 
 /// <summary>Serializes explicit full passes and per-task action syncs, and drains before data replacement. No startup authentication.</summary>
-public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider clock, TimeSpan debounce = default) : IDisposable
+public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider clock, TimeSpan debounce = default, Chaos.Application.Activity.IJobRuns? jobRuns = null) : IDisposable
 {
     private readonly object _stateGate = new();
     private readonly CancellationTokenSource _stop = new();
@@ -117,7 +117,12 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
         while (true)
         {
             GitHubSyncResult? result = null; GitHubErrorKind? githubError = null; AppException? appError = null;
-            try { result = taskId is null ? await runner.RunAsync(repositoryId, active.Token, connectionId) : await runner.RunTaskAsync(taskId, active.Token); }
+            var passTask = taskId; var passRepository = repositoryId; var passConnection = connectionId;
+            try
+            {
+                await Chaos.Application.Activity.JobPass.RunAsync(jobRuns, Chaos.Application.Activity.ActivitySources.Sync, Chaos.Application.Activity.ActivityActions.GitHubSync,
+                    async token => { result = passTask is null ? await runner.RunAsync(passRepository, token, passConnection) : await runner.RunTaskAsync(passTask, token); }, active.Token);
+            }
             catch (GitHubApiException error) { githubError = error.Kind; }
             catch (AppException error) { appError = error; }
             catch (OperationCanceledException) { appError = new(AppErrorKind.Cancelled, "GitHub sync was cancelled. Committed changes are kept; the next pass can continue."); }

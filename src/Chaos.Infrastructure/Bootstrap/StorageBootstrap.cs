@@ -106,10 +106,15 @@ public static class StorageBootstrap
                 Sync.SyncTriggerInstaller.Install(migrationConnection);
             }
 
-            var store = new SqliteApplicationStore(source, new Sync.SyncFlush(clock));
+            var store = new SqliteApplicationStore(source, new Sync.SyncFlush(clock), clock);
             try
             {
-                var profileId = await SeedAsync(store, ids, clock, ct);
+                string profileId;
+                using (Chaos.Application.Activity.ActivityScope.Open(Chaos.Application.Activity.ActivitySources.System, Chaos.Application.Activity.ActivityActions.Seed))
+                {
+                    profileId = await SeedAsync(store, ids, clock, ct);
+                }
+
                 return new ChaosStorageHandle(lockHandle)
                 {
                     DatabasePath = options.DatabasePath,

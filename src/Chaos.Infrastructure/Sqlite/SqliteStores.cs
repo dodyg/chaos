@@ -6,8 +6,12 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.Sqlite;
 
 /// <summary>SQLite implementations of the typed stores bound to one session connection (PLAN §4).</summary>
-public sealed class SqliteDataSession(SqliteConnection connection) : IDataSession
+public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrastructure.Activity.ActivityNotes notes) : IDataSession
 {
+    public SqliteDataSession(SqliteConnection connection) : this(connection, new Chaos.Infrastructure.Activity.ActivityNotes())
+    {
+    }
+
     /// <summary>The open connection (inside the caller's transaction for writes), for storage-level work such as purge.</summary>
     public SqliteConnection Connection => connection;
 
@@ -29,7 +33,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
     public IWaitingStore Waiting { get; } = new SqliteWaitingStore(connection);
-    public INotificationJobStore Notifications { get; } = new SqliteNotificationJobStore(connection);
+    public INotificationJobStore Notifications { get; } = new SqliteNotificationJobStore(connection, notes);
     public IDayPlanStore DayPlans { get; } = new SqliteDayPlanStore(connection);
     public IWeekPlanStore Weeks { get; } = new SqliteWeekPlanStore(connection);
     public ISummaryStore Summaries { get; } = new SqliteSummaryStore(connection);
@@ -38,8 +42,13 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IImportStore Imports { get; } = new SqliteImportStore(connection);
     public IGitHubStore GitHub { get; } = new SqliteGitHubStore(connection);
     public IBoardStore Boards { get; } = new SqliteBoardStore(connection);
-    public ISavedViewStore SavedViews { get; } = new SqliteSavedViewStore(connection);
-    public ICalendarStore Calendars { get; } = new SqliteCalendarStore(connection);
+    public ISavedViewStore SavedViews { get; } = new SqliteSavedViewStore(connection, notes);
+    public ICalendarStore Calendars { get; } = new SqliteCalendarStore(connection, notes);
+
+    /// <summary>Device-only writers note their changes here; the store reads the notes inside the same transaction.</summary>
+    public Chaos.Application.Activity.IActivityRecorder Activity => notes;
+
+    internal Chaos.Infrastructure.Activity.ActivityNotes Notes => notes;
 }
 
 public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileStore

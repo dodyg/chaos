@@ -1,4 +1,6 @@
 using Chaos.Application.Abstractions;
+using Chaos.Application.Activity;
+using Chaos.Infrastructure.Activity;
 using Chaos.Application.Contracts;
 using Chaos.Infrastructure.Sync;
 using Microsoft.Data.Sqlite;
@@ -17,10 +19,14 @@ namespace Chaos.Infrastructure.Sqlite;
 /// reads in flight, closes the writer and clears the pool, runs the file work, then reopens.
 /// </para>
 /// </summary>
-public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncCapture? syncCapture = null) : IApplicationStore, IDisposable
+public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncCapture? syncCapture = null, TimeProvider? clock = null) : IApplicationStore, IDisposable
 {
     private readonly SqliteConnectionSource _source = source;
     private readonly ISyncCapture? _syncCapture = syncCapture;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
+    /// <summary>Told after each commit that wrote activity (PLAN2 §6.4); the host coalesces and pushes it to the window.</summary>
+    public IActivityNotifier? ActivityNotifier { get; set; }
     private SqliteConnection _writer = source.Open();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly Lock _readSync = new();
@@ -41,20 +47,31 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
             ThrowIfClosed();
 
             using var transaction = _writer.BeginTransaction();
+            long? activitySeq;
+            TResult result;
             try
             {
-                var result = await operation(new SqliteDataSession(_writer), ct).ConfigureAwait(false);
+                var session = new SqliteDataSession(_writer);
+                result = await operation(session, ct).ConfigureAwait(false);
+                // Activity log (PLAN2 §6.4): before the sync flush, which clears SyncPending.
+                activitySeq = ActivityCapture.Capture(_writer, session.Notes, _clock);
                 // Change capture (PLAN2 §7.3): the flush runs inside the user's transaction,
                 // immediately before commit, so a rolled-back change produces no outbox row.
                 _syncCapture?.Flush(_writer);
                 transaction.Commit();
-                return result;
             }
             catch
             {
                 transaction.Rollback();
                 throw;
             }
+
+            if (activitySeq is { } seq)
+            {
+                try { ActivityNotifier?.HeadChanged(seq); } catch (Exception) { /* a notifier failure never fails a committed write */ }
+            }
+
+            return result;
         }
         catch (Exception error)
         {

@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Calendar;
 
 namespace Chaos.Desktop.Platform;
@@ -7,7 +8,7 @@ namespace Chaos.Desktop.Platform;
 /// exists: with none, a tick makes no request at all (PLAN2 §10.2, §10.4). A failure is recorded on
 /// the source by the refresher; the timer never stops because of one.
 /// </summary>
-public sealed class CalendarRefreshScheduler(CalendarRefresher refresher, TimeProvider clock) : IDisposable
+public sealed class CalendarRefreshScheduler(CalendarRefresher refresher, TimeProvider clock, IJobRuns? jobRuns = null) : IDisposable
 {
     private ITimer? _timer;
     private int _running;
@@ -23,10 +24,13 @@ public sealed class CalendarRefreshScheduler(CalendarRefresher refresher, TimePr
 
         try
         {
-            if (await refresher.HasSourcesAsync())
+            await JobPass.RunAsync(jobRuns, ActivitySources.Schedule, ActivityActions.CalendarRefresh, async ct =>
             {
-                await refresher.RefreshAsync(onlyDue: true); // Google every 5 minutes, a feed every 15
-            }
+                if (await refresher.HasSourcesAsync(ct))
+                {
+                    await refresher.RefreshAsync(ct: ct, onlyDue: true); // Google every 5 minutes, a feed every 15
+                }
+            }, CancellationToken.None);
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {

@@ -11,6 +11,8 @@ Object.defineProperties(globalThis, {
 });
 const { render, screen, waitFor, cleanup, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
+const { fakeActivity } = await import("./activityTestApi");
+const { configureActivity } = await import("./activity");
 const { GitHubSettings } = await import("./GitHubSettings");
 const disconnected: GitHubStatusResponse = { ok: true, connection: null, sync: null, repositories: [], targets: [{ id: "inbox", name: "Inbox", sections: [] }], error: null };
 const connected: GitHubStatusResponse = { ...disconnected, connection: { id: "c1", version: "1", accountId: "3000000000", accountLogin: "person", state: "Active", postDiaryByDefault: true, createLabelsForTags: false } };
@@ -99,22 +101,27 @@ test("editing a repository shows its category and saves a new selection", async 
   } finally { cleanup(); }
 });
 
-test("Sync now returns immediately, polls status and refreshes views after completion", async () => {
+test("Sync now returns immediately, follows the pushed job state and refreshes views after completion", async () => {
+  const feed = fakeActivity(); configureActivity(feed.api);
   let sync = idleSync as NonNullable<GitHubStatusResponse["sync"]>;
   let starts = 0, refreshes = 0;
   const api = { ...gitHubRpc, status: async () => ({ ...connected, repositories: [repository], sync }), syncNow: async () => { starts++; sync = { ...idleSync, running: true, startedAtUtc: "2026-11-12T09:00:00Z" }; return { ok: true, sync, error: null }; } };
-  render(<GitHubSettings api={api} pollIntervalMs={10} onSynced={() => { refreshes++; }}/>); const user = userEvent.setup({ document: dom.window.document });
+  render(<GitHubSettings api={api} onSynced={() => { refreshes++; }}/>); const user = userEvent.setup({ document: dom.window.document });
   try {
     await user.click(await screen.findByRole("button", { name: "Sync now" }));
     await screen.findByText("Fetching GitHub issues and comments…");
     assert.equal(starts, 1);
     assert.equal((screen.getByRole("button", { name: "Disconnect" }) as HTMLButtonElement).disabled, true);
+    await waitFor(() => assert.equal(feed.subscribed, true));
+    feed.setJobs([{ job: "github.sync", running: true, lastRunId: "r1" }]); feed.emit();
+    await waitFor(() => assert.equal(feed.calls.jobs >= 2, true));
     sync = { ...idleSync, startedAtUtc: "2026-11-12T09:00:00Z", finishedAtUtc: "2026-11-12T09:00:01Z", created: 2, updated: 1, commentChanges: 3, conflicts: 0, morePages: true };
+    feed.setJobs([{ job: "github.sync", running: false, lastRunId: "r1", lastOutcome: "ok" }]); feed.emit();
     await screen.findByText(/Imported 2 tasks; updated 1 task; 3 comment changes/);
     await screen.findByRole("button", { name: "Continue sync" });
     await waitFor(() => assert.equal(refreshes, 1));
     assert.match(screen.getByText(/Actions on linked tasks sync/).textContent!, /newest 100 comments/);
-  } finally { cleanup(); }
+  } finally { cleanup(); configureActivity(); }
 });
 
 test("repository Sync uses its subscription ID and surfaces an account error with a fix", async () => {

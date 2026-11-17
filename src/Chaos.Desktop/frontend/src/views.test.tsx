@@ -299,7 +299,7 @@ test("a view alert says how many tasks are new, opens the view and is acknowledg
   const { api, acknowledged } = alertApi([{ id: "a1", viewId: "v1", viewName: "My open bugs", viewAvailable: true, taskCount: 3, firstTaskTitle: "Crash on save" }]);
   const opened: string[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<ViewAlertStack api={api} intervalMs={600000} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
+  render(<ViewAlertStack api={api} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
   try {
     const card = await screen.findByRole("article", { name: "View alert: My open bugs" });
     assert.match(card.textContent ?? "", /3 new tasks in My open bugs/);
@@ -316,7 +316,7 @@ test("dismissing a view alert acknowledges it without opening anything, and a de
   const { api, acknowledged } = alertApi([{ id: "a2", viewId: "v2", viewName: "Gone view", viewAvailable: false, taskCount: 1, firstTaskTitle: "Single" }]);
   const opened: string[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<ViewAlertStack api={api} intervalMs={600000} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
+  render(<ViewAlertStack api={api} onOpen={id => opened.push(id)}/>, { container: dom.window.document.body });
   try {
     const card = await screen.findByRole("article", { name: "View alert: Gone view" });
     assert.match(card.textContent ?? "", /1 new task in Gone view/);

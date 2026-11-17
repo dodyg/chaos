@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -60,6 +61,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("list")]
     public async ValueTask<SummaryListResponse> ListAsync(SummaryListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.list");
         try
         {
             var page = await summaries.ListAsync(request.Cursor, request.Limit ?? 20, ct);
@@ -69,21 +71,31 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     }
 
     [NeoRpcMethod("get")]
-    public ValueTask<SummaryDetailResponse> GetAsync(SummaryGetRequest request, CancellationToken ct) =>
-        Detail(async () => await summaries.GetAsync(request.SummaryId, ct));
+    public ValueTask<SummaryDetailResponse> GetAsync(SummaryGetRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("summaries.get");
+        return Detail(async () => await summaries.GetAsync(request.SummaryId, ct));
+    }
 
     [NeoRpcMethod("find")]
-    public ValueTask<SummaryDetailResponse> FindAsync(SummaryFindRequest request, CancellationToken ct) =>
-        Detail(async () => await summaries.FindAsync(Kind(request.Kind), Date(request.Date, "date"), ct));
+    public ValueTask<SummaryDetailResponse> FindAsync(SummaryFindRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("summaries.find");
+        return Detail(async () => await summaries.FindAsync(Kind(request.Kind), Date(request.Date, "date"), ct));
+    }
 
     [NeoRpcMethod("generate")]
-    public ValueTask<SummaryDetailResponse> GenerateAsync(SummaryGenerateRequest request, CancellationToken ct) =>
-        Detail(async () => await summaries.GenerateAsync(new GenerateSummaryCommand(request.OperationId, Kind(request.Kind), Date(request.Date, "date")), ct));
+    public ValueTask<SummaryDetailResponse> GenerateAsync(SummaryGenerateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("summaries.generate");
+        return Detail(async () => await summaries.GenerateAsync(new GenerateSummaryCommand(request.OperationId, Kind(request.Kind), Date(request.Date, "date")), ct));
+    }
 
     /// <summary>Generates anything due first, so a prompt appears as soon as the frontend asks.</summary>
     [NeoRpcMethod("prompts")]
     public async ValueTask<SummaryPromptsResponse> PromptsAsync(SummaryPromptsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.prompts");
         try
         {
             await summaries.GenerateDueAsync(ct);
@@ -95,6 +107,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("dismiss")]
     public async ValueTask<SummaryDismissResponse> DismissAsync(SummaryDismissRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.dismiss");
         try
         {
             await summaries.DismissPromptAsync(request.SummaryId, ct);
@@ -106,6 +119,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("previewCarryOver")]
     public async ValueTask<CarryOverPreviewResponse> PreviewCarryOverAsync(CarryOverPreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.previewCarryOver");
         try
         {
             var preview = await summaries.PreviewCarryOverAsync(request.SummaryId, ct);
@@ -118,6 +132,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("carryOver")]
     public async ValueTask<CarryOverResponse> CarryOverAsync(CarryOverRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.carryOver");
         try
         {
             var result = await summaries.CarryOverAsync(new SummaryCarryOverCommand(request.OperationId, request.SummaryId, request.TaskIds ?? []), ct);
@@ -129,6 +144,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("settings")]
     public async ValueTask<SummarySettingsResponse> SettingsAsync(SummarySettingsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.settings");
         try { return Map(await summaries.GetSettingsAsync(ct)); }
         catch (AppException error) { return new(false, null, null, null, null, null, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -136,6 +152,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<SummarySettingsResponse> UpdateSettingsAsync(SummarySettingsUpdateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("summaries.updateSettings");
         try
         {
             var weekly = string.IsNullOrWhiteSpace(request.WeeklyDay) ? (DayOfWeek?)null : ReminderRpcService.Parse<DayOfWeek>(request.WeeklyDay, "weeklyDay");

@@ -88,7 +88,7 @@ test("a ready summary prompt opens Summaries and is dismissed", async () => {
     dismiss: async (request: { summaryId: string }) => { dismissed.push(request.summaryId); return { ok: true, error: null }; },
   } as unknown as typeof summaryRpc;
   const user = userEvent.setup({ document: dom.window.document });
-  render(<SummaryPrompts api={api} intervalMs={60_000} onOpen={id => opened.push(id)}/>);
+  render(<SummaryPrompts api={api} onOpen={id => opened.push(id)}/>);
 
   await screen.findByText(/is ready/);
   await user.click(screen.getByRole("button", { name: "Open" }));

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Banner, Field } from "@/components/common";
 import { trackSync, setSyncObserved } from "./syncActivity";
+import { useActivity, useJobChange } from "./activity";
 
 type Api = typeof githubRpc;
 const emptyFilter: GitHubFilterDto = { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 };
@@ -61,17 +62,9 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
   const [confirm, setConfirm] = React.useState<GitHubRepositoryDto | "disconnect" | null>(null);
   async function load() { const result = await api.status({}); if (!result.ok) throw new Error(result.error?.message ?? "Could not load GitHub settings."); setStatus(result); }
   React.useEffect(() => { void load().catch(() => setError("Could not load GitHub settings.")); }, [api]);
-  React.useEffect(() => {
-    if (!status?.sync?.running) return;
-    let current = true, inFlight = false;
-    const timer = setInterval(() => {
-      if (inFlight) return;
-      inFlight = true;
-      void api.status({}).then(result => { if (current) { if (result.ok) setStatus(result); else setError(result.error?.message ?? "Could not refresh sync status."); } })
-        .catch(() => { if (current) setError("Could not refresh sync status. Reload settings to check again."); }).finally(() => { inFlight = false; });
-    }, pollIntervalMs);
-    return () => { current = false; clearInterval(timer); };
-  }, [api, status?.sync?.running, pollIntervalMs]);
+  // A sync run starting or finishing (pushed by the host) refreshes the status; focus does the same only while the stream is unavailable.
+  useJobChange("github.sync", () => { void api.status({}).then(result => { if (result.ok) setStatus(result); else setError(result.error?.message ?? "Could not refresh sync status."); }).catch(() => setError("Could not refresh sync status. Reload settings to check again.")); });
+  useActivity([], () => { void load().catch(() => undefined); });
   React.useEffect(() => {
     const finished = status?.sync?.finishedAtUtc;
     if (!status?.sync?.running && finished && finished !== notifiedFinish.current) { notifiedFinish.current = finished; onSyncedRef.current?.(); }

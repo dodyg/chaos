@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.Sqlite;
 
 /// <summary>Saved views and their device-local alert baseline (PLAN2 P3, migration 026).</summary>
-public sealed class SqliteSavedViewStore(SqliteConnection connection) : ISavedViewStore
+public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Application.Activity.IActivityRecorder? activity = null) : ISavedViewStore
 {
     public async Task<SavedViewRecord?> GetAsync(string id, CancellationToken ct)
     {
@@ -87,6 +87,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection) : ISavedVi
 
     public async Task ReplaceMatchesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> matches, CancellationToken ct)
     {
+        activity?.Note("saved_view_match", viewId, Chaos.Application.Activity.ActivityOp.Upsert);
         using (var delete = connection.CreateCommand())
         {
             delete.CommandText = "DELETE FROM SavedViewMatches WHERE ViewId = $view;";
@@ -108,6 +109,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection) : ISavedVi
 
     public async Task ApplyMatchChangesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> upserts, IReadOnlyList<string> removedTaskIds, CancellationToken ct)
     {
+        activity?.Note("saved_view_match", viewId, Chaos.Application.Activity.ActivityOp.Upsert);
         foreach (var match in upserts)
         {
             using var command = connection.CreateCommand();
@@ -134,6 +136,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection) : ISavedVi
 
     public async Task AddAlertAsync(ViewAlertRecord alert, CancellationToken ct)
     {
+        activity?.Note("view_alert", alert.Id, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO ViewAlerts (Id, ViewId, TaskCount, TaskIdsJson, FirstTaskTitle, DeliverAtUtc, State, DeliveredAtUtc, AcknowledgedAtUtc, Presentation, CreatedAtUtc, UpdatedAtUtc)
@@ -165,6 +168,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection) : ISavedVi
 
     public async Task<bool> UpdateAlertAsync(ViewAlertRecord alert, ViewAlertState expected, CancellationToken ct)
     {
+        activity?.Note("view_alert", alert.Id, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE ViewAlerts SET TaskCount = $count, TaskIdsJson = $ids, FirstTaskTitle = $title, DeliverAtUtc = $deliver, State = $state,

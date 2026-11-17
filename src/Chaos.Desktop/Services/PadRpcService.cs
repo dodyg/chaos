@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -41,6 +42,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("list")]
     public async ValueTask<PadListResponse> ListAsync(PadListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.list");
         try { return new(true, [.. (await pad.ListAsync(request.Archived, Blank(request.TagId), ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -48,6 +50,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("get")]
     public async ValueTask<PadListResponse> GetAsync(PadGetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.get");
         try { return new(true, [Map(await pad.GetAsync(request.ItemId, ct))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -55,17 +58,22 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<PadListResponse> ListDeletedAsync(PadListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.listDeleted");
         try { return new(true, [.. (await pad.ListDeletedAsync(ct)).Select(item => Map(new PadItemView(item, [], [])))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("create")]
-    public async ValueTask<PadOperationResponse> CreateAsync(PadCreateRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => [(await pad.CreateAsync(new(request.OperationId, request.Markdown), ct)).Item]);
+    public async ValueTask<PadOperationResponse> CreateAsync(PadCreateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.create");
+        return await ItemsAsync(async () => [(await pad.CreateAsync(new(request.OperationId, request.Markdown), ct)).Item]);
+    }
 
     [NeoRpcMethod("save")]
     public async ValueTask<PadSaveResponse> SaveAsync(PadSaveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.save");
         try
         {
             var revision = long.TryParse(request.ClientRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
@@ -78,28 +86,44 @@ public sealed class PadRpcService(PadCommands pad)
     }
 
     [NeoRpcMethod("archive")]
-    public async ValueTask<PadOperationResponse> ArchiveAsync(PadItemsRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => (await pad.ArchiveAsync(new(request.OperationId, Changes(request.Items)), ct)).Items);
+    public async ValueTask<PadOperationResponse> ArchiveAsync(PadItemsRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.archive");
+        return await ItemsAsync(async () => (await pad.ArchiveAsync(new(request.OperationId, Changes(request.Items)), ct)).Items);
+    }
 
     [NeoRpcMethod("unarchive")]
-    public async ValueTask<PadOperationResponse> UnarchiveAsync(PadItemsRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => (await pad.UnarchiveAsync(new(request.OperationId, Changes(request.Items)), ct)).Items);
+    public async ValueTask<PadOperationResponse> UnarchiveAsync(PadItemsRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.unarchive");
+        return await ItemsAsync(async () => (await pad.UnarchiveAsync(new(request.OperationId, Changes(request.Items)), ct)).Items);
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<PadOperationResponse> DeleteAsync(PadItemRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => [(await pad.DeleteAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion)), ct)).Item]);
+    public async ValueTask<PadOperationResponse> DeleteAsync(PadItemRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.delete");
+        return await ItemsAsync(async () => [(await pad.DeleteAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion)), ct)).Item]);
+    }
 
     [NeoRpcMethod("restore")]
-    public async ValueTask<PadOperationResponse> RestoreAsync(PadItemRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => [(await pad.RestoreAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion)), ct)).Item]);
+    public async ValueTask<PadOperationResponse> RestoreAsync(PadItemRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.restore");
+        return await ItemsAsync(async () => [(await pad.RestoreAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion)), ct)).Item]);
+    }
 
     [NeoRpcMethod("reorder")]
-    public async ValueTask<PadOperationResponse> ReorderAsync(PadReorderRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => [(await pad.ReorderAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion), request.InsertionIndex), ct)).Item]);
+    public async ValueTask<PadOperationResponse> ReorderAsync(PadReorderRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.reorder");
+        return await ItemsAsync(async () => [(await pad.ReorderAsync(new(request.OperationId, request.ItemId, HistoryRpc.Version(request.ExpectedVersion), request.InsertionIndex), ct)).Item]);
+    }
 
     [NeoRpcMethod("makeTask")]
     public async ValueTask<PadMakeTaskResponse> MakeTaskAsync(PadMakeTaskRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.makeTask");
         try
         {
             var revision = long.TryParse(request.SourceRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
@@ -116,6 +140,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("locate")]
     public async ValueTask<PadLocateResponse> LocateAsync(PadLocateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.locate");
         try
         {
             var anchor = await pad.LocateAsync(request.TaskId, ct);
@@ -127,6 +152,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("search")]
     public async ValueTask<PadListResponse> SearchAsync(PadSearchRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.search");
         try { return new(true, [.. (await pad.SearchAsync(request.Text, request.Limit, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -134,6 +160,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("resolveLinks")]
     public async ValueTask<PadResolveResponse> ResolveLinksAsync(PadResolveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.resolveLinks");
         try { return new(true, [.. (await pad.ResolveLinksAsync(request.ItemIds, ct)).Select(target => new PadLinkTargetResponse(target.Id, target.Excerpt, target.Deleted))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -141,6 +168,7 @@ public sealed class PadRpcService(PadCommands pad)
     [NeoRpcMethod("reviewStatus")]
     public async ValueTask<PadReviewStatusResponse> ReviewStatusAsync(PadReviewStatusRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("pad.reviewStatus");
         try
         {
             var status = await pad.ReviewStatusAsync(ct);
@@ -151,8 +179,11 @@ public sealed class PadRpcService(PadCommands pad)
     }
 
     [NeoRpcMethod("completeReview")]
-    public async ValueTask<PadOperationResponse> CompleteReviewAsync(PadReviewRequest request, CancellationToken ct) =>
-        await ItemsAsync(async () => (await pad.CompleteReviewAsync(new(request.OperationId, Changes(request.Archive)), ct)).Items);
+    public async ValueTask<PadOperationResponse> CompleteReviewAsync(PadReviewRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.completeReview");
+        return await ItemsAsync(async () => (await pad.CompleteReviewAsync(new(request.OperationId, Changes(request.Archive)), ct)).Items);
+    }
 
     internal static PadItemResponse Map(PadItemView view) => new(
         view.Item.Id,

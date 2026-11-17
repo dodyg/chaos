@@ -211,6 +211,7 @@ public sealed class RecordingDataSession : IDataSession
     public IBoardStore Boards => _inner.Boards;
     public ISavedViewStore SavedViews => _inner.SavedViews;
     public ICalendarStore Calendars => _inner.Calendars;
+    public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
     public string? OperationId { get; private set; }

@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Planning;
 using NeoAstra.Rpc;
@@ -29,6 +30,7 @@ public sealed class MyDayRpcService(MyDayCommands days)
     [NeoRpcMethod("clock")]
     public async ValueTask<DayClockResult> ClockAsync(DayClockRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myDay.clock");
         try { return new(true, Map(await days.ClockAsync(ct)), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -36,6 +38,7 @@ public sealed class MyDayRpcService(MyDayCommands days)
     [NeoRpcMethod("open")]
     public async ValueTask<DayOpenResponse> OpenAsync(DayOpenRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myDay.open");
         try { return new(true, Map(await days.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -43,6 +46,7 @@ public sealed class MyDayRpcService(MyDayCommands days)
     [NeoRpcMethod("suggestions")]
     public async ValueTask<DaySuggestionsResponse> SuggestionsAsync(DaySuggestionsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myDay.suggestions");
         try
         {
             var suggestions = await days.SuggestAsync(ct);
@@ -52,20 +56,32 @@ public sealed class MyDayRpcService(MyDayCommands days)
     }
 
     [NeoRpcMethod("add")]
-    public ValueTask<DayChangeResponse> AddAsync(DayItemRequest request, CancellationToken ct) =>
-        Change(() => days.AddAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId), ct));
+    public ValueTask<DayChangeResponse> AddAsync(DayItemRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myDay.add");
+        return Change(() => days.AddAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId), ct));
+    }
 
     [NeoRpcMethod("remove")]
-    public ValueTask<DayChangeResponse> RemoveAsync(DayItemRequest request, CancellationToken ct) =>
-        Change(() => days.RemoveAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId), ct));
+    public ValueTask<DayChangeResponse> RemoveAsync(DayItemRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myDay.remove");
+        return Change(() => days.RemoveAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId), ct));
+    }
 
     [NeoRpcMethod("move")]
-    public ValueTask<DayChangeResponse> MoveAsync(DayMoveRequest request, CancellationToken ct) =>
-        Change(() => days.MoveAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId, request.Index), ct));
+    public ValueTask<DayChangeResponse> MoveAsync(DayMoveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myDay.move");
+        return Change(() => days.MoveAsync(new(request.OperationId, Date(request.Date, "date"), request.TaskId, request.Index), ct));
+    }
 
     [NeoRpcMethod("carryOver")]
-    public ValueTask<DayChangeResponse> CarryOverAsync(DayCarryOverRequest request, CancellationToken ct) =>
-        Change(() => days.CarryOverAsync(new(request.OperationId, Date(request.FromDate, "fromDate"), request.TaskIds), ct));
+    public ValueTask<DayChangeResponse> CarryOverAsync(DayCarryOverRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myDay.carryOver");
+        return Change(() => days.CarryOverAsync(new(request.OperationId, Date(request.FromDate, "fromDate"), request.TaskIds), ct));
+    }
 
     private static async ValueTask<DayChangeResponse> Change(Func<Task<DayChangeResult>> run)
     {

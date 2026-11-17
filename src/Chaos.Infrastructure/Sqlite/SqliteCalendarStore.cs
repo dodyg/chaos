@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.Sqlite;
 
 /// <summary>Calendar sources, the meeting cache, fetch state and event links (PLAN2 P5; migration 028).</summary>
-public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendarStore
+public sealed class SqliteCalendarStore(SqliteConnection connection, Chaos.Application.Activity.IActivityRecorder? activity = null) : ICalendarStore
 {
     public async Task<CalendarSourceRecord?> GetSourceAsync(string id, CancellationToken ct)
     {
@@ -89,6 +89,7 @@ public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendar
 
     public async Task SaveStateAsync(CalendarSourceState state, CancellationToken ct)
     {
+        activity?.Note("calendar_source", state.SourceId, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO CalendarSourceState (SourceId, LastAttemptUtc, LastSuccessUtc, LastError, ETag, LastModified)
@@ -106,6 +107,7 @@ public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendar
 
     public async Task ReplaceEventsAsync(string sourceId, IReadOnlyList<CalendarEventRecord> events, CancellationToken ct)
     {
+        activity?.Note("calendar_source", sourceId, Chaos.Application.Activity.ActivityOp.Upsert);
         await DeleteEventsAsync(sourceId, ct);
         foreach (var item in events)
         {
@@ -133,6 +135,7 @@ public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendar
 
     public async Task DeleteEventsAsync(string sourceId, CancellationToken ct)
     {
+        activity?.Note("calendar_source", sourceId, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM CalendarEvents WHERE SourceId = $id;";
         command.Parameters.AddWithValue("$id", sourceId);
@@ -297,6 +300,7 @@ public sealed class SqliteCalendarStore(SqliteConnection connection) : ICalendar
 
     public async Task SaveAccountStateAsync(GoogleAccountState state, CancellationToken ct)
     {
+        activity?.Note("google_account_state", state.AccountId, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO GoogleAccountState (AccountId, NeedsSignIn, LastAttemptUtc, LastSuccessUtc, LastError)

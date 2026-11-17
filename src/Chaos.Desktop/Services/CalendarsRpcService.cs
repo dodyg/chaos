@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Calendar;
 using Chaos.Application.Contracts;
@@ -46,6 +47,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("list")]
     public async ValueTask<CalendarsListResponse> ListAsync(CalendarsListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.list");
         try { return new(true, [.. (await commands.ListAsync(ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -53,6 +55,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("addFeed")]
     public async ValueTask<CalendarSourceResponse> AddFeedAsync(CalendarAddFeedRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.addFeed");
         try
         {
             var added = await commands.AddFeedAsync(new AddFeedCommand(request.Address, request.Name, request.Color, request.CountsAsBusy, request.OwnerEmail), ct);
@@ -66,6 +69,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("update")]
     public async ValueTask<CalendarSourceResponse> UpdateAsync(CalendarUpdateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.update");
         try
         {
             var saved = await commands.UpdateAsync(new UpdateSourceCommand(request.SourceId, long.TryParse(request.ExpectedVersion, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var version) ? version : throw AppException.Validation("expectedVersion", "Refresh and try again."), request.Name, request.Color,
@@ -78,6 +82,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("remove")]
     public async ValueTask<CalendarOperationResponse> RemoveAsync(CalendarRemoveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.remove");
         try
         {
             await commands.RemoveAsync(request.SourceId, ct);
@@ -89,6 +94,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("refresh")]
     public async ValueTask<CalendarRefreshResponse> RefreshAsync(CalendarRefreshRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.refresh");
         try
         {
             var results = await refresher.RefreshAsync(string.IsNullOrWhiteSpace(request.SourceId) ? null : request.SourceId, ct, request.OnlyDue);
@@ -102,6 +108,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("activity")]
     public ValueTask<CalendarActivityResponse> ActivityAsync(CalendarActivityRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.activity");
         var (google, feed) = refresher.Activity;
         return ValueTask.FromResult(new CalendarActivityResponse(true, google, feed));
     }
@@ -109,6 +116,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("makeTask")]
     public async ValueTask<CalendarMakeTaskResponse> MakeTaskAsync(CalendarMakeTaskRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.makeTask");
         try
         {
             var result = await commands.MakeTaskAsync(new MakeTaskFromEventCommand(request.OperationId, request.SourceId, request.EventId,
@@ -121,6 +129,7 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     [NeoRpcMethod("taskLinks")]
     public async ValueTask<CalendarTaskLinksResponse> TaskLinksAsync(CalendarTaskLinksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("calendars.taskLinks");
         try
         {
             var links = await commands.LinksAsync([.. (request.TaskIds ?? []).Take(200)], ct);

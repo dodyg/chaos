@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
@@ -60,41 +61,58 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("tasks.listDeleted");
         try { return new(true, [.. (await commands.ListDeletedAsync(request.ContainerId, ct)).Select(ToResponse)], null); }
         catch (AppException error) { return new(false, [], ToErrorResponse(error)); }
     }
     [NeoRpcMethod("listInbox")]
     public async ValueTask<ListTasksResponse> ListInboxAsync(ListTasksRequest request, CancellationToken cancellationToken)
     {
+        using var rpcScope = ActivityScope.Rpc("tasks.listInbox");
         try { return new(true, [.. (await commands.ListInboxAsync(cancellationToken)).Select(ToResponse)], null); }
         catch (AppException error) { return new(false, [], ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("edit")]
-    public async ValueTask<TaskOperationResponse> EditAsync(EditTaskRequest request, CancellationToken cancellationToken) =>
-        await MutateAsync(request.OperationId, async () => await commands.UpdateDetailsAsync(new(
+    public async ValueTask<TaskOperationResponse> EditAsync(EditTaskRequest request, CancellationToken cancellationToken)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.edit");
+        return await MutateAsync(request.OperationId, async () => await commands.UpdateDetailsAsync(new(
             request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.Title, request.Notes,
             Date(request.PlannedDate, "plannedDate"), Time(request.PlannedTime, "plannedTime"), request.PlannedZoneId, Date(request.DueDate, "dueDate"), Time(request.DueTime, "dueTime"), request.DueZoneId,
             ParseEnum<TaskPriority>(request.Priority, "priority"), request.EstimateMinutes,
             ParseEnum<CapacityCategory>(request.Category, "category")), cancellationToken));
+    }
 
     [NeoRpcMethod("setStatus")]
-    public async ValueTask<TaskOperationResponse> SetStatusAsync(ChangeTaskStatusRequest request, CancellationToken cancellationToken) =>
-        await MutateAsync(request.OperationId, async () => await commands.SetStatusAsync(new(
+    public async ValueTask<TaskOperationResponse> SetStatusAsync(ChangeTaskStatusRequest request, CancellationToken cancellationToken)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.setStatus");
+        return await MutateAsync(request.OperationId, async () => await commands.SetStatusAsync(new(
             request.OperationId, request.TaskId, Version(request.ExpectedVersion), ParseEnum<TaskItemStatus>(request.Status, "status"),
             request.SubtaskChoice is null ? null : ParseEnum<OpenSubtaskChoice>(request.SubtaskChoice, "subtaskChoice")), cancellationToken));
+    }
 
     [NeoRpcMethod("reorder")]
-    public async ValueTask<TaskOperationResponse> ReorderAsync(ReorderTaskRequest request, CancellationToken cancellationToken) =>
-        await MutateAsync(request.OperationId, async () => await commands.ReorderAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.InsertionIndex), cancellationToken));
+    public async ValueTask<TaskOperationResponse> ReorderAsync(ReorderTaskRequest request, CancellationToken cancellationToken)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.reorder");
+        return await MutateAsync(request.OperationId, async () => await commands.ReorderAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.InsertionIndex), cancellationToken));
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<TaskOperationResponse> DeleteAsync(DeleteTaskRequest request, CancellationToken cancellationToken) =>
-        await MutateAsync(request.OperationId, async () => await commands.DeleteAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), cancellationToken));
+    public async ValueTask<TaskOperationResponse> DeleteAsync(DeleteTaskRequest request, CancellationToken cancellationToken)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.delete");
+        return await MutateAsync(request.OperationId, async () => await commands.DeleteAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), cancellationToken));
+    }
 
     [NeoRpcMethod("restore")]
-    public async ValueTask<TaskOperationResponse> RestoreAsync(DeleteTaskRequest request, CancellationToken cancellationToken) =>
-        await MutateAsync(request.OperationId, async () => await commands.RestoreAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), cancellationToken));
+    public async ValueTask<TaskOperationResponse> RestoreAsync(DeleteTaskRequest request, CancellationToken cancellationToken)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.restore");
+        return await MutateAsync(request.OperationId, async () => await commands.RestoreAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), cancellationToken));
+    }
 
     private async ValueTask<TaskOperationResponse> MutateAsync(string operationId, Func<Task<TaskMutationResult>> action)
     {
@@ -109,6 +127,7 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
     [NeoRpcMethod("create")]
     public async ValueTask<TaskOperationResponse> CreateAsync(CreateTaskRequest request, CancellationToken cancellationToken)
     {
+        using var rpcScope = ActivityScope.Rpc("tasks.create");
         try
         {
             var result = await commands.CaptureAsync(
@@ -125,6 +144,7 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
     [NeoRpcMethod("get")]
     public async ValueTask<TaskGetResponse> GetAsync(GetTaskRequest request, CancellationToken cancellationToken)
     {
+        using var rpcScope = ActivityScope.Rpc("tasks.get");
         try
         {
             var task = await commands.GetAsync(request.TaskId, cancellationToken);

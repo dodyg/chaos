@@ -197,8 +197,8 @@ The adapter for each port lives in `Infrastructure` (portable) or `Desktop.Windo
 - **Network calls.** **Never make a network call inside a write transaction.** Read what you
   need, call the network outside the transaction, then write the result in a new transaction.
   Use expected versions to detect anything that changed in between.
-- **Change events.** Publish change events only after commit. From P6a, change events come from
-  the activity log (6.4), written in the same transaction and pushed after commit.
+- **Change events.** Publish change events only after commit. Change events come from the activity
+  log (6.4, built in P6a), written in the same transaction and pushed after commit.
 - **Migrations.** Never edit an applied migration; its checksum is enforced. Add a new numbered
   file, and raise the schema ceiling in the code that checks it (search for the current highest
   number, 23, to find it).
@@ -2085,7 +2085,9 @@ waiting on a Workspace admin to create the project).
 
 **Live check (2026-11-16).** Passed on a real Google account in the app: set up the client in Settings, connect, meetings show in the calendar, and a meeting added in Google appeared automatically on the 5-minute refresh. A meeting assigned in Google also appeared on its own, and after it was declined/cancelled in Google it disappeared from Chaos. After Disconnect every Google meeting was gone from the calendar. The live check has passed, so P6 is ticked. Not looked at: Google's own permissions page to confirm that the access was revoked there (the revoke call is best effort and Chaos says so when Google cannot be reached).
 
-### [ ] P6a — Activity log and pushed UI refresh (HIGH PRIORITY — next to implement)
+### [ ] P6a — Activity log and pushed UI refresh (implemented 2026-11-17; native check pending)
+
+**Progress note 2026-11-17.** Implemented on branch `event-stream`. Backend, host and frontend are done and tested (Infrastructure 13 new tests, Desktop 5, jsdom 6; the existing suites pass). Decisions and deviations (strict mode per async flow, summary entities, retention numbers, `IChangePublisher` deleted) are in `docs/decisions.md` (2026-11-17). **Not done:** the native check in step 6 (My Day updating within about 1 s from the reminder engine or a GitHub sync, and the logo animating during a GitHub sync with no status poll), which needs the desktop app. The box stays unticked until the native check passes, as with P6.
 
 **Priority.** Added by the owner on 2026-11-17. This is the next package to implement. It goes
 ahead of every other open package, including the open items of P0–P3 and P7 onwards. Later

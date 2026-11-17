@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -93,6 +94,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("status")]
     public async ValueTask<DataStatusResponse> StatusAsync(DataStatusRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.status");
         try
         {
             var backups = protection.Backups.List();
@@ -116,6 +118,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("backupNow")]
     public async ValueTask<BackupNowResponse> BackupNowAsync(BackupNowRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.backupNow");
         try
         {
             var manifest = await protection.BackupNowAsync(BackupReason.Manual, ct);
@@ -130,6 +133,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("inspectBackup")]
     public async ValueTask<BackupInspectResponse> InspectBackupAsync(BackupInspectRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.inspectBackup");
         try
         {
             var inspection = protection.Backups.Inspect(request.FileName);
@@ -147,6 +151,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("restoreBackup")]
     public async ValueTask<RestoreResponse> RestoreBackupAsync(BackupRestoreRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.restoreBackup");
         try
         {
             return Map(await protection.RestoreBackupAsync(request.FileName, request.Checksum, ct));
@@ -164,6 +169,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("export")]
     public async ValueTask<ExportResponse> ExportAsync(ExportRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.export");
         try
         {
             var format = request.Format.ToLowerInvariant() switch
@@ -187,6 +193,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("openFolder")]
     public ValueTask<OpenFolderResponse> OpenFolderAsync(OpenFolderRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.openFolder");
         ct.ThrowIfCancellationRequested();
         var folder = request.Which switch
         {
@@ -209,6 +216,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("importPreview")]
     public async ValueTask<ImportPreviewResponse> ImportPreviewAsync(ImportPreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.importPreview");
         try
         {
             var (kind, restore) = ParseFormat(request.Format);
@@ -243,6 +251,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("importCommit")]
     public async ValueTask<ImportCommitResponse> ImportCommitAsync(ImportCommitRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Open(ActivitySources.Import, "data.importCommit");
         try
         {
             var (kind, restore) = ParseFormat(request.Format);
@@ -285,6 +294,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("purgePreview")]
     public async ValueTask<PurgeResponse> PurgePreviewAsync(PurgeRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.purgePreview");
         try
         {
             return new(true, Map(await purge.PreviewAsync(Blank(request.TaskId), ct)), null);
@@ -298,6 +308,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("purge")]
     public async ValueTask<PurgeResponse> PurgeAsync(PurgeRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.purge");
         try
         {
             var outcome = await protection.GuardAsync(() => purge.PurgeAsync(Blank(request.TaskId), ct), ct);
@@ -317,6 +328,7 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     [NeoRpcMethod("reset")]
     public async ValueTask<ResetResponse> ResetAsync(ResetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("data.reset");
         try
         {
             if (!string.Equals(request.Confirmation?.Trim(), ResetPhrase, StringComparison.Ordinal))

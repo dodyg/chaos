@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Boards;
 using Chaos.Application.Contracts;
@@ -68,6 +69,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
     [NeoRpcMethod("get")]
     public async ValueTask<BoardGetResponse> GetAsync(BoardGetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("board.get");
         try
         {
             var board = await queries.GetAsync(request.ContainerId, Category(request.Category), request.ShowCancelled, ct);
@@ -81,6 +83,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
     [NeoRpcMethod("getView")]
     public async ValueTask<BoardGetResponse> GetViewAsync(BoardViewGetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("board.getView");
         try
         {
             var board = await viewQueries.GetAsync(request.ViewId, Category(request.Category), request.ShowCancelled, ct);
@@ -93,6 +96,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<BoardSettingsResponse> UpdateSettingsAsync(BoardUpdateSettingsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("board.updateSettings");
         try
         {
             var result = await commands.UpdateSettingsAsync(new(
@@ -114,6 +118,7 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
     [NeoRpcMethod("move")]
     public async ValueTask<BoardMoveResponse> MoveAsync(BoardMoveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("board.move");
         try
         {
             var result = await commands.MoveAsync(new(

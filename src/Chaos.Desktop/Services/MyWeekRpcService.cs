@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -57,42 +58,65 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
     [NeoRpcMethod("open")]
     public async ValueTask<WeekOpenResponse> OpenAsync(WeekOpenRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myWeek.open");
         try { return new(true, Map(await weeks.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("startDraft")]
-    public ValueTask<WeekChangeResponse> StartDraftAsync(WeekStartDraftRequest request, CancellationToken ct) =>
-        Change(() => weeks.StartDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart")), ct));
+    public ValueTask<WeekChangeResponse> StartDraftAsync(WeekStartDraftRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.startDraft");
+        return Change(() => weeks.StartDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart")), ct));
+    }
 
     [NeoRpcMethod("saveDraft")]
-    public ValueTask<WeekChangeResponse> SaveDraftAsync(WeekSaveDraftRequest request, CancellationToken ct) =>
-        Change(() => weeks.SaveDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision"), ToDraft(request.Draft)), ct));
+    public ValueTask<WeekChangeResponse> SaveDraftAsync(WeekSaveDraftRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.saveDraft");
+        return Change(() => weeks.SaveDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision"), ToDraft(request.Draft)), ct));
+    }
 
     [NeoRpcMethod("discardDraft")]
-    public ValueTask<WeekChangeResponse> DiscardDraftAsync(WeekRevisionRequest request, CancellationToken ct) =>
-        Change(() => weeks.DiscardDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision")), ct));
+    public ValueTask<WeekChangeResponse> DiscardDraftAsync(WeekRevisionRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.discardDraft");
+        return Change(() => weeks.DiscardDraftAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision")), ct));
+    }
 
     [NeoRpcMethod("confirm")]
-    public ValueTask<WeekChangeResponse> ConfirmAsync(WeekRevisionRequest request, CancellationToken ct) =>
-        Change(() => weeks.ConfirmAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision")), ct));
+    public ValueTask<WeekChangeResponse> ConfirmAsync(WeekRevisionRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.confirm");
+        return Change(() => weeks.ConfirmAsync(new(request.OperationId, Date(request.WeekStart, "weekStart"), Revision(request.ExpectedDraftRevision, "expectedDraftRevision")), ct));
+    }
 
     [NeoRpcMethod("reconcile")]
-    public ValueTask<WeekChangeResponse> ReconcileAsync(WeekReconcileRequest request, CancellationToken ct) =>
-        Change(() => weeks.ApplyReconciliationAsync(new(request.OperationId, Date(request.Date, "date"), request.WeekPlanId, Revision(request.Revision, "revision"), request.AddTaskIds ?? [], request.RemoveTaskIds ?? []), ct));
+    public ValueTask<WeekChangeResponse> ReconcileAsync(WeekReconcileRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.reconcile");
+        return Change(() => weeks.ApplyReconciliationAsync(new(request.OperationId, Date(request.Date, "date"), request.WeekPlanId, Revision(request.Revision, "revision"), request.AddTaskIds ?? [], request.RemoveTaskIds ?? []), ct));
+    }
 
     [NeoRpcMethod("setGoalOutcome")]
-    public ValueTask<WeekChangeResponse> SetGoalOutcomeAsync(WeekGoalOutcomeRequest request, CancellationToken ct) =>
-        Change(() => weeks.SetGoalOutcomeAsync(new(request.OperationId, request.GoalId, Revision(request.ExpectedVersion, "expectedVersion"), Enum<WeekGoalOutcome>(request.Outcome, "outcome")), ct));
+    public ValueTask<WeekChangeResponse> SetGoalOutcomeAsync(WeekGoalOutcomeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.setGoalOutcome");
+        return Change(() => weeks.SetGoalOutcomeAsync(new(request.OperationId, request.GoalId, Revision(request.ExpectedVersion, "expectedVersion"), Enum<WeekGoalOutcome>(request.Outcome, "outcome")), ct));
+    }
 
     [NeoRpcMethod("setAvailability")]
-    public ValueTask<WeekChangeResponse> SetAvailabilityAsync(WeekAvailabilityRequest request, CancellationToken ct) =>
-        Change(() => weeks.SetAvailabilityAsync(new(request.OperationId,
+    public ValueTask<WeekChangeResponse> SetAvailabilityAsync(WeekAvailabilityRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("myWeek.setAvailability");
+        return Change(() => weeks.SetAvailabilityAsync(new(request.OperationId,
             [.. (request.Days ?? []).Select((day, index) => new AvailabilityDay(Enum<DayOfWeek>(day.Weekday, $"days[{index}].weekday"), day.TotalMinutes, day.WorkMinutes))]), ct));
+    }
 
     [NeoRpcMethod("previewWeekStart")]
     public async ValueTask<WeekStartPreviewResponse> PreviewWeekStartAsync(WeekStartPreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myWeek.previewWeekStart");
         try
         {
             var preview = await weeks.PreviewWeekStartAsync(Enum<DayOfWeek>(request.FirstWeekday, "firstWeekday"), ct);
@@ -106,6 +130,7 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
     [NeoRpcMethod("changeWeekStart")]
     public async ValueTask<WeekStartChangeResponse> ChangeWeekStartAsync(WeekStartChangeRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("myWeek.changeWeekStart");
         try
         {
             var result = await weeks.ChangeWeekStartAsync(new(request.OperationId, Enum<DayOfWeek>(request.FirstWeekday, "firstWeekday"), request.Remap), ct);

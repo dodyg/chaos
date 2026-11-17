@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Activity;
 using Chaos.Application.Contracts;
 using Chaos.Application.Reminders;
 using Chaos.Application.Summaries;
@@ -16,7 +17,7 @@ namespace Chaos.Desktop.Platform;
 /// tick generates scheduled plain summaries (PLAN §12) when one is given: morning, evening and
 /// weekly at their times, and missed periods once at the next start.
 /// </summary>
-public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null) : IDisposable
+public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null, IJobRuns? jobRuns = null) : IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
@@ -38,6 +39,7 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
         await _gate.WaitAsync(ct);
         try
         {
+            using var scope = ActivityScope.Ensure(ActivitySources.Schedule, ActivityActions.ReminderTick);
             await reminders.ResyncAllAsync(ct);
         }
         finally
@@ -63,6 +65,7 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
         {
             try
             {
+                using var scope = ActivityScope.Ensure(ActivitySources.Schedule, ActivityActions.ReminderTick);
                 await reminders.ResyncAllAsync(CancellationToken.None);
             }
             catch (AppException error)
@@ -80,6 +83,18 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
     {
         await _gate.WaitAsync(ct);
         try
+        {
+            await JobPass.RunAsync(jobRuns, ActivitySources.Schedule, ActivityActions.ReminderTick, TickPassAsync, ct);
+            LastError = null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task TickPassAsync(CancellationToken ct)
+    {
         {
             if (summaries is not null)
             {
@@ -108,11 +123,6 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
             }
 
             await reminders.ReconcileOsAsync(ct);
-            LastError = null;
-        }
-        finally
-        {
-            _gate.Release();
         }
     }
 

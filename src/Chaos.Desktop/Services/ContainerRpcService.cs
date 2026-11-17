@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
@@ -32,87 +33,134 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     [NeoRpcMethod("list")]
     public async ValueTask<ContainerListResponse> ListAsync(ContainerListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.list");
         try { return new(true, [.. (await containers.ListPersonalAsync(ct)).Select(Map)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<ContainerListResponse> ListDeletedAsync(ContainerListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.listDeleted");
         try { return new(true, [.. (await containers.ListDeletedPersonalAsync(ct)).Select(Map)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("delete")]
-    public async ValueTask<ContainerOperationResponse> DeleteAsync(ContainerDeleteRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.DeleteAsync(new DeleteContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Choice(request.ContentsChoice)), ct));
+    public async ValueTask<ContainerOperationResponse> DeleteAsync(ContainerDeleteRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.delete");
+        return await RunAsync(() => containers.DeleteAsync(new DeleteContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Choice(request.ContentsChoice)), ct));
+    }
     [NeoRpcMethod("restore")]
-    public async ValueTask<ContainerOperationResponse> RestoreAsync(ContainerChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.RestoreAsync(new RestoreContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<ContainerOperationResponse> RestoreAsync(ContainerChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.restore");
+        return await RunAsync(() => containers.RestoreAsync(new RestoreContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("tasks")]
     public async ValueTask<ListTasksResponse> TasksAsync(ContainerTasksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.tasks");
         try { return new(true, [.. (await tasks.ListAsync(request.ContainerId, ct)).Select(TaskRpcService.ToResponse)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("create")]
-    public async ValueTask<ContainerOperationResponse> CreateAsync(ContainerCreateRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.CreateAsync(new(request.OperationId, request.Name, Kind(request.Kind), null), ct));
+    public async ValueTask<ContainerOperationResponse> CreateAsync(ContainerCreateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.create");
+        return await RunAsync(() => containers.CreateAsync(new(request.OperationId, request.Name, Kind(request.Kind), null), ct));
+    }
     [NeoRpcMethod("rename")]
-    public async ValueTask<ContainerOperationResponse> RenameAsync(ContainerChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.RenameAsync(new RenameContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), request.Name), ct));
+    public async ValueTask<ContainerOperationResponse> RenameAsync(ContainerChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.rename");
+        return await RunAsync(() => containers.RenameAsync(new RenameContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), request.Name), ct));
+    }
     [NeoRpcMethod("archive")]
-    public async ValueTask<ContainerOperationResponse> ArchiveAsync(ContainerChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.ArchiveAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<ContainerOperationResponse> ArchiveAsync(ContainerChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.archive");
+        return await RunAsync(() => containers.ArchiveAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("unarchive")]
-    public async ValueTask<ContainerOperationResponse> UnarchiveAsync(ContainerChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.UnarchiveAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<ContainerOperationResponse> UnarchiveAsync(ContainerChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.unarchive");
+        return await RunAsync(() => containers.UnarchiveAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("reorder")]
-    public async ValueTask<ContainerOperationResponse> ReorderAsync(ContainerOrderRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.ReorderAsync(new ReorderContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    public async ValueTask<ContainerOperationResponse> ReorderAsync(ContainerOrderRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.reorder");
+        return await RunAsync(() => containers.ReorderAsync(new ReorderContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    }
     [NeoRpcMethod("setDeadline")]
-    public async ValueTask<ContainerOperationResponse> SetDeadlineAsync(DeadlineRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.SetDeadlineAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Date(request.DeadlineDate)), ct));
+    public async ValueTask<ContainerOperationResponse> SetDeadlineAsync(DeadlineRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.setDeadline");
+        return await RunAsync(() => containers.SetDeadlineAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Date(request.DeadlineDate)), ct));
+    }
     [NeoRpcMethod("setDefaultCategory")]
-    public async ValueTask<ContainerOperationResponse> SetDefaultCategoryAsync(ContainerCategoryRequest request, CancellationToken ct) =>
-        await RunAsync(() => containers.SetDefaultCategoryAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Category(request.DefaultCategory)), ct));
+    public async ValueTask<ContainerOperationResponse> SetDefaultCategoryAsync(ContainerCategoryRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.setDefaultCategory");
+        return await RunAsync(() => containers.SetDefaultCategoryAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Category(request.DefaultCategory)), ct));
+    }
     [NeoRpcMethod("progress")]
     public async ValueTask<ProgressResponse> ProgressAsync(ContainerTasksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.progress");
         try { var result = await containers.GetProjectProgressAsync(request.ContainerId, ct); return new(true, checked((int)result.DoneCount), checked((int)result.TotalCount), checked((int)result.DoneSubtaskCount), checked((int)result.TotalSubtaskCount), null); }
         catch (AppException e) { return new(false, 0, 0, 0, 0, TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("sections")]
     public async ValueTask<SectionListResponse> SectionsAsync(ContainerTasksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.sections");
         try { return new(true, [.. (await containers.ListSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("deletedSections")]
     public async ValueTask<SectionListResponse> DeletedSectionsAsync(ContainerTasksRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.deletedSections");
         try { return new(true, [.. (await containers.ListDeletedSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
         catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("createSection")]
     public async ValueTask<SectionOperationResponse> CreateSectionAsync(SectionCreateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.createSection");
         try { return new(true, MapSection((await containers.CreateSectionAsync(new(request.OperationId, request.ContainerId, request.Title), ct)).Section), null); }
         catch (AppException e) { return new(false, null, TaskRpcService.ToErrorResponse(e)); }
     }
     [NeoRpcMethod("renameSection")]
-    public async ValueTask<SectionOperationResponse> RenameSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
-        await RunSectionAsync(() => containers.RenameAsync(new RenameSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion), request.Title), ct));
+    public async ValueTask<SectionOperationResponse> RenameSectionAsync(SectionChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.renameSection");
+        return await RunSectionAsync(() => containers.RenameAsync(new RenameSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion), request.Title), ct));
+    }
     [NeoRpcMethod("reorderSection")]
-    public async ValueTask<SectionOperationResponse> ReorderSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
-        await RunSectionAsync(() => containers.ReorderAsync(new ReorderSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    public async ValueTask<SectionOperationResponse> ReorderSectionAsync(SectionChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.reorderSection");
+        return await RunSectionAsync(() => containers.ReorderAsync(new ReorderSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    }
     [NeoRpcMethod("deleteSection")]
-    public async ValueTask<SectionOperationResponse> DeleteSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
-        await RunSectionAsync(() => containers.DeleteAsync(new DeleteSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<SectionOperationResponse> DeleteSectionAsync(SectionChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.deleteSection");
+        return await RunSectionAsync(() => containers.DeleteAsync(new DeleteSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("restoreSection")]
-    public async ValueTask<SectionOperationResponse> RestoreSectionAsync(SectionChangeRequest request, CancellationToken ct) =>
-        await RunSectionAsync(() => containers.RestoreAsync(new RestoreSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<SectionOperationResponse> RestoreSectionAsync(SectionChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("containers.restoreSection");
+        return await RunSectionAsync(() => containers.RestoreAsync(new RestoreSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("moveTask")]
     public async ValueTask<TaskOperationResponse> MoveTaskAsync(MoveTaskRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("containers.moveTask");
         try { var result = await tasks.MoveAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.ContainerId, request.SectionId), ct); return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null); }
         catch (AppException e) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(e)); }
     }

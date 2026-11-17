@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -76,6 +77,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("list")]
     public async ValueTask<ViewListResponse> ListAsync(ViewListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.list");
         try { return new(true, [.. (await commands.ListAsync(request.IncludeDeleted, ct)).Select(Map)], SavedViewCommands.Icons, null); }
         catch (AppException error) { return new(false, [], SavedViewCommands.Icons, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -83,35 +85,52 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("get")]
     public async ValueTask<ViewResponse> GetAsync(ViewGetRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.get");
         try { return new(true, Map(await commands.GetAsync(request.ViewId, ct)), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("save")]
-    public async ValueTask<ViewResponse> SaveAsync(ViewSaveRequest request, CancellationToken ct) =>
-        await Run(async () => (await commands.SaveAsync(new(
+    public async ValueTask<ViewResponse> SaveAsync(ViewSaveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.save");
+        return await Run(async () => (await commands.SaveAsync(new(
             request.OperationId, request.ViewId, Version(request.ExpectedVersion), request.Name, request.Icon, request.Color,
             request.DefinitionJson, request.LayoutJson, request.Pinned, request.AlertsEnabled), ct)).View);
+    }
 
     [NeoRpcMethod("duplicate")]
-    public async ValueTask<ViewResponse> DuplicateAsync(ViewDuplicateRequest request, CancellationToken ct) =>
-        await Run(async () => (await commands.DuplicateAsync(request.OperationId, request.ViewId, ct)).View);
+    public async ValueTask<ViewResponse> DuplicateAsync(ViewDuplicateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.duplicate");
+        return await Run(async () => (await commands.DuplicateAsync(request.OperationId, request.ViewId, ct)).View);
+    }
 
     [NeoRpcMethod("setPinned")]
-    public async ValueTask<ViewResponse> SetPinnedAsync(ViewPinRequest request, CancellationToken ct) =>
-        await Run(async () => (await commands.SetPinnedAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), request.Pinned, ct)).View);
+    public async ValueTask<ViewResponse> SetPinnedAsync(ViewPinRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.setPinned");
+        return await Run(async () => (await commands.SetPinnedAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), request.Pinned, ct)).View);
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<ViewResponse> DeleteAsync(ViewDeleteRequest request, CancellationToken ct) =>
-        await Run(async () => (await commands.DeleteAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), ct)).View);
+    public async ValueTask<ViewResponse> DeleteAsync(ViewDeleteRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.delete");
+        return await Run(async () => (await commands.DeleteAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), ct)).View);
+    }
 
     [NeoRpcMethod("restore")]
-    public async ValueTask<ViewResponse> RestoreAsync(ViewDeleteRequest request, CancellationToken ct) =>
-        await Run(async () => (await commands.RestoreAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), ct)).View);
+    public async ValueTask<ViewResponse> RestoreAsync(ViewDeleteRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.restore");
+        return await Run(async () => (await commands.RestoreAsync(request.OperationId, request.ViewId, Version(request.ExpectedVersion), ct)).View);
+    }
 
     [NeoRpcMethod("reorder")]
     public async ValueTask<ViewListResponse> ReorderAsync(ViewReorderRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.reorder");
         try { return new(true, [.. (await commands.ReorderAsync(request.OperationId, request.ViewIds, ct)).Select(Map)], SavedViewCommands.Icons, null); }
         catch (AppException error) { return new(false, [], SavedViewCommands.Icons, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -119,6 +138,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("run")]
     public async ValueTask<ViewRunResponse> RunAsync(ViewRunRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.run");
         try
         {
             var result = await queries.RunAsync(request.ViewId, Category(request.Category), Math.Clamp(request.Limit ?? 100, 1, 100), request.Cursor, ct);
@@ -131,6 +151,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("preview")]
     public async ValueTask<ViewRunResponse> PreviewAsync(ViewPreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.preview");
         try
         {
             var page = await queries.RunDraftAsync(request.DefinitionJson, request.LayoutJson, Category(request.Category), Math.Clamp(request.Limit ?? 5, 1, 50), ct);
@@ -142,6 +163,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("counts")]
     public async ValueTask<SavedViewCountsResponse> CountsAsync(SavedViewCountsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.counts");
         try { return new(true, [.. (await queries.CountsAsync(Category(request.Category), ct)).Select(entry => new ViewCountEntry(entry.Key, TagRpcService.Count(entry.Value)))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -149,6 +171,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("contextDefaults")]
     public async ValueTask<ViewContextResponse> ContextDefaultsAsync(ViewContextRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.contextDefaults");
         try
         {
             var defaults = await commands.ContextDefaultsAsync(request.ViewId, ct);
@@ -163,6 +186,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("export")]
     public async ValueTask<ViewExportResponse> ExportAsync(ViewExportRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.export");
         try
         {
             var (csv, fileName, rows) = await queries.BuildCsvAsync(request.ViewId, Category(request.Category), ct);
@@ -180,6 +204,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("githubOptions")]
     public async ValueTask<ViewGitHubOptionsResponse> GitHubOptionsAsync(ViewGitHubOptionsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.githubOptions");
         try { return new(true, [.. (await queries.GitHubRepositoriesAsync(ct)).Select(item => new ViewGitHubRepositoryDto(item.Id, item.FullName))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -188,6 +213,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("alerts")]
     public async ValueTask<ViewAlertsResponse> AlertsAsync(ViewAlertsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.alerts");
         try
         {
             var items = await alerts.ListAsync(20, ct);
@@ -200,6 +226,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("acknowledgeAlert")]
     public async ValueTask<ViewAlertAckResponse> AcknowledgeAlertAsync(ViewAlertAckRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.acknowledgeAlert");
         try { await alerts.AcknowledgeAsync(request.AlertId, ct); return new(true, null); }
         catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -207,6 +234,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     [NeoRpcMethod("fromSearch")]
     public ValueTask<ViewFromSearchResponse> FromSearchAsync(ViewFromSearchRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("views.fromSearch");
         ct.ThrowIfCancellationRequested();
         try { return ValueTask.FromResult(new ViewFromSearchResponse(true, ViewFromSearch.Build(QueryRpcService.ToSpec(request.Search)), null)); }
         catch (AppException error) { return ValueTask.FromResult(new ViewFromSearchResponse(false, null, TaskRpcService.ToErrorResponse(error))); }

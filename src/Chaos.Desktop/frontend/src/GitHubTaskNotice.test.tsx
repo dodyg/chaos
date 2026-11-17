@@ -6,6 +6,8 @@ import { gitHubRpc, type GitHubTaskSyncResponse } from "#neoastra";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, { window: { value: dom.window, configurable: true }, document: { value: dom.window.document, configurable: true }, navigator: { value: dom.window.navigator, configurable: true }, HTMLElement: { value: dom.window.HTMLElement, configurable: true } });
 const { render, screen, waitFor, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { fakeActivity } = await import("./activityTestApi");
+const { configureActivity } = await import("./activity");
 const { GitHubTaskNotice } = await import("./GitHubTaskNotice");
 const ordinary: GitHubTaskSyncResponse = { ok: true, connected: false, pending: false, state: null, error: null, assignedToMe: null, postDiaryByDefault: false, linkVersion: null, hasConflict: false, syncError: null, issueUrl: null, repository: null, dueDateManaged: false, syncing: false, assignees: null };
 
@@ -112,18 +114,23 @@ test("a failed task action keeps the notice and displays its error", async () =>
   } finally { cleanup(); }
 });
 
-test("issue sync polls local status and refreshes the task when background work finishes", async () => {
+test("issue sync refreshes local status and the task when the pushed job state says background work finished", async () => {
+  const feed = fakeActivity(); configureActivity(feed.api);
   let response = { ...ordinary, connected: true, state: "Linked", syncing: true, pending: true };
   let refreshed = 0;
   const api = { ...gitHubRpc, taskSync: async () => response };
-  render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api} pollIntervalMs={10} onSynced={() => { refreshed++; }}/>);
+  render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api} onSynced={() => { refreshed++; }}/>);
   try {
     await screen.findByText("Syncing this issue…");
+    await waitFor(() => assert.equal(feed.subscribed, true));
+    feed.setJobs([{ job: "github.sync", running: true, lastRunId: "r1" }]); feed.emit();
+    await waitFor(() => assert.equal(feed.calls.jobs >= 2, true));
     response = { ...response, syncing: false, pending: false };
+    feed.setJobs([{ job: "github.sync", running: false, lastRunId: "r1", lastOutcome: "ok" }]); feed.emit();
     await waitFor(() => assert.equal(refreshed, 1));
     assert.equal(screen.queryByText("Syncing this issue…") === null, true);
     assert.equal(screen.queryByText("Not sent to GitHub yet.") === null, true);
-  } finally { cleanup(); }
+  } finally { cleanup(); configureActivity(); }
 });
 
 test("an issue sync finishing before status is read still refreshes once", async () => {

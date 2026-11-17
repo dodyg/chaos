@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { SyncLogo } from "./SyncLogo";
+import { useActivity } from "./activity";
 import { trackSync } from "./syncActivity";
 import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities, statuses } from "@/components/common";
 
@@ -431,6 +432,20 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   // Window focus refreshes calendars that are due (Google every 5 minutes, feeds every 15); the host skips the rest.
   const changedRef = React.useRef(changed);
   changedRef.current = changed;
+  // Changes the host makes on its own (reminder engine, calendar and GitHub passes, undo of another window) arrive as activity
+  // (PLAN2 §6.4); the open view, the lists and the counts reload from them without a focus change. This window's own edits already
+  // call changed(), so entries it wrote itself (Source "user") are skipped. A lost position (reset) reloads everything.
+  const reloadFromActivityRef = React.useRef(() => {});
+  reloadFromActivityRef.current = () => {
+    changed();
+    void refresh().catch((e: unknown) => setError(String(e)));
+    void refreshContainers().catch((e: unknown) => setError(String(e)));
+  };
+  useActivity("*", (entries, reason) => {
+    if (reason === "focus") return;
+    if (reason === "entries" && entries.every(entry => entry.source === "user")) return;
+    reloadFromActivityRef.current();
+  });
   React.useEffect(() => {
     let running = false;
     async function refreshDue() {

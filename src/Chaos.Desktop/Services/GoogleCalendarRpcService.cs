@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Calendar;
 using Chaos.Application.Contracts;
@@ -40,6 +41,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("status")]
     public async ValueTask<GoogleStatusResponse> StatusAsync(GoogleStatusRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.status");
         try { return new(true, commands.IsConfigured, [.. (await commands.ListAsync(ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, commands.IsConfigured, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -48,6 +50,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("setup")]
     public async ValueTask<GoogleDisconnectResponse> SetupAsync(GoogleSetupRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.setup");
         try { await commands.SaveClientAsync(request.ClientId, request.ClientSecret, ct); return new(true, true, null); }
         catch (AppException error) { return new(false, false, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -55,6 +58,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("connect")]
     public async ValueTask<GoogleAccountResponse> ConnectAsync(GoogleConnectRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.connect");
         try { return new(true, Map(await commands.ConnectAsync(ct)), null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -62,6 +66,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("calendars")]
     public async ValueTask<GoogleCalendarsResponse> CalendarsAsync(GoogleCalendarsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.calendars");
         try
         {
             var choices = await commands.CalendarsAsync(request.AccountId, ct);
@@ -74,6 +79,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("choose")]
     public async ValueTask<GoogleChooseResponse> ChooseAsync(GoogleChooseRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.choose");
         try
         {
             var chosen = await commands.ChooseAsync(new ChooseGoogleCalendarCommand(request.AccountId, request.CalendarId, request.Name, request.Color, request.Chosen), ct);
@@ -94,6 +100,7 @@ public sealed class GoogleCalendarRpcService(GoogleCalendarCommands commands, Ca
     [NeoRpcMethod("disconnect")]
     public async ValueTask<GoogleDisconnectResponse> DisconnectAsync(GoogleDisconnectRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("googleCalendar.disconnect");
         try { return new(true, await commands.DisconnectAsync(request.AccountId, ct), null); }
         catch (AppException error) { return new(false, false, TaskRpcService.ToErrorResponse(error)); }
     }

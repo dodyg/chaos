@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
@@ -23,15 +24,20 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
     [NeoRpcMethod("listDeleted")]
     public async ValueTask<SubtaskListResponse> ListDeletedAsync(SubtaskListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("subtasks.listDeleted");
         try { return new(true, [.. (await subtasks.ListDeletedAsync(request.TaskId, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
     [NeoRpcMethod("restore")]
-    public async ValueTask<SubtaskOperationResponse> RestoreAsync(SubtaskRestoreRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.RestoreAsync(new(request.OperationId, request.TaskId, request.SubtaskId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<SubtaskOperationResponse> RestoreAsync(SubtaskRestoreRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.restore");
+        return await RunAsync(() => subtasks.RestoreAsync(new(request.OperationId, request.TaskId, request.SubtaskId, Version(request.ExpectedVersion)), ct));
+    }
     [NeoRpcMethod("list")]
     public async ValueTask<SubtaskListResponse> ListAsync(SubtaskListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("subtasks.list");
         try
         {
             var detail = await tasks.GetDetailAsync(request.TaskId, ct);
@@ -42,24 +48,39 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
     }
 
     [NeoRpcMethod("add")]
-    public async ValueTask<SubtaskOperationResponse> AddAsync(SubtaskAddRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.AddAsync(new(request.OperationId, request.TaskId, request.Title, request.Notes), ct));
+    public async ValueTask<SubtaskOperationResponse> AddAsync(SubtaskAddRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.add");
+        return await RunAsync(() => subtasks.AddAsync(new(request.OperationId, request.TaskId, request.Title, request.Notes), ct));
+    }
 
     [NeoRpcMethod("edit")]
-    public async ValueTask<SubtaskOperationResponse> EditAsync(SubtaskEditRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.UpdateAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.Title, request.Notes), ct));
+    public async ValueTask<SubtaskOperationResponse> EditAsync(SubtaskEditRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.edit");
+        return await RunAsync(() => subtasks.UpdateAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.Title, request.Notes), ct));
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<SubtaskOperationResponse> DeleteAsync(SubtaskEditRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.DeleteAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.Title, request.Notes), ct));
+    public async ValueTask<SubtaskOperationResponse> DeleteAsync(SubtaskEditRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.delete");
+        return await RunAsync(() => subtasks.DeleteAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.Title, request.Notes), ct));
+    }
 
     [NeoRpcMethod("setStatus")]
-    public async ValueTask<SubtaskOperationResponse> SetStatusAsync(SubtaskStatusRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.SetStatusAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), Status(request.Status)), ct));
+    public async ValueTask<SubtaskOperationResponse> SetStatusAsync(SubtaskStatusRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.setStatus");
+        return await RunAsync(() => subtasks.SetStatusAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), Status(request.Status)), ct));
+    }
 
     [NeoRpcMethod("reorder")]
-    public async ValueTask<SubtaskOperationResponse> ReorderAsync(SubtaskOrderRequest request, CancellationToken ct) =>
-        await RunAsync(() => subtasks.ReorderAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    public async ValueTask<SubtaskOperationResponse> ReorderAsync(SubtaskOrderRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("subtasks.reorder");
+        return await RunAsync(() => subtasks.ReorderAsync(new(request.OperationId, request.SubtaskId, Version(request.ExpectedVersion), request.InsertionIndex), ct));
+    }
 
     private async ValueTask<SubtaskOperationResponse> RunAsync(Func<Task<SubtaskMutationResult>> action)
     {

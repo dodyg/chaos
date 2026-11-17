@@ -1,4 +1,5 @@
 import React from "react";
+import { useActivity } from "./activity";
 import { viewRpc, type ViewAlertDto } from "#neoastra";
 import { ExternalLink, Funnel, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,11 +8,11 @@ export type ViewAlertApi = Pick<typeof viewRpc, "alerts" | "acknowledgeAlert">;
 
 /**
  * Alerts from custom views (PLAN2 §11.2): "3 new tasks in My open bugs". The host evaluates each
- * alerting view and delivers what is due after quiet hours; this polls for delivered ones, like the
+ * alerting view and delivers what is due after quiet hours; it learns of delivered ones from the activity stream, like the
  * reminder alerts, and shows them inside the app. Open goes to the view; dismissing acknowledges it.
  */
-export function ViewAlertStack({ api = viewRpc, intervalMs = 15_000, onOpen }: {
-  api?: ViewAlertApi; intervalMs?: number; onOpen: (viewId: string) => void;
+export function ViewAlertStack({ api = viewRpc, onOpen }: {
+  api?: ViewAlertApi; onOpen: (viewId: string) => void;
 }) {
   const [alerts, setAlerts] = React.useState<ViewAlertDto[]>([]);
   const [error, setError] = React.useState<string | null>(null);
@@ -26,12 +27,12 @@ export function ViewAlertStack({ api = viewRpc, intervalMs = 15_000, onOpen }: {
 
   React.useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), intervalMs);
     function wake() { if (document.visibilityState === "visible") void load(); }
     window.addEventListener("focus", wake);
     document.addEventListener("visibilitychange", wake);
-    return () => { clearInterval(timer); window.removeEventListener("focus", wake); document.removeEventListener("visibilitychange", wake); };
-  }, [load, intervalMs]);
+    return () => { window.removeEventListener("focus", wake); document.removeEventListener("visibilitychange", wake); };
+  }, [load]);
+  useActivity(["view_alert"], () => void load());
 
   async function acknowledge(alert: ViewAlertDto, open: boolean) {
     if (working) return;

@@ -11,6 +11,14 @@ import type {
 
 type Handler = (request: any) => unknown;
 
+type ActivityEntryLike = { seq: string; operationId: string; occurredAtUtc: string; source: string; action: string; outcome: string; jobRunId: string | null; entities: Array<{ kind: string; key: string; op: string; version: string | null }> };
+let activitySeq = 0;
+const activityLog: ActivityEntryLike[] = [];
+const committedHandlers = new Set<(value: { seq: string }) => void>();
+/** The preview's `activity.committed` subscribers (see client.ts); the real host pushes this event after each commit. */
+export function onPreviewCommitted(handler: (value: { seq: string }) => void) { committedHandlers.add(handler); return () => { committedHandlers.delete(handler); }; }
+function notifyCommitted(seq: string) { setTimeout(() => committedHandlers.forEach(handler => handler({ seq })), 100); }
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const localDate = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 export function addDays(date: string, days: number) {
@@ -729,6 +737,10 @@ const handlers: Record<string, Handler> = {
     assignees: linked ? previewIssueAssignees : null }; },
   "github.setSelfAssignment": (r: { assigned: boolean }) => { previewIssueAssignees = r.assigned ? ["preview-user", ...previewIssueAssignees.filter(a => a !== "preview-user")] : previewIssueAssignees.filter(a => a !== "preview-user"); return ok({}); },
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
+  // The activity feed (PLAN2 §6.4): the preview records its own writes in memory with the real shape, so the window's stream code runs here too.
+  "activity.head": () => ok({ head: String(activitySeq) }),
+  "activity.since": (r: { after: string; limit: number }) => ok({ entries: activityLog.filter(entry => Number(entry.seq) > Number(r.after)).slice(0, Math.max(1, r.limit)), head: String(activitySeq), reset: false }),
+  "activity.jobs": () => ok({ jobs: [] }),
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
 
@@ -743,5 +755,19 @@ export async function handle(command: string, request: unknown): Promise<unknown
   await new Promise(resolve => setTimeout(resolve, 40)); // a little latency, like the real host
   const handler = handlers[command];
   if (!handler) { console.info(`[preview] ${command} is not modelled; answering with an empty read.`); return structuredClone(emptyRead); }
-  return structuredClone(handler(request));
+  const result = structuredClone(handler(request));
+  recordActivity(command);
+  return result;
+}
+
+const readLike = /\.(list\w*|get\w*|counts|run|preview\w*|search|status|clock|alerts|prompts|since|head|jobs|activity|taskSync|resolveLinks|locate|capabilities|suggest\w*|inspect\w*|export\w*|tasks|unscheduled|range|upcoming|take|zones)$/;
+/** Writes made through the preview become activity entries (Source "user", like the window's own edits) and push the committed event. */
+function recordActivity(command: string) {
+  if (readLike.test(command)) return;
+  const [service] = command.split(".");
+  activitySeq++;
+  activityLog.push({ seq: String(activitySeq), operationId: `preview-${activitySeq}`, occurredAtUtc: new Date().toISOString(), source: "user", action: command, outcome: "ok", jobRunId: null,
+    entities: [{ kind: service.replace(/s$/, ""), key: command, op: "upsert", version: null }] });
+  if (activityLog.length > 500) activityLog.shift();
+  notifyCommitted(String(activitySeq));
 }

@@ -37,6 +37,8 @@ public interface IDataSession
     IBoardStore Boards { get; }
     ISavedViewStore SavedViews { get; }
     ICalendarStore Calendars { get; }
+    /// <summary>Device-only writers note their changes here (PLAN2 §6.4 rule 3).</summary>
+    Chaos.Application.Activity.IActivityRecorder Activity { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
