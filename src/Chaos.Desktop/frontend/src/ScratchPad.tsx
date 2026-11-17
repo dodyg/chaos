@@ -115,6 +115,7 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
   const [deleted, setDeleted] = React.useState<PadItemResponse[]>([]);
   const [loaded, setLoaded] = React.useState(false);
   const [openId, setOpenId] = React.useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = React.useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [missingQuote, setMissingQuote] = React.useState<string | null>(null);
@@ -461,7 +462,10 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
                 <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>
               </div>
             : <div className="min-w-0 flex-1 px-1 text-left">
-                {isDrawing ? <button type="button" className="block w-full rounded-md text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${label}`} onClick={() => void select(item)}><DrawingPreview attachmentApi={attachmentApi} attachmentId={item.previewAttachmentId} label="Drawing note preview"/></button> : text.trim() ? <MarkdownPreview source={text} links={links} compact className="max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
+                {isDrawing ? <button type="button" className="block w-full rounded-md text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${label}`} onClick={() => void select(item)}><DrawingPreview attachmentApi={attachmentApi} attachmentId={item.previewAttachmentId} label="Drawing note preview"/></button> : text.trim() ? <>
+                  <MarkdownPreview source={text} links={links} compact className={cn("text-sm", !expandedIds.has(item.id) && "max-h-40 overflow-hidden")}/>
+                  {(text.length > 200 || text.includes("\n")) && <button type="button" className="mt-1 text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:underline" aria-expanded={expandedIds.has(item.id)} onClick={() => setExpandedIds(prev => { const next = new Set(prev); if (!next.delete(item.id)) next.add(item.id); return next; })}>{expandedIds.has(item.id) ? "Show less" : "Show more"}</button>}
+                </> : <span className="text-muted-foreground italic">Empty note</span>}
                 {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — edit the note to retry.</span>}
               </div>}
           <div className="flex shrink-0 gap-0.5">
