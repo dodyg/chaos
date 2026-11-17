@@ -143,7 +143,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
         }).ToList();
         command.CommandText = $"""
             SELECT l.TaskId, l.TagId FROM TaskTags l JOIN Tags g ON g.Id = l.TagId
-            WHERE g.DeletedAtUtc IS NULL AND l.TaskId IN ({string.Join(", ", names)})
+            WHERE g.DeletedAtUtc IS NULL AND l.DeletedAtUtc IS NULL AND l.TaskId IN ({string.Join(", ", names)})
             ORDER BY l.TaskId, g.NormalizedName, g.Id;
             """;
         using var reader = await command.ExecuteReaderAsync(ct);
@@ -285,9 +285,9 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                         WHERE child.DeletedAtUtc IS NULL AND scope.Depth < {MaxTagDepth})
                     """);
                 where.Add("""
-                    (EXISTS (SELECT 1 FROM TaskTags tt WHERE tt.TaskId = t.Id AND tt.TagId IN (SELECT Id FROM TagScope))
+                    (EXISTS (SELECT 1 FROM TaskTags tt WHERE tt.TaskId = t.Id AND tt.DeletedAtUtc IS NULL AND tt.TagId IN (SELECT Id FROM TagScope))
                      OR EXISTS (SELECT 1 FROM Subtasks st JOIN SubtaskTags stt ON stt.SubtaskId = st.Id
-                                WHERE st.TaskId = t.Id AND st.DeletedAtUtc IS NULL AND stt.TagId IN (SELECT Id FROM TagScope)))
+                                WHERE st.TaskId = t.Id AND st.DeletedAtUtc IS NULL AND stt.DeletedAtUtc IS NULL AND stt.TagId IN (SELECT Id FROM TagScope)))
                     """);
             }
 
@@ -313,6 +313,7 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             if (criteria.PlannedTo is { } plannedTo) where.Add($"t.PlannedDate <= {builder.P(StorageFormats.Date(plannedTo))}");
             if (criteria.DueFrom is { } dueFrom) where.Add($"t.DueDate >= {builder.P(StorageFormats.Date(dueFrom))}");
             if (criteria.DueTo is { } dueTo) where.Add($"t.DueDate <= {builder.P(StorageFormats.Date(dueTo))}");
+            if (criteria.Unscheduled) where.Add("t.PlannedDate IS NULL");
             if (criteria.CompletedFromUtc is { } completedFrom) where.Add($"t.CompletedAtUtc >= {builder.P(StorageFormats.Instant(completedFrom))}");
             if (criteria.CompletedBeforeUtc is { } completedBefore) where.Add($"t.CompletedAtUtc < {builder.P(StorageFormats.Instant(completedBefore))}");
 
@@ -340,27 +341,18 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             {
                 // Date-only due values pass when their local date ends; timed values when their
                 // instant passes, judged in the value's own zone (PLAN §6). Planned-in-past alone is not overdue.
-                var timed = criteria.OverdueZoneCutoffs.Count == 0
-                    ? "0"
-                    : string.Join(" OR ", criteria.OverdueZoneCutoffs.Select(cutoff =>
-                    {
-                        var date = builder.P(StorageFormats.Date(cutoff.LocalDate));
-                        return $"(t.DueZoneId = {builder.P(cutoff.ZoneId)} AND (t.DueDate < {date} OR (t.DueDate = {date} AND t.DueTime < {builder.P(StorageFormats.Time(cutoff.LocalTime))})))";
-                    }));
-                var recurrenceCutoffs = criteria.OverdueZoneCutoffs.Count == 0 ? "0" : string.Join(" OR ", criteria.OverdueZoneCutoffs.Select(cutoff =>
-                {
-                    var date = builder.P(StorageFormats.Date(cutoff.LocalDate));
-                    var time = builder.P(StorageFormats.Time(cutoff.LocalTime));
-                    var zone = builder.P(cutoff.ZoneId);
-                    return $"(json_extract(rs.RuleJson, '$.payload.zoneId') = {zone} AND (substr(ro.EffectiveLocal,1,10) < {date} OR (json_extract(rs.RuleJson, '$.payload.anchorTime') IS NOT NULL AND substr(ro.EffectiveLocal,1,10) = {date} AND substr(ro.EffectiveLocal,12,8) < {time})))";
-                }));
-                var missed = $"(t.DueDate IS NULL AND EXISTS (SELECT 1 FROM RecurrenceOccurrences ro JOIN RecurrenceSeries rs ON rs.Id=ro.SeriesId WHERE ro.TaskId=t.Id AND ro.State=0 AND ro.DeletedAtUtc IS NULL AND ({recurrenceCutoffs})))";
-                where.Add($"((t.DueDate IS NOT NULL AND ((t.DueTime IS NULL AND t.DueDate < {builder.P(StorageFormats.Date(overdueBefore))}) OR (t.DueTime IS NOT NULL AND ({timed})))) OR {missed})");
+                where.Add(ViewPredicateCompiler.Overdue(builder.P, overdueBefore, criteria.OverdueZoneCutoffs));
                 groupDate = "COALESCE(t.DueDate, t.PlannedDate)";
+            }
+
+            if (criteria.Definition is { } definition)
+            {
+                where.Add(ViewPredicateCompiler.Compile(definition, builder.P, ctes, criteria.ProfileId));
             }
 
             IReadOnlyList<SortKey> keys = criteria.View switch
             {
+                TaskView.Custom => CustomKeys(criteria.Sort),
                 TaskView.Container => [new("t.Position", false)],
                 TaskView.MyDay => [new("di.Position", false)],
                 TaskView.Today => [new("t.Priority", true), new("c.Position", false), new("t.Position", false)],
@@ -389,6 +381,32 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             plan._parameters.AddRange(builder.Parameters);
             return plan;
         }
+    }
+
+    /// <summary>
+    /// A custom view's sort (PLAN2 §11.2). Dates sort with empty values last in either direction, so a
+    /// descending sort never puts the undated tasks first; every key is non-NULL for the cursor.
+    /// </summary>
+    private static IReadOnlyList<SortKey> CustomKeys(ViewSort? sort)
+    {
+        var descending = sort?.Descending ?? false;
+        static SortKey[] Dated(string column, string time, bool descending) =>
+        [
+            new($"({column} IS NULL)", false),
+            new($"COALESCE({column}, '')", descending),
+            new($"COALESCE({time}, '24:00:00')", descending),
+        ];
+
+        return (sort?.Field ?? "due") switch
+        {
+            "planned" => [.. Dated("t.PlannedDate", "t.PlannedTime", descending), new("t.Priority", true)],
+            "priority" => [new("t.Priority", descending), .. Dated("t.DueDate", "t.DueTime", false)],
+            "created" => [new("t.CreatedAtUtc", descending)],
+            "changed" => [new("t.UpdatedAtUtc", descending)],
+            "title" => [new("lower(t.Title)", descending)],
+            "manual" => [new("c.Position", descending), new("t.Position", descending)],
+            _ => [.. Dated("t.DueDate", "t.DueTime", descending), new("t.Priority", true)],
+        };
     }
 
     private sealed class PlanBuilder

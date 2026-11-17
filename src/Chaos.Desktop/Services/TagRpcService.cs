@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tags;
@@ -29,44 +30,72 @@ public sealed record TagIdsResponse(bool Ok, IReadOnlyList<string> TagIds, TaskE
 public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<TagListResponse> ListAsync(TagListRequest request, CancellationToken ct) =>
-        await ListResponseAsync(async () => [.. (await tags.ListAsync(ct)).Select(Map)]);
+    public async ValueTask<TagListResponse> ListAsync(TagListRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.list");
+        return await ListResponseAsync(async () => [.. (await tags.ListAsync(ct)).Select(Map)]);
+    }
 
     [NeoRpcMethod("listDeleted")]
-    public async ValueTask<TagListResponse> ListDeletedAsync(TagListRequest request, CancellationToken ct) =>
-        await ListResponseAsync(async () => [.. (await tags.ListDeletedAsync(ct)).Select(tag => Map(new TagWithPath(tag, tag.DisplayName)))]);
+    public async ValueTask<TagListResponse> ListDeletedAsync(TagListRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.listDeleted");
+        return await ListResponseAsync(async () => [.. (await tags.ListDeletedAsync(ct)).Select(tag => Map(new TagWithPath(tag, tag.DisplayName)))]);
+    }
 
     [NeoRpcMethod("suggest")]
-    public async ValueTask<TagListResponse> SuggestAsync(TagSuggestRequest request, CancellationToken ct) =>
-        await ListResponseAsync(async () => [.. (await tags.SuggestAsync(request.Text, 8, ct)).Select(Map)]);
+    public async ValueTask<TagListResponse> SuggestAsync(TagSuggestRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.suggest");
+        return await ListResponseAsync(async () => [.. (await tags.SuggestAsync(request.Text, 8, ct)).Select(Map)]);
+    }
 
     [NeoRpcMethod("create")]
-    public async ValueTask<TagOperationResponse> CreateAsync(TagCreateRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.CreateAsync(new(request.OperationId, request.Path, Blank(request.ParentId), Blank(request.Color)), ct));
+    public async ValueTask<TagOperationResponse> CreateAsync(TagCreateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.create");
+        return await TagResultAsync(() => tags.CreateAsync(new(request.OperationId, request.Path, Blank(request.ParentId), Blank(request.Color)), ct));
+    }
 
     [NeoRpcMethod("rename")]
-    public async ValueTask<TagOperationResponse> RenameAsync(TagRenameRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.RenameAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), request.Name), ct));
+    public async ValueTask<TagOperationResponse> RenameAsync(TagRenameRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.rename");
+        return await TagResultAsync(() => tags.RenameAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), request.Name), ct));
+    }
 
     [NeoRpcMethod("setColor")]
-    public async ValueTask<TagOperationResponse> SetColorAsync(TagColorRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.SetColorAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), Blank(request.Color)), ct));
+    public async ValueTask<TagOperationResponse> SetColorAsync(TagColorRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.setColor");
+        return await TagResultAsync(() => tags.SetColorAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), Blank(request.Color)), ct));
+    }
 
     [NeoRpcMethod("move")]
-    public async ValueTask<TagOperationResponse> MoveAsync(TagMoveRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.MoveAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), Blank(request.ParentId)), ct));
+    public async ValueTask<TagOperationResponse> MoveAsync(TagMoveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.move");
+        return await TagResultAsync(() => tags.MoveAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), Blank(request.ParentId)), ct));
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<TagOperationResponse> DeleteAsync(TagChangeRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.DeleteAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<TagOperationResponse> DeleteAsync(TagChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.delete");
+        return await TagResultAsync(() => tags.DeleteAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion)), ct));
+    }
 
     [NeoRpcMethod("restore")]
-    public async ValueTask<TagOperationResponse> RestoreAsync(TagChangeRequest request, CancellationToken ct) =>
-        await TagResultAsync(() => tags.RestoreAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion)), ct));
+    public async ValueTask<TagOperationResponse> RestoreAsync(TagChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.restore");
+        return await TagResultAsync(() => tags.RestoreAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion)), ct));
+    }
 
     [NeoRpcMethod("previewMerge")]
     public async ValueTask<TagMergePreviewResponse> PreviewMergeAsync(TagMergePreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("tags.previewMerge");
         try
         {
             var preview = await tags.PreviewMergeAsync(request.SourceId, request.TargetId, ct);
@@ -78,6 +107,7 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
     [NeoRpcMethod("merge")]
     public async ValueTask<TagOperationResponse> MergeAsync(TagMergeRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("tags.merge");
         try
         {
             var result = await tags.MergeAsync(new(request.OperationId, request.SourceId, Version(request.SourceVersion), request.TargetId, Version(request.TargetVersion)), ct);
@@ -87,16 +117,25 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
     }
 
     [NeoRpcMethod("targetTags")]
-    public async ValueTask<TagIdsResponse> TargetTagsAsync(TagTargetRequest request, CancellationToken ct) =>
-        await IdsAsync(async () => await tags.ListTargetTagsAsync(Kind(request.TargetKind), request.TargetId, ct));
+    public async ValueTask<TagIdsResponse> TargetTagsAsync(TagTargetRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.targetTags");
+        return await IdsAsync(async () => await tags.ListTargetTagsAsync(Kind(request.TargetKind), request.TargetId, ct));
+    }
 
     [NeoRpcMethod("link")]
-    public async ValueTask<TagIdsResponse> LinkAsync(TagLinkRequest request, CancellationToken ct) =>
-        await IdsAsync(async () => { var result = await tags.LinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, Blank(request.TagId), Blank(request.Path)), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
+    public async ValueTask<TagIdsResponse> LinkAsync(TagLinkRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.link");
+        return await IdsAsync(async () => { var result = await tags.LinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, Blank(request.TagId), Blank(request.Path)), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
+    }
 
     [NeoRpcMethod("unlink")]
-    public async ValueTask<TagIdsResponse> UnlinkAsync(TagUnlinkRequest request, CancellationToken ct) =>
-        await IdsAsync(async () => { var result = await tags.UnlinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, request.TagId), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
+    public async ValueTask<TagIdsResponse> UnlinkAsync(TagUnlinkRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.unlink");
+        return await IdsAsync(async () => { var result = await tags.UnlinkAsync(new(request.OperationId, Kind(request.TargetKind), request.TargetId, request.TagId), ct); if (request.TargetKind == "Task") sync?.RequestTaskSync(request.TargetId); return result.TagIds; });
+    }
 
     private static async ValueTask<TagListResponse> ListResponseAsync(Func<Task<IReadOnlyList<TagResponse>>> load)
     {

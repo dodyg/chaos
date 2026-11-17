@@ -31,6 +31,7 @@ if ($LASTEXITCODE -eq 0) {
         "tests/Chaos.Domain.Tests",
         "tests/Chaos.Application.Tests",
         "tests/Chaos.Infrastructure.Tests",
+        "tests/Chaos.Sync.Tests",
         "tests/Chaos.Desktop.Tests"
     )) {
         $dll = Get-ChildItem "$project/bin/Release" -Recurse -Filter "*.Tests.dll" |

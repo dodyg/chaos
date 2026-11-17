@@ -6,15 +6,16 @@ using Chaos.Application.Reminders;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Summaries;
+using Chaos.Sync;
 
 namespace Chaos.Application.Summaries;
 
-public sealed record SummarySettings(TimeOnly? MorningTime, TimeOnly? EveningTime, DayOfWeek? WeeklyDay, DayOfWeek FirstWeekday, long Version, string ZoneId);
+public sealed record SummarySettings(TimeOnly? MorningTime, TimeOnly? EveningTime, DayOfWeek? WeeklyDay, DayOfWeek FirstWeekday, long Version, string ZoneId, bool IncludeMeetings = false);
 
 /// <param name="MorningTime">Null turns the scheduled morning summary off (it can still be made by hand).</param>
 /// <param name="EveningTime">Null turns the scheduled evening and weekly summaries' time off; weekly then uses 18:00.</param>
 /// <param name="WeeklyDay">Null turns the scheduled weekly summary off.</param>
-public sealed record UpdateSummarySettingsCommand(string OperationId, long ExpectedVersion, TimeOnly? MorningTime, TimeOnly? EveningTime, DayOfWeek? WeeklyDay);
+public sealed record UpdateSummarySettingsCommand(string OperationId, long ExpectedVersion, TimeOnly? MorningTime, TimeOnly? EveningTime, DayOfWeek? WeeklyDay, bool IncludeMeetings = false);
 
 /// <summary>Generates (or regenerates, as a new revision) the summary of the period containing <see cref="Date"/>.</summary>
 public sealed record GenerateSummaryCommand(string OperationId, SummaryKind Kind, DateOnly Date);
@@ -110,6 +111,7 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
                     MorningTime = normalized.MorningTime,
                     SummaryTime = normalized.EveningTime,
                     WeeklySummaryDay = normalized.WeeklyDay,
+                    IncludeMeetingsInSummaries = normalized.IncludeMeetings,
                     Version = current.Version + 1,
                     UpdatedAtUtc = now,
                 };
@@ -376,11 +378,11 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
                     int added;
                     if (target == CarryOverTarget.Day)
                     {
-                        var plan = await DayPlanning.EnsurePlanAsync(session, ids, context.Profile.Id, date, now, inner);
+                        var plan = await DayPlanning.EnsurePlanAsync(session, context.Profile.Id, date, now, inner);
                         added = 0;
                         foreach (var taskId in open)
                         {
-                            added += await DayPlanning.PlaceAsync(session, ids, plan, taskId, DayPlanItemOrigin.CarryOver, now, inner) ? 1 : 0;
+                            added += await DayPlanning.PlaceAsync(session, plan, taskId, DayPlanItemOrigin.CarryOver, now, inner) ? 1 : 0;
                         }
                     }
                     else
@@ -408,7 +410,9 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
         var facts = await SummaryFactsBuilder.BuildAsync(session, context, period, token);
         return new SummaryRecord
         {
-            Id = StorageFormats.Id(ids.NewId()),
+            // §7.5: summary:{profileId}:{kind}:{periodStart}:{revision}; kind spells the enum name and
+            // revisions count regenerations, so they stay small (int in the name).
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.Summary(context.Profile.Id, kind.ToString(), start, (int)revision)),
             ProfileId = context.Profile.Id,
             Kind = kind,
             PeriodStart = start,
@@ -486,5 +490,5 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
     }
 
     private static SummarySettings SettingsOf(ProfileRecord profile) =>
-        new(profile.MorningTime, profile.SummaryTime, profile.WeeklySummaryDay, profile.FirstWeekday, profile.Version, profile.ZoneId);
+        new(profile.MorningTime, profile.SummaryTime, profile.WeeklySummaryDay, profile.FirstWeekday, profile.Version, profile.ZoneId, profile.IncludeMeetingsInSummaries);
 }

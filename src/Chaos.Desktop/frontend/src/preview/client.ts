@@ -3,7 +3,7 @@
  * the generated RPC objects call `invoke`, which goes to the in-memory backend instead of
  * the desktop host.
  */
-import { handle } from "./backend";
+import { handle, onPreviewCommitted } from "./backend";
 
 export type NeoRpcCallOptions = { readonly signal?: AbortSignal; readonly contractHash?: string; readonly timeoutMilliseconds?: number };
 export type NeoRpcUnsubscribe = () => void;
@@ -16,6 +16,7 @@ export async function invokeChannel<TRequest, TItem>(_command: string, _args: TR
   return { async *[Symbol.asyncIterator]() { /* no streams in the preview */ } };
 }
 
-export async function subscribe<T>(_event: string, _handler: (payload: T) => void, _options?: NeoRpcCallOptions): Promise<NeoRpcUnsubscribe> {
+export async function subscribe<T>(event: string, handler: (payload: T) => void, _options?: NeoRpcCallOptions): Promise<NeoRpcUnsubscribe> {
+  if (event === "activity.committed") return onPreviewCommitted(handler as (value: { seq: string }) => void);
   return () => {};
 }

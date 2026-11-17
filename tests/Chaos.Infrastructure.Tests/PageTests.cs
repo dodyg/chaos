@@ -226,6 +226,30 @@ public sealed class PageTests
     }
 
     [Test]
+    public async Task DailyPage_DeletedThenWrittenAgain_RevivesTheSameRow()
+    {
+        using var host = await Host.StartAsync();
+        var day = new DateOnly(2026, 11, 14);
+        var created = (await host.Pages.CreateDailyAsync(new(Op(), day, "First draft."))).Page;
+        await host.Pages.DeleteAsync(new(Op(), created.Id, created.Version));
+        await Assert.That(await host.Pages.GetDailyAsync(day)).IsNull();
+
+        await host.Pages.AppendToDailyAsync(new(Op(), day, "- Started over"));
+
+        var page = (await host.Pages.GetDailyAsync(day))!.Page;
+        await Assert.That(page.Id).IsEqualTo(created.Id);
+        await Assert.That(page.DeletedAtUtc).IsNull();
+        await Assert.That(page.RawMarkdown).IsEqualTo("- Started over\n");
+        await Assert.That(await host.Pages.ListDeletedAsync()).IsEmpty();
+
+        // The same day through CreateDaily after a second delete.
+        await host.Pages.DeleteAsync(new(Op(), page.Id, page.Version));
+        var again = (await host.Pages.CreateDailyAsync(new(Op(), day, "Third time."))).Page;
+        await Assert.That(again.Id).IsEqualTo(created.Id);
+        await Assert.That(again.RawMarkdown).IsEqualTo("Third time.");
+    }
+
+    [Test]
     public async Task FrontMatter_TagsIconAndAliases_FeedTagsSearchAndLinks()
     {
         using var host = await Host.StartAsync();

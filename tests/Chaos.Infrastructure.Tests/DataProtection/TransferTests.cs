@@ -372,6 +372,10 @@ public sealed class TransferTests
             public IBackupCatalogStore Backups => inner.Backups;
             public IImportStore Imports => inner.Imports;
             public IGitHubStore GitHub => inner.GitHub;
+            public IBoardStore Boards => inner.Boards;
+            public ISavedViewStore SavedViews => inner.SavedViews;
+            public ICalendarStore Calendars => inner.Calendars;
+            public Chaos.Application.Activity.IActivityRecorder Activity => inner.Activity;
         }
 
         private sealed class FailingTasks(ITaskStore inner) : ITaskStore

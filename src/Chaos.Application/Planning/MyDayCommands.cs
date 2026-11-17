@@ -37,7 +37,11 @@ public sealed record DaySummary(
     int UnknownEstimates,
     int AvailableMinutes = 0,
     int? WorkAllowanceMinutes = null,
-    int WorkMinutes = 0);
+    int WorkMinutes = 0,
+    int BusyMinutes = 0,
+    int FreeMinutes = 0,
+    bool MeetingsDontFit = false,
+    IReadOnlyList<CalendarMeeting>? Meetings = null);
 
 public sealed record DayItemCommand(string OperationId, DateOnly Date, string TaskId);
 public sealed record DayMoveCommand(string OperationId, DateOnly Date, string TaskId, int Index);
@@ -54,7 +58,7 @@ public sealed record DayChangeResult(DaySummary Summary, int Changed, bool Repla
 /// dates are read-only. Rows of a day come from the shared My Day query view, so the sidebar
 /// count and the list always agree.
 /// </summary>
-public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
+public sealed class MyDayCommands(IApplicationStore store, TimeProvider clock)
 {
     private const int SuggestionSourceLimit = TaskQueries.MaxLimit;
 
@@ -80,7 +84,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             await store.ExecuteAsync(async (session, token) =>
             {
                 var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
-                return await DayPlanning.EnsurePlanAsync(session, ids, context.Profile.Id, existing.Day, clock.GetUtcNow(), token);
+                return await DayPlanning.EnsurePlanAsync(session, context.Profile.Id, existing.Day, clock.GetUtcNow(), token);
             }, ct);
         }
 
@@ -180,7 +184,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                 throw AppException.Validation("taskId", "This task is already finished. Reopen it before adding it to My Day.");
             }
 
-            return await DayPlanning.PlaceAsync(session, ids, plan, task.Id, DayPlanItemOrigin.Manual, now, token) ? 1 : 0;
+            return await DayPlanning.PlaceAsync(session, plan, task.Id, DayPlanItemOrigin.Manual, now, token) ? 1 : 0;
         }, ct);
 
     /// <summary>Takes a task off a day. The row stays, so reopening the day never puts it back by itself.</summary>
@@ -228,7 +232,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                 var carried = 0;
                 foreach (var item in await OpenItemsAsync(session, source.Id, token))
                 {
-                    if ((wanted is null || wanted.Contains(item.TaskId)) && await DayPlanning.PlaceAsync(session, ids, target, item.TaskId, DayPlanItemOrigin.CarryOver, now, token))
+                    if ((wanted is null || wanted.Contains(item.TaskId)) && await DayPlanning.PlaceAsync(session, target, item.TaskId, DayPlanItemOrigin.CarryOver, now, token))
                     {
                         carried++;
                     }
@@ -262,7 +266,7 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
                     throw AppException.Validation("date", "Earlier days are kept for review and cannot be changed. Use today's suggestions to pick up unfinished work.");
                 }
 
-                var plan = await DayPlanning.EnsurePlanAsync(session, ids, context.Profile.Id, date, now, innerToken);
+                var plan = await DayPlanning.EnsurePlanAsync(session, context.Profile.Id, date, now, innerToken);
                 return await body(session, context, plan, now, innerToken);
             }, token);
         }, ct);
@@ -290,10 +294,13 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
     private static async Task<DaySummary> SummaryAsync(IDataSession session, TaskQueries.QueryContext context, DateOnly date, CancellationToken token)
     {
         var availability = await AvailabilityAsync(session, context.Profile.Id, date, token);
+        var meetings = await MeetingPlanning.LoadAsync(session, context.Zone, date, date, token);
+        var busy = meetings.BusyMinutes(date);
+        var free = MeetingTime.FreeMinutes(date, context.Now, availability.TotalMinutes, meetings.Intervals, context.Zone);
         var plan = await session.DayPlans.FindAsync(context.Profile.Id, date, token);
         if (plan is null)
         {
-            return new DaySummary(date, ClockOf(context), false, 0, 0, 0, 0, availability.TotalMinutes, availability.WorkMinutes);
+            return new DaySummary(date, ClockOf(context), false, 0, 0, 0, 0, availability.TotalMinutes, availability.WorkMinutes, 0, busy, free, false, meetings.Meetings);
         }
 
         int open = 0, finished = 0, minutes = 0, unknown = 0, work = 0;
@@ -326,7 +333,8 @@ public sealed class MyDayCommands(IApplicationStore store, IIdGenerator ids, Tim
             }
         }
 
-        return new DaySummary(date, ClockOf(context), true, open, finished, minutes, unknown, availability.TotalMinutes, availability.WorkMinutes, work);
+        return new DaySummary(date, ClockOf(context), true, open, finished, minutes, unknown, availability.TotalMinutes, availability.WorkMinutes, work,
+            busy, free, busy > 0 && minutes > free, meetings.Meetings);
     }
 
     /// <summary>The day's available and work time from My Week: a confirmed override, else the weekday rule, else the default.</summary>

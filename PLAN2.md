@@ -197,7 +197,8 @@ The adapter for each port lives in `Infrastructure` (portable) or `Desktop.Windo
 - **Network calls.** **Never make a network call inside a write transaction.** Read what you
   need, call the network outside the transaction, then write the result in a new transaction.
   Use expected versions to detect anything that changed in between.
-- **Change events.** Publish change events only after commit.
+- **Change events.** Publish change events only after commit. Change events come from the activity
+  log (6.4, built in P6a), written in the same transaction and pushed after commit.
 - **Migrations.** Never edit an applied migration; its checksum is enforced. Add a new numbered
   file, and raise the schema ceiling in the code that checks it (search for the current highest
   number, 23, to find it).
@@ -438,6 +439,111 @@ Dependency rules for the new projects:
 | Receipts, undo, search index, backups, notification jobs, GitHub checkpoints and runs, calendar event cache, sync bookkeeping, device settings | yes | **no** | no | Rebuilt or derived per device |
 | Secrets (AI keys, Google and Chaos refresh tokens) | **no** (credential store) | no | no | Chaos tokens are issued by the server; their hashes are kept there |
 | Accounts, devices, sessions, subscription-link tokens | no | no | yes | Server only |
+| Activity log, activity cursors, job runs (6.4) | yes | **no** | no | Device-local system event stream; not exported |
+
+### 6.4 Activity log (the system event stream)
+
+Added 2026-11-17 by the owner. Implemented by package **P6a**, which is the next package to
+implement (see section 15).
+
+**What it is.** A durable, device-local, machine-readable record of every committed change and
+every background job run. It is **for the system, not for the person**. In-process consumers read
+it in order and act on it. It has no prose and no UI of its own. It replaces the `IChangePublisher`
+of section 2.3, which was declared but was never implemented or called.
+
+**Why.** Today the only shared signal is the database itself. Writes come from user commands and
+also from background work on its own timers: `ReminderEngine` (30 s), `CalendarRefreshScheduler`,
+`BackupScheduler` and `GitHubSyncScheduler`/`GitHubSyncEngine`. None of these tell anyone what they
+did, so the frontend polls: `SyncLogo` every 4 s, `GitHubSettings` and `GitHubTaskNotice` every
+1 s while syncing, `Reminders` and `Summaries` on intervals, and many views reload on window focus.
+
+**Consumers, in the order they arrive:**
+1. UI refresh (P6a)
+2. reminder resync for changed tasks
+3. view-alert evaluation on change (11.2)
+4. GitHub outbound wake-up
+5. sync status (P15)
+6. the open-editor rule in 7.10
+
+Clock-driven work keeps its timers: reminders coming due, calendar refresh intervals and backups.
+The log replaces polling for **data changes**, not for schedules.
+
+**Tables** (migration `030_activity_log.sql`, all `LocalOnly`, never in the archive):
+
+- `ActivityLog(Seq INTEGER PRIMARY KEY AUTOINCREMENT, OperationId TEXT NOT NULL, OccurredAtUtc TEXT NOT NULL, Source TEXT NOT NULL CHECK (Source IN ('user','schedule','sync','import','undo','system')), Action TEXT NOT NULL, Outcome TEXT NOT NULL CHECK (Outcome IN ('ok','failed')), JobRunId TEXT NULL, DetailJson TEXT NULL, DetailVersion INTEGER NOT NULL DEFAULT 1)`
+  - one row per write transaction that changed something
+  - an operation spanning several transactions repeats its `OperationId`
+- `ActivityLogEntities(Seq INTEGER NOT NULL REFERENCES ActivityLog(Seq), Kind TEXT NOT NULL, EntityKey TEXT NOT NULL, Op TEXT NOT NULL CHECK (Op IN ('upsert','delete')), Version INTEGER NULL, PRIMARY KEY (Seq, Kind, EntityKey))`
+  - `Kind` and `EntityKey` use the sync catalog's names and key format (7.2, 7.3)
+  - `Version` is the row's version after the change, when the table has one
+  - consumers use `Version` to skip changes they have already seen or that are already superseded, so processing an entry twice is harmless
+- `ActivityCursors(Consumer TEXT PRIMARY KEY, Seq INTEGER NOT NULL, UpdatedAtUtc TEXT NOT NULL)`
+  - for host-side consumers that must survive a restart
+  - the UI does not register here: each window starts from the current head
+- `JobRuns(Id TEXT PRIMARY KEY, Job TEXT NOT NULL, StartedAtUtc TEXT NOT NULL, FinishedAtUtc TEXT NULL, Outcome TEXT NOT NULL CHECK (Outcome IN ('running','ok','noop','failed')), Error TEXT NULL, ActivityCount INTEGER NOT NULL DEFAULT 0)`
+  - every scheduled pass, including passes that do nothing
+  - the last 200 runs per job are kept
+  - this is diagnostics plus "is X running / when did X last run". It is kept out of the event stream on purpose, so a 30 s tick does not add 2,880 log rows a day.
+
+**Capture rules.**
+
+1. **Operation context.** An ambient `ActivityScope` (`AsyncLocal`) carries `Source`, `Action`,
+   `OperationId` and `JobRunId`. It is opened at the entry points:
+   - every RPC method (`Source=user`, `Action=<service>.<method>`). NeoAstra 1.12 has no RPC
+     middleware, so each method opens it through one helper.
+   - every scheduler or engine pass (`Source=schedule`, or `sync` for GitHub)
+   - undo, import and the remote-change applier (7.4)
+   
+   A write with no scope throws in tests and Debug builds. In Release it is recorded as
+   `Source=system`, `Action=unscoped`, so nothing is ever lost.
+2. **Synced tables: from the triggers.** `ActivityCapture` runs inside
+   `SqliteApplicationStore.ExecuteAsync`, immediately before `ISyncCapture.Flush`, which deletes
+   `SyncPending` while sync is off.
+   - It reads the distinct `(Kind, EntityKey)` pairs in `SyncPending`. A `__purge` group becomes
+     `Op=delete`.
+   - It reads `Version` by key where the table has one.
+   - It writes one `ActivityLog` row and its entity rows.
+   
+   Commands do not change for this.
+3. **Device-only tables: explicit notes.** `LocalOnly` tables have no triggers. Their writers call
+   `IActivityRecorder.Note(kind, key, op, version)` inside their transaction:
+   - notification jobs
+   - view matches and alerts
+   - the calendar event cache and source state
+   - Google account state
+   
+   Churning caches note one **summary entity** rather than every row. For example, a calendar
+   refresh notes `calendar_source/<id>`, not each `CalendarEvents` row.
+4. **Remote apply.** Triggers are suppressed while applying (7.3), so the applier notes every
+   entity it applied, with `Source=sync`.
+5. **Rollback and failure.**
+   - A rolled-back transaction leaves no activity row. This comes free from writing in the same
+     transaction.
+   - A failed job pass records `Outcome=failed` in `JobRuns`, plus an `ActivityLog` row with
+     `Outcome=failed` and no entities, in its own small transaction.
+   - User validation rejections are not logged.
+6. **Action names are a closed list in code** (`ActivityActions`). A contract test fails on any
+   action written that is not in the list. `DetailJson` is versioned by `DetailVersion`.
+
+**Ordering.** All writes go through the one serialized writer, and `Seq` is assigned inside the
+writing transaction. So `Seq` order is commit order. A consumer that has read everything up to
+`Seq = N` can never later see a newly committed row with a smaller `Seq`. Consumers must not
+assume the numbers are contiguous.
+
+**Delivery to the UI.**
+1. After commit, the store reports the new head `Seq` to `IActivityNotifier`. The Desktop host
+   coalesces these reports, about every 100 ms.
+2. It publishes the NeoAstra RPC event `activity.committed { seq }` (`NeoRpcEvent<T>.PublishAsync`).
+3. The frontend calls `activity.since({ after, limit })`. This returns entries with their
+   entities, or `reset: true` when `after` is older than the oldest retained row; the window then
+   reloads everything.
+4. `activity.jobs` returns each job's current state (running, last run, outcome) for the sync
+   indicators.
+
+**Retention.** The backup check's timer prunes the log. It deletes rows below the lowest
+`ActivityCursors.Seq`, but always keeps at least 7 days. A hard cap of 30 days or 200,000 rows,
+whichever is reached first, stops a stalled consumer from growing the log forever. A consumer whose
+cursor is pruned past gets a reset.
 
 ---
 
@@ -1498,9 +1604,23 @@ Every package follows the same pattern:
 
 The steps below add only what is specific to each package.
 
+> **Priority override (owner, 2026-11-17).** **P6a — Activity log and pushed UI refresh** is
+> high priority and is the next package to implement, ahead of every other open package. It is
+> placed after P6 so the numbering of later packages does not change.
+
 ### [ ] P0 — Close Phase 1 and prove the Phase 2 integrations
 
 **Depends on:** nothing. **Migration:** none.
+
+**Progress note 2026-11-15.** All eight spikes recorded in `docs/desktop-support.md` ("Phase 2
+spikes"): #7 (FullCalendar registry facts, MIT, v7 restructure) verified; #1 documented the
+NeoAstra custom-scheme capability without a running app (P9 uses the RPC chunk path); #2–#5 and
+#8 are blocked — they need an interactive Windows desktop, an installed MSIX or an elevated
+Docker daemon, none of which exists in the implementing environment. D6 is therefore PENDING
+(no default): the Phase 1 installed checklist could not be run, so WP0/WP10/WP13 stay open and
+this package is not ticked. The owner's instruction "implement PLAN2 up to P11" authorized
+starting P1 while D6 is outstanding; decisions D1–D8 status recorded in `docs/decisions.md`
+(2026-11-15 entry). No product code changed. Gate not applicable (docs only).
 
 1. Run the installed-desktop checklist in `docs/acceptance.md` on a real Windows desktop, with an
    installed MSIX package. This closes Phase 1 WP0, WP10 and WP13. Record the results. If the
@@ -1629,6 +1749,38 @@ it.
 - Offline-only behaviour is unchanged (all existing tests pass).
 - No network code exists.
 
+**Progress note 2026-11-15.** Items 1–4 landed in commits 6f4154d..603b33f: Chaos.Sync (Hlc,
+NameBasedId, Merge) with their tests, migration 024 with the link tombstones and the rebuilt
+WeekGoalTasks, DeviceSettings seeding with archive exclusions and restore-safe device identity,
+the SyncCatalog over every table with its guard test, and the trigger installer with the catalog
+hash. Item 9's flush hook landed in b42e5b1: one outbox change per entity with exactly the pended
+groups and fresh HLCs, a purge for entities removed in the transaction, nothing for rolled-back
+writes, and only a SyncPending clear while sync is off. One test per synced catalog kind (added
+in 6760afd) drives a real command and asserts the outbox caught it; the one kind no command can
+reach (space) is documented in a guard test. Item 10 landed in b8023d4: name-based UUIDs for day
+plans and items, week plans and assignments, daily pages, recurrence occurrences with their
+successor tasks and copied subtasks, summaries and GitHub-imported tasks; existing rows keep
+their random ids, so the duplicate rules still cover them. Items 11–12 landed in 53493a6:
+SyncApplier merges per field group by HLC, applies purges as hard deletes with their dependents,
+resolves unique breaks with the catalog's rules (RenameLoser, MergeTag, AppendText,
+KeepLowestRetireOther, RepointChildren), parks children whose parent has not arrived in
+SyncInboxParked and retries them after the batch, keeps replaced values as sync.merged history
+(task, subtask) and page revisions, bumps the local Version so a stale undo refuses, refreshes
+search documents, and receives remote clocks into SyncState.LastHlc. A purged or removed
+duplicate keeps a clock watermark so a replayed change cannot resurrect it, and a missing parent
+is detected before the write because deferred foreign keys only fail at commit. The two-data-root
+harness covers all eleven scenarios and settles to identical synced columns and clocks; the
+legacy-duplicate scenarios (daily page, occurrence) construct pre-P1 rows with random ids, since
+the deterministic ids prevent new ones. Performance (Release, 10,000 tasks, 60 ordinary saves):
+p50 4 ms, p95 6 ms, max 16 ms per save — the capture overhead is invisible against the 150 ms
+budget. Gate: Domain 192/192, Application 47/47, Infrastructure 487/487, Sync 26/26,
+Desktop 88/89 in the sandbox — the one failure (LaunchRouting named-pipe IPC) passes 89/89
+outside it; the sandbox denies named-pipe connections, as it also does for `dotnet test`'s own
+IPC, so verify.ps1's direct-run fallback is used. Frontend npm test 131/131. Slopwatch clean.
+Offline-only behaviour is unchanged (sync seeds disabled; every pre-existing suite passes) and no
+network code exists. D6 is still pending per the P0 note, so the package box stays unticked until
+the owner answers it.
+
 ### [ ] P2 — Kanban board
 
 **Depends on:** P1. **Migration:** `025_board_settings.sql`. **Read:** section 11.1.
@@ -1638,7 +1790,7 @@ it.
 2. In Application, add `BoardCommands`:
    - get or create settings
    - update grouping and limits
-   - `MoveCard(taskId, expectedVersion, toColumn, toIndex, operationId)`
+   - `MoveCard(taskId, expectedVersion, toColumn, beforeTaskId | afterTaskId, operationId)`
    
    `MoveCard` translates the move into the existing commands, using **one** OperationId, so it
    produces one receipt and one undo entry. A status move to Done with open subtasks returns the
@@ -1650,7 +1802,7 @@ it.
 5. Frontend:
    - `Board.tsx`, with a view switch (List / Board) on list and project pages. The choice is
      remembered per container in local storage.
-   - Drag between columns and within a column, with `dragReorder.tsx` generalized for two axes.
+   - Native drag between columns and within a column, with a drop marker.
    - The card menu with "Move to column…".
    - WIP header warnings and a settings popover.
    - Extend the preview backend.
@@ -1663,6 +1815,35 @@ it.
 
 **Exit:** a project board grouped by status and then by section moves tasks with both pointer and
 keyboard. Every move is undoable and survives restart.
+
+**Progress note 2026-11-15.** Implemented in two commits on `phase-2-plan` (backend, then
+frontend). Migration 025 adds `BoardSettings` with a deterministic name-based id
+(`boardsetting:{targetKind}:{targetId}`) plus `ColumnTagId`/`SwimlaneTagId` for the tag-group
+choices (recorded in `docs/decisions.md`, 2026-11-15 P2 entry, with the other calls: one
+composed operation per card move, board rows from the board store rather than the query
+specification, defaults returned without writing, and the accepted gap that purging a
+container leaves an inert settings row). The sync catalog classifies the table (Merge,
+grouping/limits groups, deterministic-index exemption) and the flush-coverage suite gained a
+`board` scenario, so the guard tests enforce it like every other kind. `BoardCommands.MoveAsync`
+composes the column's field change (status via the extracted `TaskCommands.ApplyStatusAsync`,
+section, priority, tag swap) with the within-column rank reorder in one transaction — one
+receipt, one undo entry ("Move task on board"), the open-subtask question surfacing exactly as
+the list's. `BoardQueries` builds columns, swimlanes and cards (tags, subtask progress, GitHub
+mark, 500-card cap with truncation flag); `board` RPC exposes get/updateSettings/move.
+Frontend: `Board.tsx` (columns, swimlanes, WIP warnings, hidden columns, show-cancelled,
+settings popover, open-subtask dialog), native drag and drop with the whole card as the source,
+each column-in-lane cell as a drop zone with a drop marker, a List/Board switch on list and project pages remembered per container,
+roving-tabindex keyboard moves with a card menu, a preview-backend model, and a Help update.
+Gate (Release): Domain 192/192, Application 57/57, Infrastructure 492/492, Sync 26/26, Desktop
+88/89 in the sandbox — the one failure (LaunchRouting named-pipe IPC) is the same known
+sandbox denial P1 recorded; it passes outside. Frontend `npm test` 144/144 (131 pre-existing +
+13 new). Slopwatch clean. Not done: the native pointer-drag check on a running desktop and
+the installed-package checks need an interactive Windows session this environment does not
+have (as in P0); a card keeps its swimlane — other lanes refuse the drop, since changing a lane
+field is a task edit and `board.move` changes one grouping field. A move places the card just
+before or after the neighbouring card the person saw (`beforeTaskId`/`afterTaskId`), not at an
+index, so cards the board hides (focus, hidden columns, other tag columns) never shift where
+it lands. The box stays unticked until the native check runs.
 
 ### [ ] P3 — Custom views, alerts and spreadsheet export
 
@@ -1714,7 +1895,75 @@ others", grouped by person; "Book club this month" as a calendar once P4 exists;
 bugs" if D7). Their sidebar counts equal their rows, and an alert fires once for a newly matching
 task.
 
-### [ ] P4 — Calendar view
+**Progress note 2026-11-16 (backend slice, commit 38e5ae8).** Done: migration 026
+(`SavedViews` synced, `SavedViewMatches` local-only, both in the catalog and the task purge
+paths; flush-coverage scenario for `saved_view`); `Chaos.Domain.Views` (`ViewDefinition` parse,
+validate and canonical JSON, depth 4 / 50 conditions, `ViewFieldCatalog`, relative-date
+resolution, `ViewLayout`); `ViewFields` resolver and `ViewPredicateCompiler` (parameterized SQL
+in the existing candidate query, custom sorts with undated tasks last, `TaskView.Custom`);
+`SavedViewCommands` (save, duplicate, pin, delete, restore, reorder, `ContextDefaults`) with
+silent alert baselines on enable. Tests: Domain 248/248 (56 new), Infrastructure view tests
+21/21 including parity with the built-in Overdue, Today, list, tag, Waiting and Recently
+completed views, a per-field matrix, nested any/all, paging and hostile-value binding; full
+Infrastructure run 520/520 after the catalog fixes, Application 61/61. Decisions are in
+`docs/decisions.md` (2026-11-16). **Not done yet** (items 5–10): the D7 GitHub field group;
+`ViewAlertEvaluator`, the `ViewAlert` notification kind (needs the nullable `SavedViewId` and a
+rebuild of `NotificationJobs` in migration 026) and the host timer; `ViewExport` CSV; the
+`views` RPC service, preview backend and Help text; every frontend item (`ViewEditor`, sidebar
+Views, table layout, board layout on a view, Save as view on search, quick-add pre-fill); and
+the editor/table/pin jsdom tests. Gate (`eng/verify.ps1`, Slopwatch, `npm test`) not yet run on
+this slice. Smallest next action: the `views` RPC service, so the frontend can start.
+
+**Progress note 2026-11-16 (RPC and frontend slice).** Done: `ViewRpcService` (`views`: list, get, save,
+duplicate, setPinned, delete, restore, reorder, run, preview, counts, contextDefaults, export,
+fromSearch); `SavedViewQueries` (run, draft preview, pinned counts from the same specification,
+CSV build); `ViewExport` (UTF-8 BOM, RFC 4180, formula neutralizing, safe file names);
+`ViewFromSearch`; the preview backend model; Help text. Frontend: `viewModel.ts`, `ViewEditor`
+(condition rows, nested all/any groups to depth 4, relative dates, layout, pin, alerts flag, live
+preview count), `ViewTable` (sortable headers over the loaded rows, inline edit of title, status,
+priority, planned, due and estimate through the ordinary commands with the row version), the
+sidebar Views section (pinned views with icon, colour and count, New view), the view header (Edit,
+Duplicate, Export, Delete with Undo), list grouping, Save as view on search, and quick add inside a
+view that pre-fills what the top-level all conditions fix (status is applied by a follow-up
+set-status call, since capture drafts carry no status). Checked in the browser preview.
+Tests: solution 963/963 (Domain 248, Application 74, Infrastructure 546 incl. 24 view tests,
+Sync 26, Desktop 89), frontend `npm test` 163/163 (10 new: model round trips, editor build and
+save, host refusal keeps text and reuses the operation, table inline edit and sort, refused edit,
+pinned views in the sidebar), Slopwatch clean. **Still not done:** the D7 GitHub field group;
+alerts (`ViewAlertEvaluator`, the `ViewAlert` notification kind with the `NotificationJobs` rebuild,
+the host timer); the board layout on a view; inline tag editing in the table; table header sort is
+client-side over loaded rows; the section field is not offered in the editor; the native desktop
+run was not done. The package stays unticked. Smallest next action: alerts.
+
+**Progress note 2026-11-16 (GitHub fields, D7).** Added the GitHub condition group: repository,
+issue state, label, milestone and assignee, compiled to parameterized SQL over the issue link,
+its stored baseline and the label and milestone mappings (no network). The editor offers the group
+when a repository is subscribed (`views.githubOptions`). Author, linked pull requests and review
+state are NOT built: the sync does not store them (see decisions, 2026-11-16 D7). Tests: Domain
+258/258, GitHub view tests 7/7 against real SQLite (including an unreadable baseline and a "My open
+GitHub bugs" view with a matching sidebar count), frontend views 12/12. Still open in P3: alerts,
+board layout on a view, inline tag editing in the table, the native desktop run.
+
+**Progress note 2026-11-16 (board layout on a view).** A view can be shown as a board: `board.getView`
+(`ViewBoardQueries`), settings stored against the view, no section grouping, lanes by list, drops change
+the column only (decisions, 2026-11-16). Tests: 7 real-SQLite view-board tests (cards across lists,
+settings across restart, lane assignment, move to Done, subtask progress, deleted view, focus) and
+4 jsdom tests (getView with the focus, card menu without Move up/down, a drop sends no position,
+settings save against the view). Still open in P3: alerts, inline tag editing in the table, the
+native desktop run.
+
+**Progress note 2026-11-16 (view alerts, inline tags).** `ViewAlertService` (evaluate, deliver after quiet
+hours, list, acknowledge) over a device-local `ViewAlerts` table (migration 027, LocalOnly in the catalog),
+run from the reminder engine tick; `views.alerts` and `views.acknowledgeAlert`; `ViewAlertStack` in the
+app. Deviations from the plan, all recorded in decisions (2026-11-16): own table instead of
+`NotificationJobs.SavedViewId`, in-app presentation only, a 30-second cadence. Table tags are now
+editable inline with the task editor's picker. Tests: 9 real-SQLite alert tests (silent baseline, one
+alert per new match and no repeat, grouping across evaluations, 24 h return rule both ways, quiet hours,
+cancel on disable, acknowledge idempotence, replacement, restart) and 3 jsdom tests (alert card, dismiss,
+table tag cell). **P3 items now all built;** what remains before the box can be ticked is the native check
+on a running desktop (drag, the table, the board, an alert arriving) and D6/P2's open native checks.
+
+### [x] P4 — Calendar view
 
 **Depends on:** P1 (P3 for the view layout). **Migration:** none. **Read:** section 10.1.
 
@@ -1742,7 +1991,18 @@ task.
 **Exit:** a week of tasks shows planned blocks, due markers and repeats. Dragging replans without
 touching due dates and can be undone. Overloaded days are flagged.
 
-### [ ] P5 — Calendar feeds and meetings in planning
+**Progress note 2026-11-16 (calendar view).** `CalendarQueries` (range, unscheduled), `calendar.range` and
+`calendar.unscheduled`, `RecurrenceCalculator.ProjectRange`, the `Calendar` component on FullCalendar 6.1.22
+(Day, Week, Month, Agenda; planned blocks, due markers, repeats; overload badges; unscheduled panel with drag;
+entry menu with "Move to date…"; filters; arrow-key day cursor), a sidebar entry and palette command, and
+the calendar layout of a custom view. Decisions are recorded in `docs/decisions.md` (2026-11-16, P4). Tests:
+8 real-SQLite calendar tests (boundaries, timed vs all-day, blocks, 62-day cap, filters, totals, repeats,
+unscheduled paging, view layout), 6 recurrence projection cases (every rule kind over a daylight-saving
+month), 7 jsdom tests (move dialog, refused move, due marker, Plan…, filters, grid keys). Native desktop
+check (drag between days and into a time slot) confirmed by the owner on 2026-11-16. Meetings are an
+empty list until P5.
+
+### [x] P5 — Calendar feeds and meetings in planning
 
 **Depends on:** P4. **Migration:** `027_calendars.sql`. **Read:** sections 10.2 and 10.4.
 
@@ -1785,7 +2045,9 @@ touching due dates and can be undone. Overloaded days are flagged.
 **Exit:** a real Google or Outlook secret ICS address shows meetings in the calendar and My Day. My
 Week's hours drop by the busy time, and the feed URL is not in the database.
 
-### [ ] P6 — Google Calendar connection
+**Progress note 2026-11-16 (calendar feeds).** Migration 028 (027 was taken), `ISecretStore` over DPAPI, `CalendarFeedClient`, `IcsParser` (Ical.Net 5.2.4), `CalendarCommands`/`CalendarRefresher`, `MeetingTime` busy maths, meetings in the calendar, My Week capacity and My Day (with the fit warning), Make a task, the summary switch, `calendars` RPC and Settings → Calendars. Decisions are in `docs/decisions.md` (2026-11-16, P5). Tests: 10 domain busy-maths cases, 9 parser fixtures, 8 feed-client cases, 17 real-SQLite calendar cases (including a byte scan for the feed address) and 9 jsdom tests. **Still open:** the native check with a real secret ICS address.
+
+### [x] P6 — Google Calendar connection
 
 **Depends on:** P5. **Migration:** `028_google_calendar.sql` (`GoogleAccounts(Id, Email, Subject,
 Version, timestamps, DeletedAtUtc)`, synced). **Read:** section 10.3 and `docs/decisions.md`
@@ -1818,6 +2080,96 @@ Version, timestamps, DeletedAtUtc)`, synced). **Read:** section 10.3 and `docs/d
 
 **Exit:** the live check has passed, or is recorded as blocked with the reason (for example,
 waiting on a Workspace admin to create the project).
+
+**Progress note 2026-11-16 (Google Calendar).** Migration 029 (028 was taken), `GoogleAccounts` (synced) and `GoogleAccountState` (device-local); `GoogleCalendarClient` over plain REST (no Google SDK, so no file token store; decision recorded), installed-app loopback flow with PKCE through `ISystemBrowser`; `GoogleCalendarCommands` (connect, list calendars, choose, disconnect with revoke) and Google sources in `CalendarRefresher` (5-minute tick, refresh on window focus, only what is due); `googleCalendar` RPC and Settings → Calendars → Google Calendar; `google-oauth.json` git-ignored with an example. Scopes and the windowed-refresh rule were checked against Google's current documentation and are in `docs/decisions.md` (2026-11-16, P6). Tests: 10 client cases over a fake transport (list, events, declined/cancelled/transparent, paging, expiry, 401 retry, policy block, offline, revoke, PKCE sign-in, cancelled sign-in), 12 real-SQLite cases (no requests when nothing is connected, token only in the secret store and in no file or export, stable source ids, replace-the-window, due-only, expiry keeps the cache, blocked/offline not hammered, sign in on this device, disconnect and failed revoke, not configured) and 8 jsdom tests. **Not done: the live check (release gate).** It needs the SilverKey Internal OAuth client in `google-oauth.json`, an interactive desktop and a real account; the box stays unticked until it has passed or is recorded as blocked. Smallest next action: create the Desktop OAuth client in the SilverKey Google Cloud project, drop its `google-oauth.json` beside the app, then connect, decline a meeting in Google, see it vanish within 5 minutes, and disconnect.
+
+**Live check (2026-11-16).** Passed on a real Google account in the app: set up the client in Settings, connect, meetings show in the calendar, and a meeting added in Google appeared automatically on the 5-minute refresh. A meeting assigned in Google also appeared on its own, and after it was declined/cancelled in Google it disappeared from Chaos. After Disconnect every Google meeting was gone from the calendar. The live check has passed, so P6 is ticked. Not looked at: Google's own permissions page to confirm that the access was revoked there (the revoke call is best effort and Chaos says so when Google cannot be reached).
+
+### [ ] P6a — Activity log and pushed UI refresh (implemented 2026-11-17; native check pending)
+
+**Progress note 2026-11-17.** Implemented on branch `event-stream`. Backend, host and frontend are done and tested (Infrastructure 13 new tests, Desktop 5, jsdom 6; the existing suites pass). Decisions and deviations (strict mode per async flow, summary entities, retention numbers, `IChangePublisher` deleted) are in `docs/decisions.md` (2026-11-17). **Not done:** the native check in step 6 (My Day updating within about 1 s from the reminder engine or a GitHub sync, and the logo animating during a GitHub sync with no status poll), which needs the desktop app. The box stays unticked until the native check passes, as with P6.
+
+**Priority.** Added by the owner on 2026-11-17. This is the next package to implement. It goes
+ahead of every other open package, including the open items of P0–P3 and P7 onwards. Later
+consumers (reminder resync, view alerts, GitHub wake-up, P15, the 7.10 editor rule) build on it.
+
+**Depends on:** P1 (triggers and `SyncPending`). **Migration:** `030_activity_log.sql` (the next
+free number when written; update Appendix A if it is taken). **Read:** section 6.4, 7.3,
+`SqliteApplicationStore.cs`, `ChangePublisher.cs`, `SyncFlush.cs`, `SyncCatalog.cs`, the four
+schedulers in `src/Chaos.Desktop/Platform/`, and the frontend files listed in step 5.
+
+1. **Migration and catalog.**
+   - Create `ActivityLog`, `ActivityLogEntities`, `ActivityCursors` and `JobRuns` (6.4).
+   - Add them to the sync catalog as `LocalOnly`.
+   - Exclude them from the JSON archive and from restore merges.
+2. **Application.**
+   - `ActivityScope` (Source, Action, OperationId, JobRunId).
+   - `IActivityRecorder` (`Note` for device-only writes).
+   - `IJobRuns` (`StartAsync`, `FinishAsync` with outcome and error).
+   - `ActivityActions`, the closed list of action names.
+   - Delete the unused `IChangePublisher` and `ChangeCollector`, or re-point them at the notifier.
+     Record which in `docs/decisions.md`.
+3. **Infrastructure.**
+   - `ActivityCapture` in `SqliteApplicationStore.ExecuteAsync`, before the sync flush (6.4 rule 2).
+   - Head notification after commit.
+   - The `since` / `head` / `jobs` reads, and pruning.
+   - Real-SQLite tests:
+     - a commit writes exactly one row with its entities and versions
+     - a rollback writes none
+     - a transaction with no changes writes none
+     - a delete becomes `Op=delete`
+     - capture works with `SyncState.Enabled = 0` and with it on (the outbox is unchanged)
+     - device-only notes are recorded
+     - `Seq` follows commit order across interleaved callers
+     - pruning respects cursors, the 7-day floor and the hard cap, and a pruned cursor gets `reset`
+4. **Desktop host.**
+   - Open the `ActivityScope` in every RPC method through one helper.
+   - Wrap each pass of `ReminderEngine`, `CalendarRefreshScheduler`, `BackupScheduler` and
+     `GitHubSyncScheduler`/`GitHubSyncEngine` in a `JobRuns` entry and a `schedule`/`sync` scope.
+   - Add explicit notes where those passes write device-only tables (6.4 rule 3).
+   - `ActivityRpcService` (`activity`: `since`, `head`, `jobs`) and the event
+     `activity.committed`, coalesced to about 100 ms.
+   - Tests:
+     - a guard test that every `[NeoRpcMethod]` that writes runs inside a scope (unscoped writes
+       throw under test)
+     - a scheduler pass records a job run and, when it changed data, an activity row with its
+       `JobRunId`
+5. **Frontend.**
+   - `activity.ts`: subscribe to `activity.committed`, coalesce, call `activity.since`, and
+     dispatch to `useActivity(kinds, handler)` and `useJobs()`. On `reset`, reload everything.
+     If the subscription fails, fall back to today's focus reload.
+   - Migrate off polling:
+     - `SyncLogo` (4 s), with `syncActivity.ts` observing job state from `useJobs()`
+     - `GitHubSettings` and `GitHubTaskNotice` (1 s while syncing)
+     - `Reminders` and `Summaries` (interval loads)
+   - Refresh on relevant entity kinds, so host-made changes appear without a focus change:
+     - My Day, My Week, the lists, Board, Calendar, saved views and the task editor
+   - Out of scope: `App.tsx`'s 1 s shell-activation poll (not a data change; it moves only if
+     shell activations later become an event).
+   - Preview backend: an in-memory activity feed with the same shape.
+6. **Tests.**
+   - jsdom:
+     - a pushed `activity.committed` reloads the affected view and not unrelated ones
+     - `reset` reloads everything
+     - the migrated components start no interval timers (fake timers assert none are pending)
+     - focus reload is still the fallback when subscribing fails
+   - Desktop: a change made by a scheduler pass reaches a subscribed client through `since`.
+   - **Native check:**
+     - With My Day open and focused, let the reminder engine or a GitHub sync change a task. It
+       updates within about 1 s with no focus change.
+     - The sidebar logo animates during a GitHub sync with no status poll running.
+7. **Docs.**
+   - Record in `docs/decisions.md`: the scope helper, the summary-entity choice per device-only
+     table, the retention numbers, and the `IChangePublisher` outcome.
+   - Update 2.3's "Change events" rule to point at 6.4.
+
+**Exit:**
+- Every committed write has exactly one activity row with a source and an action, and a
+  rolled-back write has none.
+- Every scheduler pass appears in `JobRuns`.
+- Changes made by background work show in the open UI within about 1 s without a poll or focus
+  change.
+- The polls listed in step 5 are gone.
 
 ### [ ] P7 — AI providers, keys, privacy and AI summaries
 
@@ -2373,6 +2725,7 @@ If a number is already taken when you start, use the next free number and update
 | 027 | P5 | Calendar sources, events cache, source state, event links |
 | 028 | P6 | Google accounts |
 | 029 | P7 | AI settings, summary narrative columns |
+| 030 | P6a | Activity log, entities, cursors, job runs (028 and 029 were actually used by P5 and P6, so 030 is the next free number; later rows shift when they land) |
 | 030 | P9 | Attachments, attachment local state |
 | 031 | P10 | Pad item kind, drawings, region links |
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |

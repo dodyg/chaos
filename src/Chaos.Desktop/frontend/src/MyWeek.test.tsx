@@ -31,7 +31,7 @@ function board(placements: readonly { taskId: string; day: string | null }[] = [
   return {
     goals: [],
     placements: placements.map(item => ({ ...item, origin: "Planned" })),
-    days: dates.map(date => ({ date, availableMinutes: 480, workAllowanceMinutes: null, isOverride: false, plannedMinutes: overTuesday && date === today ? 600 : 0, workMinutes: 0, unknownEstimates: 0, openCount: 0, overTotal: overTuesday && date === today, overWork: false })),
+    days: dates.map(date => ({ date, availableMinutes: 480, workAllowanceMinutes: null, isOverride: false, plannedMinutes: overTuesday && date === today ? 600 : 0, workMinutes: 0, unknownEstimates: 0, openCount: 0, overTotal: overTuesday && date === today, overWork: false, busyMinutes: 0 })),
     pool: { plannedMinutes: 0, workMinutes: 0, unknownEstimates: 0, openCount: 0 },
   };
 }
@@ -194,5 +194,16 @@ test("a work focus shows only work tasks on the confirmed board and says how man
   assert.ok(within(list).getByText("Ship release"));
   assert.equal(within(list).queryByText("Water plants"), null);
   assert.ok(screen.getByText("· 1 other task hidden by focus"));
+  cleanup();
+});
+
+test("a day with meetings shows the meeting time and the hours left after it", async () => {
+  const confirmed = board();
+  const withMeetings: WeekBoardDto = { ...confirmed, days: confirmed.days.map(day => day.date === today ? { ...day, busyMinutes: 120 } : day) };
+  const { api } = fakes(overview({ state: "Confirmed", confirmedRevision: "1", confirmed: withMeetings }));
+  show(api);
+  await screen.findByRole("list", { name: "Tasks for Tue 10" });
+  assert.equal((await screen.findByText("2 h meetings")).getAttribute("data-meetings"), today);
+  assert.ok(screen.getAllByText(/of 6 h/).length >= 1);
   cleanup();
 });

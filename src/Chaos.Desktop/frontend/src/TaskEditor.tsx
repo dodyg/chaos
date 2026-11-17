@@ -15,6 +15,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Count, DeletedItems, Field, FieldGroup, PriorityBadge, StatusBadge, isFinished, label, priorities, statuses } from "@/components/common";
 import { GitHubTaskNotice } from "./GitHubTaskNotice";
+import { MeetingTaskNotice } from "./meetings";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { extractChecklist, MarkdownPreview, type MarkdownLinks } from "./markdown";
 import { TaskJournal } from "./TaskJournal";
@@ -241,6 +242,7 @@ function checklistPanel() {
         <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>Edit task</Button>
       </div> : <><Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
+          <MeetingTaskNotice taskId={editing.id}/>
           <GitHubTaskNotice taskId={editing.id} version={editing.version} revision={revision + subtaskRevision} onStatus={updateGitHubStatus} onChanged={changed} onSynced={() => issueSyncFinished(editing.id)}/>
           <Field label="Title"><Input required maxLength={taskGitHub?.connected ? 256 : undefined} form="task-editor-form" className="h-10 text-sm" value={editing.title} onChange={e => change({ title: e.target.value })}/></Field>
           {/* Inactive tabs show only their icon (name in the tooltip and to screen readers), so all six fit the panel. */}

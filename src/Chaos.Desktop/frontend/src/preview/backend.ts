@@ -11,6 +11,14 @@ import type {
 
 type Handler = (request: any) => unknown;
 
+type ActivityEntryLike = { seq: string; operationId: string; occurredAtUtc: string; source: string; action: string; outcome: string; jobRunId: string | null; entities: Array<{ kind: string; key: string; op: string; version: string | null }> };
+let activitySeq = 0;
+const activityLog: ActivityEntryLike[] = [];
+const committedHandlers = new Set<(value: { seq: string }) => void>();
+/** The preview's `activity.committed` subscribers (see client.ts); the real host pushes this event after each commit. */
+export function onPreviewCommitted(handler: (value: { seq: string }) => void) { committedHandlers.add(handler); return () => { committedHandlers.delete(handler); }; }
+function notifyCommitted(seq: string) { setTimeout(() => committedHandlers.forEach(handler => handler({ seq })), 100); }
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const localDate = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 export function addDays(date: string, days: number) {
@@ -52,6 +60,11 @@ const tasks: TaskResponse[] = [
   task("task-8", "Write release notes", { containerId: "chaos", category: "Work", status: "Done" }),
 ];
 const deletedTasks: TaskResponse[] = [];
+// Board settings per container (PLAN2 P2): version 0 means "defaults, no row yet".
+type PreviewBoardSettings = { groupBy: string; swimlaneBy: string; columnTagId: string | null; swimlaneTagId: string | null; wipLimitsJson: string; hiddenColumnsJson: string; version: number };
+const boardSettings = new Map<string, PreviewBoardSettings>();
+/** The container's manual task order; board moves reorder inside it. */
+const taskOrder: string[] = [];
 const subtasks: SubtaskResponse[] = [
   { id: "sub-1", taskId: "task-2", title: "Design the blocklist table", notes: "", status: "Done", version: "1" },
   { id: "sub-2", taskId: "task-2", title: "Add the admin screen", notes: "", status: "NotStarted", version: "1" },
@@ -110,7 +123,8 @@ function daySummary(date: string): DaySummaryResponse {
   const open = chosen.filter(t => !isFinished(t));
   return { date, clock: clock(), exists: dayPlans.has(date), editable: date >= today, openCount: open.length, finishedCount: chosen.length - open.length,
     remainingMinutes: open.reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0), unknownEstimates: open.filter(t => t.estimateMinutes === null).length,
-    availableMinutes: 480, workAllowanceMinutes: 360, workMinutes: open.filter(t => t.category === "Work").reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0) };
+    availableMinutes: 480, workAllowanceMinutes: 360, workMinutes: open.filter(t => t.category === "Work").reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0),
+    busyMinutes: dayMeetings(date).filter(m => m.busy).length * 60, freeMinutes: Math.max(0, 480 - dayMeetings(date).filter(m => m.busy).length * 60), meetingsDontFit: false, meetings: dayMeetings(date) };
 }
 function clock() { return { today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00Z`, zoneId: "UTC" }; }
 function dayChange(date: string, changed = 1) { return ok({ day: daySummary(date), changed, replayed: false }); }
@@ -122,13 +136,361 @@ function week(): WeekOverviewDto {
   const minutes = (date: string, work: boolean) => (dayPlans.get(date) ?? []).map(find).filter((t): t is TaskResponse => !!t && (!work || t.category === "Work")).reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0);
   const board: WeekBoardDto = { goals: [], placements,
     days: days.map(date => { const planned = minutes(date, false), work = minutes(date, true), weekend = days.indexOf(date) >= 5;
-      return { date, availableMinutes: weekend ? 0 : 480, workAllowanceMinutes: weekend ? null : 360, isOverride: false, plannedMinutes: planned, workMinutes: work, unknownEstimates: 0, openCount: 0, overTotal: planned > (weekend ? 0 : 480), overWork: !weekend && work > 360 }; }),
+      return { date, availableMinutes: weekend ? 0 : 480, workAllowanceMinutes: weekend ? null : 360, isOverride: false, plannedMinutes: planned, workMinutes: work, unknownEstimates: 0, openCount: 0, overTotal: planned > (weekend ? 0 : 480), overWork: !weekend && work > 360, busyMinutes: dayMeetings(date).filter(m => m.busy).length * 60 }; }),
     pool: { plannedMinutes: 0, workMinutes: 0, unknownEstimates: 0, openCount: 0 } };
   return { weekStart: start, weekEnd: days[6], today, firstWeekday: "Monday", planId: "plan", state: "Confirmed", confirmedRevision: "1", confirmedAtUtc: now(),
     editable: true, availabilityConfigured: true, confirmed: board, draft: null, draftRevision: "0", draftBoard: null,
     lookBack: { weekStart: addDays(start, -7), weekEnd: addDays(start, -1), hadPlan: false, completedTaskIds: [], completedCount: 0, assignedCount: 0, assignedDone: 0, assignedCancelled: 0, unfinishedTaskIds: [], goals: [], summaryId: null, summaryCompleted: [] },
     candidates: [], goalSuggestions: [], pendingReconciliation: [], checkIn: null,
     tasks: tasks.map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false })) };
+}
+
+/** The container's tasks in the current manual order, picking up tasks created later. */
+function orderedTasks(containerId: string) {
+  for (const row of tasks) if (row.containerId === containerId && !taskOrder.includes(row.id)) taskOrder.push(row.id);
+  return tasks.filter(t => t.containerId === containerId).sort((a, b) => taskOrder.indexOf(a.id) - taskOrder.indexOf(b.id));
+}
+function boardDefaults(): PreviewBoardSettings { return { groupBy: "Status", swimlaneBy: "None", columnTagId: null, swimlaneTagId: null, wipLimitsJson: "{}", hiddenColumnsJson: "[]", version: 0 }; }
+const settingsDto = (s: PreviewBoardSettings) => ({ groupBy: s.groupBy, swimlaneBy: s.swimlaneBy, columnTagId: s.columnTagId, swimlaneTagId: s.swimlaneTagId, wipLimitsJson: s.wipLimitsJson, hiddenColumnsJson: s.hiddenColumnsJson, version: String(s.version), isDefault: s.version === 0 });
+const priorities = ["Urgent", "High", "Normal", "Low", "None"];
+function boardColumns(s: PreviewBoardSettings, containerId: string, showCancelled: boolean) {
+  if (s.groupBy === "Section") return [...(sections.get(containerId) ?? []).map(section => ({ key: section.id, title: section.title, isNone: false })), { key: "", title: "No section", isNone: true }];
+  if (s.groupBy === "Priority") return [...priorities.map(p => ({ key: p, title: p, isNone: p === "None" }))];
+  if (s.groupBy === "TagGroup") {
+    const children = s.columnTagId ? tags.filter(t => t.parentId === s.columnTagId) : [];
+    return [...children.map(t => ({ key: t.id, title: t.name, isNone: false })), { key: "", title: "None", isNone: true }];
+  }
+  const status = ["NotStarted", "InProgress", "WaitingOnSomeone", "NeedsReview", "Done"];
+  const statusTitles: Record<string, string> = { NotStarted: "Not started", InProgress: "In progress", WaitingOnSomeone: "Waiting on someone", NeedsReview: "Needs review", Done: "Done" };
+  return [...status.map(k => ({ key: k, title: statusTitles[k], isNone: false })), ...(showCancelled ? [{ key: "Cancelled", title: "Cancelled", isNone: false }] : [])];
+}
+function boardLanes(s: PreviewBoardSettings) {
+  if (s.swimlaneBy === "Priority") return priorities.map(p => ({ key: p, title: p, isNone: p === "None" }));
+  if (s.swimlaneBy === "TagGroup") {
+    const children = s.swimlaneTagId ? tags.filter(t => t.parentId === s.swimlaneTagId) : [];
+    return [...children.map(t => ({ key: t.id, title: t.name, isNone: false })), { key: "", title: "None", isNone: true }];
+  }
+  if (s.swimlaneBy === "Category") return [{ key: "Work", title: "Work", isNone: false }, { key: "Personal", title: "Personal", isNone: false }];
+  return [{ key: "", title: "All tasks", isNone: true }];
+}
+function columnKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
+  if (s.groupBy === "Section") return t.sectionId ?? "";
+  if (s.groupBy === "Priority") return t.priority;
+  if (s.groupBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.columnTagId && ids.includes(tag.id))?.id ?? ""; }
+  return t.status;
+}
+function laneKeyOf(s: PreviewBoardSettings, t: TaskResponse): string {
+  if (s.swimlaneBy === "Priority") return t.priority;
+  if (s.swimlaneBy === "Category") return t.category;
+  if (s.swimlaneBy === "TagGroup") { const ids = taskTags.get(t.id) ?? []; return tags.find(tag => tag.parentId === s.swimlaneTagId && ids.includes(tag.id))?.id ?? ""; }
+  return "";
+}
+
+// Custom views (PLAN2 P3): an in-memory list and a small evaluator for the common fields, so the
+// view screens render in the preview. The desktop host is the real implementation.
+type PreviewView = { id: string; name: string; icon: string; color: string | null; pinned: boolean; position: number; definitionJson: string; layoutJson: string; alertsEnabled: boolean; version: string; deleted: boolean };
+const savedViews: PreviewView[] = [{
+  id: "view-1", name: "Open high priority", icon: "flag", color: "red", pinned: true, position: 0, alertsEnabled: false, version: "1", deleted: false,
+  definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "status", op: "notIn", value: ["Done", "Cancelled"] }, { field: "priority", op: "atLeast", value: "High" }] }),
+  layoutJson: JSON.stringify({ v: 1, kind: "table", group: "none", sort: { field: "due", dir: "asc" }, columns: ["title", "status", "priority", "due", "estimate"] }),
+}];
+const priorityOrder = ["None", "Low", "Normal", "High", "Urgent"];
+function relativeRange(value: any): [string | null, string | null] {
+  if (typeof value === "string") return [value, value];
+  if (value && typeof value === "object" && typeof value.relative === "string") {
+    switch (value.relative) {
+      case "today": return [today, today];
+      case "tomorrow": return [addDays(today, 1), addDays(today, 1)];
+      case "yesterday": return [addDays(today, -1), addDays(today, -1)];
+      case "next": return [today, addDays(today, value.days - 1)];
+      case "last": return [addDays(today, -(value.days - 1)), today];
+      case "overdue": return [null, addDays(today, -1)];
+      default: return [today, addDays(today, 6)];
+    }
+  }
+  return [value?.from ?? null, value?.to ?? null];
+}
+function previewMatch(t: TaskResponse, node: any): boolean {
+  if (Array.isArray(node.items)) {
+    const results = node.items.map((item: any) => previewMatch(t, item));
+    return results.length === 0 || (node.match === "any" ? results.some(Boolean) : results.every(Boolean));
+  }
+  const date = (v: string | null) => {
+    if (node.op === "isEmpty") return v === null;
+    if (node.op === "isNotEmpty") return v !== null;
+    if (v === null) return false;
+    const [from, to] = relativeRange(node.value);
+    if (node.op === "before") return from !== null && v < from;
+    if (node.op === "after") return to !== null && v > to;
+    return (from === null || v >= from) && (to === null || v <= to);
+  };
+  switch (node.field) {
+    case "status": return node.op === "in" ? node.value.includes(t.status) : !node.value.includes(t.status);
+    case "priority": { const a = priorityOrder.indexOf(t.priority), b = priorityOrder.indexOf(node.value); return node.op === "atLeast" ? a >= b : node.op === "atMost" ? a <= b : a === b; }
+    case "container": return node.op === "isNot" ? t.containerId !== node.value : ([] as string[]).concat(node.value).includes(t.containerId);
+    case "category": return t.category === node.value;
+    case "due": return date(t.dueDate);
+    case "planned": return date(t.plannedDate);
+    case "estimate": return node.op === "isEmpty" ? t.estimateMinutes === null : t.estimateMinutes !== null && (node.op === "lessThan" ? t.estimateMinutes < node.value : t.estimateMinutes > node.value);
+    case "text": return `${t.title} ${t.notes}`.toLowerCase().includes(String(node.value).toLowerCase());
+    case "tag": { const ids = taskTags.get(t.id) ?? []; const wanted: string[] = node.value; return node.op === "hasAllOf" ? wanted.every(id => ids.includes(id)) : node.op === "hasNone" ? !wanted.some(id => ids.includes(id)) : wanted.some(id => ids.includes(id)); }
+    default: return true;
+  }
+}
+function viewRows(definitionJson: string, category: string | null) {
+  const definition = JSON.parse(definitionJson);
+  return tasks.filter(t => (!category || t.category === category) && previewMatch(t, definition)).map(t => row(t));
+}
+function viewHandlers(): Record<string, Handler> {
+  const find = (id: string) => savedViews.find(v => v.id === id);
+  const missing = { ...fail("That view no longer exists."), view: null };
+  return {
+    "views.list": (r: { includeDeleted: boolean }) => ok({ views: savedViews.filter(v => r.includeDeleted || !v.deleted).sort((a, b) => a.position - b.position), icons: ["list", "star", "flag", "bug", "calendar", "clock", "inbox", "briefcase", "home", "user", "users", "tag", "bookmark", "heart", "target", "zap", "bell", "square-check", "folder", "sun"] }),
+    "views.get": (r: { viewId: string }) => { const v = find(r.viewId); return v ? ok({ view: v }) : missing; },
+    "views.save": (r: { viewId: string | null; name: string; icon: string | null; color: string | null; definitionJson: string; layoutJson: string | null; pinned: boolean; alertsEnabled: boolean }) => {
+      if (!r.name.trim()) return { ...fail("Give the view a name of 1 to 80 characters."), view: null };
+      try { JSON.parse(r.definitionJson); } catch { return { ...fail("The view definition is not valid JSON."), view: null }; }
+      const existing = r.viewId ? find(r.viewId) : undefined;
+      if (r.viewId && !existing) return missing;
+      const next: PreviewView = { id: existing?.id ?? newId("view"), name: r.name.trim(), icon: r.icon ?? "list", color: r.color, pinned: r.pinned, position: existing?.position ?? savedViews.length, definitionJson: r.definitionJson, layoutJson: r.layoutJson ?? "{\"v\":1}", alertsEnabled: r.alertsEnabled, version: existing ? bump(existing.version) : "1", deleted: false };
+      if (existing) savedViews[savedViews.indexOf(existing)] = next; else savedViews.push(next);
+      return ok({ view: next });
+    },
+    "views.duplicate": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; const copy = { ...v, id: newId("view"), name: `${v.name} (copy)`, position: savedViews.length, alertsEnabled: false, version: "1" }; savedViews.push(copy); return ok({ view: copy }); },
+    "views.setPinned": (r: { viewId: string; pinned: boolean }) => { const v = find(r.viewId); if (!v) return missing; v.pinned = r.pinned; v.version = bump(v.version); return ok({ view: v }); },
+    "views.delete": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; v.deleted = true; v.version = bump(v.version); return ok({ view: v }); },
+    "views.restore": (r: { viewId: string }) => { const v = find(r.viewId); if (!v) return missing; v.deleted = false; v.version = bump(v.version); return ok({ view: v }); },
+    "views.reorder": (r: { viewIds: string[] }) => { r.viewIds.forEach((id, index) => { const v = find(id); if (v) v.position = index; }); return ok({ views: [...savedViews].sort((a, b) => a.position - b.position), icons: [] }); },
+    "views.run": (r: { viewId: string; category: string | null }) => { const v = find(r.viewId); if (!v || v.deleted) return { ...fail("That view no longer exists."), rows: [], totalCount: 0, nextCursor: null, layoutJson: null }; const rows = viewRows(v.definitionJson, r.category); return ok({ rows, totalCount: rows.length, nextCursor: null, layoutJson: v.layoutJson }); },
+    "views.preview": (r: { definitionJson: string; layoutJson: string | null; category: string | null; limit: number | null }) => {
+      try { const rows = viewRows(r.definitionJson, r.category); return ok({ rows: rows.slice(0, r.limit ?? 5), totalCount: rows.length, nextCursor: null, layoutJson: r.layoutJson }); }
+      catch { return { ...fail("This view cannot be previewed."), rows: [], totalCount: 0, nextCursor: null, layoutJson: null }; }
+    },
+    "views.counts": (r: { category: string | null }) => ok({ counts: savedViews.filter(v => v.pinned && !v.deleted).map(v => ({ viewId: v.id, count: viewRows(v.definitionJson, r.category).length })) }),
+    "views.contextDefaults": () => ok({ containerId: null, status: null, priority: null, category: null, tagIds: [], plannedDate: null, dueDate: null }),
+    "views.export": (r: { viewId: string }) => { const v = find(r.viewId); return v ? ok({ fileName: `${v.name} preview.csv`, rows: viewRows(v.definitionJson, null).length }) : { ...fail("That view no longer exists."), fileName: null, rows: 0 }; },
+    "views.alerts": () => ok({ alerts: [] }),
+    "views.acknowledgeAlert": () => ok({}),
+    "views.githubOptions": () => ok({ repositories: [{ id: "repo-1", fullName: "person/chaos" }] }),
+    "views.fromSearch": (r: { search: { text: string | null } }) => ok({ definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "text", op: "contains", value: r.search.text ?? "" }, { field: "status", op: "notIn", value: ["Done", "Cancelled"] }] }) }),
+  };
+}
+// Calendar feeds (PLAN2 P5): one sample feed, kept in memory. The address is never kept after adding.
+type PreviewSource = { id: string; provider: string; name: string; color: string; countsAsBusy: boolean; enabled: boolean; ownerEmail: string | null; version: string; lastAttemptUtc: string | null; lastSuccessUtc: string | null; lastError: string | null };
+const calendarSources: PreviewSource[] = [
+  { id: "cal-team", provider: "Feed", name: "Team calendar", color: "#3b82f6", countsAsBusy: true, enabled: true, ownerEmail: null, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null },
+];
+type PreviewMeeting = { sourceId: string; eventId: string; title: string; offset: number; start: string | null; end: string | null; location: string | null; busy: boolean };
+const meetingSamples: PreviewMeeting[] = [
+  { sourceId: "cal-team", eventId: "m1", title: "Stand-up", offset: 0, start: "10:00", end: "11:00", location: "Room 2", busy: true },
+  { sourceId: "cal-team", eventId: "m2", title: "Design review", offset: 0, start: "14:00", end: "15:30", location: null, busy: true },
+  { sourceId: "cal-team", eventId: "m3", title: "Planning", offset: 1, start: "11:00", end: "12:00", location: null, busy: true },
+  { sourceId: "cal-team", eventId: "m4", title: "Company holiday", offset: 3, start: null, end: null, location: null, busy: false },
+];
+function dayMeetings(date: string) {
+  return meetingSamples.flatMap(m => {
+    const source = calendarSources.find(s => s.id === m.sourceId);
+    if (!source || !source.enabled || addDays(today, m.offset) !== date) return [];
+    return [{ id: `${m.sourceId}|${m.eventId}|${date}`, sourceId: m.sourceId, eventId: m.eventId, sourceName: source.name, title: m.title, date, start: m.start, end: m.end, allDay: m.start === null,
+      color: source.color, busy: m.busy && source.countsAsBusy, location: m.location, videoUrl: null, webUrl: m.eventId === "m1" ? "https://example.com/standup" : null }];
+  });
+}
+const meetingTaskLinks = new Map<string, { taskId: string; eventTitle: string; eventStartUtc: string; eventWebUrl: string | null }>();
+function calendarsHandlers(): Record<string, Handler> {
+  return {
+    "calendars.list": () => ok({ sources: calendarSources }),
+    "calendars.addFeed": (r: { address: string; name: string; color: string; countsAsBusy: boolean; ownerEmail: string | null }) => {
+      if (/^http:\/\//i.test(r.address.trim())) return { ok: false, source: null, refreshError: null, error: { kind: "Validation", message: "Calendar feeds must use https://. Plain http:// is not allowed.", fields: [{ fieldPath: "address", message: "Calendar feeds must use https://. Plain http:// is not allowed." }], correlationId: "preview" } };
+      const source: PreviewSource = { id: newId("cal"), provider: "Feed", name: r.name, color: r.color, countsAsBusy: r.countsAsBusy, enabled: true, ownerEmail: r.ownerEmail, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null };
+      calendarSources.push(source);
+      return ok({ source, refreshError: null });
+    },
+    "calendars.update": (r: { sourceId: string; expectedVersion: string; name: string; color: string; countsAsBusy: boolean; enabled: boolean; ownerEmail: string | null }) => {
+      const index = calendarSources.findIndex(s => s.id === r.sourceId);
+      if (index < 0) return { ...fail("That calendar was removed. Refresh and try again."), source: null, refreshError: null };
+      const next = { ...calendarSources[index], name: r.name, color: r.color, countsAsBusy: r.countsAsBusy, enabled: r.enabled, ownerEmail: r.ownerEmail, version: String(Number(calendarSources[index].version) + 1) };
+      calendarSources[index] = next;
+      return ok({ source: next, refreshError: null });
+    },
+    "calendars.remove": (r: { sourceId: string }) => { const index = calendarSources.findIndex(s => s.id === r.sourceId); if (index >= 0) calendarSources.splice(index, 1); return ok({}); },
+    "calendars.activity": () => ok({ google: false, feed: false }),
+    "calendars.refresh": () => { for (const s of calendarSources) { s.lastAttemptUtc = now(); s.lastSuccessUtc = now(); s.lastError = null; } return ok({ results: calendarSources.map(s => ({ sourceId: s.id, ok: true, changed: false, eventCount: 0, error: null })), sources: calendarSources }); },
+    "calendars.makeTask": (r: { sourceId: string; eventId: string }) => {
+      const sample = meetingSamples.find(m => m.sourceId === r.sourceId && m.eventId === r.eventId);
+      const t = task(newId("task"), `Prepare: ${sample?.title ?? "meeting"}`, { plannedDate: addDays(today, (sample?.offset ?? 0) - 1) });
+      tasks.push(t); record(`Make task “${t.title}”`);
+      meetingTaskLinks.set(t.id, { taskId: t.id, eventTitle: sample?.title ?? "meeting", eventStartUtc: now(), eventWebUrl: null });
+      return ok({ task: t, replayed: false });
+    },
+    "calendars.taskLinks": (r: { taskIds: string[] }) => ok({ links: r.taskIds.flatMap(id => meetingTaskLinks.get(id) ?? []) }),
+  };
+}
+// Google Calendar (PLAN2 P6): a fake account and two calendars; nothing leaves the page. Sources of the account are CalendarSources with provider Google.
+type PreviewGoogleAccount = { id: string; email: string; signedInHere: boolean; needsSignIn: boolean; error: string | null; lastSuccessUtc: string | null };
+const googleAccounts: PreviewGoogleAccount[] = [];
+const googleCalendarList = [
+  { calendarId: "you@example.com", name: "you@example.com", color: "#16a765", primary: true },
+  { calendarId: "team@example.com", name: "Team (shared)", color: "#9a9cff", primary: false },
+];
+function googleAccountView(account: PreviewGoogleAccount) {
+  return { ...account, calendars: calendarSources.filter(s => s.provider === "Google") };
+}
+let googleConfigured = false;
+function googleHandlers(): Record<string, Handler> {
+  return {
+    "googleCalendar.setup": () => { googleConfigured = true; return ok({ revoked: true }); },
+    "googleCalendar.status": () => ok({ configured: googleConfigured, accounts: googleAccounts.map(googleAccountView) }),
+    "googleCalendar.connect": () => {
+      let account = googleAccounts[0];
+      if (!account) { account = { id: "acct-1", email: "you@example.com", signedInHere: true, needsSignIn: false, error: null, lastSuccessUtc: now() }; googleAccounts.push(account); }
+      account.signedInHere = true; account.needsSignIn = false; account.error = null;
+      return ok({ account: googleAccountView(account) });
+    },
+    "googleCalendar.calendars": () => ok({ calendars: googleCalendarList.map(c => {
+      const source = calendarSources.find(s => s.id === `g-${c.calendarId}`) ?? null;
+      return { ...c, chosen: !!source?.enabled, source };
+    }) }),
+    "googleCalendar.choose": (r: { accountId: string; calendarId: string; name: string; color: string | null; chosen: boolean }) => {
+      const id = `g-${r.calendarId}`;
+      const index = calendarSources.findIndex(s => s.id === id);
+      const next: PreviewSource = index >= 0
+        ? { ...calendarSources[index], enabled: r.chosen, version: String(Number(calendarSources[index].version) + 1) }
+        : { id, provider: "Google", name: r.name, color: r.color ?? "#3b82f6", countsAsBusy: true, enabled: r.chosen, ownerEmail: null, version: "1", lastAttemptUtc: now(), lastSuccessUtc: now(), lastError: null };
+      if (index >= 0) calendarSources[index] = next; else calendarSources.push(next);
+      return ok({ source: next, refreshError: null });
+    },
+    "googleCalendar.disconnect": (r: { accountId: string }) => {
+      const index = googleAccounts.findIndex(a => a.id === r.accountId);
+      if (index >= 0) googleAccounts.splice(index, 1);
+      for (let i = calendarSources.length - 1; i >= 0; i--) if (calendarSources[i].provider === "Google") calendarSources.splice(i, 1);
+      return ok({ revoked: true });
+    },
+  };
+}
+function calendarHandlers(): Record<string, Handler> {
+  type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showMeetings?: boolean; showCompleted?: boolean } | null;
+  const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
+  const endOf = (time: string, estimate: number | null) => { const [h, m] = time.split(":").map(Number); const total = Math.min(h * 60 + m + (estimate && estimate > 0 ? estimate : 30), 24 * 60 - 1); return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; };
+  const entry = (kind: string, t: TaskResponse, date: string, time: string | null) => ({ kind, taskId: t.id, title: t.title, status: t.status, priority: t.priority, containerName: containerName(t.containerId), date, time,
+    endTime: kind === "Planned" && time ? endOf(time, t.estimateMinutes) : null, isBlock: kind === "Planned" && !!time && t.estimateMinutes !== null, isEstimated: t.estimateMinutes !== null, estimateMinutes: t.estimateMinutes, category: t.category });
+  return {
+    "calendar.range": (r: { from: string; to: string; filters: Filters }) => {
+      const f = r.filters; const finished = (t: TaskResponse) => t.status === "Done" || t.status === "Cancelled";
+      const inRange = (d: string | null) => d !== null && d >= r.from && d <= r.to;
+      const entries = [
+        ...(f?.showPlanned === false ? [] : tasks.filter(t => matches(t, f) && inRange(t.plannedDate) && (f?.showCompleted ? t.status !== "Cancelled" : !finished(t))).map(t => entry("Planned", t, t.plannedDate!, t.plannedTime))),
+        ...(f?.showDue === false ? [] : tasks.filter(t => matches(t, f) && inRange(t.dueDate) && (f?.showCompleted ? t.status !== "Cancelled" : !finished(t))).map(t => entry("Due", t, t.dueDate!, t.dueTime))),
+      ].sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? "").localeCompare(b.time ?? ""));
+      const days: unknown[] = [];
+      for (let d = r.from; d <= r.to; d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)) {
+        const weekend = [0, 6].includes(new Date(`${d}T00:00:00Z`).getUTCDay()); const available = weekend ? 0 : 480;
+        const planned = tasks.filter(t => (!f?.category || t.category === f.category) && t.plannedDate === d && !finished(t));
+        const minutes = planned.reduce((sum, t) => sum + (t.estimateMinutes ?? 0), 0);
+        days.push({ date: d, availableMinutes: available, workAllowanceMinutes: null, busyMinutes: dayMeetings(d).filter(m => m.busy).length * 60, plannedMinutes: minutes, workMinutes: 0, unknownEstimates: planned.filter(t => t.estimateMinutes === null).length, openCount: planned.length, overTotal: minutes > available || (available === 0 && planned.length > 0), overWork: false });
+      }
+      return ok({ from: r.from, to: r.to, today, zoneId: "UTC", entries, meetings: f?.showMeetings === false ? [] : (() => { const all: ReturnType<typeof dayMeetings> = []; for (let d = r.from; d <= r.to; d = addDays(d, 1)) all.push(...dayMeetings(d)); return all; })(), days, truncated: false });
+    },
+    "calendar.unscheduled": (r: { filters: Filters; text: string | null }) => {
+      const rows = tasks.filter(t => matches(t, r.filters) && t.plannedDate === null && t.status !== "Done" && t.status !== "Cancelled" && (!r.text || t.title.toLowerCase().includes(r.text.toLowerCase())))
+        .map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: [...(taskTags.get(t.id) ?? [])], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null }));
+      return ok({ rows, totalCount: rows.length, nextCursor: null });
+    },
+  };
+}
+function boardHandlers(): Record<string, Handler> {
+  return {
+    "board.get": (r: { containerId: string; category: string | null; showCancelled: boolean }) => {
+      const container = containers.find(c => c.id === r.containerId);
+      if (!container) return { ...fail("That list or project no longer exists."), settings: settingsDto(boardDefaults()), columns: [], lanes: [], cards: [], totalCount: 0, truncated: false };
+      const s = boardSettings.get(r.containerId) ?? boardDefaults();
+      const visible = orderedTasks(r.containerId)
+        .filter(t => !r.category || t.category === r.category)
+        .filter(t => r.showCancelled || t.status !== "Cancelled");
+      const cards = visible.map(t => {
+        const subs = subtasks.filter(sub => sub.taskId === t.id);
+        return { task: t, tagIds: [...(taskTags.get(t.id) ?? [])], subtasksTotal: subs.length, subtasksDone: subs.filter(sub => sub.status === "Done").length,
+          hasIssueLink: t.id === "task-2", columnKey: columnKeyOf(s, t), laneKey: laneKeyOf(s, t) };
+      });
+      return ok({ settings: settingsDto(s), columns: boardColumns(s, r.containerId, r.showCancelled), lanes: boardLanes(s), cards, totalCount: cards.length, truncated: false });
+    },
+    "board.getView": (r: { viewId: string; category: string | null; showCancelled: boolean }) => {
+      const view = savedViews.find(v => v.id === r.viewId && !v.deleted);
+      if (!view) return { ...fail("That view no longer exists."), settings: settingsDto(boardDefaults()), columns: [], lanes: [], cards: [], totalCount: 0, truncated: false };
+      const found = boardSettings.get(r.viewId) ?? boardDefaults();
+      const s = found.groupBy === "Section" ? { ...found, groupBy: "Status" } : found;
+      const visible = viewRows(view.definitionJson, r.category).map(row => row.task).filter(t => r.showCancelled || t.status !== "Cancelled");
+      const lanes = s.swimlaneBy === "Container"
+        ? [...new Set(visible.map(t => t.containerId))].map(id => ({ key: id, title: containerName(id), isNone: false }))
+        : boardLanes(s);
+      const cards = visible.map(t => {
+        const subs = subtasks.filter(sub => sub.taskId === t.id);
+        return { task: t, tagIds: [...(taskTags.get(t.id) ?? [])], subtasksTotal: subs.length, subtasksDone: subs.filter(sub => sub.status === "Done").length,
+          hasIssueLink: t.id === "task-2", columnKey: columnKeyOf(s, t), laneKey: s.swimlaneBy === "Container" ? t.containerId : laneKeyOf(s, t) };
+      });
+      return ok({ settings: settingsDto(found), columns: boardColumns(s, "", r.showCancelled), lanes, cards, totalCount: cards.length, truncated: false });
+    },
+    "board.updateSettings": (r: { operationId: string; targetId: string; expectedVersion: string; groupBy: string; swimlaneBy: string; columnTagId: string | null; swimlaneTagId: string | null; wipLimitsJson: string; hiddenColumnsJson: string }) => {
+      const existing = boardSettings.get(r.targetId);
+      if ((existing ?? boardDefaults()).version !== Number(r.expectedVersion)) return { ...fail("This board's settings changed elsewhere. Refresh and try again."), settings: null };
+      const saved: PreviewBoardSettings = { groupBy: r.groupBy, swimlaneBy: r.swimlaneBy, columnTagId: r.columnTagId || null, swimlaneTagId: r.swimlaneTagId || null,
+        wipLimitsJson: r.wipLimitsJson || "{}", hiddenColumnsJson: r.hiddenColumnsJson || "[]", version: (existing?.version ?? 0) + 1 };
+      boardSettings.set(r.targetId, saved);
+      record("Change board settings");
+      return ok({ settings: settingsDto(saved) });
+    },
+    "board.move": (r: { taskId: string; expectedVersion: string; groupBy: string; fromColumn: string | null; toColumn: string | null; beforeTaskId: string | null; afterTaskId: string | null; subtaskChoice: string | null }) => {
+      const t = find(r.taskId);
+      if (!t) return { ...fail("That task no longer exists."), task: null, warning: null };
+      if (t.version !== r.expectedVersion) return { ...fail("This task changed elsewhere while you were working. Refresh and try again."), task: null, warning: null };
+      // The card lands next to the anchor card the person dropped it beside (as BoardCommands).
+      const anchor = r.beforeTaskId ?? r.afterTaskId;
+      if (anchor && !orderedTasks(t.containerId).some(row => row.id === anchor && row.id !== t.id)) {
+        return { ...fail("The card it was placed next to is no longer in this list or project. Refresh and try again."), task: null, warning: null };
+      }
+      if (r.groupBy === "Status" && r.toColumn === "Done" && r.subtaskChoice === null
+        && subtasks.some(sub => sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled")) {
+        return { ok: false, task: null, warning: null, error: { kind: "Validation", message: "Open subtasks", fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }], correlationId: "preview" } };
+      }
+      // One field change, one reorder, one history entry for the whole move (as BoardCommands).
+      const patch: { -readonly [K in keyof TaskResponse]?: TaskResponse[K] } = {};
+      if (r.groupBy === "Status") {
+        if (!boardColumns(boardDefaults(), t.containerId, true).some(column => column.key === r.toColumn)) return { ...fail("That column is not a status."), task: null, warning: null };
+        if (r.toColumn !== t.status) patch.status = r.toColumn!;
+        if (r.toColumn === "Done" && r.subtaskChoice === "CompleteAll") {
+          subtasks.forEach((sub, index) => {
+            if (sub.taskId === t.id && sub.status !== "Done" && sub.status !== "Cancelled") subtasks[index] = { ...sub, status: "Done", version: bump(sub.version) };
+          });
+        }
+      } else if (r.groupBy === "Section") {
+        if ((r.toColumn || null) !== t.sectionId) patch.sectionId = r.toColumn || null;
+      } else if (r.groupBy === "Priority") {
+        if (r.toColumn && r.toColumn !== t.priority) patch.priority = r.toColumn;
+      }
+      let retagged = false;
+      if (r.groupBy === "TagGroup" && r.fromColumn !== r.toColumn) {
+        const links = (taskTags.get(r.taskId) ?? []).filter(id => id !== r.fromColumn);
+        if (r.toColumn) links.push(r.toColumn);
+        taskTags.set(r.taskId, links);
+        retagged = true;
+      }
+      const before = orderedTasks(t.containerId).map(row => row.id);
+      if (anchor) {
+        taskOrder.splice(taskOrder.indexOf(t.id), 1);
+        taskOrder.splice(taskOrder.indexOf(anchor) + (r.afterTaskId ? 1 : 0), 0, t.id);
+      }
+      const after = orderedTasks(t.containerId).map(row => row.id);
+      // Every reranked card gets a new version, as the real reorder bumps its neighbours.
+      const reranked = new Set(after.filter((id, index) => before[index] !== id));
+      const changed = Object.keys(patch).length > 0 || retagged || reranked.has(t.id);
+      if (!changed) return ok({ task: t, warning: null });
+      for (const id of new Set([...reranked, t.id])) {
+        const index = tasks.findIndex(row => row.id === id);
+        tasks[index] = { ...tasks[index], ...(id === t.id ? patch : {}), version: bump(tasks[index].version), updatedAtUtc: now() };
+      }
+      record(`Move “${t.title}”`);
+      return ok({ task: find(r.taskId), warning: null });
+    },
+  };
 }
 
 function previewDraft(text: string, containerId: string | null): CaptureDraftDto {
@@ -357,6 +719,11 @@ const handlers: Record<string, Handler> = {
   "pad.search": (r: { text: string }) => ok({ items: padNotes.filter(n => n.markdown.toLowerCase().includes(r.text.toLowerCase())) }),
   "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
+  ...boardHandlers(),
+  ...calendarHandlers(),
+  ...calendarsHandlers(),
+  ...googleHandlers(),
+  ...viewHandlers(),
   ...pageHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),
@@ -370,6 +737,10 @@ const handlers: Record<string, Handler> = {
     assignees: linked ? previewIssueAssignees : null }; },
   "github.setSelfAssignment": (r: { assigned: boolean }) => { previewIssueAssignees = r.assigned ? ["preview-user", ...previewIssueAssignees.filter(a => a !== "preview-user")] : previewIssueAssignees.filter(a => a !== "preview-user"); return ok({}); },
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
+  // The activity feed (PLAN2 §6.4): the preview records its own writes in memory with the real shape, so the window's stream code runs here too.
+  "activity.head": () => ok({ head: String(activitySeq) }),
+  "activity.since": (r: { after: string; limit: number }) => ok({ entries: activityLog.filter(entry => Number(entry.seq) > Number(r.after)).slice(0, Math.max(1, r.limit)), head: String(activitySeq), reset: false }),
+  "activity.jobs": () => ok({ jobs: [] }),
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
 
@@ -384,5 +755,19 @@ export async function handle(command: string, request: unknown): Promise<unknown
   await new Promise(resolve => setTimeout(resolve, 40)); // a little latency, like the real host
   const handler = handlers[command];
   if (!handler) { console.info(`[preview] ${command} is not modelled; answering with an empty read.`); return structuredClone(emptyRead); }
-  return structuredClone(handler(request));
+  const result = structuredClone(handler(request));
+  recordActivity(command);
+  return result;
+}
+
+const readLike = /\.(list\w*|get\w*|counts|run|preview\w*|search|status|clock|alerts|prompts|since|head|jobs|activity|taskSync|resolveLinks|locate|capabilities|suggest\w*|inspect\w*|export\w*|tasks|unscheduled|range|upcoming|take|zones)$/;
+/** Writes made through the preview become activity entries (Source "user", like the window's own edits) and push the committed event. */
+function recordActivity(command: string) {
+  if (readLike.test(command)) return;
+  const [service] = command.split(".");
+  activitySeq++;
+  activityLog.push({ seq: String(activitySeq), operationId: `preview-${activitySeq}`, occurredAtUtc: new Date().toISOString(), source: "user", action: command, outcome: "ok", jobRunId: null,
+    entities: [{ kind: service.replace(/s$/, ""), key: command, op: "upsert", version: null }] });
+  if (activityLog.length > 500) activityLog.shift();
+  notifyCommitted(String(activitySeq));
 }

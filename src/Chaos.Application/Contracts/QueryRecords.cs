@@ -19,6 +19,8 @@ public enum TaskView
     Waiting = 7,
     Search = 8,
     MyDay = 9,
+    /// <summary>A saved or draft custom view: the condition tree in <c>Definition</c> (PLAN2 §11.2).</summary>
+    Custom = 10,
 }
 
 /// <summary>An inclusive range of local dates; either end may be open.</summary>
@@ -43,6 +45,8 @@ public sealed record TaskQuerySpec
     public LocalDateRange? Planned { get; init; }
     public LocalDateRange? Due { get; init; }
     public LocalDateRange? Completed { get; init; }
+    /// <summary>Only tasks with no planned date (the calendar's unscheduled panel).</summary>
+    public bool Unscheduled { get; init; }
     /// <summary>Show Done/Cancelled tasks too. Ignored when an explicit status filter is given.</summary>
     public bool IncludeCompleted { get; init; }
     /// <summary>Show tasks of archived lists/projects (they are hidden by default).</summary>
@@ -51,6 +55,10 @@ public sealed record TaskQuerySpec
     public int RecentDays { get; init; } = 30;
     /// <summary>My Day: the local date whose plan to show; null means the profile's today.</summary>
     public DateOnly? Day { get; init; }
+    /// <summary>Custom view: the validated condition tree. Required when <see cref="View"/> is Custom.</summary>
+    public Chaos.Domain.Views.ViewDefinition? Definition { get; init; }
+    /// <summary>Custom view: the layout's sort; null sorts by due date then priority.</summary>
+    public ViewSort? Sort { get; init; }
     public int Limit { get; init; } = 100;
     /// <summary>Opaque cursor from the previous page; null for the first page.</summary>
     public string? Cursor { get; init; }
@@ -82,6 +90,7 @@ public sealed record TaskQueryCriteria
     public DateOnly? PlannedTo { get; init; }
     public DateOnly? DueFrom { get; init; }
     public DateOnly? DueTo { get; init; }
+    public bool Unscheduled { get; init; }
     public DateTimeOffset? CompletedFromUtc { get; init; }
     public DateTimeOffset? CompletedBeforeUtc { get; init; }
     /// <summary>Today view: planned or due on this local date.</summary>
@@ -95,6 +104,9 @@ public sealed record TaskQueryCriteria
     public IReadOnlyList<ZoneCutoff> OverdueZoneCutoffs { get; init; } = [];
     /// <summary>My Day view: active (not removed) items of the profile's plan for this local date.</summary>
     public DateOnly? DayPlanOn { get; init; }
+    /// <summary>Custom view: the resolved condition tree and sort.</summary>
+    public ResolvedViewGroup? Definition { get; init; }
+    public ViewSort? Sort { get; init; }
     public required int Limit { get; init; }
     public string? Cursor { get; init; }
 }

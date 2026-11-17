@@ -35,7 +35,7 @@ public static class ArchiveMerge
         var containers = Rows(archive, "Containers").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);
         var tagRows = Rows(archive, "Tags").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);
         var tagPaths = tagRows.Keys.ToDictionary(id => id, id => TagPath(tagRows, id), StringComparer.Ordinal);
-        var taskTags = Rows(archive, "TaskTags").Where(row => tagPaths.ContainsKey(row.Text("TagId")!))
+        var taskTags = Rows(archive, "TaskTags").Where(row => tagPaths.ContainsKey(row.Text("TagId")!) && row.Text("DeletedAtUtc") is null)
             .ToLookup(row => row.Text("TaskId")!, row => tagPaths[row.Text("TagId")!]);
         var subtasks = Rows(archive, "Subtasks").Where(row => row.Text("DeletedAtUtc") is null)
             .OrderBy(row => row.Long("Position")).ThenBy(row => row.Text("Id"), StringComparer.Ordinal)

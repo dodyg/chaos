@@ -35,6 +35,30 @@ public sealed class RecurrenceCalculatorTests
         await Assert.That(next).IsEqualTo(new DateTime(2025, 2, 28));
         await Assert.That(RecurrenceCalculator.AfterCompletion(rule, next!.Value)).IsNull();
     }
+    [Test]
+    [Arguments(RecurrenceFrequency.Day, 1, 30)]
+    [Arguments(RecurrenceFrequency.Day, 3, 10)]
+    [Arguments(RecurrenceFrequency.Week, 1, 4)]
+    [Arguments(RecurrenceFrequency.Month, 1, 1)]
+    public async Task ProjectRange_EveryKindAcrossMonthWithDaylightSavingChange_KeepsLocalDates(RecurrenceFrequency frequency, int interval, int expectedCount)
+    {
+        // US clocks go back on 2026-11-01. Slots are local dates, so none move or vanish.
+        var rule = Rule(new(2026, 10, 15), frequency) with { Interval = interval, AnchorTime = new TimeOnly(1, 30), ZoneId = "America/New_York" };
+        var slots = RecurrenceCalculator.ProjectRange(rule, new DateTime(2026, 10, 15, 1, 30, 0), new(2026, 11, 1), new(2026, 11, 30), 1000);
+        await Assert.That(slots.Count).IsEqualTo(expectedCount);
+        await Assert.That(slots.All(slot => slot.TimeOfDay == new TimeSpan(1, 30, 0))).IsTrue();
+        await Assert.That(slots.Distinct().Count()).IsEqualTo(slots.Count);
+    }
+
+    [Test]
+    public async Task ProjectRange_StopsAtTheRemainingCount_AndSkipsEarlierSlots()
+    {
+        var rule = Rule(new(2026, 11, 1), RecurrenceFrequency.Day);
+        var slots = RecurrenceCalculator.ProjectRange(rule, new DateTime(2026, 11, 3), new(2026, 11, 1), new(2026, 11, 30), 2);
+        await Assert.That(slots.Select(DateOnly.FromDateTime).ToArray()).IsEquivalentTo(new[] { new DateOnly(2026, 11, 4), new(2026, 11, 5) });
+        await Assert.That(RecurrenceCalculator.ProjectRange(rule, new DateTime(2026, 11, 3), new(2026, 11, 1), new(2026, 11, 30), 0).Count).IsEqualTo(0);
+    }
+
     private static RecurrenceRule Rule(DateOnly anchor, RecurrenceFrequency frequency) =>
         new(RecurrenceMode.FixedSchedule, frequency, 1, anchor, null, "UTC", [], null, null, null, null,
             RecurrenceEndKind.Never, null, null);

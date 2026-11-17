@@ -177,6 +177,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
             UPDATE Pages SET ParentPageId = NULL WHERE ParentPageId IN (SELECT Id FROM temp.PurgePages) AND Id NOT IN (SELECT Id FROM temp.PurgePages);
             DELETE FROM Pages WHERE Id IN (SELECT Id FROM temp.PurgePages);
             UPDATE RecurrenceOccurrences SET TaskId = NULL WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
+            DELETE FROM SavedViewMatches WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM NotificationJobs WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ReminderRules WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM FollowUps WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
@@ -212,17 +213,28 @@ public sealed class DataPurge(SqliteApplicationStore store)
             """);
 
         // Tags: leaves first, repeatedly, so a deleted subtree goes once its children have.
+        // Only active links keep a tag alive; tombstoned links (migration 024) do not. A tag
+        // going away takes its tombstoned link rows with it — a purge removes dependents, and
+        // the link tables' foreign keys refuse to let the tag rows go while they exist.
         while (true)
         {
+            Execute(connection, """
+                CREATE TEMP TABLE IF NOT EXISTS PurgeTags (Id TEXT PRIMARY KEY);
+                DELETE FROM temp.PurgeTags;
+                INSERT INTO temp.PurgeTags
+                    SELECT Id FROM Tags WHERE DeletedAtUtc IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM Tags c WHERE c.ParentTagId = Tags.Id)
+                        AND NOT EXISTS (SELECT 1 FROM TaskTags l WHERE l.TagId = Tags.Id AND l.DeletedAtUtc IS NULL)
+                        AND NOT EXISTS (SELECT 1 FROM SubtaskTags l WHERE l.TagId = Tags.Id AND l.DeletedAtUtc IS NULL)
+                        AND NOT EXISTS (SELECT 1 FROM ScratchPadTags l WHERE l.TagId = Tags.Id AND l.DeletedAtUtc IS NULL)
+                        AND NOT EXISTS (SELECT 1 FROM PageTags l WHERE l.TagId = Tags.Id AND l.DeletedAtUtc IS NULL);
+                DELETE FROM TaskTags WHERE TagId IN (SELECT Id FROM temp.PurgeTags);
+                DELETE FROM SubtaskTags WHERE TagId IN (SELECT Id FROM temp.PurgeTags);
+                DELETE FROM ScratchPadTags WHERE TagId IN (SELECT Id FROM temp.PurgeTags);
+                DELETE FROM PageTags WHERE TagId IN (SELECT Id FROM temp.PurgeTags);
+                """);
             using var tags = connection.CreateCommand();
-            tags.CommandText = """
-                DELETE FROM Tags WHERE DeletedAtUtc IS NOT NULL
-                    AND NOT EXISTS (SELECT 1 FROM Tags c WHERE c.ParentTagId = Tags.Id)
-                    AND NOT EXISTS (SELECT 1 FROM TaskTags l WHERE l.TagId = Tags.Id)
-                    AND NOT EXISTS (SELECT 1 FROM SubtaskTags l WHERE l.TagId = Tags.Id)
-                    AND NOT EXISTS (SELECT 1 FROM ScratchPadTags l WHERE l.TagId = Tags.Id)
-                    AND NOT EXISTS (SELECT 1 FROM PageTags l WHERE l.TagId = Tags.Id);
-                """;
+            tags.CommandText = "DELETE FROM Tags WHERE Id IN (SELECT Id FROM temp.PurgeTags);";
             if (tags.ExecuteNonQuery() == 0)
             {
                 break;

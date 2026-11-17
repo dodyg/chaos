@@ -17,6 +17,8 @@
   <ItemGroup>
     <!-- Tray icon (PLAN §13); regenerate with eng/make-assets.ps1. -->
     <Content Include="Icons\chaos.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Google OAuth client (PLAN2 10.3). Git-ignored; copy google-oauth.example.json to google-oauth.json and fill it in. -->
+    <Content Include="google-oauth.json" Condition="Exists('google-oauth.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

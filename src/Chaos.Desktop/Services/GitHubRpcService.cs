@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Desktop.Platform;
 using System.Text.Json;
 using System.Globalization;
@@ -45,6 +46,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("status")]
     public async ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.status");
         try
         {
             var status = await commands.StatusAsync(ct);
@@ -66,6 +68,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("taskSync")]
     public async ValueTask<GitHubTaskSyncResponse> TaskSyncAsync(GitHubTaskSyncRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.taskSync");
         try
         {
             return await store.QueryAsync(async (s, token) =>
@@ -106,6 +109,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("attachment")]
     public async ValueTask<GitHubAttachmentResponse> AttachmentAsync(GitHubAttachmentRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.attachment");
         string? issueUrl = null;
         try
         {
@@ -137,6 +141,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("syncNow")]
     public async ValueTask<GitHubSyncResponse> SyncNowAsync(GitHubSyncRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.syncNow");
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -162,10 +167,15 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     private static string? Instant(DateTimeOffset? value) => value?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
     [NeoRpcMethod("connect")]
-    public async ValueTask<GitHubOperationResponse> ConnectAsync(GitHubConnectRequest request, CancellationToken ct) => await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); scheduler?.Wake(); });
+    public async ValueTask<GitHubOperationResponse> ConnectAsync(GitHubConnectRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.connect");
+        return await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); scheduler?.Wake(); });
+    }
     [NeoRpcMethod("listRepositories")]
     public async ValueTask<GitHubCandidatesResponse> ListRepositoriesAsync(GitHubCandidatesRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.listRepositories");
         try
         {
             var result = await commands.ListReachableRepositoriesAsync(request.Cursor, ct);
@@ -177,32 +187,77 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("lookupRepository")]
     public async ValueTask<GitHubCandidatesResponse> LookupRepositoryAsync(GitHubLookupRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("github.lookupRepository");
         try { var result = await commands.LookupRepositoryAsync(request.Owner, request.Name, ct); return new(true, [Candidate(result.Repository, result.AlreadyAdded)], null, null); }
         catch (AppException e) { return new(false, [], null, TaskRpcService.ToErrorResponse(e)); }
         catch (GitHubApiException e) { return new(false, [], null, Error(e)); }
     }
     [NeoRpcMethod("addRepository")]
-    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct) => await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
+    public async ValueTask<GitHubOperationResponse> AddRepositoryAsync(GitHubAddRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.addRepository");
+        return await Run(async () => { await commands.AddRepositoryAsync(new(r.OperationId, r.ConnectionId, Positive(r.ExpectedVersion), r.Owner, r.Name, Positive(r.RepositoryId), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
+    }
     [NeoRpcMethod("updateRepository")]
-    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
+    public async ValueTask<GitHubOperationResponse> UpdateRepositoryAsync(GitHubUpdateRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.updateRepository");
+        return await Run(async () => { await commands.UpdateRepositoryAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.TargetContainerId, r.TargetSectionId, Filter(r.Filter), r.MilestonesAsProjects, Category(r.TaskCategory)), ct); scheduler?.Wake(); });
+    }
     [NeoRpcMethod("pauseConnection")]
-    public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); }, ct); });
+    public async ValueTask<GitHubOperationResponse> PauseConnectionAsync(GitHubChangeRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.pauseConnection");
+        return await Run(async () => { await Quiesce(async () => { await commands.SetConnectionPausedAsync(Change(r), ct); }, ct); });
+    }
     [NeoRpcMethod("pauseRepository")]
-    public async ValueTask<GitHubOperationResponse> PauseRepositoryAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.SetRepositoryPausedAsync(Change(r), ct); }, ct); });
+    public async ValueTask<GitHubOperationResponse> PauseRepositoryAsync(GitHubChangeRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.pauseRepository");
+        return await Run(async () => { await Quiesce(async () => { await commands.SetRepositoryPausedAsync(Change(r), ct); }, ct); });
+    }
     [NeoRpcMethod("updateSettings")]
-    public async ValueTask<GitHubOperationResponse> UpdateSettingsAsync(GitHubSettingsRequest r, CancellationToken ct) => await Run(async () => { await commands.UpdateSettingsAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.PostDiaryByDefault, r.CreateLabelsForTags), ct); });
+    public async ValueTask<GitHubOperationResponse> UpdateSettingsAsync(GitHubSettingsRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.updateSettings");
+        return await Run(async () => { await commands.UpdateSettingsAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.PostDiaryByDefault, r.CreateLabelsForTags), ct); });
+    }
     [NeoRpcMethod("setSelfAssignment")]
-    public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct) => await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); sync?.RequestTaskSync(r.TaskId); });
+    public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.setSelfAssignment");
+        return await Run(async () => { await commands.SetSelfAssignmentAsync(new(r.OperationId, r.TaskId, r.Assigned), ct); sync?.RequestTaskSync(r.TaskId); });
+    }
     [NeoRpcMethod("retryTask")]
-    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); sync?.RequestTaskSync(r.TaskId, immediate: true); });
+    public async ValueTask<GitHubOperationResponse> RetryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.retryTask");
+        return await Run(async () => { await commands.RetryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); sync?.RequestTaskSync(r.TaskId, immediate: true); });
+    }
     [NeoRpcMethod("dismissConflict")]
-    public async ValueTask<GitHubOperationResponse> DismissConflictAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await commands.DismissConflictAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); });
+    public async ValueTask<GitHubOperationResponse> DismissConflictAsync(GitHubTaskActionRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.dismissConflict");
+        return await Run(async () => { await commands.DismissConflictAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); });
+    }
     [NeoRpcMethod("keepAsOrdinaryTask")]
-    public async ValueTask<GitHubOperationResponse> KeepAsOrdinaryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(async () => { await commands.KeepAsOrdinaryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); }, ct); });
+    public async ValueTask<GitHubOperationResponse> KeepAsOrdinaryTaskAsync(GitHubTaskActionRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.keepAsOrdinaryTask");
+        return await Run(async () => { await Quiesce(async () => { await commands.KeepAsOrdinaryTaskAsync(new(r.OperationId, r.TaskId, Positive(r.ExpectedVersion)), ct); }, ct); });
+    }
     [NeoRpcMethod("removeRepository")]
-    public async ValueTask<GitHubOperationResponse> RemoveRepositoryAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(() => commands.RemoveRepositoryAsync(Change(r), ct), ct); });
+    public async ValueTask<GitHubOperationResponse> RemoveRepositoryAsync(GitHubChangeRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.removeRepository");
+        return await Run(async () => { await Quiesce(() => commands.RemoveRepositoryAsync(Change(r), ct), ct); });
+    }
     [NeoRpcMethod("disconnect")]
-    public async ValueTask<GitHubOperationResponse> DisconnectAsync(GitHubChangeRequest r, CancellationToken ct) => await Run(async () => { await Quiesce(() => commands.DisconnectAsync(Change(r), ct), ct); });
+    public async ValueTask<GitHubOperationResponse> DisconnectAsync(GitHubChangeRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.disconnect");
+        return await Run(async () => { await Quiesce(() => commands.DisconnectAsync(Change(r), ct), ct); });
+    }
 
     private async Task Quiesce(Func<Task> action, CancellationToken ct)
     {

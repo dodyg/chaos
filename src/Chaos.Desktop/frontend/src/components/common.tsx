@@ -107,6 +107,17 @@ export function EmptyState({ title, children }: { title: string; children: React
   </div>;
 }
 
+/** A compact segmented radio group (the list's completion filter, the List / Board switch). */
+export function SegmentedRadio<T extends string>({ label: groupLabel, value, options, onChange, disabled }: {
+  label: string; value: T; options: readonly (readonly [T, string])[]; onChange: (value: T) => void; disabled?: boolean;
+}) {
+  return <div role="radiogroup" aria-label={groupLabel} className="inline-flex rounded-md border bg-muted/40 p-0.5 text-xs">
+    {options.map(([option, name]) => <button key={option} type="button" role="radio" aria-checked={value === option} disabled={disabled}
+      className={cn("rounded-[5px] px-2.5 py-1 font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50", value === option && "bg-background text-foreground shadow-xs")}
+      onClick={() => onChange(option)}>{name}</button>)}
+  </div>;
+}
+
 /** Page title block shared by the task list and templates views. */
 export function PageHeader({ eyebrow, title, titleId, subtitle, actions }: { eyebrow: string; title: string; titleId?: string; subtitle: React.ReactNode; actions?: React.ReactNode }) {
   return <header className="flex flex-wrap items-end justify-between gap-4">

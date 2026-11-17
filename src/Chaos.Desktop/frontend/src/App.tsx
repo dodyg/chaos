@@ -5,13 +5,17 @@ import React from "react";
 import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
 import { handleListKeys } from "./listKeyboard";
 import { TodayContext } from "./dates";
-import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
+import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, viewRpc, dataRpc, calendarsRpc, type ViewDto, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
 import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
 import { QueryView, builtInViews, type QueryState } from "./QueryView";
+import { ViewEditor } from "./ViewEditor";
+import { ViewIcon } from "./viewIcons";
+import { ViewAlertStack } from "./ViewAlerts";
+import { QuickAdd } from "./QuickAdd";
 import { NewTagForm, TagSettings, TagTree } from "./tags";
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
@@ -19,6 +23,7 @@ import { Pages, type PageFocus, type PageRequest } from "./Pages";
 import { MyDay, useDayClock } from "./MyDay";
 import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
+import { Calendar } from "./Calendar";
 import { AlertStack, NotificationCenter } from "./Reminders";
 import { Summaries, SummaryPrompts } from "./Summaries";
 import { DataSettings } from "./DataSettings";
@@ -31,12 +36,15 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { SyncLogo } from "./SyncLogo";
+import { useActivity } from "./activity";
+import { trackSync } from "./syncActivity";
 import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities, statuses } from "@/components/common";
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
 
-type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; pageRpc?: typeof pageRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc };
-type View = "tasks" | "templates" | "query" | "pad" | "pages" | "daily" | "myday" | "myweek" | "notifications" | "summaries" | "data" | "settings" | "help";
+type Api = { taskRpc: typeof taskRpc; containerRpc: typeof containerRpc; recurrenceRpc?: typeof recurrenceRpc; tagRpc?: typeof tagRpc; queryRpc?: typeof queryRpc; undoRpc?: typeof undoRpc; markdownRpc?: typeof markdownRpc; diaryRpc?: typeof diaryRpc; historyRpc?: typeof historyRpc; padRpc?: typeof padRpc; pageRpc?: typeof pageRpc; captureRpc?: typeof captureRpc; myDayRpc?: typeof myDayRpc; myWeekRpc?: typeof myWeekRpc; reminderRpc?: typeof reminderRpc; waitingRpc?: typeof waitingRpc; summaryRpc?: typeof summaryRpc; shellRpc?: typeof shellRpc; viewRpc?: typeof viewRpc };
+type View = "tasks" | "templates" | "query" | "pad" | "pages" | "daily" | "myday" | "myweek" | "calendar" | "notifications" | "summaries" | "data" | "settings" | "help" | "viewedit";
 
 /** This computer's date (yyyy-MM-dd), used until the profile's day clock has loaded. */
 function localToday(): string {
@@ -68,6 +76,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const waitingApi = api.waitingRpc ?? waitingRpc;
   const summaryApi = api.summaryRpc ?? summaryRpc;
   const shellApi = api.shellRpc ?? shellRpc;
+  const viewApi = api.viewRpc ?? viewRpc;
   const dayBackground = useDayBackground();
   const dayClock = useDayClock(myDayApi);
   const timeZones = useTimeZones(shellApi, dayClock?.zoneId);
@@ -120,6 +129,13 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [viewCounts, setViewCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
   const [tagCounts, setTagCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
   const [containerCounts, setContainerCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  const [savedViews, setSavedViews] = React.useState<ViewDto[]>([]);
+  const [viewIconNames, setViewIconNames] = React.useState<string[]>([]);
+  const [savedViewCounts, setSavedViewCounts] = React.useState<ReadonlyMap<string, number>>(new Map());
+  /** The view editor's target: an existing view, or a new one (optionally starting from a search). */
+  const [viewDraft, setViewDraft] = React.useState<{ view: ViewDto | null; definitionJson?: string; name?: string } | null>(null);
+  const [deletedView, setDeletedView] = React.useState<ViewDto | null>(null);
+  const [exported, setExported] = React.useState<string | null>(null);
   const [confirmQuit, setConfirmQuit] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   React.useEffect(() => {
@@ -166,7 +182,9 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   }
   /** Tags, deleted tags and sidebar counts; counts use the same query as each view (PLAN §10). */
   async function refreshMeta() {
-    const [list, removed, counts] = await Promise.all([tagApi.list({}), tagApi.listDeleted({}), queryApi.counts({ category: focusRef.current })]);
+    const [list, removed, counts, views, viewTotals] = await Promise.all([tagApi.list({}), tagApi.listDeleted({}), queryApi.counts({ category: focusRef.current }), viewApi.list({ includeDeleted: false }).catch(() => null), viewApi.counts({ category: focusRef.current }).catch(() => null)]);
+    if (views?.ok) { setSavedViews([...views.views]); setViewIconNames([...views.icons]); }
+    if (viewTotals?.ok) setSavedViewCounts(new Map(viewTotals.counts.map(entry => [entry.viewId, entry.count])));
     if (!list.ok) throw new Error(list.error?.message ?? "Could not load tags.");
     setTags([...list.tags]);
     if (removed.ok) setDeletedTags([...removed.tags]);
@@ -411,6 +429,38 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     return stop;
   }, [shellApi]);
 
+  // Window focus refreshes calendars that are due (Google every 5 minutes, feeds every 15); the host skips the rest.
+  const changedRef = React.useRef(changed);
+  changedRef.current = changed;
+  // Changes the host makes on its own (reminder engine, calendar and GitHub passes, undo of another window) arrive as activity
+  // (PLAN2 §6.4); the open view, the lists and the counts reload from them without a focus change. This window's own edits already
+  // call changed(), so entries it wrote itself (Source "user") are skipped. A lost position (reset) reloads everything.
+  const reloadFromActivityRef = React.useRef(() => {});
+  reloadFromActivityRef.current = () => {
+    changed();
+    void refresh().catch((e: unknown) => setError(String(e)));
+    void refreshContainers().catch((e: unknown) => setError(String(e)));
+  };
+  useActivity("*", (entries, reason) => {
+    if (reason === "focus") return;
+    if (reason === "entries" && entries.every(entry => entry.source === "user")) return;
+    reloadFromActivityRef.current();
+  });
+  React.useEffect(() => {
+    let running = false;
+    async function refreshDue() {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      try {
+        const result = await trackSync("calendar", calendarsRpc.refresh({ sourceId: null, onlyDue: true }));
+        if (result.ok && result.results.some(item => item.changed)) changedRef.current();
+      } catch { /* outside the desktop host, or offline: the host's own timer keeps trying */ }
+      finally { running = false; }
+    }
+    window.addEventListener("focus", refreshDue);
+    return () => window.removeEventListener("focus", refreshDue);
+  }, []);
+
   async function openLinkedTask(taskId: string) {
     const result = await taskRpc.get({ taskId });
     if (result.ok && result.task) setEditing(result.task);
@@ -586,6 +636,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     return [
       { id: "view:myday", group: "Go to", label: "My Day", icon: <Sun/>, run: go("myday"), keywords: "today plan" },
       { id: "view:myweek", group: "Go to", label: "My Week", icon: <CalendarDays/>, run: go("myweek"), keywords: "plan week" },
+      { id: "view:calendar", group: "Go to", label: "Calendar", icon: <CalendarRange/>, run: go("calendar"), keywords: "schedule month agenda planner" },
       { id: "view:inbox", group: "Go to", label: "Inbox", icon: <Inbox/>, run: () => openContainer("") },
       ...builtInViews.map(item => ({ id: `query:${item.view}`, group: "Go to", label: item.title, icon: viewIcons[item.view], run: () => openQuery({ view: item.view }) })),
       { id: "view:pages", group: "Go to", label: "Pages", icon: <FileText/>, run: () => openPages(null), keywords: "notes writing wiki documents" },
@@ -614,9 +665,62 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     return result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title, detail: row.containerName })) : [];
   }, [queryApi]);
 
+  /** Opens the view editor for an existing view, or a new one (from the sidebar or from a search). */
+  function editView(draft: { view: ViewDto | null; definitionJson?: string; name?: string }) {
+    setEditing(null); setShowTagSettings(false); setViewDraft(draft); setView("viewedit");
+  }
+  function openSavedView(saved: ViewDto) { setDeletedView(null); setExported(null); openQuery({ view: "Custom", viewId: saved.id }); }
+  async function saveAsView() {
+    try {
+      const result = await queryApi.run({ view: "Search", text: query.text ?? "", containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: false, includeArchived: false, upcomingDays: null, limit: 1, cursor: null, day: null, category: focus });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not read the search.");
+      const converted = await viewApi.fromSearch({ search: { view: "Search", text: query.text ?? "", containerId: null, tagId: null, statuses: null, priorities: null, plannedFrom: null, plannedTo: null, dueFrom: null, dueTo: null, completedFrom: null, completedTo: null, includeCompleted: false, includeArchived: false, upcomingDays: null, limit: null, cursor: null, day: null, category: focus } });
+      if (!converted.ok || !converted.definitionJson) throw new Error(converted.error?.message ?? "Could not turn the search into a view.");
+      editView({ view: null, definitionJson: converted.definitionJson, name: query.text ?? "" });
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }
+  async function viewAction(action: () => Promise<{ ok: boolean; error: { message: string } | null }>, failure: string, after?: () => void) {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try { const result = await action(); if (!result.ok) throw new Error(result.error?.message ?? failure); after?.(); await refreshMeta(); setRevision(current => current + 1); }
+    catch (e) { setError(e instanceof Error ? e.message : failure); }
+    finally { setBusy(false); }
+  }
+  async function shellOpenExports() {
+    try { const result = await dataRpc.openFolder({ which: "exports", path: null }); if (!result.ok) setError(result.error?.message ?? "The folder could not be opened."); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }
+  const openedView = query.view === "Custom" ? savedViews.find(item => item.id === query.viewId) ?? null : null;
+  /** Quick add inside a view: its top-level "all" conditions fill the fields they fix (PLAN2 §11.2). */
+  async function saveCapturedInView(drafts: CaptureDraftDto[], operation: string): Promise<string | null> {
+    const defaults = openedView ? await viewApi.contextDefaults({ viewId: openedView.id }).catch(() => null) : null;
+    const filled = defaults?.ok ? drafts.map(draft => ({
+      ...draft,
+      containerId: draft.containerId ?? defaults.containerId,
+      category: draft.category ?? defaults.category,
+      priority: draft.priority === "Normal" && defaults.priority ? defaults.priority : draft.priority,
+      plannedDate: draft.plannedDate ?? defaults.plannedDate,
+      dueDate: draft.dueDate ?? defaults.dueDate,
+      tagIds: [...new Set([...draft.tagIds, ...defaults.tagIds])],
+    })) : drafts;
+    const result = await captureApi.create({ operationId: operation, drafts: filled.map(withCategory) });
+    if (!result.ok) return result.error?.fields.map(field => field.message).join("; ") || result.error?.message || "The tasks could not be saved.";
+    if (defaults?.ok && defaults.status && defaults.status !== "NotStarted") {
+      for (const created of result.tasks) {
+        const moved = await taskRpc.setStatus({ operationId: operationId(), taskId: created.id, expectedVersion: created.version, status: defaults.status, subtaskChoice: null });
+        if (!moved.ok) return moved.error?.message ?? "The task was added, but its status could not be set.";
+      }
+    }
+    setNotice(result.tasks.length === 1 ? null : `Added ${result.tasks.length} tasks.`);
+    await refresh();
+    changed();
+    return null;
+  }
+
   const builtIn = builtInViews.find(item => item.view === query.view);
   const queryHeader = query.view === "Search"
-    ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries, pages and pad notes. Completed tasks and archived lists need a filter."/>
+    ? <><PageHeader eyebrow="Search" title={`“${query.text ?? ""}”`} subtitle="Matches words in titles, notes, subtasks, diary entries, pages and pad notes. Completed tasks and archived lists need a filter."
+        actions={<Button type="button" variant="outline" onClick={() => void saveAsView()}>Save as view</Button>}/>
       {pageMatches.length > 0 && <PageList label="Matching pages" pages={pageMatches} onOpen={page => openPages(page.dailyDate ? { kind: "daily", date: page.dailyDate } : { kind: "page", pageId: page.id })}/>}
       {padMatches.length > 0 && <section aria-label="Matching pad notes" className="grid gap-1.5">
         <h3 className="flex items-center border-b px-1 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">Pad notes<Count>{padMatches.length}</Count></h3>
@@ -631,7 +735,17 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           onChanged={async () => { await refreshMeta(); setRevision(current => current + 1); }}
           onDeleted={async () => { await refreshMeta(); openQuery({ view: "Today" }); }}/></div>}
         {tagPages.length > 0 && <PageList label="Pages with this tag" pages={tagPages} onOpen={page => openPages(page.dailyDate ? { kind: "daily", date: page.dailyDate } : { kind: "page", pageId: page.id })}/>}</>
-      : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
+      : query.view === "Custom"
+        ? <><PageHeader eyebrow="View" title={openedView?.name ?? "View"} subtitle={openedView ? "Your own view. Counts and rows come from the same conditions." : "This view is no longer available."}
+            actions={openedView && <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={() => editView({ view: openedView })}>Edit</Button>
+              <Button type="button" variant="outline" disabled={busy} onClick={() => void viewAction(() => viewApi.duplicate({ operationId: operationId(), viewId: openedView.id }), "Could not duplicate the view.")}>Duplicate</Button>
+              <Button type="button" variant="outline" disabled={busy} onClick={() => void viewAction(async () => { const result = await viewApi.export({ viewId: openedView.id, category: focus }); if (result.ok) setExported(result.fileName); return result; }, "Could not export the view.")}>Export as spreadsheet</Button>
+              <Button type="button" variant="outline" disabled={busy} onClick={() => void viewAction(async () => { const result = await viewApi.delete({ operationId: operationId(), viewId: openedView.id, expectedVersion: openedView.version }); if (result.ok && result.view) setDeletedView(result.view); return result; }, "Could not delete the view.", () => openQuery({ view: "Today" }))}>Delete</Button>
+            </div>}/>
+          {exported && <Banner tone="warning" onDismiss={() => setExported(null)}>Saved “{exported}” to your exports folder. <button type="button" className="underline" onClick={() => void shellOpenExports()}>Show in folder</button></Banner>}
+          {openedView && <QuickAdd api={captureApi} containers={containers} defaultContainerId="" label={`Add a task to ${openedView.name}`} allowBatch={false} onSubmit={saveCapturedInView}/>}</>
+        : <PageHeader eyebrow="View" title={builtIn?.title ?? query.view} subtitle={builtIn?.hint ?? ""}/>;
 
   function viewTask(task: TaskResponse | string) {
     if (typeof task !== "string") { setViewingTask(true); setEditing(task); return; }
@@ -645,7 +759,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
-      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt="" className="size-5"/>Chaos</h1>
+      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
@@ -659,11 +773,16 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           <Sun/>My Day{(viewCounts.get("MyDay") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>}
         </Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "myweek" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("myweek"); }}><CalendarDays/>My Week</Button>
+        <Button type="button" variant="ghost" className={navItem} aria-current={view === "calendar" ? "page" : undefined} onClick={() => { setEditing(null); setShowTagSettings(false); setView("calendar"); }}><CalendarRange/>Calendar</Button>
         <Button type="button" variant="ghost" className={navItem} aria-current={view === "tasks" && !containerId ? "page" : undefined} onClick={() => openContainer("")}><Inbox/>Inbox{(containerCounts.get(containers.find(c => c.kind === "Inbox")?.id ?? "") ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{containerCounts.get(containers.find(c => c.kind === "Inbox")!.id)}</span>}</Button>
         <SidebarSection id="views" title="Views">
           {builtInViews.map(item => <Button key={item.view} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === item.view ? "page" : undefined} onClick={() => openQuery({ view: item.view })}>
             {viewIcons[item.view]}{item.title}{(viewCounts.get(item.view) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>}
           </Button>)}
+          {savedViews.filter(item => item.pinned).map(item => <Button key={item.id} type="button" variant="ghost" className={navItem} aria-current={view === "query" && query.view === "Custom" && query.viewId === item.id ? "page" : undefined} onClick={() => openSavedView(item)}>
+            <ViewIcon name={item.icon} color={item.color}/><span className="truncate">{item.name}</span>{(savedViewCounts.get(item.id) ?? 0) > 0 && <span className="ml-auto text-xs text-muted-foreground tabular-nums">{savedViewCounts.get(item.id)}</span>}
+          </Button>)}
+          <Button type="button" variant="ghost" className={navItem} onClick={() => editView({ view: null })}><Plus/>New view</Button>
         </SidebarSection>
         <SidebarSection id="notes" title="Notes">
           <Button type="button" variant="ghost" className={navItem} aria-current={view === "pad" ? "page" : undefined} title="Personal pad (Ctrl+Shift+P for a new note)" onClick={() => { setShowTagSettings(false); setView("pad"); }}><StickyNote/>Personal pad</Button>
@@ -721,10 +840,11 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : view === "calendar" ? "max-w-7xl px-[clamp(1rem,3vw,2rem)] pt-6 pb-10" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 has-[[data-board-wide]]:max-w-none", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      {deletedView && <Banner tone="warning" onDismiss={() => setDeletedView(null)}>Deleted the view “{deletedView.name}”. <button type="button" className="underline" onClick={() => void viewAction(() => viewApi.restore({ operationId: operationId(), viewId: deletedView.id, expectedVersion: deletedView.version }), "Could not restore the view.", () => setDeletedView(null))}>Undo</button></Banner>}
       <SummaryPrompts api={summaryApi} onOpen={id => { setSummaryOpenId(id); setShowTagSettings(false); setView("summaries"); }}/>
 
       {view === "pad" ? <ScratchPad api={padApi} tagApi={tagApi} captureApi={captureApi} registry={drafts} containers={containers} tags={tags} revision={revision} focus={padFocus}
@@ -735,22 +855,26 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
           onOpenTask={taskId => void openLinkedTask(taskId)} onOpenSummary={id => { setSummaryOpenId(id); setView("summaries"); }} onCreateTag={async path => { const created = await createTag(path); if (created) changed(); return created; }} onError={setError}/>
       : view === "myweek" ? <MyWeek clock={dayClock} revision={revision} busy={busy} containers={containers} api={myWeekApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed} focus={focus}
           dailyPages={dailyPageDates} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
+      : view === "calendar" ? <Calendar tags={tags} containers={containers.filter(c => !c.archived)} focus={focus} busy={busy} revision={revision} today={dayClock?.today} onOpen={task => { setViewingTask(false); setEditing(task); }} onChanged={changed}/>
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
-      : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
+      : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onCalendarsChanged={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else if (next === "pages") openPages(null); else setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
-      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory}/>
+      : view === "viewedit" && viewDraft ? <ViewEditor key={viewDraft.view?.id ?? "new"} view={viewDraft.view} initialDefinitionJson={viewDraft.definitionJson} initialName={viewDraft.name} icons={viewIconNames} tags={tags} containers={containers.filter(c => !c.archived)} focus={focus} api={viewApi}
+          onSaved={saved => { setViewDraft(null); void refreshMeta().catch((e: unknown) => setError(String(e))); openSavedView(saved); }}
+          onCancel={() => { const back = viewDraft.view; setViewDraft(null); if (back) openSavedView(back); else openQuery({ view: "Today" }); }}/>
+      : view === "query" ? <QueryView query={query} tags={tags} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={queryApi} recurrenceApi={recurrenceApi} viewApi={viewApi} tagApi={tagApi} onChanged={changed} onTaskUpdated={() => changed()} onOpen={task => { setViewingTask(false); setEditing(task); }} header={queryHeader} focus={focus} onSetCategory={setTaskCategory} containers={containers.filter(c => !c.archived)}/>
       : view === "templates" ? (templates ?? <Templates timeZones={timeZones} containerId={containerId} containerName={listName} onCreated={refresh}/>) : <>
         <ListPage tasks={tasks} deleted={deleted} sections={sections} setSections={setSections} containers={containers} containerId={containerId} selected={selected}
-          busy={busy} setBusy={setBusy} setError={setError} run={run} runContainer={runContainer} refresh={refresh} refreshContainers={refreshContainers}
+          busy={busy} setBusy={setBusy} setError={setError} run={run} runContainer={runContainer} refresh={refresh} changed={changed} refreshContainers={refreshContainers}
           onDeleted={async () => { if (selectedContainer.current === containerId) selectContainer(""); await refreshContainers(); }}
           isStillSelected={id => selectedContainer.current === id}
           editingId={editing?.id ?? null} setEditing={setEditing} onOpen={(task, viewing) => { setViewingTask(viewing); setEditing(task); }}
           onDelete={task => void requestTaskDeletion(task)} onSetStatus={setTaskStatus} onSetCategory={setTaskCategory}
           revision={revision} subtaskRevision={subtaskRevision} focus={focus} setFocus={setFocus}
-          showSettings={showSettings} setShowSettings={setShowSettings} captureApi={captureApi} onCapture={saveCaptured} quickAddInput={quickAddInput} containerApi={containerRpc} taskApi={taskRpc}/>
+          showSettings={showSettings} setShowSettings={setShowSettings} captureApi={captureApi} onCapture={saveCaptured} quickAddInput={quickAddInput} containerApi={containerRpc} taskApi={taskRpc} tags={tags}/>
       </>}
     </div>
     </div>
@@ -765,6 +889,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
 
     {recurrenceConflict && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-conflict-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-conflict-title" className="font-semibold">Review the later occurrence</h2><p className="text-sm">{recurrenceConflict.message}</p><p className="text-sm">The completion and the later work are unchanged. Open the later task to review its edits and diary before deciding how to reconcile them.</p><div className="flex gap-2"><Button type="button" onClick={() => { const id = recurrenceConflict.taskId; setRecurrenceConflict(null); void taskRpc.get({ taskId: id }).then(result => { if (result.ok && result.task) setEditing(result.task); else setError(result.error?.message ?? "Could not open the task."); }).catch((error: unknown) => setError(String(error))); }}>Open later task</Button><Button type="button" variant="outline" onClick={() => setRecurrenceConflict(null)}>Keep current state</Button></div></div></div>}
     {recurrenceDelete && <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4"><div role="dialog" aria-modal="true" aria-labelledby="recurrence-delete-title" className="grid max-w-md gap-3 rounded-xl border bg-card p-5 shadow-lg"><h2 id="recurrence-delete-title" className="font-semibold">Delete repeating task?</h2><p className="text-sm">Skip this occurrence and continue the series, or end the series and delete this task. Earlier history stays available.</p><div className="flex flex-wrap gap-2"><Button type="button" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.skip({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>Skip this occurrence</Button><Button type="button" variant="outline" disabled={busy} onClick={() => { const task = recurrenceDelete; setRecurrenceDelete(null); void run(() => recurrenceApi.endAndDelete({ operationId: operationId(), taskId: task.id, expectedVersion: task.version }), () => { if (editing?.id === task.id) setEditing(null); }); }}>End and delete</Button><Button type="button" variant="ghost" onClick={() => setRecurrenceDelete(null)}>Cancel</Button></div></div></div>}
+    <ViewAlertStack api={viewApi} onOpen={viewId => { const target = savedViews.find(item => item.id === viewId); if (target) openSavedView(target); else openQuery({ view: "Custom", viewId }); }}/>
     <AlertStack api={reminderApi} onOpen={id => void openTaskById(id)} onChanged={changed}/>
     {paletteOpen && <CommandPalette commands={paletteCommands()} searchTasks={paletteSearch} onOpenTask={taskId => void openTaskById(taskId)} onClose={() => setPaletteOpen(false)}/>}
     {lastUndo && <div role="status" aria-label="Undo" className="fixed bottom-4 left-1/2 z-30 flex max-w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border bg-popover py-1.5 pr-1.5 pl-4 text-sm shadow-lg">

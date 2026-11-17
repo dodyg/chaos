@@ -162,6 +162,20 @@
   }
 }
 
+/* Sidebar logo sync animations: GitHub = an orbiting spark, Google Calendar = a page-flip, both = a pulsing wobble with a halo. */
+@layer components {
+  .sync-logo { position: relative; display: inline-flex; width: 1.25rem; height: 1.25rem; flex: none; }
+  .sync-logo > img { width: 100%; height: 100%; }
+  .sync-logo[data-sync="calendar"] > img { animation: sync-flip 1.4s ease-in-out infinite; }
+  .sync-logo[data-sync="github"]::after { content: ""; position: absolute; inset: -4px; border-radius: 9999px; border: 2px solid transparent; border-top-color: var(--primary); border-right-color: color-mix(in oklch, var(--primary) 35%, transparent); animation: sync-orbit 0.9s linear infinite; }
+  .sync-logo[data-sync="both"] > img { animation: sync-wobble 1.1s ease-in-out infinite; }
+  .sync-logo[data-sync="both"]::after { content: ""; position: absolute; inset: -3px; border-radius: 0.4rem; border: 2px solid var(--primary); animation: sync-halo 1.1s ease-out infinite; }
+  @keyframes sync-orbit { to { transform: rotate(360deg); } }
+  @keyframes sync-flip { 0%, 100% { transform: perspective(60px) rotateY(0); } 50% { transform: perspective(60px) rotateY(180deg); } }
+  @keyframes sync-wobble { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(-12deg) scale(1.12); } 75% { transform: rotate(12deg) scale(1.12); } }
+  @keyframes sync-halo { from { opacity: 0.9; transform: scale(0.9); } to { opacity: 0; transform: scale(1.6); } }
+}
+
 /* Locally bundled syntax highlighting for fenced code in Markdown (lowlight emits hljs-* classes). */
 @layer components {
   [data-slot="markdown"] .hljs-keyword, [data-slot="markdown"] .hljs-built_in, [data-slot="markdown"] .hljs-selector-tag { color: oklch(0.5 0.18 300); }
@@ -174,3 +188,39 @@
   .dark [data-slot="markdown"] :is(.hljs-number, .hljs-literal, .hljs-type) { color: oklch(0.8 0.12 60); }
   .dark [data-slot="markdown"] :is(.hljs-title, .hljs-function, .hljs-section) { color: oklch(0.8 0.11 250); }
 }
+
+/* ---- Calendar (P4): FullCalendar styled through the theme tokens, light and dark ------------------ */
+.chaos-calendar {
+  --fc-border-color: var(--border);
+  --fc-page-bg-color: var(--background);
+  --fc-neutral-bg-color: var(--muted);
+  --fc-neutral-text-color: var(--muted-foreground);
+  --fc-list-event-hover-bg-color: var(--accent);
+  --fc-today-bg-color: var(--brand-soft);
+  --fc-now-indicator-color: var(--destructive);
+  --fc-event-bg-color: var(--primary);
+  --fc-event-border-color: var(--primary);
+  --fc-event-text-color: var(--primary-foreground);
+  --fc-highlight-color: color-mix(in oklch, var(--primary) 18%, transparent);
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+.chaos-calendar .fc-theme-standard td, .chaos-calendar .fc-theme-standard th, .chaos-calendar .fc-theme-standard .fc-scrollgrid { border-color: var(--border); }
+.chaos-calendar .fc-col-header-cell-cushion, .chaos-calendar .fc-daygrid-day-number, .chaos-calendar .fc-list-day-text, .chaos-calendar .fc-list-day-side-text, .chaos-calendar .fc-timegrid-slot-label-cushion { color: var(--foreground); text-decoration: none; }
+.chaos-calendar .fc-list-event-title a { color: inherit; text-decoration: none; }
+.chaos-calendar .chaos-event { cursor: pointer; border-style: solid; }
+.chaos-calendar .chaos-event-block { border-style: dashed; border-width: 2px; border-color: var(--primary-foreground); }
+.chaos-calendar .chaos-event-due { background: var(--background); color: var(--destructive); border-color: var(--destructive); border-left-width: 4px; }
+.chaos-calendar .chaos-event-repeat { background: var(--secondary); color: var(--secondary-foreground); border-color: var(--border); border-style: dotted; cursor: pointer; }
+.chaos-calendar .chaos-event-work:not(.chaos-event-due):not(.chaos-event-repeat) { background: color-mix(in oklch, var(--primary) 70%, var(--foreground)); }
+.chaos-calendar .chaos-event-done { opacity: 0.55; text-decoration: line-through; }
+.chaos-calendar .chaos-cursor { outline: 2px solid var(--ring); outline-offset: -2px; }
+.chaos-calendar .fc-event:focus-visible { outline: 3px solid var(--ring); outline-offset: 1px; }
+.chaos-calendar .chaos-event-meeting { border-left-width: 4px; cursor: pointer; }
+.chaos-calendar .chaos-event-meeting.chaos-event-free { opacity: 0.7; }
+/* Agenda rows have no coloured block, only a dot: the row keeps the theme's own text colour and background in every theme.
+   A due task still reads in the destructive colour. */
+.chaos-calendar .fc-list-event.chaos-event:not(.chaos-event-due) { background: transparent !important; color: var(--foreground) !important; border-style: none; }
+.chaos-calendar .fc-list-event.chaos-event.chaos-event-due { background: transparent !important; border-style: none; }
+.chaos-calendar .fc-list-event.chaos-event .fc-list-event-time, .chaos-calendar .fc-list-event.chaos-event .fc-list-event-title { color: inherit; }
+.chaos-calendar .fc-list-event.chaos-event-meeting.chaos-event-free { opacity: 0.8; }

@@ -1,5 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
+import { useActivity } from "./activity";
 import { reminderRpc, waitingRpc, type FollowUpDto, type FollowUpItemResponse, type NotificationItemResponse, type ReminderRuleDto, type ReminderRuleResponse, type ReminderSettingsResponse, type TaskResponse, type WaitingResponse } from "#neoastra";
 import { Bell, BellOff, Check, Clock, ExternalLink, MessageSquareText, Plus, Trash2, UserRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -321,8 +322,8 @@ export function FollowUps({ day, revision, busy, api = waitingRpc, onOpen, onCha
  * its own operation ID and the notification's generation, so a repeated click or an alert
  * from a replaced schedule is never applied twice.
  */
-export function AlertStack({ api = reminderRpc, intervalMs = 15_000, onOpen, onChanged }: {
-  api?: typeof reminderRpc; intervalMs?: number; onOpen: (taskId: string) => void; onChanged: () => void;
+export function AlertStack({ api = reminderRpc, onOpen, onChanged }: {
+  api?: typeof reminderRpc; onOpen: (taskId: string) => void; onChanged: () => void;
 }) {
   const [alerts, setAlerts] = React.useState<NotificationItemResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
@@ -338,12 +339,13 @@ export function AlertStack({ api = reminderRpc, intervalMs = 15_000, onOpen, onC
 
   React.useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), intervalMs);
     function wake() { if (document.visibilityState === "visible") void load(); }
     window.addEventListener("focus", wake);
     document.addEventListener("visibilitychange", wake);
-    return () => { clearInterval(timer); window.removeEventListener("focus", wake); document.removeEventListener("visibilitychange", wake); };
-  }, [load, intervalMs]);
+    return () => { window.removeEventListener("focus", wake); document.removeEventListener("visibilitychange", wake); };
+  }, [load]);
+  // The reminder engine's deliveries arrive as notification_job activity; nothing polls.
+  useActivity(["notification_job"], () => void load());
 
   async function act(item: NotificationItemResponse, action: string, snooze: string | null = null, openSubtaskChoice: string | null = null) {
     if (working) return;

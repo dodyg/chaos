@@ -6,6 +6,7 @@ using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
+using Chaos.Sync;
 
 namespace Chaos.Application.Planning;
 
@@ -32,7 +33,8 @@ public sealed record WeekGoalProgress(
     string Id, string Title, string? ProjectId, string? ProjectName, IReadOnlyList<string> TaskIds,
     WeekGoalOutcome Outcome, int DoneCount, int CountedCount, long Version);
 
-public sealed record WeekDayLoad(DateOnly Date, DayAvailability Availability, bool IsOverride, DayLoad Load);
+/// <summary>One day of a week board. <see cref="Availability"/> is what the person set; <see cref="BusyMinutes"/> is busy meeting time, and <see cref="Load"/> is measured against what is left after it.</summary>
+public sealed record WeekDayLoad(DateOnly Date, DayAvailability Availability, bool IsOverride, DayLoad Load, int BusyMinutes = 0);
 
 /// <summary>One week's goals, placements and per-day capacity (confirmed rows or the draft).</summary>
 public sealed record WeekBoard(IReadOnlyList<WeekGoalProgress> Goals, IReadOnlyList<WeekPlacement> Placements, IReadOnlyList<WeekDayLoad> Days, DayLoad Pool);
@@ -237,6 +239,13 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
                 }
             }
 
+            // Confirming makes each day assignment the task's planned date, so the calendar agrees with the plan.
+            // One change per task, recorded in the task's history under this operation (so it can be undone).
+            foreach (var placement in placements.Where(item => item.Day is not null))
+            {
+                await ReplanTaskAsync(session, placement.TaskId, placement.Day!.Value, command.OperationId, now, token);
+            }
+
             var existingGoals = (await session.Weeks.ListGoalsAsync(plan.Id, token)).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             var goals = draft.Goals.Select((goal, index) => existingGoals.TryGetValue(goal.Id, out var before)
                 ? before with { Title = goal.Title, ProjectId = goal.ProjectId, TaskIds = goal.TaskIds, Position = index * RankOrdering.Gap, Version = before.Version + 1, UpdatedAtUtc = now }
@@ -271,7 +280,8 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
 
                 return new WeekAssignmentRecord
                 {
-                    Id = StorageFormats.Id(ids.NewId()),
+                    // §7.5: weekassign:{weekPlanId}:{taskId}; re-confirming a task keeps its row id.
+                    Id = StorageFormats.NameBasedId(NameBasedId.Names.WeekAssignment(plan.Id, item.TaskId)),
                     WeekPlanId = plan.Id,
                     TaskId = item.TaskId,
                     LocalDate = item.Day,
@@ -375,7 +385,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
             var changed = 0;
             foreach (var taskId in difference.AddTaskIds.Where(command.AddTaskIds.Contains))
             {
-                changed += await DayPlanning.PlaceAsync(session, ids, day, taskId, DayPlanItemOrigin.Week, now, token) ? 1 : 0;
+                changed += await DayPlanning.PlaceAsync(session, day, taskId, DayPlanItemOrigin.Week, now, token) ? 1 : 0;
             }
 
             foreach (var taskId in difference.RemoveTaskIds.Where(command.RemoveTaskIds.Contains))
@@ -725,7 +735,8 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
 
         await session.Weeks.TryAddAsync(new WeekPlanRecord
         {
-            Id = StorageFormats.Id(ids.NewId()),
+            // §7.5: the id is the week's natural key, so two devices planning the same week make one row.
+            Id = StorageFormats.NameBasedId(NameBasedId.Names.WeekPlan(profileId, weekStart)),
             ProfileId = profileId,
             WeekStartDate = weekStart,
             State = WeekPlanState.Draft,
@@ -964,7 +975,7 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
     private async Task ReplanTaskAsync(IDataSession session, string taskId, DateOnly plannedDate, string operationId, DateTimeOffset now, CancellationToken token)
     {
         var task = await session.Tasks.GetAsync(taskId, token);
-        if (task is null || task.PlannedDate == plannedDate)
+        if (task is null || task.IsTerminal || task.PlannedDate == plannedDate)
         {
             return;
         }
@@ -1170,10 +1181,15 @@ public sealed class MyWeekCommands(IApplicationStore store, IIdGenerator ids, Ti
         IEnumerable<CapacityItem> On(DateOnly? day) =>
             placements.Where(item => item.Day == day && items.ContainsKey(item.TaskId)).Select(item => items[item.TaskId]);
 
-        var days = WeekCalendar.Dates(start).Select(date =>
+        var profile = await session.Profiles.GetPrimaryAsync(token);
+        var zone = profile is null ? TimeZoneInfo.Utc : Chaos.Application.Reminders.ReminderSync.ProfileZone(profile);
+        var weekDates = WeekCalendar.Dates(start).ToList();
+        var meetings = await MeetingPlanning.LoadAsync(session, zone, weekDates[0], weekDates[^1], token);
+        var days = weekDates.Select(date =>
         {
             var availability = AvailabilityOn(date, rules, overrides, out var isOverride);
-            return new WeekDayLoad(date, availability, isOverride, Capacity.Measure(availability, On(date)));
+            var busy = meetings.BusyMinutes(date);
+            return new WeekDayLoad(date, availability, isOverride, Capacity.Measure(availability.AfterMeetings(busy), On(date)), busy);
         }).ToList();
         var pool = Capacity.Measure(new DayAvailability(int.MaxValue, null), On(null));
 

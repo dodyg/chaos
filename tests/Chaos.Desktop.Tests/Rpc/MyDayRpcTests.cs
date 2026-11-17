@@ -23,7 +23,7 @@ public sealed class MyDayRpcTests
             var ids = new SequentialIdGenerator();
             var tasks = new TaskCommands(storage.Store, ids, clock);
             var task = (await tasks.CaptureAsync(new(Guid.NewGuid().ToString(), "", "Read the contract", null))).Task;
-            var rpc = new MyDayRpcService(new MyDayCommands(storage.Store, ids, clock));
+            var rpc = new MyDayRpcService(new MyDayCommands(storage.Store, clock));
             var clockResult = await rpc.ClockAsync(new(), CancellationToken.None);
             today = clockResult.Clock!.Today;
 
@@ -44,7 +44,7 @@ public sealed class MyDayRpcTests
         await Assert.That(rows.Rows.Single().Task.Title).IsEqualTo("Read the contract");
         var counts = await queries.CountsAsync(new(), CancellationToken.None);
         await Assert.That(counts.Views.Single(view => view.View == "MyDay").Count).IsEqualTo(1);
-        var opened = await new MyDayRpcService(new MyDayCommands(reopened.Store, new SequentialIdGenerator(), clock)).OpenAsync(new(today), CancellationToken.None);
+        var opened = await new MyDayRpcService(new MyDayCommands(reopened.Store, clock)).OpenAsync(new(today), CancellationToken.None);
         await Assert.That(opened.Day!.OpenCount).IsEqualTo(1);
     }
 }

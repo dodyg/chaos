@@ -106,6 +106,10 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
     private async Task<RestoreOutcome> ReplaceWithStagedAsync(string stagedPath, string description, string restoredFrom, CancellationToken ct)
     {
         RestoreOutcome? outcome = null;
+        // The current device's DeviceSettings survive a restore (PLAN2 §7.1): they are read
+        // while the live database is still open and written into the file that replaces it.
+        var deviceSettings = await store.QueryAsync(async (session, token) =>
+            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection, token), ct);
         try
         {
             await Quiesce(async () =>
@@ -117,7 +121,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
                     DatabaseReplacement.Swap(options, stagedPath, description, clock.GetUtcNow());
                     try
                     {
-                        var (version, counts) = await OpenAndPrepareAsync(options, clock.GetUtcNow(), token);
+                        var (version, counts) = await OpenAndPrepareAsync(options, clock.GetUtcNow(), token, deviceSettings);
                         SqliteConnection.ClearAllPools();
                         DatabaseReplacement.Complete(options);
                         return new RestoreOutcome(restoredFrom, safety.FileName, version, counts);
@@ -188,9 +192,13 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
     /// <summary>
     /// Opens the database file now in place: WAL on, migrations to this build's version, the
     /// search index rebuilt when stale, integrity checked, and notification schedules from
-    /// another time or machine cleared so they are scheduled again. Throws when it is unusable.
+    /// another time or machine cleared so they are scheduled again. When
+    /// <paramref name="deviceSettings"/> is given, they replace whatever DeviceSettings the
+    /// restored file carries, so a restore keeps this device's identity and never imports
+    /// another device's (PLAN2 §7.1). Throws when the file is unusable.
     /// </summary>
-    public static async Task<(long SchemaVersion, DataCounts Counts)> OpenAndPrepareAsync(StorageOptions options, DateTimeOffset now, CancellationToken ct)
+    public static async Task<(long SchemaVersion, DataCounts Counts)> OpenAndPrepareAsync(StorageOptions options, DateTimeOffset now, CancellationToken ct,
+        IReadOnlyList<(string Key, string Value)>? deviceSettings = null)
     {
         var source = new SqliteConnectionSource(options.DatabasePath);
         await using var connection = source.Open();
@@ -202,6 +210,9 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, ct);
         await SearchIndexWriter.EnsureCurrentAsync(connection, now, ct);
+        // A restored or rebuilt file may lack the change-capture triggers (an archive builds
+        // one without them) or carry a stale catalog hash: reinstall when it differs (PLAN2 §7.3).
+        Sync.SyncTriggerInstaller.Install(connection);
 
         using (var check = connection.CreateCommand())
         {
@@ -231,7 +242,40 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
                 """;
             await github.ExecuteNonQueryAsync(ct);
         }
+
+        if (deviceSettings is not null)
+        {
+            using (var clear = connection.CreateCommand())
+            {
+                clear.CommandText = "DELETE FROM DeviceSettings;";
+                clear.ExecuteNonQuery();
+            }
+
+            foreach (var (key, value) in deviceSettings)
+            {
+                using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO DeviceSettings (Key, Value) VALUES ($key, $value);";
+                insert.Parameters.AddWithValue("$key", key);
+                insert.Parameters.AddWithValue("$value", value);
+                insert.ExecuteNonQuery();
+            }
+        }
+
         return (version, BackupManager.ReadCounts(connection));
+    }
+
+    private static async Task<IReadOnlyList<(string Key, string Value)>> ReadDeviceSettingsAsync(SqliteConnection connection, CancellationToken ct)
+    {
+        var rows = new List<(string Key, string Value)>();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Key, Value FROM DeviceSettings;";
+        using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return rows;
     }
 
     /// <summary>OS notification IDs the current database has scheduled, so they can be taken back before a replace or reset.</summary>

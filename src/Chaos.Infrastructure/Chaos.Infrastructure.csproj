@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Ical.Net" />
   </ItemGroup>
 
   <ItemGroup>
@@ -16,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Chaos.Application\Chaos.Application.csproj" />
     <ProjectReference Include="..\Chaos.Domain\Chaos.Domain.csproj" />
+    <ProjectReference Include="..\Chaos.Sync\Chaos.Sync.csproj" />
   </ItemGroup>
 
 </Project>

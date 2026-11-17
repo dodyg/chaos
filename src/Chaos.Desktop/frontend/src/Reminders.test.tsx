@@ -68,7 +68,7 @@ test("an alert's Done asks about open subtasks, then completes with the choice a
   } as unknown as typeof reminderRpc;
   const user = userEvent.setup({ document: dom.window.document });
   let changed = 0;
-  render(<AlertStack api={api} intervalMs={60_000} onOpen={() => undefined} onChanged={() => changed++}/>);
+  render(<AlertStack api={api} onOpen={() => undefined} onChanged={() => changed++}/>);
 
   await user.click(await screen.findByRole("button", { name: /Done/ }));
   await user.click(await screen.findByRole("button", { name: "Keep them open" }));
@@ -89,7 +89,7 @@ test("snoozing and opening from an alert, and a missed alert says so", async () 
   } as unknown as typeof reminderRpc;
   const user = userEvent.setup({ document: dom.window.document });
   const opened: string[] = [];
-  render(<AlertStack api={api} intervalMs={60_000} onOpen={id => opened.push(id)} onChanged={() => undefined}/>);
+  render(<AlertStack api={api} onOpen={id => opened.push(id)} onChanged={() => undefined}/>);
 
   assert.ok(await screen.findByText("Missed while Chaos was closed or asleep."));
   assert.ok(screen.getByText("Omar"));

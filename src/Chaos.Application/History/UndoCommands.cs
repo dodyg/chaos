@@ -86,7 +86,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
 
                     foreach (var link in changes.Links.Reverse())
                     {
-                        await RevertLinkAsync(session, link, entry.Label, inner);
+                        await RevertLinkAsync(session, link, entry.Label, now, inner);
                     }
 
                     var rewritten = new Dictionary<(ChangeKind Kind, string Id, long Version), long>();
@@ -140,17 +140,17 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         _ => (null, null),
     };
 
-    private static async Task RevertLinkAsync(IDataSession session, LinkChange link, string label, CancellationToken ct)
+    private static async Task RevertLinkAsync(IDataSession session, LinkChange link, string label, DateTimeOffset now, CancellationToken ct)
     {
         // Undo applies the opposite set operation; if it changes nothing, someone already
         // changed that link after the operation, so the inverse would not be exact.
         var applied = (link.Kind, link.PresentAfter) switch
         {
-            (LinkKind.TaskTag, true) => await session.Tags.RemoveTaskLinkAsync(link.TargetId, link.TagId, ct),
+            (LinkKind.TaskTag, true) => await session.Tags.RemoveTaskLinkAsync(link.TargetId, link.TagId, now, ct),
             (LinkKind.TaskTag, false) => await session.Tags.AddTaskLinkAsync(link.TargetId, link.TagId, ct),
-            (LinkKind.SubtaskTag, true) => await session.Tags.RemoveSubtaskLinkAsync(link.TargetId, link.TagId, ct),
+            (LinkKind.SubtaskTag, true) => await session.Tags.RemoveSubtaskLinkAsync(link.TargetId, link.TagId, now, ct),
             (LinkKind.SubtaskTag, false) => await session.Tags.AddSubtaskLinkAsync(link.TargetId, link.TagId, ct),
-            (LinkKind.PadTag, true) => await session.Tags.RemovePadLinkAsync(link.TargetId, link.TagId, ct),
+            (LinkKind.PadTag, true) => await session.Tags.RemovePadLinkAsync(link.TargetId, link.TagId, now, ct),
             _ => await session.Tags.AddPadLinkAsync(link.TargetId, link.TagId, ct),
         };
         if (!applied)

@@ -6,8 +6,12 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.Sqlite;
 
 /// <summary>SQLite implementations of the typed stores bound to one session connection (PLAN §4).</summary>
-public sealed class SqliteDataSession(SqliteConnection connection) : IDataSession
+public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrastructure.Activity.ActivityNotes notes) : IDataSession
 {
+    public SqliteDataSession(SqliteConnection connection) : this(connection, new Chaos.Infrastructure.Activity.ActivityNotes())
+    {
+    }
+
     /// <summary>The open connection (inside the caller's transaction for writes), for storage-level work such as purge.</summary>
     public SqliteConnection Connection => connection;
 
@@ -29,7 +33,7 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IRecurrenceStore Recurrence { get; } = new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules { get; } = new SqliteReminderRuleStore(connection);
     public IWaitingStore Waiting { get; } = new SqliteWaitingStore(connection);
-    public INotificationJobStore Notifications { get; } = new SqliteNotificationJobStore(connection);
+    public INotificationJobStore Notifications { get; } = new SqliteNotificationJobStore(connection, notes);
     public IDayPlanStore DayPlans { get; } = new SqliteDayPlanStore(connection);
     public IWeekPlanStore Weeks { get; } = new SqliteWeekPlanStore(connection);
     public ISummaryStore Summaries { get; } = new SqliteSummaryStore(connection);
@@ -37,6 +41,14 @@ public sealed class SqliteDataSession(SqliteConnection connection) : IDataSessio
     public IBackupCatalogStore Backups { get; } = new SqliteBackupCatalogStore(connection);
     public IImportStore Imports { get; } = new SqliteImportStore(connection);
     public IGitHubStore GitHub { get; } = new SqliteGitHubStore(connection);
+    public IBoardStore Boards { get; } = new SqliteBoardStore(connection);
+    public ISavedViewStore SavedViews { get; } = new SqliteSavedViewStore(connection, notes);
+    public ICalendarStore Calendars { get; } = new SqliteCalendarStore(connection, notes);
+
+    /// <summary>Device-only writers note their changes here; the store reads the notes inside the same transaction.</summary>
+    public Chaos.Application.Activity.IActivityRecorder Activity => notes;
+
+    internal Chaos.Infrastructure.Activity.ActivityNotes Notes => notes;
 }
 
 public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileStore
@@ -133,7 +145,7 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            UPDATE Profiles SET MorningTime = $morningTime, SummaryTime = $summaryTime, WeeklySummaryDay = $weeklyDay,
+            UPDATE Profiles SET MorningTime = $morningTime, SummaryTime = $summaryTime, WeeklySummaryDay = $weeklyDay, IncludeMeetingsInSummaries = $meetings,
                 Version = $version, UpdatedAtUtc = $updated
             WHERE Id = $id AND Version = $expected AND DeletedAtUtc IS NULL;
             """;
@@ -142,6 +154,7 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         command.Parameters.AddWithValue("$summaryTime", Optional(profile.SummaryTime));
         command.Parameters.AddWithValue("$weeklyDay", profile.WeeklySummaryDay is { } weeklyDay ? (long)weeklyDay : DBNull.Value);
         command.Parameters.AddWithValue("$version", profile.Version);
+        command.Parameters.AddWithValue("$meetings", profile.IncludeMeetingsInSummaries ? 1L : 0L);
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
         command.Parameters.AddWithValue("$expected", expectedVersion);
         return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
@@ -181,6 +194,7 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         SummaryTime = r.Tn("SummaryTime"),
         MorningTime = r.Tn("MorningTime"),
         WeeklySummaryDay = r.Ln("WeeklySummaryDay") is { } weeklyDay ? (DayOfWeek)(int)weeklyDay : null,
+        IncludeMeetingsInSummaries = r.B("IncludeMeetingsInSummaries"),
         DefaultReminderTime = StorageFormats.ParseTime(r.S("DefaultReminderTime"))!.Value,
         QuietHoursEnabled = r.B("QuietHoursEnabled"),
         QuietStart = r.Tn("QuietStart"),

@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
@@ -47,6 +48,7 @@ public sealed class QueryRpcService(TaskQueries queries)
     [NeoRpcMethod("run")]
     public async ValueTask<TaskQueryResponse> RunAsync(TaskQueryRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("queries.run");
         try
         {
             var page = await queries.RunAsync(ToSpec(request), ct);
@@ -58,6 +60,7 @@ public sealed class QueryRpcService(TaskQueries queries)
     [NeoRpcMethod("counts")]
     public async ValueTask<ViewCountsResponse> CountsAsync(ViewCountsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("queries.counts");
         try
         {
             var counts = await queries.CountsAsync(Category(request.Category), ct);
@@ -73,6 +76,7 @@ public sealed class QueryRpcService(TaskQueries queries)
     [NeoRpcMethod("rebuildSearch")]
     public async ValueTask<RebuildSearchResponse> RebuildSearchAsync(RebuildSearchRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("queries.rebuildSearch");
         try { return new(true, TagRpcService.Count(await queries.RebuildSearchIndexAsync(ct)), null); }
         catch (AppException error) { return new(false, 0, TaskRpcService.ToErrorResponse(error)); }
     }

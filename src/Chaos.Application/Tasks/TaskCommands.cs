@@ -243,35 +243,10 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                         return new TaskMutationResult(task, Replayed: false, Warning: null); // nothing to change
                     }
 
-                    if (task.RecurrenceOccurrenceKey is not null && (task.IsTerminal || normalized.Status == TaskItemStatus.Cancelled))
-                        throw AppException.Validation("status", "Use the recurrence controls to reconcile or end this series.");
-
                     var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
                     var before = new TaskAggregateSnapshot(task, subtasks);
-
-                    // Reopening restores the previous nonterminal status when history knows it (PLAN §6).
-                    var targetStatus = TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(normalized.Status)
-                        ? await TaskMutationSupport.PreviousNonterminalStatusAsync(session, task.Id, subtaskId: null, inner)
-                        : normalized.Status;
-
-                    if (targetStatus == TaskItemStatus.Done && !TaskItemStatusRules.IsTerminal(task.Status))
-                    {
-                        await ApplyOpenSubtaskChoiceAsync(session, subtasks, normalized.OpenSubtaskChoice, now, inner);
-                        subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
-                    }
-
-                    var updated = task with
-                    {
-                        Status = targetStatus,
-                        CompletedAtUtc = targetStatus == TaskItemStatus.Done ? now : null,
-                        CancelledAtUtc = targetStatus == TaskItemStatus.Cancelled ? now : null,
-                        Version = task.Version + 1,
-                        UpdatedAtUtc = now,
-                    };
-                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
-
-                    if (applied.RecurrenceOccurrenceKey is not null && targetStatus == TaskItemStatus.Done)
-                        await RecurrenceCommands.AdvanceAsync(session, ids, applied, now, inner);
+                    var applied = await ApplyStatusAsync(session, ids, task, normalized.Status, normalized.OpenSubtaskChoice, now, subtasks, inner);
+                    subtasks = await session.Subtasks.ListByTaskAsync(task.Id, inner);
 
                     await TaskMutationSupport.WriteTaskHistoryAsync(
                         session, ids, normalized.OperationId, before,
@@ -576,7 +551,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         await session.Tasks.GetAsync(taskId, token)
         ?? throw AppException.NotFound("That task no longer exists. Refresh and try again.");
 
-    private static void RequireCurrentVersion(TaskRecord task, long expectedVersion)
+    internal static void RequireCurrentVersion(TaskRecord task, long expectedVersion)
     {
         if (task.Version != expectedVersion)
         {
@@ -584,7 +559,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         }
     }
 
-    private static async Task<TaskRecord> ApplyTaskUpdateAsync(IDataSession session, TaskRecord updated, long expectedVersion, CancellationToken token) =>
+    internal static async Task<TaskRecord> ApplyTaskUpdateAsync(IDataSession session, TaskRecord updated, long expectedVersion, CancellationToken token) =>
         await session.Tasks.UpdateAsync(updated, expectedVersion, token)
         ?? throw AppException.VersionConflict("This task changed elsewhere while you were working. Refresh and try again.");
 
@@ -636,13 +611,60 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         }
     }
 
-    private static string EventKindForStatusChange(TaskItemStatus before, TaskItemStatus after) => after switch
+    internal static string EventKindForStatusChange(TaskItemStatus before, TaskItemStatus after) => after switch
     {
         TaskItemStatus.Done => "task.completed",
         TaskItemStatus.Cancelled => "task.cancelled",
         _ when TaskItemStatusRules.IsTerminal(before) => "task.reopened",
         _ => "task.status-changed",
     };
+
+    /// <summary>
+    /// The status change itself, without its history write, so one operation can compose it
+    /// with other field changes (the board's card move, PLAN2 P2) and still write one
+    /// history entry and one undo entry for the whole move. Reopening a finished task
+    /// normally restores its previous open status (PLAN §6); a board drop names the exact
+    /// column, so it passes <paramref name="restorePreviousStatus"/> false.
+    /// </summary>
+    internal static async Task<TaskRecord> ApplyStatusAsync(
+        IDataSession session,
+        IIdGenerator ids,
+        TaskRecord task,
+        TaskItemStatus status,
+        OpenSubtaskChoice? choice,
+        DateTimeOffset now,
+        IReadOnlyList<SubtaskRecord> subtasks,
+        CancellationToken token,
+        bool restorePreviousStatus = true)
+    {
+        if (task.RecurrenceOccurrenceKey is not null && (task.IsTerminal || status == TaskItemStatus.Cancelled))
+            throw AppException.Validation("status", "Use the recurrence controls to reconcile or end this series.");
+
+        // Reopening restores the previous nonterminal status when history knows it (PLAN §6).
+        var targetStatus = restorePreviousStatus && TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(status)
+            ? await TaskMutationSupport.PreviousNonterminalStatusAsync(session, task.Id, subtaskId: null, token)
+            : status;
+
+        if (targetStatus == TaskItemStatus.Done && !TaskItemStatusRules.IsTerminal(task.Status))
+        {
+            await ApplyOpenSubtaskChoiceAsync(session, subtasks, choice, now, token);
+        }
+
+        var updated = task with
+        {
+            Status = targetStatus,
+            CompletedAtUtc = targetStatus == TaskItemStatus.Done ? now : null,
+            CancelledAtUtc = targetStatus == TaskItemStatus.Cancelled ? now : null,
+            Version = task.Version + 1,
+            UpdatedAtUtc = now,
+        };
+        var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, token);
+
+        if (applied.RecurrenceOccurrenceKey is not null && targetStatus == TaskItemStatus.Done)
+            await RecurrenceCommands.AdvanceAsync(session, ids, applied, now, token);
+
+        return applied;
+    }
 
     private static async Task<ProfileRecord> RequirePrimaryProfile(IDataSession session, CancellationToken token) =>
         await session.Profiles.GetPrimaryAsync(token)

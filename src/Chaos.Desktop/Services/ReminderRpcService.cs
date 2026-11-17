@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Reminders;
@@ -76,25 +77,36 @@ public sealed class ReminderRpcService(ReminderCommands reminders, ReminderEngin
     [NeoRpcMethod("list")]
     public async ValueTask<ReminderListResponse> ListAsync(ReminderListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.list");
         try { return new(true, [.. (await reminders.ListForTaskAsync(request.TaskId, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
 
     [NeoRpcMethod("add")]
-    public ValueTask<ReminderOperationResponse> AddAsync(ReminderAddRequest request, CancellationToken ct) =>
-        Change(async () => (await reminders.AddAsync(new AddReminderCommand(request.OperationId, request.TaskId, Input(request.Rule)), ct)).Replayed);
+    public ValueTask<ReminderOperationResponse> AddAsync(ReminderAddRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("reminders.add");
+        return Change(async () => (await reminders.AddAsync(new AddReminderCommand(request.OperationId, request.TaskId, Input(request.Rule)), ct)).Replayed);
+    }
 
     [NeoRpcMethod("update")]
-    public ValueTask<ReminderOperationResponse> UpdateAsync(ReminderUpdateRequest request, CancellationToken ct) =>
-        Change(async () => (await reminders.UpdateAsync(new UpdateReminderCommand(request.OperationId, request.RuleId, Number(request.ExpectedVersion, "expectedVersion"), Input(request.Rule)), ct)).Replayed);
+    public ValueTask<ReminderOperationResponse> UpdateAsync(ReminderUpdateRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("reminders.update");
+        return Change(async () => (await reminders.UpdateAsync(new UpdateReminderCommand(request.OperationId, request.RuleId, Number(request.ExpectedVersion, "expectedVersion"), Input(request.Rule)), ct)).Replayed);
+    }
 
     [NeoRpcMethod("delete")]
-    public ValueTask<ReminderOperationResponse> DeleteAsync(ReminderDeleteRequest request, CancellationToken ct) =>
-        Change(async () => (await reminders.DeleteAsync(new DeleteReminderCommand(request.OperationId, request.RuleId, Number(request.ExpectedVersion, "expectedVersion")), ct)).Replayed);
+    public ValueTask<ReminderOperationResponse> DeleteAsync(ReminderDeleteRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("reminders.delete");
+        return Change(async () => (await reminders.DeleteAsync(new DeleteReminderCommand(request.OperationId, request.RuleId, Number(request.ExpectedVersion, "expectedVersion")), ct)).Replayed);
+    }
 
     [NeoRpcMethod("settings")]
     public async ValueTask<ReminderSettingsResponse> SettingsAsync(ReminderSettingsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.settings");
         try { return Map(await reminders.GetSettingsAsync(ct)); }
         catch (AppException error) { return new(false, null, false, null, null, null, null, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -102,6 +114,7 @@ public sealed class ReminderRpcService(ReminderCommands reminders, ReminderEngin
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<ReminderSettingsResponse> UpdateSettingsAsync(ReminderSettingsUpdateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.updateSettings");
         try
         {
             var settings = await reminders.UpdateSettingsAsync(new UpdateReminderSettingsCommand(
@@ -120,6 +133,7 @@ public sealed class ReminderRpcService(ReminderCommands reminders, ReminderEngin
     [NeoRpcMethod("alerts")]
     public async ValueTask<NotificationListResponse> AlertsAsync(NotificationListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.alerts");
         try
         {
             await engine.TickAsync(ct);
@@ -131,6 +145,7 @@ public sealed class ReminderRpcService(ReminderCommands reminders, ReminderEngin
     [NeoRpcMethod("center")]
     public async ValueTask<NotificationListResponse> CenterAsync(NotificationListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.center");
         try { return new(true, [.. (await reminders.CenterAsync(request.Limit ?? 100, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -138,6 +153,7 @@ public sealed class ReminderRpcService(ReminderCommands reminders, ReminderEngin
     [NeoRpcMethod("act")]
     public async ValueTask<NotificationActResponse> ActAsync(NotificationActRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("reminders.act");
         try
         {
             var result = await reminders.ActAsync(new NotificationActionCommand(

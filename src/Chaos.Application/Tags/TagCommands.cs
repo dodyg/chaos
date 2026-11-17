@@ -231,19 +231,19 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     {
                         foreach (var taskId in await session.Tags.ListTaskIdsAsync(row.Id, inner))
                         {
-                            await session.Tags.RemoveTaskLinkAsync(taskId, row.Id, inner);
+                            await session.Tags.RemoveTaskLinkAsync(taskId, row.Id, now, inner);
                             taskLinks.Add(new TagLink(taskId, row.Id));
                         }
 
                         foreach (var subtaskId in await session.Tags.ListSubtaskIdsAsync(row.Id, inner))
                         {
-                            await session.Tags.RemoveSubtaskLinkAsync(subtaskId, row.Id, inner);
+                            await session.Tags.RemoveSubtaskLinkAsync(subtaskId, row.Id, now, inner);
                             subtaskLinks.Add(new TagLink(subtaskId, row.Id));
                         }
 
                         foreach (var padItemId in await session.Tags.ListPadItemIdsAsync(row.Id, inner))
                         {
-                            await session.Tags.RemovePadLinkAsync(padItemId, row.Id, inner);
+                            await session.Tags.RemovePadLinkAsync(padItemId, row.Id, now, inner);
                             padLinks.Add(new TagLink(padItemId, row.Id));
                         }
 
@@ -396,9 +396,9 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     await RequireTargetAsync(session, command.TargetKind, command.TargetId, inner);
                     var changed = command.TargetKind switch
                     {
-                        TagTargetKind.Task => await session.Tags.RemoveTaskLinkAsync(command.TargetId, command.TagId, inner),
-                        TagTargetKind.Subtask => await session.Tags.RemoveSubtaskLinkAsync(command.TargetId, command.TagId, inner),
-                        _ => await session.Tags.RemovePadLinkAsync(command.TargetId, command.TagId, inner),
+                        TagTargetKind.Task => await session.Tags.RemoveTaskLinkAsync(command.TargetId, command.TagId, now, inner),
+                        TagTargetKind.Subtask => await session.Tags.RemoveSubtaskLinkAsync(command.TargetId, command.TagId, now, inner),
+                        _ => await session.Tags.RemovePadLinkAsync(command.TargetId, command.TagId, now, inner),
                     };
                     return new TagLinkResult(command.TagId, await ListTargetTagIdsAsync(session, command.TargetKind, command.TargetId, inner), changed, Replayed: false, []);
                 }, token);
@@ -522,7 +522,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
             if (targetTasks.Contains(taskId)) counter.TaskPresent++; else counter.TaskMoved++;
             if (apply)
             {
-                await session.Tags.RemoveTaskLinkAsync(taskId, source.Id, token);
+                await session.Tags.RemoveTaskLinkAsync(taskId, source.Id, now, token);
                 await session.Tags.AddTaskLinkAsync(taskId, target.Id, token);
             }
         }
@@ -533,7 +533,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
             if (targetSubtasks.Contains(subtaskId)) counter.SubtaskPresent++; else counter.SubtaskMoved++;
             if (apply)
             {
-                await session.Tags.RemoveSubtaskLinkAsync(subtaskId, source.Id, token);
+                await session.Tags.RemoveSubtaskLinkAsync(subtaskId, source.Id, now, token);
                 await session.Tags.AddSubtaskLinkAsync(subtaskId, target.Id, token);
             }
         }
@@ -544,7 +544,7 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
             if (targetPads.Contains(padItemId)) counter.PadPresent++; else counter.PadMoved++;
             if (apply)
             {
-                await session.Tags.RemovePadLinkAsync(padItemId, source.Id, token);
+                await session.Tags.RemovePadLinkAsync(padItemId, source.Id, now, token);
                 await session.Tags.AddPadLinkAsync(padItemId, target.Id, token);
             }
         }

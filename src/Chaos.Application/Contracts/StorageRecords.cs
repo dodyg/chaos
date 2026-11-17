@@ -27,6 +27,8 @@ public sealed record ProfileRecord : AggregateRecord
     public TimeOnly? MorningTime { get; init; }
     /// <summary>Weekday the weekly summary is due; null = not scheduled.</summary>
     public DayOfWeek? WeeklySummaryDay { get; init; }
+    /// <summary>Whether plain summaries (and, later, the AI) may list the day's meetings; off by default (PLAN2 §10.4).</summary>
+    public bool IncludeMeetingsInSummaries { get; init; }
     public required TimeOnly DefaultReminderTime { get; init; }
     public bool QuietHoursEnabled { get; init; }
     public TimeOnly? QuietStart { get; init; }

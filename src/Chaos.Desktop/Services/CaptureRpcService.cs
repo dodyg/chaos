@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Capture;
@@ -67,6 +68,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
     [NeoRpcMethod("preview")]
     public async ValueTask<CapturePreviewResponse> PreviewAsync(CapturePreviewRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("capture.preview");
         try
         {
             var excluded = (request.Excluded ?? []).Take(200).Select(span => new CaptureSpan(span.Start, span.End)).ToList();
@@ -80,6 +82,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
     [NeoRpcMethod("create")]
     public async ValueTask<CaptureCreateResponse> CreateAsync(CaptureCreateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("capture.create");
         try
         {
             if (request.Drafts is null || request.Drafts.Count > 500) throw AppException.Validation("drafts", "Send between 1 and 500 tasks.");

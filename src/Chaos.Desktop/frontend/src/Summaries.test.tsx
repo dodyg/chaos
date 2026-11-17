@@ -30,6 +30,7 @@ function header(patch: Partial<SummaryHeaderDto> = {}): SummaryHeaderDto {
 
 function facts(): SummaryFactsDto {
   return {
+    meetings: [],
     completions: [
       { task: task("a", "Plant bulbs", "Garden"), completedAtUtc: "2026-11-10T10:00:00Z", reopenedAfter: false, stillDone: true },
       { task: task("b", "Draft report", "Work"), completedAtUtc: "2026-11-10T11:00:00Z", reopenedAfter: true, stillDone: false },
@@ -69,7 +70,7 @@ test("a summary groups completions by list, marks reopened ones and carries over
   assert.ok(screen.getByText("Forty tulips."));
 
   await user.click(screen.getByRole("button", { name: /Carry over to tomorrow/ }));
-  const box = await screen.findByRole("checkbox");
+  const box = await screen.findByRole("checkbox", { name: /Tidy shed/ });
   assert.equal((box as HTMLInputElement).checked, true);
   await user.click(screen.getByRole("button", { name: "Carry 1 over" }));
   await waitFor(() => assert.equal(carried.length, 1));
@@ -87,7 +88,7 @@ test("a ready summary prompt opens Summaries and is dismissed", async () => {
     dismiss: async (request: { summaryId: string }) => { dismissed.push(request.summaryId); return { ok: true, error: null }; },
   } as unknown as typeof summaryRpc;
   const user = userEvent.setup({ document: dom.window.document });
-  render(<SummaryPrompts api={api} intervalMs={60_000} onOpen={id => opened.push(id)}/>);
+  render(<SummaryPrompts api={api} onOpen={id => opened.push(id)}/>);
 
   await screen.findByText(/is ready/);
   await user.click(screen.getByRole("button", { name: "Open" }));

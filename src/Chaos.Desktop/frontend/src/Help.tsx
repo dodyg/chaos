@@ -1,10 +1,10 @@
 import React from "react";
-import { ArrowRight, BookOpen, Database, FileText, Keyboard, ListTodo, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarDays, Database, FileText, Keyboard, ListTodo, Rocket, Search, Sparkles, StickyNote, Sun, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common";
 import { listShortcuts } from "./listKeyboard";
 
-export type HelpLink = "myday" | "myweek" | "tasks" | "pad" | "pages" | "summaries" | "notifications" | "templates" | "data" | "settings";
+export type HelpLink = "myday" | "myweek" | "calendar" | "tasks" | "pad" | "pages" | "summaries" | "notifications" | "templates" | "data" | "settings";
 
 /** Shortcuts that work anywhere in the main window (App's keydown handler). */
 export const appShortcuts: readonly [string, string][] = [
@@ -84,14 +84,29 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       <Keys rows={quickAddParts}/>
       <p>Quick add also understands French, Italian, Spanish, Indonesian and Arabic, such as demain, domani, mañana, besok and غدًا, whatever language you start in.</p>
     </> },
-    { id: "planning", title: "My Day and My Week", icon: <Sun/>, keywords: "plan today week capacity hours suggestions myday myweek", body: <>
-      <p><strong>My Week</strong> turns everything on your plate into a plan: look back at last week, carry over or drop unfinished work, set a few goals and drag tasks onto days. Each day shows its estimated work against your available hours.</p>
-      <p><strong>My Day</strong> starts each morning with what your week plan put on today. Add more from the suggestions, or press <kbd>M</kbd> on any task in a list to add it. Adding a task to My Day never changes its planned or due date.</p>
+    { id: "planning", title: "My Day and My Week", icon: <Sun/>, keywords: "plan today week capacity hours suggestions myday myweek meetings busy confirm planned date", body: <>
+      <p><strong>My Week</strong> turns everything on your plate into a plan: look back at last week, carry over or drop unfinished work, set a few goals and drag tasks onto days. Each day shows its estimated work against your available hours, less any busy meetings (“2 h meetings”). Confirming the plan sets each task's planned date to the day you put it on, so the calendar and My Week agree; Undo reverses it.</p>
+      <p><strong>My Day</strong> starts each morning with what your week plan put on today. Add more from the suggestions, or press <kbd>M</kbd> on any task in a list to add it. Adding a task to My Day never changes its planned or due date. Today's meetings are listed above the plan, and a warning appears when the day's open estimates will not fit in the time left after meetings. It is only a warning; nothing is moved for you.</p>
       <p>Use the Work / Personal switch (<kbd>Ctrl+2</kbd>, <kbd>Ctrl+3</kbd>) to see one side of your life at a time; <kbd>Ctrl+1</kbd> shows both.</p>
       <div className="flex flex-wrap gap-2"><Go to="myweek" onNavigate={onNavigate}>Open My Week</Go><Go to="myday" onNavigate={onNavigate}>Open My Day</Go></div>
     </> },
-    { id: "organise", title: "Lists, projects, tags and views", icon: <ListTodo/>, keywords: "list project section tag view today upcoming overdue waiting subtasks templates drag reorder", body: <>
+    { id: "calendar", title: "Calendar and meetings", icon: <CalendarDays/>, keywords: "calendar month week day agenda drag reschedule planned due repeat unscheduled meetings google ics feed webcal busy sign in connect account decline refresh focus", body: <>
+      <p>The <strong>Calendar</strong> shows your tasks by month, week, day or as an agenda. Planned tasks are blocks, due dates are markers, and repeating tasks show their next occurrences. Each day shows its estimated work against your available hours, and overload stays visible whatever you filter. Filter by Work or Personal, tag or list, or show a custom view's calendar.</p>
+      <p>Drag a planned task to another day or time slot to reschedule it (Undo reverses it); drop it on the all-day row to clear its time. From the keyboard, use a task's menu: <em>Move to date…</em>, or <em>Plan…</em> for tasks in the Unscheduled panel. Arrow keys move between days and Enter opens one.</p>
+      <p><strong>Meetings</strong> from other calendars appear read-only in their own colour, and busy meetings take time off your available hours in My Week and My Day. Chaos never changes those calendars. On a meeting, <em>Make a task</em> creates “Prepare: …”, planned for the day before (or the same day if the meeting starts after noon) and linked back to the meeting.</p>
+      <p>Add calendars under Settings → Calendars:</p>
+      <ul className="grid list-disc gap-1 pl-5">
+        <li><strong>Calendar feeds.</strong> Paste a calendar's secret ICS address (https:// or webcal://). The address is kept in protected storage on this computer, not in your data, and is entered again on each device. Feeds refresh every 15 minutes.</li>
+        <li><strong>Google Calendar.</strong> Connect one or more Google accounts (sign-in happens in your web browser; Chaos can only read). The first time, paste the client ID and secret of a Desktop OAuth client from Google Cloud. Then choose which calendars to show, with a colour and a busy-time choice each. Google calendars refresh every 5 minutes and when you return to the window; <em>Refresh now</em> fetches straight away, and a meeting you decline in Google disappears on the next refresh.</li>
+      </ul>
+      <p>If Google says <em>sign in again</em> (your access expired or was revoked), the last meetings stay and a Sign in again button appears. On another device that learns of the account, press <em>Sign in on this device</em>. <em>Disconnect</em> removes the account everywhere and revokes Chaos's access at Google.</p>
+      <p>Meetings appear in daily and morning summaries only when <em>Include meetings in summaries</em> is on (in the summary settings on the Summaries page); it is off by default.</p>
+      <div className="flex flex-wrap gap-2"><Go to="calendar" onNavigate={onNavigate}>Open Calendar</Go><Go to="settings" onNavigate={onNavigate}>Open Settings</Go></div>
+    </> },
+    { id: "organise", title: "Lists, projects, tags and views", icon: <ListTodo/>, keywords: "list project section tag view today upcoming overdue waiting subtasks templates drag reorder board kanban column swimlane wip custom view saved search condition filter export csv spreadsheet", body: <>
       <p><strong>Lists</strong> hold open-ended tasks; <strong>projects</strong> have an end and show progress. Create them with the + next to “Lists &amp; projects” in the sidebar, drag to reorder, and group tasks into sections.</p>
+      <p><strong>Boards</strong> show a list or project as a Kanban board: switch with the List / Board control above the tasks (each list remembers its own). Drag cards between and within columns (a card stays in its swimlane), or use the arrow keys and each card's menu. Columns group by status, section, priority or a tag's children, with optional swimlanes, WIP limits and hidden columns in the board settings. Switching layout never changes the tasks.</p>
+      <p><strong>Custom views</strong> keep a search you want again. Under Views choose New view, then add conditions on status, priority, tags, dates (including relative ones such as this week or the next 7 days), estimate, text and more; group conditions with all or any. The count under the editor is the exact number of tasks that match. Show the result as a list (optionally grouped), as a table where title, status, priority, dates and estimate can be edited in place, or as a board (columns by status, priority or a tag group, with swimlanes by priority, tag group, Work or Personal, or list; dragging a card changes its column, and the view's sort keeps ordering the cards), and pin the view to the sidebar to see its count. A view can be edited, duplicated, deleted (with Undo) and exported as a spreadsheet (CSV) to your exports folder. On a search page, Save as view turns the words and filters into a view. Adding a task inside a view fills in the fields its conditions fix. Switch on "Tell me when a new task matches" and Chaos tells you, inside the app while it is open, when new tasks join the view (one notice per view, such as "3 new tasks in My open bugs", held until your quiet hours end). Tasks already in the view when you switch it on stay quiet, and a task that leaves and comes back is announced again only after 24 hours. When GitHub is connected, views can also use the GitHub repository, issue state (open or closed), labels, milestone and assignee of a task that came from an issue; these read the last state Chaos synced, so they work offline.</p>
       <p><strong>Tags</strong> cut across lists. Nest them with a slash (#home/garden), and drag a task onto a tag in the sidebar to tag it without moving it.</p>
       <p><strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed and Assigned to me.</p>
       <p>Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. Save task shapes you reuse as <strong>templates</strong>.</p>
@@ -109,11 +124,11 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
     </> },
     { id: "pad", title: "Personal pad and summaries", icon: <StickyNote/>, keywords: "pad notes scratch summaries summary review morning evening journal diary make task", body: <>
       <p>The <strong>Personal pad</strong> is for thoughts that are not tasks yet. Notes save as you type. Select some text and choose <em>Make task</em> to turn it into a task that links back to its spot on the pad. When a note grows into something to keep, move it to a page or add it to today's page.</p>
-      <p><strong>Summaries</strong> are built from your own lists and history: a morning plan, an evening summary and a weekly look back. From an evening summary you can carry unfinished tasks over to tomorrow.</p>
+      <p><strong>Summaries</strong> are built from your own lists and history: a morning plan, an evening summary and a weekly look back. From an evening summary you can carry unfinished tasks over to tomorrow. Meetings are listed only if you switch on <em>Include meetings in summaries</em>.</p>
       <div className="flex flex-wrap gap-2"><Go to="pad" onNavigate={onNavigate}>Open the pad</Go><Go to="summaries" onNavigate={onNavigate}>Open Summaries</Go></div>
     </> },
     { id: "reminders", title: "Reminders and waiting", icon: <Bell/>, keywords: "reminder notification alert waiting follow up delegate", body: <>
-      <p>Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date so it comes back to you. Everything that fired is listed under Alerts.</p>
+      <p>Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date so it comes back to you. Everything that fired is listed under Alerts. Alerts, summaries and changes made by background work (reminders, calendar and GitHub sync) appear on their own, without switching windows.</p>
       <p>Windows notifications after Chaos closes need the installed app; you can keep Chaos running in the notification area from Settings.</p>
       <Go to="notifications" onNavigate={onNavigate}>Open Notifications</Go>
     </> },

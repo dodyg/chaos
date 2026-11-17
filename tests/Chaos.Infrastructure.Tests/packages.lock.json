@@ -93,6 +93,11 @@
         "resolved": "0.11.6",
         "contentHash": "f33RkDtZO8VlGXCtmQIviOtxgnUdym9xx/b1p9h91CRGOsJFxCFOFK1FDbVt1OCf1aWwYejUFa2MOQyFWTFjbA=="
       },
+      "NodaTime": {
+        "type": "Transitive",
+        "resolved": "3.2.2",
+        "contentHash": "dmju5W0UYC3QP/UJM0juKAZkH0HSDMp0gH91A0+mT9M0kgyM2Jm67hUZPl/WRQLq8Lijjqmdk8kyAViWFWM7dA=="
+      },
       "SQLitePCLRaw.bundle_e_sqlite3": {
         "type": "Transitive",
         "resolved": "2.1.13",
@@ -144,7 +149,8 @@
       "chaos.application": {
         "type": "Project",
         "dependencies": {
-          "Chaos.Domain": "[1.0.0, )"
+          "Chaos.Domain": "[1.0.0, )",
+          "Chaos.Sync": "[1.0.0, )"
         }
       },
       "chaos.domain": {
@@ -155,7 +161,21 @@
         "dependencies": {
           "Chaos.Application": "[1.0.0, )",
           "Chaos.Domain": "[1.0.0, )",
+          "Chaos.Sync": "[1.0.0, )",
+          "Ical.Net": "[5.2.4, )",
           "Microsoft.Data.Sqlite": "[10.0.14, )"
+        }
+      },
+      "chaos.sync": {
+        "type": "Project"
+      },
+      "Ical.Net": {
+        "type": "CentralTransitive",
+        "requested": "[5.2.4, )",
+        "resolved": "5.2.4",
+        "contentHash": "KpXaIEqe4TntybCRoa0TSwkXJu7kgnFsLRj3lKSaYLYRQuos1ujyzaS0Opk7g5QZKM1Igi/2h84+FBhbmGgNeg==",
+        "dependencies": {
+          "NodaTime": "3.2.2"
         }
       },
       "Microsoft.Data.Sqlite": {

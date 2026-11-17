@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Settings;
 using Chaos.Desktop.Platform;
@@ -50,13 +51,17 @@ public sealed record QuitResponse(bool Ok);
 public sealed class ShellRpcService(ShellActivations activations, IDesktopShell shell, ProfileSettingsCommands settings, string appVersion, Func<CancellationToken, Task>? onZoneChanged = null)
 {
     [NeoRpcMethod("take")]
-    public ValueTask<ShellTakeResponse> TakeAsync(ShellTakeRequest request, CancellationToken ct) =>
-        ValueTask.FromResult(new ShellTakeResponse(true, [.. activations.Take().Select(item => new ShellActivationDto(
+    public ValueTask<ShellTakeResponse> TakeAsync(ShellTakeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("shell.take");
+        return ValueTask.FromResult(new ShellTakeResponse(true, [.. activations.Take().Select(item => new ShellActivationDto(
             item.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture), item.Kind.ToString(), item.TaskId, item.Message))]));
+    }
 
     [NeoRpcMethod("status")]
     public ValueTask<ShellStatusResponse> StatusAsync(ShellStatusRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("shell.status");
         var status = shell.Status;
         return ValueTask.FromResult(new ShellStatusResponse(true, appVersion, status.Packaged, status.TrayAvailable, status.KeepRunningInTray,
             [.. status.Shortcuts.Select(item => new ShortcutStatusDto(item.Id, item.Accelerator, item.State, item.Message))]));
@@ -65,6 +70,7 @@ public sealed class ShellRpcService(ShellActivations activations, IDesktopShell 
     [NeoRpcMethod("settings")]
     public async ValueTask<ProfileSettingsResponse> SettingsAsync(ProfileSettingsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("shell.settings");
         try { return Map(await settings.GetAsync(ct), zoneChanged: false); }
         catch (AppException error) { return Failure(error); }
     }
@@ -72,6 +78,7 @@ public sealed class ShellRpcService(ShellActivations activations, IDesktopShell 
     [NeoRpcMethod("updateSettings")]
     public async ValueTask<ProfileSettingsResponse> UpdateSettingsAsync(ProfileSettingsUpdateRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("shell.updateSettings");
         try
         {
             var result = await settings.UpdateAsync(new UpdateProfileSettingsCommand(
@@ -95,12 +102,16 @@ public sealed class ShellRpcService(ShellActivations activations, IDesktopShell 
     }
 
     [NeoRpcMethod("zones")]
-    public ValueTask<ZoneListResponse> ZonesAsync(ZoneListRequest request, CancellationToken ct) =>
-        ValueTask.FromResult(new ZoneListResponse(true, ProfileSettingsCommands.AvailableZones()));
+    public ValueTask<ZoneListResponse> ZonesAsync(ZoneListRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("shell.zones");
+        return ValueTask.FromResult(new ZoneListResponse(true, ProfileSettingsCommands.AvailableZones()));
+    }
 
     [NeoRpcMethod("quit")]
     public ValueTask<QuitResponse> QuitAsync(QuitRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("shell.quit");
         shell.RequestQuit();
         return ValueTask.FromResult(new QuitResponse(true));
     }

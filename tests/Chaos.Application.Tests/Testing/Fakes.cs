@@ -49,6 +49,7 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<NotificationJobRecord> Jobs = [];
     public readonly List<ScratchTaskLinkRecord> PadTaskLinks = [];
     public readonly HashSet<(string PadItemId, string TagId)> PadTags = [];
+    public readonly List<BoardSettingsRecord> BoardSettings = [];
 
     public Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default) =>
         operation(new Session(this), ct);
@@ -84,7 +85,71 @@ public sealed class InMemoryStore : IApplicationStore
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
         public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
         public ISummaryStore Summaries => throw new NotSupportedException("This test store does not implement summaries; summaries are tested against SQLite.");
+        public IBoardStore Boards { get; } = new FakeBoardStore(owner.BoardSettings, owner.Tasks, owner.Subtasks, owner.TaskTags);
+        public ISavedViewStore SavedViews => throw new NotSupportedException("This test store does not implement saved views; they are tested against SQLite.");
+        public Chaos.Application.Activity.IActivityRecorder Activity => Chaos.Application.Activity.NullActivityRecorder.Instance;
+        public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
     }
+}
+
+public sealed class FakeBoardStore(
+    List<BoardSettingsRecord> settings,
+    List<TaskRecord> tasks,
+    List<SubtaskRecord> subtasks,
+    HashSet<(string TaskId, string TagId)> taskTags) : IBoardStore
+{
+    public Task<BoardSettingsRecord?> GetAsync(BoardTargetKind targetKind, string targetId, CancellationToken ct) =>
+        Task.FromResult(settings.FirstOrDefault(row => row.TargetKind == targetKind && row.TargetId == targetId && row.DeletedAtUtc is null));
+
+    public async Task AddAsync(BoardSettingsRecord row, CancellationToken ct)
+    {
+        if (settings.Any(existing => existing.TargetKind == row.TargetKind && existing.TargetId == row.TargetId && existing.DeletedAtUtc is null))
+        {
+            throw new InvalidOperationException("Duplicate board settings for one target.");
+        }
+
+        await Task.Yield();
+        settings.Add(row);
+    }
+
+    public async Task<BoardSettingsRecord?> UpdateAsync(BoardSettingsRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        await Task.Yield();
+        var index = settings.FindIndex(row => row.Id == updated.Id);
+        if (index < 0 || settings[index].Version != expectedVersion)
+        {
+            return null;
+        }
+
+        settings[index] = updated;
+        return updated;
+    }
+
+    public Task<IReadOnlyList<BoardCardRow>> ListCardsAsync(string containerId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<BoardCardRow>>([..
+            tasks
+                .Where(task => task.ContainerId == containerId && task.DeletedAtUtc is null)
+                .OrderBy(task => task.Position).ThenBy(task => task.Id, StringComparer.Ordinal)
+            .Select(task =>
+            {
+                var children = subtasks.Where(subtask => subtask.TaskId == task.Id && subtask.DeletedAtUtc is null).ToList();
+                return new BoardCardRow(task, children.Count, children.Count(subtask => subtask.Status == TaskItemStatus.Done), HasIssueLink: false);
+            })]);
+
+    public Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<BoardCardTag>>([..
+            taskTags
+                .Where(link => tasks.FirstOrDefault(task => task.Id == link.TaskId) is { ContainerId: var container, DeletedAtUtc: null } && container == containerId)
+            .Select(link => new BoardCardTag(link.TaskId, link.TagId))]);
+
+    public Task<IReadOnlyDictionary<string, BoardCardExtras>> ListCardExtrasAsync(IReadOnlyList<string> taskIds, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyDictionary<string, BoardCardExtras>>(taskIds.ToDictionary(
+            id => id,
+            id =>
+            {
+                var children = subtasks.Where(subtask => subtask.TaskId == id && subtask.DeletedAtUtc is null).ToList();
+                return new BoardCardExtras(children.Count, children.Count(subtask => subtask.Status == TaskItemStatus.Done), HasIssueLink: false);
+            }));
 }
 
 public sealed class FakeReminderRuleStore(List<ReminderRuleRecord> rows) : IReminderRuleStore
@@ -421,13 +486,13 @@ public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, s
     public Task<IReadOnlyList<string>> ListTaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TagId == id).Select(x => x.TaskId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListSubtaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(subtaskLinks.Where(x => x.TagId == id).Select(x => x.SubtaskId).Order(StringComparer.Ordinal).ToList());
     public Task<bool> AddTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Add((target, tag)));
-    public Task<bool> RemoveTaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
+    public Task<bool> RemoveTaskLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(taskLinks.Remove((target, tag)));
     public Task<bool> AddSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Add((target, tag)));
-    public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
+    public Task<bool> RemoveSubtaskLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(subtaskLinks.Remove((target, tag)));
     public Task<IReadOnlyList<string>> ListPadTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.PadItemId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListPadItemIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(padLinks.Where(x => x.TagId == id).Select(x => x.PadItemId).Order(StringComparer.Ordinal).ToList());
     public Task<bool> AddPadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Add((target, tag)));
-    public Task<bool> RemovePadLinkAsync(string target, string tag, CancellationToken ct) => Task.FromResult(padLinks.Remove((target, tag)));
+    public Task<bool> RemovePadLinkAsync(string target, string tag, DateTimeOffset removedAtUtc, CancellationToken ct) => Task.FromResult(padLinks.Remove((target, tag)));
 }
 
 public sealed class FakePadStore(List<PadItemRecord> rows, List<ScratchTaskLinkRecord> links) : IPadStore

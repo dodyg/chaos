@@ -1,8 +1,13 @@
 using Chaos.Application.GitHub;
+using Chaos.Application.Activity;
 using Chaos.Infrastructure.GitHub;
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Tasks;
+using Chaos.Application.Boards;
+using Chaos.Application.Calendar;
+using Chaos.Infrastructure.Calendar;
+using Chaos.Application.Views;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.History;
@@ -50,7 +55,21 @@ internal static class Program
             .StartAsync(StorageOptions.FromDataRoot(dataRoot), AppVersion(), new GuidIdGenerator(), TimeProvider.System, CancellationToken.None)
             .GetAwaiter().GetResult();
 
+        // The activity log (PLAN2 §6.4): the store reports each commit that wrote activity, the publisher coalesces and pushes it to the window.
+        using var activityPublisher = new ActivityPublisher(TimeProvider.System);
+        storage.Store.ActivityNotifier = activityPublisher;
+        var activityFeed = new Chaos.Infrastructure.Activity.ActivityFeed(storage.Store, TimeProvider.System);
+        var jobRuns = new Chaos.Infrastructure.Activity.JobRuns(storage.Store, TimeProvider.System);
+
         var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var boards = new BoardCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var boardQueries = new BoardQueries(storage.Store);
+        var taskQueries = new TaskQueries(storage.Store, TimeProvider.System);
+        var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
+        var viewBoardQueries = new ViewBoardQueries(storage.Store, taskQueries);
+        var calendarQueries = new CalendarQueries(storage.Store, taskQueries, TimeProvider.System);
+        var viewAlerts = new ViewAlertService(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
@@ -60,7 +79,7 @@ internal static class Program
         var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
         // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
         var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries, viewAlerts, jobRuns);
         reminderEngine.Start();
 
         // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
@@ -76,7 +95,7 @@ internal static class Program
 
             await work();
         }, ct);
-        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System);
+        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System, jobRuns, activityFeed);
         backupScheduler.Start();
         var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System),
             new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store), storage.RecoveryNotice,
@@ -93,7 +112,7 @@ internal static class Program
         using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System),
             async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, TimeProvider.System);
         using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
-        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10));
+        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10), jobRuns);
         var pauseReminders = protection.Quiesce;
         protection.Quiesce = (work, ct) => githubEngine.RunPausedAsync(() => pauseReminders(work, ct), ct);
         var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
@@ -105,6 +124,19 @@ internal static class Program
             try { await pauseGitHub(work, ct); }
             finally { githubScheduler.Wake(); }
         };
+        // Calendar feeds (PLAN2 P5): addresses live in the protected secret store, never in the database.
+        var secrets = new FileSecretStore(Path.Combine(dataRoot, "secrets"), new Chaos.Desktop.Windows.Security.DpapiSecretProtector());
+        using var feedClient = new CalendarFeedClient();
+        // Google Calendar (PLAN2 P6): the OAuth client comes from google-oauth.json beside the exe (git-ignored); tokens go to the secret store only.
+        using var googleClient = new GoogleCalendarClient(GoogleOAuthConfig.TryLoad(Path.Combine(AppContext.BaseDirectory, "google-oauth.json")), new Chaos.Desktop.Platform.ShellBrowser());
+        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
+        var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
+        googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
+        var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
+        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System, jobRuns);
+        calendarScheduler.Start();
+        var pauseForCalendars = protection.Quiesce;
+        protection.Quiesce = (work, ct) => calendarRefresher.RunPausedAsync(() => pauseForCalendars(work, ct), ct);
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
         var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
         var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -137,6 +169,9 @@ internal static class Program
             app.ConfigureMainWindow((application, window) => shell.ConfigureMainWindow(application, window, initialSettings));
             app.UseRpc(rpc =>
             {
+                var committed = rpc.AddActivityEventsCommittedEvent();
+                activityPublisher.Attach(payload => committed.PublishAsync(payload).AsTask());
+                rpc.AddActivityRpcService(new ActivityRpcService(activityFeed));
                 rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks, githubEngine));
                 rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
@@ -144,7 +179,12 @@ internal static class Program
                 rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
-                rpc.AddQueryRpcService(new QueryRpcService(new TaskQueries(storage.Store, TimeProvider.System)));
+                rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
+                rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries, viewAlerts));
+                rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
+                rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
+                rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
+                rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -152,7 +192,7 @@ internal static class Program
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
                 rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -181,6 +221,16 @@ internal static class Program
     private static string AppVersion() => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
+[JsonSerializable(typeof(ActivityEntityDto))]
+[JsonSerializable(typeof(ActivityEntryDto))]
+[JsonSerializable(typeof(ActivitySinceRequest))]
+[JsonSerializable(typeof(ActivitySinceResponse))]
+[JsonSerializable(typeof(ActivityHeadRequest))]
+[JsonSerializable(typeof(ActivityHeadResponse))]
+[JsonSerializable(typeof(ActivityJobDto))]
+[JsonSerializable(typeof(ActivityJobsRequest))]
+[JsonSerializable(typeof(ActivityJobsResponse))]
+[JsonSerializable(typeof(ActivityCommitted))]
 [JsonSerializable(typeof(GitHubAttachmentRequest))]
 [JsonSerializable(typeof(GitHubAttachmentResponse))]
 [JsonSerializable(typeof(GitHubTaskSyncRequest))]
@@ -298,6 +348,81 @@ internal static class Program
 [JsonSerializable(typeof(TagLinkRequest))]
 [JsonSerializable(typeof(TagUnlinkRequest))]
 [JsonSerializable(typeof(TagIdsResponse))]
+[JsonSerializable(typeof(ViewDto))]
+[JsonSerializable(typeof(ViewListRequest))]
+[JsonSerializable(typeof(ViewListResponse))]
+[JsonSerializable(typeof(ViewGetRequest))]
+[JsonSerializable(typeof(ViewSaveRequest))]
+[JsonSerializable(typeof(ViewResponse))]
+[JsonSerializable(typeof(ViewDuplicateRequest))]
+[JsonSerializable(typeof(ViewPinRequest))]
+[JsonSerializable(typeof(ViewDeleteRequest))]
+[JsonSerializable(typeof(ViewReorderRequest))]
+[JsonSerializable(typeof(ViewRunRequest))]
+[JsonSerializable(typeof(ViewPreviewRequest))]
+[JsonSerializable(typeof(ViewRunResponse))]
+[JsonSerializable(typeof(SavedViewCountsRequest))]
+[JsonSerializable(typeof(ViewCountEntry))]
+[JsonSerializable(typeof(SavedViewCountsResponse))]
+[JsonSerializable(typeof(ViewContextRequest))]
+[JsonSerializable(typeof(ViewContextResponse))]
+[JsonSerializable(typeof(ViewExportRequest))]
+[JsonSerializable(typeof(ViewExportResponse))]
+[JsonSerializable(typeof(ViewAlertsRequest))]
+[JsonSerializable(typeof(ViewAlertDto))]
+[JsonSerializable(typeof(ViewAlertsResponse))]
+[JsonSerializable(typeof(ViewAlertAckRequest))]
+[JsonSerializable(typeof(ViewAlertAckResponse))]
+[JsonSerializable(typeof(ViewGitHubOptionsRequest))]
+[JsonSerializable(typeof(ViewGitHubRepositoryDto))]
+[JsonSerializable(typeof(ViewGitHubOptionsResponse))]
+[JsonSerializable(typeof(ViewFromSearchRequest))]
+[JsonSerializable(typeof(ViewFromSearchResponse))]
+[JsonSerializable(typeof(BoardViewGetRequest))]
+[JsonSerializable(typeof(CalendarRangeRequest))]
+[JsonSerializable(typeof(CalendarRangeResponse))]
+[JsonSerializable(typeof(CalendarUnscheduledRequest))]
+[JsonSerializable(typeof(CalendarSourceDto))]
+[JsonSerializable(typeof(GoogleAccountDto))]
+[JsonSerializable(typeof(GoogleStatusRequest))]
+[JsonSerializable(typeof(GoogleStatusResponse))]
+[JsonSerializable(typeof(GoogleConnectRequest))]
+[JsonSerializable(typeof(GoogleSetupRequest))]
+[JsonSerializable(typeof(GoogleAccountResponse))]
+[JsonSerializable(typeof(GoogleCalendarsRequest))]
+[JsonSerializable(typeof(GoogleCalendarsResponse))]
+[JsonSerializable(typeof(GoogleCalendarChoiceDto))]
+[JsonSerializable(typeof(GoogleChooseRequest))]
+[JsonSerializable(typeof(GoogleChooseResponse))]
+[JsonSerializable(typeof(GoogleDisconnectRequest))]
+[JsonSerializable(typeof(GoogleDisconnectResponse))]
+[JsonSerializable(typeof(CalendarsListRequest))]
+[JsonSerializable(typeof(CalendarsListResponse))]
+[JsonSerializable(typeof(CalendarAddFeedRequest))]
+[JsonSerializable(typeof(CalendarSourceResponse))]
+[JsonSerializable(typeof(CalendarUpdateRequest))]
+[JsonSerializable(typeof(CalendarRemoveRequest))]
+[JsonSerializable(typeof(CalendarOperationResponse))]
+[JsonSerializable(typeof(CalendarRefreshRequest))]
+[JsonSerializable(typeof(CalendarRefreshResultDto))]
+[JsonSerializable(typeof(CalendarRefreshResponse))]
+[JsonSerializable(typeof(CalendarActivityRequest))]
+[JsonSerializable(typeof(CalendarActivityResponse))]
+[JsonSerializable(typeof(CalendarMakeTaskRequest))]
+[JsonSerializable(typeof(CalendarMakeTaskResponse))]
+[JsonSerializable(typeof(CalendarTaskLinksRequest))]
+[JsonSerializable(typeof(CalendarTaskLinkDto))]
+[JsonSerializable(typeof(CalendarTaskLinksResponse))]
+[JsonSerializable(typeof(BoardGetRequest))]
+[JsonSerializable(typeof(BoardSettingsDto))]
+[JsonSerializable(typeof(BoardColumnResponse))]
+[JsonSerializable(typeof(BoardLaneResponse))]
+[JsonSerializable(typeof(BoardCardResponse))]
+[JsonSerializable(typeof(BoardGetResponse))]
+[JsonSerializable(typeof(BoardUpdateSettingsRequest))]
+[JsonSerializable(typeof(BoardSettingsResponse))]
+[JsonSerializable(typeof(BoardMoveRequest))]
+[JsonSerializable(typeof(BoardMoveResponse))]
 [JsonSerializable(typeof(TaskQueryRequest))]
 [JsonSerializable(typeof(QueryRowResponse))]
 [JsonSerializable(typeof(TaskQueryResponse))]
@@ -502,6 +627,7 @@ internal static class Program
 [JsonSerializable(typeof(GoalFactDto))]
 [JsonSerializable(typeof(WeekProgressDto))]
 [JsonSerializable(typeof(FollowUpFactDto))]
+[JsonSerializable(typeof(MeetingFactDto))]
 [JsonSerializable(typeof(SummaryFactsDto))]
 [JsonSerializable(typeof(SummaryCountsDto))]
 [JsonSerializable(typeof(SummaryHeaderDto))]

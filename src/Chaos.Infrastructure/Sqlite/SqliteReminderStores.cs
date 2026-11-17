@@ -152,7 +152,7 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
 }
 
 /// <summary>Desired and delivered notifications (migration 010).</summary>
-public sealed class SqliteNotificationJobStore(SqliteConnection connection) : INotificationJobStore
+public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chaos.Application.Activity.IActivityRecorder? activity = null) : INotificationJobStore
 {
     public async Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct) =>
         (await ReadAsync("SELECT * FROM NotificationJobs WHERE Id=$a", ct, ("$a", id))).FirstOrDefault();
@@ -169,6 +169,7 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection) : IN
 
     public async Task AddAsync(NotificationJobRecord row, CancellationToken ct)
     {
+        activity?.Note("notification_job", row.Id, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO NotificationJobs (Id,ProfileId,TaskId,SourceKind,SourceId,Generation,Sequence,Reason,TargetAtUtc,NotBeforeUtc,DeliverAtUtc,
@@ -182,6 +183,7 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection) : IN
 
     public async Task<bool> UpdateAsync(NotificationJobRecord row, NotificationJobState expectedState, CancellationToken ct)
     {
+        activity?.Note("notification_job", row.Id, Chaos.Application.Activity.ActivityOp.Upsert);
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE NotificationJobs SET NotBeforeUtc=$notBefore,DeliverAtUtc=$deliverAt,State=$state,DeliveredAtUtc=$delivered,

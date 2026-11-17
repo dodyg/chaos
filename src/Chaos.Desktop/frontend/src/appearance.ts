@@ -111,6 +111,22 @@ export const presetThemes: Theme[] = [
     light: { background: "#ffffff", surface: "#ffffff", sidebar: "#f2f2f2", hover: "#e3e3e3", text: "#000000", mutedText: "#333333", border: "#6b6b6b" },
     dark: { background: "#000000", surface: "#0a0a0a", sidebar: "#050505", hover: "#262626", text: "#ffffff", mutedText: "#d4d4d4", border: "#8a8a8a" } }),
   preset({ name: "Roomy", font: "sitka", size: 17, accent: "#495bc1", density: "spacious", radius: "large" }),
+  preset({ name: "Dracula", accent: "#a06be0", mode: "dark", radius: "small",
+    dark: { background: "#1e1f2b", surface: "#282a3a", sidebar: "#232434", hover: "#343650", text: "#f2f2f7", mutedText: "#a9acc6", border: "#3c3f5a" } }),
+  preset({ name: "Sunset", font: "trebuchet", accent: "#d9552b", radius: "large",
+    light: { background: "#fff6f0", surface: "#fffbf8", sidebar: "#fde9dc", hover: "#fadccb", text: "#3d2218", mutedText: "#7d5546", border: "#f3d2bf" },
+    dark: { background: "#211513", surface: "#2b1c19", sidebar: "#251815", hover: "#38251f", text: "#f7e8e1", mutedText: "#b99a8d", border: "#44302a" } }),
+  preset({ name: "Mint", font: "calibri", accent: "#1f9d78", radius: "large",
+    light: { background: "#f1faf6", surface: "#fbfffd", sidebar: "#e3f4ec", hover: "#d5eee3", text: "#12332a", mutedText: "#4a6e62", border: "#c9e6d9" },
+    dark: { background: "#0e1c17", surface: "#142720", sidebar: "#10211b", hover: "#1c3329", text: "#dff3ea", mutedText: "#8db3a3", border: "#234235" } }),
+  preset({ name: "Sepia", font: "palatino", accent: "#9a5b2e", mode: "light", radius: "none",
+    light: { background: "#f1e7d3", surface: "#f8f0e0", sidebar: "#e8dcc2", hover: "#dfd1b3", text: "#33261a", mutedText: "#675238", border: "#d3c3a1" } }),
+  preset({ name: "Slate", font: "verdana", accent: "#3b82c4", density: "comfortable", radius: "medium",
+    light: { background: "#f1f5f9", surface: "#f9fbfd", sidebar: "#e6ecf3", hover: "#dbe4ee", text: "#0f172a", mutedText: "#51607a", border: "#d0dae6" },
+    dark: { background: "#0f172a", surface: "#162036", sidebar: "#121b30", hover: "#1f2b45", text: "#e6ecf6", mutedText: "#94a3bd", border: "#26334d" } }),
+  preset({ name: "Rose gold", font: "candara", accent: "#b76e79", radius: "round",
+    light: { background: "#fbf4f3", surface: "#fffaf9", sidebar: "#f5e6e4", hover: "#efdbd8", text: "#3a2528", mutedText: "#7a5a5e", border: "#e9d0cd" },
+    dark: { background: "#1d1517", surface: "#271c1f", sidebar: "#211719", hover: "#33252a", text: "#f5e7e8", mutedText: "#b89ca0", border: "#40303a" } }),
 ];
 
 const activeKey = "chaos.appearance.active.v1";

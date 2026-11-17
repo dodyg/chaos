@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Activity;
 using Chaos.Infrastructure.DataProtection;
 
 namespace Chaos.Desktop.Platform;
@@ -10,7 +11,7 @@ namespace Chaos.Desktop.Platform;
 /// the newest one is a day old and something changed since. Failures are kept by the backup
 /// manager for Settings and retried on the next check; nothing here blocks the UI.
 /// </summary>
-public sealed class BackupScheduler(DataProtectionService protection, TimeProvider clock) : IDisposable
+public sealed class BackupScheduler(DataProtectionService protection, TimeProvider clock, IJobRuns? jobRuns = null, IActivityFeed? activity = null) : IDisposable
 {
     public static readonly TimeSpan FirstCheck = TimeSpan.FromMinutes(2);
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(30);
@@ -32,7 +33,16 @@ public sealed class BackupScheduler(DataProtectionService protection, TimeProvid
 
         try
         {
-            await protection.RunScheduledBackupIfDueAsync(CancellationToken.None);
+            await JobPass.RunAsync(jobRuns, ActivitySources.Schedule, ActivityActions.BackupCheck, async ct =>
+            {
+                await protection.RunScheduledBackupIfDueAsync(ct);
+                // The same timer keeps the activity log within its retention rules (PLAN2 §6.4).
+                if (activity is not null)
+                {
+                    using var prune = ActivityScope.Open(ActivitySources.Schedule, ActivityActions.ActivityPrune);
+                    await activity.PruneAsync(ct);
+                }
+            }, CancellationToken.None);
         }
         catch (AppException error)
         {

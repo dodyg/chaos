@@ -1,3 +1,4 @@
+using Chaos.Application.Activity;
 using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
@@ -51,6 +52,7 @@ public sealed class HistoryRpcService(TaskHistoryCommands history, GitHubSyncEng
     [NeoRpcMethod("list")]
     public async ValueTask<HistoryListResponse> ListAsync(HistoryTaskRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("history.list");
         try { return new(true, [.. (await history.ListAsync(request.TaskId, ct)).Select(HistoryRpc.Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -58,6 +60,7 @@ public sealed class HistoryRpcService(TaskHistoryCommands history, GitHubSyncEng
     [NeoRpcMethod("asOf")]
     public async ValueTask<HistoryAsOfResponse> AsOfAsync(HistoryAsOfRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("history.asOf");
         try
         {
             TaskAsOf result;
@@ -80,6 +83,7 @@ public sealed class HistoryRpcService(TaskHistoryCommands history, GitHubSyncEng
     [NeoRpcMethod("restoreFields")]
     public async ValueTask<TaskOperationResponse> RestoreFieldsAsync(RestoreFieldsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("history.restoreFields");
         try
         {
             var fields = request.Fields.Select(field => Enum.TryParse<RestorableTaskField>(field, ignoreCase: true, out var value) && Enum.IsDefined(value)
@@ -100,6 +104,7 @@ public sealed class DiaryRpcService(DiaryCommands diary, GitHubSyncEngine? sync 
     [NeoRpcMethod("list")]
     public async ValueTask<DiaryListResponse> ListAsync(DiaryListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("diary.list");
         try { return new(true, [.. (await diary.ListAsync(request.TaskId, request.IncludeDeleted, ct)).Select(HistoryRpc.Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -107,6 +112,7 @@ public sealed class DiaryRpcService(DiaryCommands diary, GitHubSyncEngine? sync 
     [NeoRpcMethod("timeline")]
     public async ValueTask<TimelineResponse> TimelineAsync(HistoryTaskRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("diary.timeline");
         try
         {
             var items = await diary.TimelineAsync(request.TaskId, ct);
@@ -118,6 +124,7 @@ public sealed class DiaryRpcService(DiaryCommands diary, GitHubSyncEngine? sync 
     [NeoRpcMethod("revisions")]
     public async ValueTask<DiaryRevisionsResponse> RevisionsAsync(DiaryRevisionsRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("diary.revisions");
         try
         {
             var rows = await diary.RevisionsAsync(request.EntryId, ct);
@@ -127,24 +134,36 @@ public sealed class DiaryRpcService(DiaryCommands diary, GitHubSyncEngine? sync 
     }
 
     [NeoRpcMethod("add")]
-    public async ValueTask<DiaryOperationResponse> AddAsync(DiaryAddRequest request, CancellationToken ct) =>
-        await RunAsync(() =>
+    public async ValueTask<DiaryOperationResponse> AddAsync(DiaryAddRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("diary.add");
+        return await RunAsync(() =>
         {
             DateTimeOffset? at = string.IsNullOrEmpty(request.EntryAtUtc) ? null : StorageFormats.ParseInstant(request.EntryAtUtc) ?? throw AppException.Validation("entryAtUtc", "Choose a valid entry time.");
             return diary.AddAsync(new(request.OperationId, request.TaskId, request.Markdown, at, request.PostToGitHub), ct);
         });
+    }
 
     [NeoRpcMethod("edit")]
-    public async ValueTask<DiaryOperationResponse> EditAsync(DiaryEditRequest request, CancellationToken ct) =>
-        await RunAsync(() => diary.EditAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion), request.Markdown), ct));
+    public async ValueTask<DiaryOperationResponse> EditAsync(DiaryEditRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("diary.edit");
+        return await RunAsync(() => diary.EditAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion), request.Markdown), ct));
+    }
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<DiaryOperationResponse> DeleteAsync(DiaryChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => diary.DeleteAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion), request.DeleteOnGitHub), ct));
+    public async ValueTask<DiaryOperationResponse> DeleteAsync(DiaryChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("diary.delete");
+        return await RunAsync(() => diary.DeleteAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion), request.DeleteOnGitHub), ct));
+    }
 
     [NeoRpcMethod("restore")]
-    public async ValueTask<DiaryOperationResponse> RestoreAsync(DiaryChangeRequest request, CancellationToken ct) =>
-        await RunAsync(() => diary.RestoreAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion)), ct));
+    public async ValueTask<DiaryOperationResponse> RestoreAsync(DiaryChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("diary.restore");
+        return await RunAsync(() => diary.RestoreAsync(new(request.OperationId, request.EntryId, HistoryRpc.Version(request.ExpectedVersion)), ct));
+    }
 
     private async ValueTask<DiaryOperationResponse> RunAsync(Func<Task<DiaryMutationResult>> action)
     {
@@ -160,6 +179,7 @@ public sealed class UndoRpcService(UndoCommands undo)
     [NeoRpcMethod("list")]
     public async ValueTask<UndoListResponse> ListAsync(UndoListRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("undo.list");
         try { return new(true, [.. (await undo.ListAsync(request.Limit <= 0 ? 10 : request.Limit, ct)).Select(row => new UndoEntryResponse(row.OperationId, row.Label, StorageFormats.Instant(row.AppliedAtUtc)))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }
@@ -167,6 +187,7 @@ public sealed class UndoRpcService(UndoCommands undo)
     [NeoRpcMethod("undo")]
     public async ValueTask<UndoResponse> UndoAsync(UndoRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Open(ActivitySources.Undo, "undo.undo");
         try { return new(true, (await undo.UndoAsync(new(request.OperationId, request.TargetOperationId), ct)).Label, null); }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -187,6 +208,7 @@ public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommand
     [NeoRpcMethod("openExternal")]
     public ValueTask<OpenExternalResponse> OpenExternalAsync(OpenExternalRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("markdown.openExternal");
         ct.ThrowIfCancellationRequested();
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https" or "mailto") || request.Url.Length > 2048)
         {
@@ -215,6 +237,7 @@ public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommand
     [NeoRpcMethod("convertChecklist")]
     public async ValueTask<ChecklistConvertResponse> ConvertChecklistAsync(ChecklistConvertRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("markdown.convertChecklist");
         try
         {
             var result = await checklists.ConvertAsync(new(request.OperationId, request.TaskId, [.. request.Items.Select(item => new ChecklistItem(item.ItemKey, item.Title, item.Done))]), ct);
@@ -227,6 +250,7 @@ public sealed class MarkdownRpcService(ChecklistCommands checklists, TaskCommand
     [NeoRpcMethod("resolveLinks")]
     public async ValueTask<LinkResolveResponse> ResolveLinksAsync(LinkResolveRequest request, CancellationToken ct)
     {
+        using var rpcScope = ActivityScope.Rpc("markdown.resolveLinks");
         try { return new(true, [.. (await tasks.ResolveLinksAsync(request.TaskIds, ct)).Select(task => new LinkTargetResponse(task.Id, task.Title, task.DeletedAtUtc is not null))], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
     }

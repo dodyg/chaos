@@ -34,6 +34,11 @@ public interface IDataSession
     IBackupCatalogStore Backups { get; }
     IImportStore Imports { get; }
     IGitHubStore GitHub { get; }
+    IBoardStore Boards { get; }
+    ISavedViewStore SavedViews { get; }
+    ICalendarStore Calendars { get; }
+    /// <summary>Device-only writers note their changes here (PLAN2 §6.4 rule 3).</summary>
+    Chaos.Application.Activity.IActivityRecorder Activity { get; }
 }
 
 /// <summary>My Day plans and their membership rows (PLAN §10), within the caller's transaction.</summary>
@@ -83,7 +88,7 @@ public interface IWeekPlanStore
     Task<WeekGoalRecord?> UpdateGoalOutcomeAsync(WeekGoalRecord goal, long expectedVersion, CancellationToken ct);
     /// <summary>Confirmed assignments ordered by (day, Position, Id); pool items (no day) last.</summary>
     Task<IReadOnlyList<WeekAssignmentRecord>> ListAssignmentsAsync(string weekPlanId, CancellationToken ct);
-    /// <summary>Replaces every confirmed goal, goal link and assignment of the plan with the given rows.</summary>
+    /// <summary>Replaces every confirmed goal, goal link and assignment of the plan with the given rows. A goal's links are removed with the goal.</summary>
     Task ReplaceContentAsync(string weekPlanId, IReadOnlyList<WeekGoalRecord> goals, IReadOnlyList<WeekAssignmentRecord> assignments, CancellationToken ct);
     Task AddRevisionAsync(string weekPlanId, long revision, string snapshot, DateTimeOffset confirmedAtUtc, CancellationToken ct);
     Task<long> CountRevisionsAsync(string weekPlanId, CancellationToken ct);
@@ -419,15 +424,15 @@ public interface ITagStore
     /// <returns>False when the link already existed.</returns>
     Task<bool> AddTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
     /// <returns>False when there was no such link.</returns>
-    Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct);
+    Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
     Task<bool> AddSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
-    Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct);
+    Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
 
     Task<IReadOnlyList<string>> ListPadTagIdsAsync(string padItemId, CancellationToken ct);
     /// <summary>Pad item IDs linked to this exact tag, including tombstoned items.</summary>
     Task<IReadOnlyList<string>> ListPadItemIdsAsync(string tagId, CancellationToken ct);
     Task<bool> AddPadLinkAsync(string padItemId, string tagId, CancellationToken ct);
-    Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct);
+    Task<bool> RemovePadLinkAsync(string padItemId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct);
 }
 
 /// <summary>
@@ -465,6 +470,55 @@ public interface IBackupCatalogStore
 }
 
 /// <summary>
+/// Board settings rows and the card reads a board needs (PLAN2 P2). Settings are a synced
+/// aggregate; the card reads are ordinary read-snapshot queries over tasks, subtasks, tag
+/// links and GitHub issue links.
+/// </summary>
+public interface IBoardStore
+{
+    /// <summary>The target's active settings row, or null when the board still uses the defaults.</summary>
+    Task<BoardSettingsRecord?> GetAsync(BoardTargetKind targetKind, string targetId, CancellationToken ct);
+    Task AddAsync(BoardSettingsRecord settings, CancellationToken ct);
+    Task<BoardSettingsRecord?> UpdateAsync(BoardSettingsRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>Active top-level tasks of one container with subtask progress and an issue-link mark, ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<BoardCardRow>> ListCardsAsync(string containerId, CancellationToken ct);
+    /// <summary>Active task-tag links of one container's tasks, ordered by (TaskId, TagId).</summary>
+    Task<IReadOnlyList<BoardCardTag>> ListCardTagsAsync(string containerId, CancellationToken ct);
+    /// <summary>Subtask progress and the issue-link mark for these tasks, keyed by task id (a view's board reads cards across lists).</summary>
+    Task<IReadOnlyDictionary<string, BoardCardExtras>> ListCardExtrasAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
+}
+
+/// <summary>
+/// Saved custom views and their device-local alert baseline (PLAN2 P3). Views are a synced
+/// aggregate; the match rows record what this device's alert evaluator has already seen.
+/// </summary>
+public interface ISavedViewStore
+{
+    /// <summary>One view by id, deleted ones included (restore needs them); null when it never existed.</summary>
+    Task<SavedViewRecord?> GetAsync(string id, CancellationToken ct);
+    /// <summary>The space's views ordered by (Position, Id); deleted ones only when asked.</summary>
+    Task<IReadOnlyList<SavedViewRecord>> ListAsync(string spaceId, bool includeDeleted, CancellationToken ct);
+    Task AddAsync(SavedViewRecord view, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<SavedViewRecord?> UpdateAsync(SavedViewRecord updated, long expectedVersion, CancellationToken ct);
+    Task<IReadOnlyList<SavedViewMatchRecord>> ListMatchesAsync(string viewId, CancellationToken ct);
+    /// <summary>Replaces one view's baseline with exactly these rows.</summary>
+    Task ReplaceMatchesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> matches, CancellationToken ct);
+    /// <summary>Writes baseline rows that are new or changed (a task seen for the first time, or one that left or returned) and removes the given tasks.</summary>
+    Task ApplyMatchChangesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> upserts, IReadOnlyList<string> removedTaskIds, CancellationToken ct);
+    Task AddAlertAsync(ViewAlertRecord alert, CancellationToken ct);
+    Task<ViewAlertRecord?> GetAlertAsync(string id, CancellationToken ct);
+    /// <summary>The view's pending alert, if one is waiting for its delivery time.</summary>
+    Task<ViewAlertRecord?> FindPendingAlertAsync(string viewId, CancellationToken ct);
+    /// <summary>Writes the alert when it is still in <paramref name="expected"/> state; false when it changed meanwhile.</summary>
+    Task<bool> UpdateAlertAsync(ViewAlertRecord alert, ViewAlertState expected, CancellationToken ct);
+    /// <summary>Pending alerts whose delivery time has come, oldest first.</summary>
+    Task<IReadOnlyList<ViewAlertRecord>> ListDueAlertsAsync(DateTimeOffset now, int limit, CancellationToken ct);
+    /// <summary>Delivered alerts waiting to be dismissed, newest first.</summary>
+    Task<IReadOnlyList<ViewAlertRecord>> ListDeliveredAlertsAsync(int limit, CancellationToken ct);
+}
+
+/// <summary>
 /// The application store owns transactions and read snapshots (PLAN §4 IApplicationStore /
 /// IUnitOfWork). Writes run on a single serialized storage worker; changes are published
 /// only after commit by the implementation.
@@ -487,4 +541,41 @@ public interface IImportStore
     /// <summary>Records (or re-points, after the earlier task was deleted) the task an item became.</summary>
     Task MapItemAsync(string itemFingerprint, string batchId, string taskId, string sourceKey, CancellationToken ct);
     Task<IReadOnlyList<Transfer.ImportBatchRecord>> ListBatchesAsync(int limit, CancellationToken ct);
+}
+
+/// <summary>
+/// Calendar sources, the device-local meeting cache and event links (PLAN2 P5). Sources and links are
+/// synced aggregates; events and fetch state stay on this device.
+/// </summary>
+public interface ICalendarStore
+{
+    Task<CalendarSourceRecord?> GetSourceAsync(string id, CancellationToken ct);
+    /// <summary>Active (not removed) sources ordered by (Position, Id).</summary>
+    Task<IReadOnlyList<CalendarSourceRecord>> ListSourcesAsync(CancellationToken ct);
+    Task AddSourceAsync(CalendarSourceRecord source, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<CalendarSourceRecord?> UpdateSourceAsync(CalendarSourceRecord updated, long expectedVersion, CancellationToken ct);
+
+    Task<CalendarSourceState?> GetStateAsync(string sourceId, CancellationToken ct);
+    Task SaveStateAsync(CalendarSourceState state, CancellationToken ct);
+
+    /// <summary>Replaces every cached event of the source with these rows.</summary>
+    Task ReplaceEventsAsync(string sourceId, IReadOnlyList<CalendarEventRecord> events, CancellationToken ct);
+    Task DeleteEventsAsync(string sourceId, CancellationToken ct);
+    /// <summary>Events of enabled, active sources that may touch the half-open UTC window, ordered by start. Date-only events are matched by date.</summary>
+    Task<IReadOnlyList<CalendarEventRecord>> ListEventsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, DateOnly fromDate, DateOnly toDate, CancellationToken ct);
+    Task<CalendarEventRecord?> GetEventAsync(string sourceId, string externalId, CancellationToken ct);
+
+    Task<GoogleAccountRecord?> GetAccountAsync(string id, CancellationToken ct);
+    /// <summary>Active Google accounts, oldest first.</summary>
+    Task<IReadOnlyList<GoogleAccountRecord>> ListAccountsAsync(CancellationToken ct);
+    Task AddAccountAsync(GoogleAccountRecord account, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<GoogleAccountRecord?> UpdateAccountAsync(GoogleAccountRecord updated, long expectedVersion, CancellationToken ct);
+    Task<GoogleAccountState?> GetAccountStateAsync(string accountId, CancellationToken ct);
+    Task SaveAccountStateAsync(GoogleAccountState state, CancellationToken ct);
+
+    Task<CalendarEventLinkRecord?> FindLinkAsync(string taskId, CancellationToken ct);
+    Task<IReadOnlyList<CalendarEventLinkRecord>> ListLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
+    Task AddLinkAsync(CalendarEventLinkRecord link, CancellationToken ct);
 }

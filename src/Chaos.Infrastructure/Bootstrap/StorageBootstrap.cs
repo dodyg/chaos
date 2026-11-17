@@ -101,12 +101,20 @@ public static class StorageBootstrap
                 // Verifies FTS5 and (re)builds the search index when its normalization is stale,
                 // including the first start after migration 003 (PLAN §5).
                 await Search.SearchIndexWriter.EnsureCurrentAsync(migrationConnection, clock.GetUtcNow(), ct);
+                // Change capture (PLAN2 §7.3): recreates the TR_Sync_% triggers when the catalog
+                // changed — that is, after any migration that touched the schema.
+                Sync.SyncTriggerInstaller.Install(migrationConnection);
             }
 
-            var store = new SqliteApplicationStore(source);
+            var store = new SqliteApplicationStore(source, new Sync.SyncFlush(clock), clock);
             try
             {
-                var profileId = await SeedAsync(store, ids, clock, ct);
+                string profileId;
+                using (Chaos.Application.Activity.ActivityScope.Open(Chaos.Application.Activity.ActivitySources.System, Chaos.Application.Activity.ActivityActions.Seed))
+                {
+                    profileId = await SeedAsync(store, ids, clock, ct);
+                }
+
                 return new ChaosStorageHandle(lockHandle)
                 {
                     DatabasePath = options.DatabasePath,
@@ -196,6 +204,14 @@ public static class StorageBootstrap
                 };
                 await session.Containers.AddAsync(inbox, token);
             }
+
+            // One device identity per data root (PLAN2 §7.1, migration 024). Restores keep the
+            // current device's DeviceSettings rows (DataProtectionService), so this only fills
+            // a database that has none: a fresh data root, or a reset.
+            var device = ((SqliteDataSession)session).Connection.CreateCommand();
+            device.CommandText = "INSERT OR IGNORE INTO DeviceSettings (Key, Value) VALUES ('DeviceId', $id);";
+            device.Parameters.AddWithValue("$id", ids.NewId().ToString("N"));
+            await device.ExecuteNonQueryAsync(token);
 
             return profile.Id;
         }, ct);

@@ -11,6 +11,21 @@ public sealed record DayAvailability(int TotalMinutes, int? WorkMinutes)
     public static DayAvailability DefaultFor(DayOfWeek weekday) =>
         weekday is DayOfWeek.Saturday or DayOfWeek.Sunday ? new(0, null) : new(8 * 60, null);
 
+    /// <summary>
+    /// What is left after busy meeting minutes (PLAN2 §10.4): the total reduced and floored at zero, and a
+    /// work allowance that never exceeds what remains.
+    /// </summary>
+    public DayAvailability AfterMeetings(int busyMinutes)
+    {
+        if (busyMinutes <= 0)
+        {
+            return this;
+        }
+
+        var total = Math.Max(0, TotalMinutes - busyMinutes);
+        return new DayAvailability(total, WorkMinutes is { } work ? Math.Min(work, total) : null);
+    }
+
     /// <returns>Null when valid, otherwise a message naming the problem.</returns>
     public string? Problem() =>
         TotalMinutes is < 0 or > MaxMinutes ? "Available time must be between 0 and 24 hours."

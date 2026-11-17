@@ -1,5 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
+import { useActivity } from "./activity";
 import { summaryRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
 import { BookOpen, CalendarArrowUp, Check, NotebookPen, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export function countsText(header: SummaryHeaderDto) {
  * The "summary ready" prompt (PLAN §12): the newest unseen summary per kind, shown once its
  * time has come and outside quiet hours. Opening or dismissing it marks it seen.
  */
-export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }: { api?: typeof summaryRpc; intervalMs?: number; onOpen: (summaryId: string) => void }) {
+export function SummaryPrompts({ api = summaryRpc, onOpen }: { api?: typeof summaryRpc; onOpen: (summaryId: string) => void }) {
   const [prompts, setPrompts] = React.useState<SummaryHeaderDto[]>([]);
   const load = React.useCallback(async () => {
     try {
@@ -54,9 +55,9 @@ export function SummaryPrompts({ api = summaryRpc, intervalMs = 60_000, onOpen }
 
   React.useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), intervalMs);
-    return () => clearInterval(timer);
-  }, [load, intervalMs]);
+  }, [load]);
+  // A summary generated on schedule is a new summary row; its prompt appears without polling.
+  useActivity(["summary"], () => void load());
 
   async function dismiss(prompt: SummaryHeaderDto, open: boolean) {
     setPrompts(current => current.filter(item => item.id !== prompt.id));
@@ -246,6 +247,9 @@ function SummaryDetail({ detail, api, working, onRevision, onRegenerate, onOpenT
         </li>)}</ul>}
       </Section>}
       <CarryOver detail={detail} api={api} next={next} onOpenTask={onOpenTask} onCarried={onCarried}/>
+      {(facts.meetings ?? []).length > 0 && <Section title="Meetings" count={(facts.meetings ?? []).length}>
+        <ul className="grid gap-1">{(facts.meetings ?? []).map((item, index) => <li key={`${item.date}-${index}`} className="rounded-lg border bg-card px-3 py-1.5 text-sm">{item.title}<span className="ml-2 text-xs text-muted-foreground">{item.date}{item.allDay ? "" : ` ${item.start ?? ""}–${item.end ?? ""}`}</span></li>)}</ul>
+      </Section>}
       {facts.waiting.length > 0 && <Section title="Waiting on someone" count={facts.waiting.length}>
         <ul className="grid gap-1">{facts.waiting.map(item => <TaskItem key={item.task.taskId} task={item.task} onOpen={onOpenTask}>
           {item.person && <span className="text-xs text-muted-foreground"><bdi>{item.person}</bdi></span>}
@@ -331,12 +335,12 @@ function CarryOver({ detail, api, next, onOpenTask, onCarried }: { detail: Summa
 /** When summaries are made: morning, evening and weekly. An empty time or day turns that one off. */
 function SummarySchedule({ api }: { api: typeof summaryRpc }) {
   const [settings, setSettings] = React.useState<SummarySettingsResponse | null>(null);
-  const [draft, setDraft] = React.useState({ morningTime: "", eveningTime: "", weeklyDay: "" });
+  const [draft, setDraft] = React.useState({ morningTime: "", eveningTime: "", weeklyDay: "", includeMeetings: false });
   const [status, setStatus] = React.useState<string | null>(null);
 
   const adopt = React.useCallback((result: SummarySettingsResponse) => {
     setSettings(result);
-    setDraft({ morningTime: result.morningTime ?? "", eveningTime: result.eveningTime ?? "", weeklyDay: result.weeklyDay ?? "" });
+    setDraft({ morningTime: result.morningTime ?? "", eveningTime: result.eveningTime ?? "", weeklyDay: result.weeklyDay ?? "", includeMeetings: result.includeMeetings });
   }, []);
 
   React.useEffect(() => {
@@ -346,7 +350,7 @@ function SummarySchedule({ api }: { api: typeof summaryRpc }) {
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!settings?.version) return;
-    const result = await api.updateSettings({ operationId: operationId(), expectedVersion: settings.version, morningTime: draft.morningTime || null, eveningTime: draft.eveningTime || null, weeklyDay: draft.weeklyDay || null });
+    const result = await api.updateSettings({ operationId: operationId(), expectedVersion: settings.version, morningTime: draft.morningTime || null, eveningTime: draft.eveningTime || null, weeklyDay: draft.weeklyDay || null, includeMeetings: draft.includeMeetings });
     if (result.ok) { adopt(result); setStatus("Schedule saved."); } else setStatus(result.error?.message ?? "Could not save the schedule.");
   }
 
@@ -359,6 +363,7 @@ function SummarySchedule({ api }: { api: typeof summaryRpc }) {
           <NativeSelectOption value="">Off</NativeSelectOption>
           {weekdays.map(day => <NativeSelectOption key={day} value={day}>{day}</NativeSelectOption>)}
         </NativeSelect></Field>
+        <label className="inline-flex items-center gap-1.5 pb-2 text-sm"><input type="checkbox" className="accent-primary" checked={draft.includeMeetings} onChange={event => setDraft({ ...draft, includeMeetings: event.target.checked })}/>Include meetings in summaries</label>
         <Button disabled={!settings}>Save</Button>
       </div>
       <p className="text-xs text-muted-foreground">Clear a time to stop that summary. The weekly summary covers the week that has just ended, at the evening time. Prompts wait until quiet hours end. Summaries missed while Chaos was closed are made once when it starts.</p>

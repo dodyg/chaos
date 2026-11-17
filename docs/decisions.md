@@ -782,3 +782,221 @@ wider check and resets the normalization version so the next start rebuilds the 
 - **ICS subscription link needs no OAuth.** Importing a calendar's secret ICS address gives
   read-only meetings with no Google review and works for any user, so it can be built first
   and independently of the Google connection.
+
+## 2026-11-15 (Phase 2 owner decisions — status after P0)
+
+PLAN2 §4 lists eight decisions (D1–D8). Status after package P0; defaults are in use where the
+plan provides one, and each blocking package stays unticked until the owner confirms or replaces:
+
+- **D1 (phone client in Phase 2)** — default adopted: no; Phase 2 is desktop plus service. P19
+  will be recorded as not applicable unless the owner says otherwise.
+- **D2 (hosting)** — default stands (any Linux container host with managed PostgreSQL, S3-compatible
+  storage, key vault). Affects P20 only; nothing in code depends on it.
+- **D3 (domain, email sender)** — `https://sync.<owner-domain>` placeholder; affects P12's live
+  exit and P20, not P1–P11.
+- **D4 (sign-in providers)** — default adopted: email code + Google first; Microsoft, Apple and
+  GitHub share the code path and stay off until registered. Affects P14 exits only.
+- **D5 (attachment limits)** — default adopted: 100 MiB per file, 5 GiB per account, enforced by
+  the server, configurable. The local client cap (P9) is 100 MiB.
+- **D6 (has Phase 1 proven itself?)** — **PENDING; no default exists.** The installed-desktop
+  checklist (`docs/acceptance.md`) and the WP0/WP10 interactive items need a person at a Windows
+  desktop with an installed MSIX; the implementing environment is headless. The owner instructed
+  "implement PLAN2 up to P11", which P1–P11 implementation proceeded on; the P0 and P1 checkboxes
+  stay unticked until D6 is answered (pass or written waiver).
+- **D7 (GitHub fields in personal custom views)** — default adopted: yes, personal views only;
+  shared views remain phase 3.
+- **D8 (calendar library)** — default adopted: FullCalendar standard (MIT) only. Spike note (P0,
+  `docs/desktop-support.md`): v7 restructured the packages; P4 pins `@fullcalendar/react@7.1.5`
+  and verifies the v7 API before use. No premium packages exist on npm (`@fullcalendar/premium`
+  is 404), so "standard only" is currently the whole registry offering.
+
+## 2026-11-15 (P1 sync foundation — implementation decisions)
+
+- **Link tombstones without partial unique indexes.** PLAN2 §7.2 asks for tombstoned link
+  tables to carry partial `WHERE DeletedAtUtc IS NULL` unique indexes. For the five link
+  tables (TaskTags, SubtaskTags, ScratchPadTags, PageTags, WeekGoalTasks) uniqueness is the
+  composite **primary key**, which SQLite cannot make partial. Instead the row stays and a
+  re-added link **un-tombstones** it (`ON CONFLICT … DO UPDATE SET DeletedAtUtc = NULL`),
+  which preserves the same guarantee: a removed link never blocks re-adding it. The catalog
+  records the classification comment; no unique rule is needed for a primary key.
+- **WeekGoalTasks loses its `ON DELETE CASCADE`.** Goals are replaced wholesale when a week
+  is re-confirmed, so a cascade would erase even tombstoned links without the store seeing
+  the removal. Migration 024 rebuilds the table in place (rows and index carried over).
+  Content replacement removes a goal's links physically with the goal — the removal travels
+  as a purge, like the goal's own; `DeletedAtUtc` remains for removals that keep the parent
+  and for tombstones the sync applier writes. Tag links (TaskTags, SubtaskTags,
+  ScratchPadTags, PageTags) do tombstone: their removal is a user-facing change on a living
+  entity.
+- **Purge takes tombstoned links of purged owners.** A purged tag or task removes its link
+  rows entirely (they are dependents), which the link tables' foreign keys require anyway;
+  a **live** task's tombstoned link survives, because the removal it records still has to
+  sync (`DataPurge` collects deletable tags per pass and removes their links first).
+- **Restore keeps this device's identity.** Every restore rewrites `DeviceSettings` with the
+  live database's rows (`OpenAndPrepareAsync`), so neither a backup nor an archive can import
+  another device's identity; archives exclude `DeviceSettings` and every `Sync*` table, and
+  a reset starts a fresh identity. Seeding (`INSERT OR IGNORE`) only fills a database that
+  has none.
+- **Capture triggers deduplicate with `WHERE NOT EXISTS`, not `INSERT OR IGNORE`.** SQLite
+  gives statements inside a trigger program the conflict-resolution algorithm of the
+  statement that fired the trigger, so an ordinary write's default ABORT overrides the
+  trigger's `OR IGNORE`, and a field group whose pending row already existed (captured by an
+  earlier write) failed the SyncPending key. The pending inserts therefore carry an explicit
+  `WHERE NOT EXISTS` probe, and multi-column group comparisons are parenthesized (`AND`
+  binds tighter than `OR` — the first generated version silently dropped the guard for all
+  but the last column of a group).
+
+## 2026-11-15 (P2 Kanban board - implementation decisions)
+
+- **BoardSettings rows use a deterministic id** (`boardsetting:{targetKind}:{targetId}`,
+  UUIDv5) rather than a random one, so two devices that configure the same target offline
+  converge on one row and the `UX_BoardSettings_Target` unique index needs no duplicate rule
+  (a catalog exemption, like Sections). The plan left the id open; the natural key is stable.
+- **The tag-group choice lives in two extra columns** (`ColumnTagId`, `SwimlaneTagId`) that
+  the plan's column list did not name: grouping by a tag group is meaningless without saying
+  which parent tag, and columns and lanes can pick different parents. They travel in the
+  `grouping` field group.
+- **A card move is one composed operation, not a chain of commands.** `board.move` performs
+  the column's field change and the within-column reorder inside one transaction with one
+  OperationId, so it produces exactly one receipt and one undo entry ("Move task on board").
+  The status-change core was extracted from `TaskCommands.SetStatusAsync` into
+  `TaskCommands.ApplyStatusAsync` and reused; behaviour of the existing command is unchanged.
+- **A move names its neighbour card, not an index.** `board.move` takes `beforeTaskId` or
+  `afterTaskId` (neither keeps the card's place in the container order). An index counted
+  among the cards the board shows disagrees with the server's count whenever the board hides
+  tasks — the Work/Personal focus, hidden columns, tag columns sharing the container's rank
+  space — and the card landed in the wrong place. The neighbour is what the person saw.
+- **A dragged card keeps its swimlane.** Other lanes refuse the drop instead of accepting it
+  and leaving the card in its old lane: the lane is a task field `board.move` does not change.
+- **Board rows come from the board store, not the query specification.** A board's within-
+  column order is the container's manual rank order, which the query store does not return;
+  `IBoardStore.ListCardsAsync` joins tasks with subtask progress, tag links and the GitHub
+  mark in three statements. The Work/Personal focus filter is applied in the read model.
+- **`get` returns defaults without writing.** A target with no settings row gets the
+  defaults (Status columns, no lanes, version 0); the row is created only by the first
+  `updateSettings`. This keeps opening a board a pure read.
+- **Known gap, accepted for P2:** a container's board-settings row has no foreign key and
+  `DataPurge` does not remove it, so purging a list leaves an inert settings row that still
+  syncs. Harmless (it is keyed by target id and re-created lazily); P3 should decide whether
+  view settings share the fate of their target.
+
+## 2026-11-16 (PLAN2 P3, backend slice)
+
+- **The condition compiler is split across three layers.** `ViewFieldCatalog` (Domain) holds each
+  field's type and legal operators, because validation lives in the domain; `ViewFields`
+  (Application) resolves a validated tree into `ResolvedViewGroup` (names to stored integers,
+  relative dates to dates or UTC instants in the profile zone and first weekday); the store's
+  `ViewPredicateCompiler` turns that into parameterized SQL inside the same candidate CTE the
+  built-in views use. The plan's single "ViewFields with an SQL compiler" would have put SQL
+  in Application. Counts and rows therefore come from one specification.
+- **Relative dates.** "Next N days" is today through N−1 days ahead and "last N days" is N−1
+  days back through today (today counts); weeks start on the profile's first weekday. `before`,
+  `after` and `on` accept any relative phrase and use its start, end or whole range. `overdue`
+  is valid only as `inRange` on the due field; it shares one SQL builder
+  (`ViewPredicateCompiler.Overdue`) with the built-in Overdue view, and parity tests pin it.
+  A definition equal to the built-in Overdue also needs the open-status condition, as that view
+  adds it implicitly.
+- **Fields not offered yet.** `space` (there is one personal space), `has attachment` (P9) and
+  the GitHub group (D7 default yes; not built in this slice) are absent from the registry rather
+  than listed and unanswerable. "Page mention" means a task made from a page selection
+  (`PageTaskLinks`), "pad link" one made from a pad selection (`ScratchTaskLinks`), "recurring"
+  a task that is an occurrence of a series. `text` matches the task's own title and notes (search
+  document kind 1), not its subtasks or diary.
+- **Custom views include archived lists' tasks only when asked** (as built-in views do) and do
+  not imply "open": the definition's own status condition decides.
+- **Layouts.** `ViewLayout` v1 allows list, table and board; calendar is refused until P4.
+  "Manual" sort needs exactly one container fixed by a top-level `all` condition. A custom
+  view's board will reuse `BoardSettings` with `TargetKind = View`.
+- **Delete is a tombstone and Undo is Restore.** There is no operation-history entry for views;
+  the toast's Undo calls `restore` with the delete's version. Restoring a view with alerts
+  re-baselines it, as does enabling alerts or changing the definition of an alerting view, so a
+  change never notifies about tasks that already matched.
+- **Alert baseline rows stay for 24 h after a task leaves** (`SavedViewMatches.LeftAtUtc`) so the
+  "leaves and returns notifies only after 24 h" rule is a lookup, not a timer.
+- **Purge.** Task purge deletes the task's `SavedViewMatches` rows in both purge paths. Saved
+  views themselves have no purge path yet (like board settings).
+
+## 2026-11-16 (PLAN2 P3, GitHub fields, D7)
+
+- **D7 is taken as yes, for personal views only**, as the plan defaults. The group is answered purely from what the sync already stores: the issue link, its baseline JSON (state, label ids, milestone number, assignees) and the label and milestone mappings. No GitHub call is made and the conditions work offline.
+- **Offered:** repository (is, is not, one of; picked from the subscribed repositories), issue state (open or closed), label (name contains, or has none), milestone (title contains, or has none) and assignee (login contains, or has none). Positive conditions need an issue link; "repository is not" also matches tasks that are not from GitHub. Label and assignee text is a case-insensitive substring; milestone titles are known only for repositories that map milestones to projects, while "has none" works for every repository.
+- **Not offered, because the data is not stored:** the issue author, linked pull requests and pull request review state. The inbound sync keeps no author and fetches no timeline or pull request data, so a condition on them could only look like it worked. They need the sync to fetch and store them first; that is a change to the GitHub sync, not to views.
+- **The editor shows the group only when a repository is subscribed** (or the view already uses it), so people without GitHub never see fields that cannot match. An older baseline that stored only assignee ids has no logins, so "assignee contains" does not match it until the next sync refreshes it.
+
+## 2026-11-16 (PLAN2 P3, board layout on a view)
+
+- **A view's board is the P2 board with the view as its target.** Its settings are a `BoardSettings` row with `TargetKind = View` (the table already allowed it), so grouping, swimlanes, WIP limits and hidden columns are saved, synced and versioned exactly like a list board's. The cards are the view's own rows from the same specification as the list and table layouts, read in pages until 500 and flagged as truncated beyond that; nothing is read twice or differently.
+- **A view cannot group its board by section** (sections belong to one list), and `board.updateSettings` refuses it for a view target; a stale row that says Section reads as Status. Instead a view board may use one swimlane per list or project (`Container`), which a list board does not offer.
+- **A drop changes only the column.** Within a column the view's saved sort decides the order, and a rank is a per-list notion, so `board.move` from a view board sends no neighbour card and the board offers no Move up or Move down. Moving to Done, the open-subtask question and undo (one operation, one undo entry) are the existing `board.move` behaviour.
+- **`board.getView`** is a separate read method; `IBoardStore.ListCardExtrasAsync` supplies subtask progress and the GitHub mark for cards from many lists.
+
+## 2026-11-16 (PLAN2 P3, view alerts)
+
+- **View alerts have their own table, not a column on NotificationJobs.** The plan (item 6) asked for a nullable `SavedViewId` on `NotificationJobs`. Doing that means making `TaskId` optional and branching every task-bound path that reads a job: delivery, OS reconciliation, the notification center, snooze and Done, the toast adapter and its activation. Summaries took the same way out (package 11). `ViewAlerts` (migration 027, device-local, no task foreign key) holds one grouped alert per view with a pending, delivered, acknowledged or cancelled state, so the reminder delivery path is untouched and a bug in alerts cannot hold back a reminder. The plan's "record this" is this entry.
+- **Alerts are shown in the app, not by Windows.** An alert exists only because the running app found a match, so there is nothing to pre-schedule with the OS, and the toast adapter's activation opens a task, not a view. The in-app stack (`views.alerts`, polled like reminder alerts) has Open view and Dismiss. A Windows toast for view alerts waits for the installed adapter to support non-task activation; the delivered row records `Presentation = InApp`.
+- **Evaluation runs on the reminder engine's 30-second tick,** not "5 s after change events and every 15 minutes". The tick already runs, an evaluation is one candidate query per alerting view, and a relative-date view ("due in the next 7 days") then also moves on by itself. It is a cadence difference, not a behaviour one.
+- **The rules, as implemented.** Switching alerts on, restoring a view, or changing the definition of an alerting view re-baselines silently (`ViewAlertBaseline`). A task never in the baseline is new. A task that left and returns sooner than 24 hours is re-marked present without a notice; later, it is new. Baseline rows of tasks that left are kept 7 days (`LeftAtUtc`), then forgotten, so a much later return counts as new. New tasks found before a pending alert is delivered join it, so there is at most one pending alert per view; a newer delivered alert replaces an older one of the same view. Delivery is held until the profile's quiet hours end. Deleting a view or switching its alerts off cancels what is pending.
+- **Not done: clearing an alert on every device.** That is P17's acknowledgement sync; alerts are per device until then.
+
+## 2026-11-16 (PLAN2 P4, calendar view)
+
+- **FullCalendar 6.1.22, standard packages only (D8).** `@fullcalendar/core`, `react`, `daygrid`, `timegrid`, `list` and `interaction`, all MIT, pinned exactly in `package.json`. The v7 line exists but the v6 API is the one this component is written against; moving up is a separate, deliberate change. No premium packages.
+- **The calendar reads through the ordinary task query.** `CalendarQueries.RangeAsync` runs `TaskQueries` for the planned range and the due range, so tags, lists, the Work/Personal focus and a custom view's conditions behave exactly as in lists. `TaskQuerySpec.Unscheduled` (planned date is null) was added for the side panel. Planned and due entries come from separate queries, so a task planned and due on the same day shows twice (a block and a marker).
+- **Day totals ignore every filter except the focus.** Overload is a fact about the day, so a tag or list filter must not hide it. Totals use `Capacity.Measure` and My Week's availability (a confirmed override, else the weekday rule, else the default), the same precedence My Day uses. Busy meeting minutes are 0 until P5.
+- **Repeats start tomorrow.** Missed slots of a fixed-schedule series are suppressed, so nothing is projected for today or earlier; the series' own active task is the entry for its current occurrence. `RecurrenceCalculator.ProjectRange` is the bounded-range projection. Slots are local dates and times, so a daylight-saving change cannot move or drop one (tested across 2026-11-01).
+- **Caps.** 62 days and 2,000 entries (with a truncated flag), enforced in C#. A tag or custom-view filter reads at most 5,000 task ids to decide which repeating tasks match.
+- **Entries show the dates as stored.** A planned time keeps its own zone; the calendar does not convert it to the profile zone. Dragging onto a time slot stores the task's existing planned zone, or the profile zone when it had none.
+- **Drag is a task edit, so it is undoable** with the app-wide undo. Dropping on the all-day row clears the time. Only planned entries move: due markers and repeats never do.
+- **Keyboard path.** FullCalendar's own drag is pointer-only, so a planned entry's menu offers "Move to date…" and each unscheduled task offers "Plan…". Arrow keys on the focused grid move a highlighted day (up and down by a week), Enter opens that day. Due markers and repeats open their task on click.
+- **Calendar layout of a custom view** is `kind: "calendar"` in the layout JSON. The calendar is filtered by the view's definition; the unscheduled panel is filtered by it too.
+- **Space filter.** The control exists but only offers Personal today (the plan's data-model placeholder).
+- **Confirming a week plan sets planned dates (owner decision, 2026-11-16).** So the calendar and My Week agree, `MyWeekCommands.ConfirmAsync` makes each task's day assignment its planned date: one `task.updated` history entry per changed task under the confirm operation (so it is undoable), the time and the due date untouched. Finished or cancelled tasks, tasks already on that day, and unassigned pool tasks are left alone. This overrides the earlier "a week assignment never changes the task's dates"; My Day's own rule (adding to My Day never changes dates) is unchanged.
+
+## 2026-11-16 (PLAN2 P5, calendar feeds and meetings in planning)
+
+- **Migration 028, not 027.** The plan names `027_calendars.sql`, but 027 was taken by view alerts. The calendar tables are `028_calendars.sql`. `MaxKnownSchemaVersion` is 28.
+- **The feed address lives in `ISecretStore`, never in SQLite.** `CalendarSources` has no URL column; the key is `chaos/calendar-feed/{sourceId}`. The desktop implementation is `FileSecretStore` over `DpapiSecretProtector` (Windows data protection, current user): one file per key under `<data root>/secrets`, named by a hash of the key, outside the database, backups and exports. A file copied to another user or machine cannot be decrypted and reads as absent, and the source then says "this device does not have the calendar's address". A test scans every byte under the data root, including a JSON export, for the address.
+- **Each device holds its own address.** `CalendarSources` syncs (name, colour, busy flag, enabled, order, owner email) but the address does not, so a synced source on a second device shows the "address missing" error until it is added there. P6's per-device sign-in plays the same role for Google. Removing a calendar tombstones the row everywhere and deletes the local cache and address.
+- **Owner email (extra column).** The plan hides the person's own declined invitations "when the feed's owner can be identified". Feeds do not say whose they are, so a source has an optional "your email" (`OwnerEmail`, synced); without it a declined invitation is shown. A feed whose attendees are all unknown is never guessed at.
+- **Ical.Net 5.2.4 (MIT), pinned.** It brings NodaTime 3.2.2. Window: 7 days back to 56 days ahead, expanded lazily, capped at 5,000 meetings per feed. Zone ids that are not IANA (Outlook's "W. Europe Standard Time") are read through the system zone table; a zone that cannot be resolved falls back to Ical.Net's own UTC conversion. A parse failure keeps the old cache and shows "the address did not return a calendar Chaos can read".
+- **All-day meetings.** Shown at the top of the day; busy only with an explicit `TRANSP:OPAQUE`. A busy all-day meeting fills the whole day (24 h, or 23 or 25 on a daylight-saving day), so the day's capacity floors at zero. A multi-day meeting appears once per day.
+- **Busy maths.** `MeetingTime.BusyMinutes` is the union of busy intervals clipped to the local day (so overlaps count once, a meeting across midnight counts its share on each day, and the day is as long as it really is on a daylight-saving change). A meeting is busy only if its feed says so AND its calendar "counts as busy time". The meetings filter on the calendar hides them from view but never from the load.
+- **Capacity.** `DayAvailability.AfterMeetings` reduces the total (floored at 0) and caps the work allowance at what remains. The calendar, My Week and My Day measure against the reduced figure, but My Week keeps the configured availability beside it (`BusyMinutes` is a separate field) so editing availability never writes a net figure.
+- **My Day's fit warning.** Free time is `min(available − busy, time from now to the end of the day − meetings still to come)` for today, and `available − busy` for any other day. The plan says "end of the available hours", but availability is a total, not a window, so the end of the day stands in. The warning shows only on a day that has busy meetings (otherwise the evening would always warn), when the open tasks' estimates exceed the free time. It never changes anything.
+- **Make a task.** "Prepare: <title>", planned the day before the meeting, or the same day when it starts after 12:00 local; an all-day meeting plans the day before. It goes through the ordinary capture command (so the operation id makes it idempotent) and then a link row with a deterministic id `calendareventlink:{taskId}`, so two devices cannot double-link. The link keeps the meeting's title, start and link, so another device can show "From meeting …" without the cache. Task and link are two transactions: a crash between them leaves a task without its link, and repeating the same operation completes it.
+- **Refresh.** A 15-minute timer, first tick 20 s after start, runs only while at least one enabled feed exists (a tick with none makes no request: tested with a fake client that counts calls). Network and parsing happen outside any transaction; the window is replaced and the state recorded in one. A failure records the error and keeps the cache. A source removed while its fetch was running is not resurrected. Restore and reset wait for a running refresh (`RunPausedAsync`).
+- **HTTP client.** HTTPS only, conditional GET (`If-None-Match`, `If-Modified-Since`), 10 MiB cap while reading, 30 s timeout, at most 3 redirects with every hop checked for HTTPS; automatic redirects are off. Error messages never contain the address.
+- **Summaries.** "Include meetings in summaries" is a synced profile column (`IncludeMeetingsInSummaries`, default off, in the `planning` field group). Morning summaries list today's meetings and daily summaries tomorrow's, title and time only. The AI summary (phase 4) must read the same switch.
+- **Not done in P5.** Google (P6). Meetings in the weekly summary. A "link to the event" for a feed event whose URL is only in the description is limited to known video hosts.
+- **Frontend placement (P5).** Meetings today sits above the My Day plan, not beside it. My Week and the calendar show hours net of meetings while availability editing keeps the configured hours. Join/Open links appear only for https and open through the external-link RPC. Removing a calendar is confirmed inline. The add form sends no owner email; it is set on the calendar row afterwards. The "From meeting" line shows in the task editor only.
+
+## 2026-11-16 (PLAN2 P6, Google Calendar)
+
+- **Scopes confirmed against Google's scope table (2026-11-16).** `https://www.googleapis.com/auth/calendar.calendarlist.readonly` lists the calendars and `https://www.googleapis.com/auth/calendar.events.readonly` reads their events; `events.list` accepts the second. `openid email` is added so the sign-in's id token says which account signed in (subject and address), which avoids a third calendar scope or a profile call. No write scope is requested anywhere.
+- **The windowed refresh is confirmed.** The `events.list` reference says `timeMin`, `timeMax`, `orderBy`, `q`, `updatedMin`, `iCalUID` and the extended-property filters cannot be combined with `syncToken`. A window of −7 to +56 days therefore cannot be synced incrementally, so every refresh asks for the whole window with `singleEvents=true` and replaces the calendar's cached rows in one transaction. That also makes a declined or cancelled event disappear on the next fetch with no delete handling.
+- **Plain REST over `HttpClient`, not `Google.Apis.Calendar.v3`.** The plan names the Google client libraries; this build does not use them. The calls are four small endpoints, the installed-app flow is a few dozen lines, a fake `HttpMessageHandler` makes the failure states testable without a library's internals, and above all no library token store (the default writes refresh tokens to a file) can be in the picture. No new package was added. `GoogleCalendarClient` returns the refresh token to the caller and never stores it; the caller puts it in `ISecretStore`.
+- **Sign-in.** System browser, a `TcpListener` on `127.0.0.1` with an OS-chosen port, PKCE (S256), a random `state` checked in constant time, `access_type=offline` and `prompt=consent select_account` so Google always returns a refresh token and lets the person pick the account. Three minutes to finish, then the attempt is abandoned. Favicon and stray requests to the listener get a 404 and are ignored.
+- **Client id and secret** come from git-ignored `src/Chaos.Desktop/google-oauth.json`, copied beside the exe when present (`google-oauth.example.json` is committed). Without it `IsConfigured` is false, Settings explains instead of offering Connect, and no request is ever made.
+- **Migration 029, not 028.** `GoogleAccounts` (synced; id `googleaccount:{subject}` so two devices that connect the same account offline converge) and `GoogleAccountState` (device-local: needs sign-in, last attempt, last success, last error). The chosen calendars are the P5 `CalendarSources` rows with Provider Google, `AccountRef` the account id and `ExternalId` Google's calendar id; their ids are `calendarsource:google:{accountId}:{calendarId}` for the same reason.
+- **Choosing is switching on.** The first choice creates the source; un-choosing sets `Enabled = false` and drops the cached rows, so the colour and busy choice survive. Only disconnecting tombstones sources.
+- **One click per device.** The account row syncs, the token does not. A device that knows the account but has no token shows "Google Calendar: sign in on this device." with a Sign in button; one sign-in there fills the same account.
+- **Timing.** The scheduler ticks every 5 minutes (first tick 20 s after start) and refreshes only what is due: Google after 4½ minutes, a feed after 14½ (a 30 s slack so a tick never just misses). Window focus calls `calendars.refresh` with `onlyDue`, so focus and the timer cannot double the requests. A manual "Refresh now" always fetches.
+- **Failure states.** `invalid_grant` or a 401 that survives one fresh access token is "Google Calendar: sign in again." (the account is flagged and the cache kept); an admin-policy refusal or a 403 that is not a rate limit is "blocked"; network errors are "offline"; a rate limit or 5xx is a plain "will try again". When an account is signed out, blocked or offline, its other calendars in the same run are marked without another request. Messages never contain a token or the client secret (tested).
+- **Disconnect** tombstones the account and its sources (synced, so every device drops them), deletes the cached rows, revokes the refresh token (a 400 from Google counts as already revoked) and deletes it from the secret store. A revoke that cannot reach Google does not stop the disconnect; Settings then says so and points at the person's Google account permissions page.
+- **Declined, cancelled, transparent.** Mapped as in the plan: `status == cancelled` and an attendee with `self == true` and `responseStatus == declined` are dropped, `transparency == transparent` is free time. The video link is `hangoutLink` or the first `video` entry point; links that are not https are not kept.
+- **Settings.** The feed list shows feeds only; Google accounts and their calendars have their own section under Settings → Calendars (colour, busy flag, last updated, plain errors, Choose calendars, Disconnect with an inline confirm).
+- **Not done: the live check (release gate).** Connecting a SilverKey account in the installed app needs the Internal OAuth client from the SilverKey Google Cloud project, an interactive desktop and a real Google account. See the progress note under P6.
+
+## 2026-11-17 (PLAN2 P6a, activity log and pushed UI refresh)
+
+- **Migration 030.** `ActivityLog`, `ActivityLogEntities`, `ActivityCursors` and `JobRuns`, all `LocalOnly` in the catalog and listed in `JsonArchive.ExcludedTables`. `MaxKnownSchemaVersion` is 30. Device-only writers need no extra table: their notes live on the write session (`SqliteDataSession.Activity`) and are read by the capture inside the same transaction, so a rollback discards them.
+- **Capture.** `ActivityCapture` runs in `SqliteApplicationStore.ExecuteAsync` before `ISyncCapture.Flush`. It reads the distinct `(Kind, EntityKey)` pairs from `SyncPending` (the triggers fire whether or not sync is enabled), looks each row up for its `Version` (null when the table has none), and writes one row plus entities. A pended row that no longer exists is `Op=delete`; a row deleted and re-inserted under its key is an upsert. A transaction with no changes writes nothing. The store tells `IActivityNotifier` the new head after commit.
+- **The scope helper.** `ActivityScope.Rpc("service.method")` is the first line of every `[NeoRpcMethod]` (240 methods plus the three `activity.*` ones), added mechanically. A guard test reads the service sources and fails on a method without it, and a reflection test fails when an RPC method is missing from `ActivityActions` (or the list names a method that is gone). Undo and import open their own source (`undo`, `import`) in place of `user`. Scheduler passes use `JobPass.RunAsync(runs, source, action, pass, ct)`: a `JobRuns` row, a `schedule` (or `sync`, for GitHub) scope that stamps `JobRunId`, `Failed` plus a failure `ActivityLog` row with no entities on an exception, `Noop` when the pass wrote nothing.
+- **Strict mode is per async flow, not process-wide.** The plan says an unscoped write throws in tests and Debug builds. Hundreds of existing tests write through commands with no scope, so a global switch would break them without testing anything new. `ActivityScope.UseStrict()` turns it on for the current async flow (new tests, the scheduler test), `ActivityScope.StrictByDefault` is the process-wide switch for a later cleanup, and Release always records an unscoped write as `system` / `unscoped`. Strict mode also rejects an action name outside `ActivityActions`.
+- **Summary entities of device-only tables.** `calendar_source/<id>` for a refresh, a state save or a cache delete (not one entity per `CalendarEvents` row); `google_account_state/<accountId>`; `notification_job/<id>`; `saved_view_match/<viewId>` for any change to a view's baseline; `view_alert/<id>`. Remote apply (7.4) will note every applied entity with `Source=sync` when P13 lands; there is no applier yet.
+- **Retention.** The backup check's timer (every 30 minutes, first check after 2) prunes. Rows go only when they are older than 7 days and no registered cursor still needs them; the hard cap is 30 days or 200,000 rows, whichever comes first, and wins over a stalled cursor. The pruned-through position is kept in `DeviceSettings` (`ActivityPrunedThrough`) so `since` can answer `reset`. `JobRuns` keeps the last 200 runs per job.
+- **Delivery.** `ActivityPublisher` coalesces head and job notices into one `activity.committed { seq }` event per 100 ms. The event carries no data. A job start or finish also pushes it (no data changed) so the sync indicators learn about running jobs; a pass that starts and ends inside one window is never seen as running, so a 5-minute calendar tick with no calendars does not flicker the logo. The event is declared with `[NeoRpcEvent]` on `ActivityEvents.Committed`; the generated names are `AddActivityEventsCommittedEvent` (host) and `activityRpc.onCommitted` (frontend).
+- **`IChangePublisher` is deleted.** It was declared and never implemented or called. `ChangeNotice` and `ChangeCollector` went with it. The activity log replaces it.
+- **Frontend.** `activity.ts` holds one hub per window: it subscribes, reads the head, and on each push pulls `since` until a short page. `useActivity(kinds, handler)` receives the entries that touch its kinds, and every subscriber on `reset`. `useJobs()` and `useJobChange(job, handler)` follow job state. While subscribing fails (outside the host) the handlers run on window focus instead. `App` subscribes to every kind and reloads the open view, lists, counts and undo offer for entries not written by this window (`Source` other than `user`), because its own edits already call `changed()`.
+- **Polls removed:** `SyncLogo` (4 s), `GitHubSettings` and `GitHubTaskNotice` (1 s while syncing), `AlertStack` (reminders), `SummaryPrompts` and `ViewAlertStack`. `App`'s 1 s shell-activation poll stays (not a data change).
+- **Known edge.** A summary prompt that becomes visible only because quiet hours end, with no data change, now shows on the next push or focus rather than within a minute.
+- **Not done here:** the native check (My Day updating from the reminder engine or a GitHub sync with no focus change, the logo animating with no status poll) needs the desktop app; see the progress note under P6a.

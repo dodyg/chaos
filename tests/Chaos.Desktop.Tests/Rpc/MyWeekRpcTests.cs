@@ -55,7 +55,7 @@ public sealed class MyWeekRpcTests
         using var reopened = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", new SequentialIdGenerator(), clock, CancellationToken.None);
         var again = await new MyWeekRpcService(new MyWeekCommands(reopened.Store, new SequentialIdGenerator(), clock)).OpenAsync(new(today), CancellationToken.None);
         await Assert.That(again.Week!.Confirmed.Placements.Single().Day).IsEqualTo(today);
-        var day = await new MyDayRpcService(new MyDayCommands(reopened.Store, new SequentialIdGenerator(), clock)).OpenAsync(new(null), CancellationToken.None);
+        var day = await new MyDayRpcService(new MyDayCommands(reopened.Store, clock)).OpenAsync(new(null), CancellationToken.None);
         await Assert.That(day.Day!.OpenCount).IsEqualTo(1);
     }
 }

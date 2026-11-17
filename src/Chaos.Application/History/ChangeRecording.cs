@@ -208,6 +208,10 @@ public sealed class RecordingDataSession : IDataSession
     public IBackupCatalogStore Backups => _inner.Backups;
     public IImportStore Imports => _inner.Imports;
     public IGitHubStore GitHub => _inner.GitHub;
+    public IBoardStore Boards => _inner.Boards;
+    public ISavedViewStore SavedViews => _inner.SavedViews;
+    public ICalendarStore Calendars => _inner.Calendars;
+    public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
     public string? OperationId { get; private set; }
@@ -569,6 +573,7 @@ internal static class UndoLabels
         ["task.set-status"] = "Change status of",
         ["task.move"] = "Move task",
         ["task.reorder"] = "Reorder task",
+        ["board.move"] = "Move task on board",
         ["task.delete"] = "Delete task",
         ["task.restore"] = "Restore task",
         ["task.restore-fields"] = "Restore earlier values of",
@@ -846,10 +851,10 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, CancellationToken ct)
+    public async Task<bool> RemoveTaskLinkAsync(string taskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
         await recorder.TouchTaskAsync(taskId, ct);
-        var changed = await inner.RemoveTaskLinkAsync(taskId, tagId, ct);
+        var changed = await inner.RemoveTaskLinkAsync(taskId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.TaskTag, taskId, tagId, presentAfter: false);
         return changed;
     }
@@ -862,10 +867,10 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, CancellationToken ct)
+    public async Task<bool> RemoveSubtaskLinkAsync(string subtaskId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
         await TouchSubtaskParentAsync(subtaskId, ct);
-        var changed = await inner.RemoveSubtaskLinkAsync(subtaskId, tagId, ct);
+        var changed = await inner.RemoveSubtaskLinkAsync(subtaskId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.SubtaskTag, subtaskId, tagId, presentAfter: false);
         return changed;
     }
@@ -880,9 +885,9 @@ internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore
         return changed;
     }
 
-    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, CancellationToken ct)
+    public async Task<bool> RemovePadLinkAsync(string padItemId, string tagId, DateTimeOffset removedAtUtc, CancellationToken ct)
     {
-        var changed = await inner.RemovePadLinkAsync(padItemId, tagId, ct);
+        var changed = await inner.RemovePadLinkAsync(padItemId, tagId, removedAtUtc, ct);
         if (changed) recorder.RecordLink(LinkKind.PadTag, padItemId, tagId, presentAfter: false);
         return changed;
     }
