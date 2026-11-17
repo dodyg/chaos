@@ -74,10 +74,11 @@ const undo: UndoEntryResponse[] = [];
 /** A long trash, so the bounded deleted-notes list can be seen. */
 const deletedPadNotes: PadItemResponse[] = Array.from({ length: 64 }, (_, i) => ({
   id: `pad-deleted-${i}`, markdown: i % 9 === 0 ? "" : ["Meeting notes", "Grocery list", "Idea: offline sync", "Reading list", "Draft reply to Sam"][i % 5] + ` ${i + 1}`,
-  version: "2", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: true, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [],
-}) as PadItemResponse);
+  version: "2", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: true, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [], kind: "text", previewAttachmentId: null, width: 0, height: 0,
+}) as unknown as PadItemResponse);
+const drawings = new Map<string, { strokesJson: string; revision: string }>();
 const padNotes: PadItemResponse[] = [
-  { id: "pad-1", markdown: "React Server Components\n\n- read the RFC\n- try it in a side project", version: "1", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [] },
+  { id: "pad-1", markdown: "React Server Components\n\n- read the RFC\n- try it in a side project", version: "1", draftVersion: "1", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: now(), updatedAtUtc: now(), tagIds: [], tasks: [], kind: "text", previewAttachmentId: null, width: 0, height: 0 },
 ];
 
 const ok = <T extends object>(value: T) => ({ ok: true, error: null, ...value });
@@ -731,6 +732,17 @@ const handlers: Record<string, Handler> = {
   "pad.get": (r: { itemId: string }) => ok({ items: padNotes.filter(n => n.id === r.itemId) }),
   "pad.search": (r: { text: string }) => ok({ items: padNotes.filter(n => n.markdown.toLowerCase().includes(r.text.toLowerCase())) }),
   "pad.create": (r: { markdown: string }) => { const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: r.markdown, version: "1", draftVersion: "0", tasks: [], tagIds: [] }; padNotes.push(created); return ok({ items: [created] }); },
+  // Drawings: strokes live in memory with the editor revision rule of the real store.
+  "pad.createDrawing": (r: { width: number; height: number }) => {
+    const created: PadItemResponse = { ...padNotes[0], id: newId("pad"), markdown: "", kind: "drawing", version: "1", draftVersion: "0", tasks: [], tagIds: [], width: r.width, height: r.height };
+    padNotes.push(created); drawings.set(created.id, { strokesJson: "{\"v\":1,\"strokes\":[]}", revision: "0" }); return ok({ items: [created] });
+  },
+  "pad.getDrawing": (r: { itemId: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); const d = drawings.get(r.itemId); return i < 0 || !d ? { ok: false, error: { message: "That drawing no longer exists.", fields: [] }, drawing: null, applied: false } : ok({ drawing: { item: padNotes[i], strokesJson: d.strokesJson, width: padNotes[i].width, height: padNotes[i].height, revision: d.revision, previewAttachmentId: null }, applied: true }); },
+  "pad.saveDrawing": (r: { itemId: string; clientRevision: string; strokesJson: string }) => {
+    const i = padNotes.findIndex(n => n.id === r.itemId); const d = drawings.get(r.itemId)!; const applied = Number(r.clientRevision) > Number(d.revision);
+    if (applied) drawings.set(r.itemId, { strokesJson: r.strokesJson, revision: r.clientRevision });
+    return ok({ drawing: { item: padNotes[i], strokesJson: drawings.get(r.itemId)!.strokesJson, width: padNotes[i].width, height: padNotes[i].height, revision: drawings.get(r.itemId)!.revision, previewAttachmentId: null }, applied });
+  },
   "pad.save": (r: { itemId: string; clientRevision: string; markdown: string }) => { const i = padNotes.findIndex(n => n.id === r.itemId); padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) }; return ok({ item: padNotes[i], applied: true }); },
   ...boardHandlers(),
   ...calendarHandlers(),

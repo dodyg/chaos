@@ -20,7 +20,7 @@ const { ScratchPad, titleFromSelection } = await import("./ScratchPad");
 const { DraftRegistry } = await import("./padAutosave");
 
 function note(id: string, markdown: string, draftVersion = "1"): PadItemResponse {
-  return { id, markdown, version: "2", draftVersion, archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "2026-11-01T00:00:00Z", updatedAtUtc: "2026-11-01T00:00:00Z", tagIds: [], tasks: [] };
+  return { id, markdown, version: "2", draftVersion, archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "2026-11-01T00:00:00Z", updatedAtUtc: "2026-11-01T00:00:00Z", tagIds: [], tasks: [], kind: "text", previewAttachmentId: null, width: 0, height: 0 };
 }
 
 /** A pad API over in-memory notes; `failSaves` makes every autosave fail like a full disk. */

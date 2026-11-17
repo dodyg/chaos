@@ -1,7 +1,7 @@
 import React from "react";
-import { padRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
+import { attachmentRpc, padRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Copy, FileText, ListPlus, NotebookPen, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Camera, Copy, FileText, ListPlus, NotebookPen, PenLine, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,11 @@ import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { MarkdownPreview, type MarkdownLinks } from "./markdown";
 import { TagPicker } from "./tags";
 import { useDragReorder } from "./dragReorder";
+import { DrawingNote, DrawingPreview } from "./PadDrawing";
+import { VoiceRecorder, type RecorderEngine } from "./VoiceRecorder";
+import { attachmentMarkdown, uploadFile, type AttachmentApi } from "./attachments";
+import { voiceTitle } from "./voice";
+import type { Region } from "./drawing";
 import { DraftRegistry, type DraftSaver, type DraftSnapshot } from "./padAutosave";
 import type { PageRequest } from "./Pages";
 
@@ -20,13 +25,14 @@ export type PadApi = typeof padRpc;
 export type PadFocus = {
   key: number;
   itemId: string | null;
-  anchor?: { state: string; start: number | null; end: number | null; quote: string } | null;
+  anchor?: { state: string; start: number | null; end: number | null; quote: string; region?: Region | null } | null;
 };
 
 const operationId = () => crypto.randomUUID();
 
 /** A short readable label for an untitled note: its first line of text. */
-export function padExcerpt(markdown: string): string {
+export function padExcerpt(markdown: string, kind?: string): string {
+  if (kind === "drawing") return "Drawing";
   for (const raw of markdown.split("\n")) {
     const line = raw.trim().replace(/^(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, "").trim();
     if (line) return line.length > 80 ? `${line.slice(0, 79)}…` : line;
@@ -42,7 +48,7 @@ export function titleFromSelection(text: string): string {
 
 /** Stand-in for a new note that is not stored yet. */
 function newPlaceholder(markdown: string): PadItemResponse {
-  return { id: "new", markdown, version: "0", draftVersion: "0", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "", updatedAtUtc: "", tagIds: [], tasks: [] } as unknown as PadItemResponse;
+  return { id: "new", markdown, version: "0", draftVersion: "0", archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "", updatedAtUtc: "", tagIds: [], tasks: [], kind: "text", previewAttachmentId: null, width: 0, height: 0 } as unknown as PadItemResponse;
 }
 
 /** Saver for one note, created from the stored state the first time it is opened. */
@@ -71,6 +77,10 @@ function useSnapshot(saver: DraftSaver | null): DraftSnapshot | null {
 
 type Props = {
   api?: PadApi;
+  /** Photos and voice notes are stored as attachments of the new note. */
+  attachmentApi?: AttachmentApi;
+  /** How voice notes record; tests pass a fake. */
+  recorder?: RecorderEngine;
   tagApi?: typeof tagRpc;
   /** Quick-add preview used by Make task. */
   captureApi?: CapturePreviewApi;
@@ -96,7 +106,7 @@ type Props = {
  * type, ordered by hand, tagged and archived; "Make task" on a selection with a backlink;
  * and a weekly review that suggests archiving old notes.
  */
-export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError, pageApi, today, onOpenPage }: Props) {
+export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, recorder, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError, pageApi, today, onOpenPage }: Props) {
   const [archived, setArchived] = React.useState(false);
   const [tagFilter, setTagFilter] = React.useState("");
   const [items, setItems] = React.useState<PadItemResponse[]>([]);
@@ -112,6 +122,8 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
   const [review, setReview] = React.useState<{ due: boolean; suggestions: PadItemResponse[] } | null>(null);
   const [reviewChoice, setReviewChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [newKey, setNewKey] = React.useState(0);
+  /** The part of a drawing a task came from, outlined when that task opens the pad. */
+  const [highlight, setHighlight] = React.useState<Region | null>(null);
   /**
    * A new note exists only here until its first character is typed, so closing it untouched
    * leaves nothing behind: no stored note, no deleted note, no undo step. `itemId` is set once
@@ -129,7 +141,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
   const open = items.find(item => item.id === openId) ?? null;
   // A clean saver is dropped when the stored text changed elsewhere (undo), so the memo also
   // follows the loaded text; a saver with unsaved text is kept by the registry regardless.
-  const saver = React.useMemo(() => open ? saverFor(registry, api, open) : null, [open?.id, open?.markdown, registry, api]);
+  const saver = React.useMemo(() => open && open.kind !== "drawing" ? saverFor(registry, api, open) : null, [open?.id, open?.markdown, open?.kind, registry, api]);
   const snapshot = useSnapshot(saver);
 
   async function load() {
@@ -163,6 +175,8 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
     setOpenId(request.itemId);
     setMakeTask(null);
     const anchor = request.anchor;
+    setHighlight(anchor?.region ?? null);
+    if (anchor?.region) { setMissingQuote(null); return; }
     if (anchor && anchor.state !== "Missing" && anchor.start !== null && anchor.end !== null) {
       setMissingQuote(null);
       setSelectRange({ start: anchor.start, end: anchor.end, key: request.key });
@@ -214,6 +228,53 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
     draftTextRef.current = ""; setDraftText(""); creating.current = false;
     setNewNote(current => ({ key: (current?.key ?? 0) + 1, itemId: null }));
     setNewKey(key => key + 1);
+  }
+
+  /** A drawing is stored empty straight away: there is no first character to wait for. */
+  async function createDrawing() {
+    if (saver) void saver.flush();
+    setNewNote(null); setMakeTask(null); setMissingQuote(null); setHighlight(null); setArchived(false); setTagFilter("");
+    await run(() => api.createDrawing({ operationId: operationId(), width: 1600, height: 1200 }), "Could not add the drawing.", result => {
+      const created = result.items[0];
+      if (created) setOpenId(created.id);
+    });
+  }
+
+  /**
+   * A note that starts from a file: a photo (the image at the top) or a voice note (a first line
+   * and the audio). The note is made, the file attached, then the note's text set; if the file
+   * cannot be stored the empty note is deleted again, so a failure leaves nothing half made.
+   */
+  async function createMediaNote(file: File, title: string) {
+    if (saver) void saver.flush();
+    setNewNote(null); setMakeTask(null); setMissingQuote(null); setHighlight(null); setArchived(false); setTagFilter("");
+    const created = await api.create({ operationId: operationId(), markdown: "" });
+    const note = created.ok ? created.items[0] : undefined;
+    if (!note) throw new Error(created.error?.fields.map(field => field.message).join("; ") || created.error?.message || "Could not add the note.");
+    try {
+      const attachment = await uploadFile(attachmentApi, "pad", note.id, file);
+      const markdown = `${title ? `${title}
+
+` : ""}${attachmentMarkdown(attachment)}
+`;
+      const saved = await api.save({ itemId: note.id, clientRevision: "1", markdown });
+      if (!saved.ok) throw new Error(saved.error?.message ?? "The note could not be saved.");
+    } catch (error) {
+      await api.delete({ operationId: operationId(), itemId: note.id, expectedVersion: note.version }).catch(() => undefined);
+      await load().catch(() => undefined);
+      throw error;
+    }
+    registry.forget(note.id);
+    await load();
+    setOpenId(note.id);
+    onChanged();
+  }
+
+  const photoInput = React.useRef<HTMLInputElement | null>(null);
+  async function addPhoto(file: File | undefined) {
+    if (!file) return;
+    try { onError(null); await createMediaNote(file, ""); }
+    catch (e) { onError(e instanceof Error ? e.message : "The photo could not be added."); }
   }
 
   /** The first typed text stores the note; later text goes through that note's autosave. */
@@ -342,6 +403,8 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
       const isOpen = isNew || item.id === openId;
       const draft = registry.get(item.id)?.snapshot;
       const text = draft?.text ?? item.markdown;
+      const isDrawing = item.kind === "drawing";
+      const label = padExcerpt(text, item.kind);
       return <li key={options.key} className={cn("grid gap-2 rounded-xl border bg-card p-3 shadow-xs", isOpen && "border-primary ring-1 ring-primary")}
         {...(!archived && !isNew ? drag.target(ordered.map(row => row.id), index, "pad", busy || isOpen, (id, insertionIndex) => { const moving = ordered.find(row => row.id === id); if (moving) void reorder(moving, insertionIndex); }) : {})}>
         <div className="flex items-start gap-2">
@@ -352,6 +415,12 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
                   links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
                 <p className="text-xs text-muted-foreground" role="status">New note. It is kept once you type; close it untouched and it is gone.</p>
               </div>
+            : isOpen && isDrawing
+            ? <div className="grid min-w-0 flex-1 gap-2">
+                <DrawingNote key={item.id} api={api} attachmentApi={attachmentApi} item={item} containers={containers} captureApi={captureApi} highlight={highlight}
+                  onSaved={() => { void load(); }} onError={onError}
+                  onTaskMade={title => { setNotice(`Made task “${title}”. It links back to this drawing.`); void load(); onChanged(); }}/>
+              </div>
             : isOpen && snapshot && saver
             ? <div className="grid min-w-0 flex-1 gap-2">
                 {missingQuote !== null && <Banner tone="warning" onDismiss={() => setMissingQuote(null)}>The text this task came from was changed or removed. It said: “{missingQuote}”</Banner>}
@@ -360,27 +429,31 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
                   links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
                 <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>
               </div>
-            : <button type="button" className="min-w-0 flex-1 rounded-md px-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${padExcerpt(text)}`} onClick={() => void select(item)}>
-                {text.trim() ? <MarkdownPreview source={text} links={links} compact className="pointer-events-none max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
+            : <button type="button" className="min-w-0 flex-1 rounded-md px-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${label}`} onClick={() => void select(item)}>
+                {isDrawing ? <DrawingPreview attachmentApi={attachmentApi} attachmentId={item.previewAttachmentId} label="Drawing note preview"/> : text.trim() ? <MarkdownPreview source={text} links={links} compact className="pointer-events-none max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
                 {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — open the note to retry.</span>}
               </button>}
           <div className="flex shrink-0 gap-0.5">
             {!archived && !isNew && <>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move note ${padExcerpt(text)} up`} title="Move up" onClick={() => void reorder(item, index - 1)}><ArrowUp/></Button>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === ordered.length - 1} aria-label={`Move note ${padExcerpt(text)} down`} title="Move down" onClick={() => void reorder(item, index + 1)}><ArrowDown/></Button>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move note ${label} up`} title="Move up" onClick={() => void reorder(item, index - 1)}><ArrowUp/></Button>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === ordered.length - 1} aria-label={`Move note ${label} down`} title="Move down" onClick={() => void reorder(item, index + 1)}><ArrowDown/></Button>
             </>}
-            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`${item.archived ? "Unarchive" : "Archive"} note ${padExcerpt(text)}`} title={item.archived ? "Unarchive" : "Archive"} onClick={() => void changeItems(item.archived ? "unarchive" : "archive", item)}>{item.archived ? <ArchiveRestore/> : <Archive/>}</Button>}
-            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete note ${padExcerpt(text)}`} title="Delete" onClick={() => void remove(item)}><Trash2/></Button>}
+            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`${item.archived ? "Unarchive" : "Archive"} note ${label}`} title={item.archived ? "Unarchive" : "Archive"} onClick={() => void changeItems(item.archived ? "unarchive" : "archive", item)}>{item.archived ? <ArchiveRestore/> : <Archive/>}</Button>}
+            {!placeholder && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Delete note ${label}`} title="Delete" onClick={() => void remove(item)}><Trash2/></Button>}
             {isOpen && <Button variant="ghost" size="icon-sm" aria-label="Close note" title="Close" onClick={() => { if (isNew) closeDraft(); else { void saver?.flush(); setOpenId(null); setMakeTask(null); } }}><X/></Button>}
           </div>
         </div>
 
         {item.tasks.length > 0 && <div className="flex flex-wrap items-center gap-1.5 pl-1 text-xs" aria-label="Tasks made from this note">
           <span className="text-muted-foreground">Tasks:</span>
-          {item.tasks.map(task => <Button key={task.taskId} type="button" variant="outline" size="xs" disabled={task.deleted} className={cn(task.deleted && "line-through")} title={task.deleted ? "This task is deleted" : `From “${task.quote}”`} onClick={() => onOpenTask(task.taskId)}>{task.title}</Button>)}
+          {item.tasks.map(task => <Button key={task.taskId} type="button" variant="outline" size="xs" disabled={task.deleted} className={cn(task.deleted && "line-through")} title={task.deleted ? "This task is deleted" : task.region ? "From part of this drawing" : `From “${task.quote}”`} onClick={() => onOpenTask(task.taskId)}>{task.title}</Button>)}
         </div>}
 
-        {isOpen && !placeholder && <div className="grid gap-3 border-t pt-3">
+        {isOpen && !placeholder && isDrawing && <div className="grid gap-3 border-t pt-3">
+          <TagPicker targetKind="Pad" targetId={item.id} label="Tags" tags={tags} api={tagApi} revision={revision} onChanged={onChanged}/>
+        </div>}
+
+        {isOpen && !placeholder && !isDrawing && <div className="grid gap-3 border-t pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" size="sm" variant="outline" disabled={busy || selection.end <= selection.start} title="Select text in the note first" onClick={startMakeTask}><ListPlus/>Make task</Button>
             {selection.end <= selection.start && <span className="text-xs text-muted-foreground">Select a line or a few lines to make a task from them.</span>}
@@ -411,6 +484,14 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
           {tags.map(tag => <NativeSelectOption key={tag.id} value={tag.id}>#{tag.path}</NativeSelectOption>)}
         </NativeSelect>
         <Button type="button" variant={archived ? "secondary" : "outline"} aria-pressed={archived} onClick={() => { setArchived(value => !value); setOpenId(null); setNewNote(null); }}>{archived ? <ArchiveRestore/> : <Archive/>}{archived ? "Show pad" : "Archived"}</Button>
+        {!archived && <VoiceRecorder engine={recorder} disabled={busy} onError={onError}
+          onRecorded={(file, startedAt) => createMediaNote(file, voiceTitle(startedAt))}
+          onAttachFile={file => createMediaNote(file, voiceTitle(new Date()))}/>}
+        {!archived && <>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => photoInput.current?.click()} title="Make a note from a picture"><Camera/>New photo note</Button>
+          <input ref={photoInput} type="file" accept="image/*" className="sr-only" tabIndex={-1} aria-label="Photo file" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; void addPhoto(file); }}/>
+        </>}
+        {!archived && <Button type="button" variant="outline" disabled={busy} onClick={() => void createDrawing()} title="Draw on a blank canvas"><PenLine/>New drawing</Button>}
         {!archived && <Button type="button" disabled={busy} onClick={createNote} title="New note (Ctrl+Shift+P)"><Plus/>New note</Button>}
       </>}/>
 
@@ -426,7 +507,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
           <p className="text-xs text-muted-foreground">Archived notes leave the pad but stay searchable. Nothing is deleted.</p>
           <ul className="grid gap-1">{review.suggestions.map(item => <li key={item.id}><label className="flex items-center gap-2">
             <input type="checkbox" className="accent-primary" checked={reviewChoice.has(item.id)} onChange={e => { const next = new Set(reviewChoice); if (e.target.checked) next.add(item.id); else next.delete(item.id); setReviewChoice(next); }}/>
-            <span className="truncate">{padExcerpt(item.markdown)}</span>
+            <span className="truncate">{padExcerpt(item.markdown, item.kind)}</span>
           </label></li>)}</ul>
           <div className="flex flex-wrap gap-2 pt-1">
             <Button type="button" size="sm" disabled={busy} onClick={() => void finishReview(reviewChoice)}>{reviewChoice.size === 0 ? "Finish without archiving" : `Archive ${reviewChoice.size} and finish`}</Button>
@@ -441,7 +522,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
       {newNote && !archived && noteCard(items.find(item => item.id === newNote.itemId) ?? newPlaceholder(draftText), ordered.length, { key: `new-${newNote.key}`, isNew: true })}
     </ol>
 
-    <DeletedItems noun="notes" items={deleted} name={item => padExcerpt(item.markdown)} busy={busy}
+    <DeletedItems noun="notes" items={deleted} name={item => padExcerpt(item.markdown, item.kind)} busy={busy}
       onRestore={item => void run(() => api.restore({ operationId: operationId(), itemId: item.id, expectedVersion: item.version }), "Could not restore the note.")}/>
     <p className="text-xs text-muted-foreground"><StickyNote className="mr-1 inline size-3.5"/>Ctrl+Shift+P opens a new note from anywhere in Chaos.</p>
   </div>;

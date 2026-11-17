@@ -105,6 +105,83 @@ public sealed class ScratchPadTests
         throw new InvalidOperationException("Expected an AppException.");
     }
 
+    private const string OneStroke = "{\"v\":1,\"strokes\":[{\"tool\":\"pen\",\"color\":\"#112233\",\"size\":4,\"points\":[[10,10,0.5],[20,20,0.6]]}]}";
+
+    [Test]
+    public async Task Drawing_StrokesPersistAcrossRestart_AndOlderRevisionsNeverReplaceNewerOnes()
+    {
+        string root;
+        string id;
+        using (var host = await Host.StartAsync())
+        {
+            root = host.Root;
+            id = (await host.Pad.CreateDrawingAsync(new(Op(), 800, 600))).Item.Id;
+            var empty = await host.Pad.GetDrawingAsync(id);
+            await Assert.That(empty.Item.Kind).IsEqualTo(PadItemKind.Drawing);
+            await Assert.That(empty.Drawing.StrokesJson).IsEqualTo(PadDrawingValidation.EmptyStrokes);
+
+            await Assert.That((await host.Pad.SaveDrawingAsync(new(id, 2, OneStroke))).Applied).IsTrue();
+            var stale = await host.Pad.SaveDrawingAsync(new(id, 1, PadDrawingValidation.EmptyStrokes));
+            await Assert.That(stale.Applied).IsFalse();
+            await Assert.That(stale.Drawing.StrokesJson).IsEqualTo(OneStroke);
+            await Assert.That((await host.Pad.SaveDrawingAsync(new(id, 2, PadDrawingValidation.EmptyStrokes))).Applied).IsFalse();
+        }
+
+        using var restarted = await Host.StartAsync(root);
+        var saved = await restarted.Pad.GetDrawingAsync(id);
+        await Assert.That(saved.Drawing.StrokesJson).IsEqualTo(OneStroke);
+        await Assert.That(saved.Drawing.Revision).IsEqualTo(2);
+        await Assert.That(saved.Drawing.Width).IsEqualTo(800);
+    }
+
+    [Test]
+    public async Task Drawing_RefusesMalformedStrokesOversizeAndTextSaves()
+    {
+        using var host = await Host.StartAsync();
+        var id = (await host.Pad.CreateDrawingAsync(new(Op()))).Item.Id;
+        foreach (var bad in new[] { "", "not json", "[]", "{\"v\":2,\"strokes\":[]}", "{\"v\":1,\"strokes\":[{\"x\":1}]}" })
+        {
+            var error = await ThrowsAsync(() => host.Pad.SaveDrawingAsync(new(id, 1, bad)));
+            await Assert.That(error.Kind).IsEqualTo(AppErrorKind.Validation);
+        }
+
+        var big = "{\"v\":1,\"strokes\":[],\"pad\":\"" + new string('x', PadDrawingValidation.MaxStrokesBytes) + "\"}";
+        await Assert.That((await ThrowsAsync(() => host.Pad.SaveDrawingAsync(new(id, 1, big)))).Kind).IsEqualTo(AppErrorKind.Validation);
+        await Assert.That((await ThrowsAsync(() => host.Pad.CreateDrawingAsync(new(Op(), 0, 10)))).Kind).IsEqualTo(AppErrorKind.Validation);
+        await Assert.That((await ThrowsAsync(() => host.Pad.SaveTextAsync(new(id, 1, "typed")))).Kind).IsEqualTo(AppErrorKind.Validation);
+    }
+
+    [Test]
+    public async Task Drawing_RegionTask_LinksToFixedRegion_AndADeletedDrawingGivesMissing()
+    {
+        using var host = await Host.StartAsync();
+        var item = (await host.Pad.CreateDrawingAsync(new(Op(), 800, 600))).Item;
+        await host.Pad.SaveDrawingAsync(new(item.Id, 1, OneStroke));
+
+        var outside = await ThrowsAsync(() => host.Pad.MakeTaskFromRegionAsync(new(Op(), item.Id, 1, new PadRegion(700, 500, 200, 200), "Out", null, null, null, null, [])));
+        await Assert.That(outside.Kind).IsEqualTo(AppErrorKind.Validation);
+
+        var made = await host.Pad.MakeTaskFromRegionAsync(new(Op(), item.Id, 1, new PadRegion(100, 50, 200, 120), "Fix the sketch", null, null, null, null, []));
+        await Assert.That(made.Link.RegionJson).IsNotNull();
+        var anchor = (await host.Pad.LocateAsync(made.Task.Id))!;
+        await Assert.That(anchor.State).IsEqualTo(PadAnchorState.Exact);
+        await Assert.That(anchor.Region).IsEqualTo(new PadRegion(100, 50, 200, 120));
+
+        // More strokes later do not move the region.
+        await host.Pad.SaveDrawingAsync(new(item.Id, 2, PadDrawingValidation.EmptyStrokes));
+        await Assert.That((await host.Pad.LocateAsync(made.Task.Id))!.Region).IsEqualTo(new PadRegion(100, 50, 200, 120));
+
+        var current = (await host.Pad.GetAsync(item.Id)).Item;
+        await host.Pad.DeleteAsync(new(Op(), item.Id, current.Version));
+        var missing = (await host.Pad.LocateAsync(made.Task.Id))!;
+        await Assert.That(missing.State).IsEqualTo(PadAnchorState.Missing);
+        await Assert.That(missing.Deleted).IsTrue();
+
+        var textId = await host.NoteAsync("plain");
+        var notDrawing = await ThrowsAsync(() => host.Pad.MakeTaskFromRegionAsync(new(Op(), textId, 1, new PadRegion(1, 1, 5, 5), "No", null, null, null, null, [])));
+        await Assert.That(notDrawing.Kind).IsEqualTo(AppErrorKind.Validation);
+    }
+
     [Test]
     public async Task Autosave_OutOfOrderAndRepeatedSaves_KeepNewestTextAcrossRestart()
     {

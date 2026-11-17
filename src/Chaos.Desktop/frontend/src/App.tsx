@@ -487,7 +487,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       pageApi.search({ text, limit: 5 }).catch(() => null),
     ]);
     const tasks: LinkCandidate[] = result.ok ? result.rows.map(row => ({ id: row.task.id, title: row.task.title })) : [];
-    const pads: LinkCandidate[] = notes?.ok ? notes.items.map(item => ({ id: item.id, title: padExcerpt(item.markdown), kind: "pad" as const })) : [];
+    const pads: LinkCandidate[] = notes?.ok ? notes.items.map(item => ({ id: item.id, title: padExcerpt(item.markdown, item.kind), kind: "pad" as const })) : [];
     const pageRows: LinkCandidate[] = pages?.ok ? pages.pages.map(page => ({ id: page.id, title: page.title, kind: "page" as const, icon: page.icon })) : [];
     const key = text.trim().toLowerCase();
     const listRows: LinkCandidate[] = containers.filter(c => c.kind !== "Inbox" && c.name.toLowerCase().includes(key)).slice(0, 3)
@@ -725,7 +725,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       {padMatches.length > 0 && <section aria-label="Matching pad notes" className="grid gap-1.5">
         <h3 className="flex items-center border-b px-1 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase">Pad notes<Count>{padMatches.length}</Count></h3>
         <ul className="grid gap-1">{padMatches.map(item => <li key={item.id}><button type="button" className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-left text-sm hover:border-input" onClick={() => openPad({ itemId: item.id })}>
-          <StickyNote className="size-4 shrink-0 text-muted-foreground"/><span className="truncate">{padExcerpt(item.markdown)}</span>{item.archived && <span className="ml-auto text-xs text-muted-foreground">archived</span>}
+          <StickyNote className="size-4 shrink-0 text-muted-foreground"/><span className="truncate">{padExcerpt(item.markdown, item.kind)}</span>{item.archived && <span className="ml-auto text-xs text-muted-foreground">archived</span>}
         </button></li>)}</ul>
       </section>}</>
     : query.view === "Tag"

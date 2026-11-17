@@ -8,9 +8,11 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record PadListRequest(bool Archived, string? TagId);
-public sealed record PadTaskLinkResponse(string TaskId, string Title, bool Deleted, string Quote);
+public sealed record PadRegionDto(double X, double Y, double W, double H);
+public sealed record PadTaskLinkResponse(string TaskId, string Title, bool Deleted, string Quote, PadRegionDto? Region = null);
 public sealed record PadItemResponse(string Id, string Markdown, string Version, string DraftVersion, bool Archived, string? ArchivedAtUtc, bool Deleted,
-    string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> TagIds, IReadOnlyList<PadTaskLinkResponse> Tasks);
+    string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> TagIds, IReadOnlyList<PadTaskLinkResponse> Tasks,
+    string Kind = "text", string? PreviewAttachmentId = null, int Width = 0, int Height = 0);
 public sealed record PadListResponse(bool Ok, IReadOnlyList<PadItemResponse> Items, TaskErrorResponse? Error);
 public sealed record PadGetRequest(string ItemId);
 public sealed record PadCreateRequest(string OperationId, string Markdown);
@@ -25,7 +27,14 @@ public sealed record PadMakeTaskRequest(string OperationId, string PadItemId, st
     string Title, string? Notes, string? ContainerId, string? PlannedDate, string? DueDate, IReadOnlyList<string> TagIds, CaptureDraftDto? Draft = null);
 public sealed record PadMakeTaskResponse(bool Ok, TaskResponse? Task, TaskErrorResponse? Error);
 public sealed record PadLocateRequest(string TaskId);
-public sealed record PadAnchorResponse(string PadItemId, string State, int? Start, int? End, string Quote, bool Archived, bool Deleted);
+public sealed record PadAnchorResponse(string PadItemId, string State, int? Start, int? End, string Quote, bool Archived, bool Deleted, PadRegionDto? Region = null);
+public sealed record PadCreateDrawingRequest(string OperationId, int Width, int Height);
+public sealed record PadDrawingGetRequest(string ItemId);
+public sealed record PadDrawingSaveRequest(string ItemId, string ClientRevision, string StrokesJson, string? PreviewAttachmentId);
+public sealed record PadDrawingData(PadItemResponse Item, string StrokesJson, int Width, int Height, string Revision, string? PreviewAttachmentId);
+public sealed record PadDrawingResponse(bool Ok, PadDrawingData? Drawing, bool Applied, TaskErrorResponse? Error);
+public sealed record PadMakeTaskFromRegionRequest(string OperationId, string PadItemId, string SourceRevision, PadRegionDto Region,
+    string Title, string? Notes, string? ContainerId, string? PlannedDate, string? DueDate, IReadOnlyList<string> TagIds, CaptureDraftDto? Draft = null);
 public sealed record PadLocateResponse(bool Ok, PadAnchorResponse? Anchor, TaskErrorResponse? Error);
 public sealed record PadSearchRequest(string Text, int Limit);
 public sealed record PadResolveRequest(IReadOnlyList<string> ItemIds);
@@ -137,6 +146,54 @@ public sealed class PadRpcService(PadCommands pad)
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 
+    [NeoRpcMethod("createDrawing")]
+    public async ValueTask<PadOperationResponse> CreateDrawingAsync(PadCreateDrawingRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.createDrawing");
+        return await ItemsAsync(async () => [(await pad.CreateDrawingAsync(new(request.OperationId, request.Width, request.Height), ct)).Item]);
+    }
+
+    [NeoRpcMethod("getDrawing")]
+    public async ValueTask<PadDrawingResponse> GetDrawingAsync(PadDrawingGetRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.getDrawing");
+        try { return new(true, MapDrawing(await pad.GetDrawingAsync(request.ItemId, ct)), true, null); }
+        catch (AppException error) { return new(false, null, false, TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    [NeoRpcMethod("saveDrawing")]
+    public async ValueTask<PadDrawingResponse> SaveDrawingAsync(PadDrawingSaveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.saveDrawing");
+        try
+        {
+            var revision = long.TryParse(request.ClientRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+                ? parsed
+                : throw AppException.Validation("clientRevision", "Invalid editor revision.");
+            var result = await pad.SaveDrawingAsync(new(request.ItemId, revision, request.StrokesJson, Blank(request.PreviewAttachmentId)), ct);
+            return new(true, MapDrawing(new PadDrawingView(result.Item, result.Drawing)), result.Applied, null);
+        }
+        catch (AppException error) { return new(false, null, false, TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    [NeoRpcMethod("makeTaskFromRegion")]
+    public async ValueTask<PadMakeTaskResponse> MakeTaskFromRegionAsync(PadMakeTaskFromRegionRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("pad.makeTaskFromRegion");
+        try
+        {
+            var revision = long.TryParse(request.SourceRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : throw AppException.Validation("sourceRevision", "Invalid drawing revision. Select the region again.");
+            var result = await pad.MakeTaskFromRegionAsync(new(request.OperationId, request.PadItemId, revision,
+                new PadRegion(request.Region.X, request.Region.Y, request.Region.W, request.Region.H),
+                request.Title, request.Notes, Blank(request.ContainerId), Date(request.PlannedDate, "plannedDate"), Date(request.DueDate, "dueDate"), request.TagIds,
+                request.Draft is { } draft ? CaptureRpcService.ToDraft(draft, "draft") : null), ct);
+            return new(true, TaskRpcService.ToResponse(result.Task), null);
+        }
+        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
+    }
+
     [NeoRpcMethod("locate")]
     public async ValueTask<PadLocateResponse> LocateAsync(PadLocateRequest request, CancellationToken ct)
     {
@@ -144,7 +201,7 @@ public sealed class PadRpcService(PadCommands pad)
         try
         {
             var anchor = await pad.LocateAsync(request.TaskId, ct);
-            return new(true, anchor is null ? null : new PadAnchorResponse(anchor.PadItemId, anchor.State.ToString(), anchor.Start, anchor.End, anchor.Quote, anchor.Archived, anchor.Deleted), null);
+            return new(true, anchor is null ? null : new PadAnchorResponse(anchor.PadItemId, anchor.State.ToString(), anchor.Start, anchor.End, anchor.Quote, anchor.Archived, anchor.Deleted, MapRegion(anchor.Region)), null);
         }
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
@@ -196,7 +253,18 @@ public sealed class PadRpcService(PadCommands pad)
         StorageFormats.Instant(view.Item.CreatedAtUtc),
         StorageFormats.Instant(view.Item.UpdatedAtUtc),
         view.TagIds,
-        [.. view.Tasks.Select(task => new PadTaskLinkResponse(task.Link.TaskId, task.Title, task.Deleted, task.Link.Quote))]);
+        [.. view.Tasks.Select(task => new PadTaskLinkResponse(task.Link.TaskId, task.Title, task.Deleted, task.Link.Quote, MapRegion(PadDrawingValidation.ParseRegion(task.Link.RegionJson))))],
+        view.Item.Kind == PadItemKind.Drawing ? "drawing" : "text",
+        view.Drawing?.PreviewAttachmentId,
+        view.Drawing?.Width ?? 0,
+        view.Drawing?.Height ?? 0);
+
+    private static PadRegionDto? MapRegion(PadRegion? region) => region is null ? null : new(region.X, region.Y, region.W, region.H);
+
+    private static PadDrawingData MapDrawing(PadDrawingView view) => new(
+        Map(new PadItemView(view.Item, [], [], view.Drawing)),
+        view.Drawing.StrokesJson, view.Drawing.Width, view.Drawing.Height,
+        view.Drawing.Revision.ToString(CultureInfo.InvariantCulture), view.Drawing.PreviewAttachmentId);
 
     private static async ValueTask<PadOperationResponse> ItemsAsync(Func<Task<IReadOnlyList<PadItemRecord>>> action)
     {

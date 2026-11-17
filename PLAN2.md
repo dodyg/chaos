@@ -2330,6 +2330,8 @@ never load anything from the internet.
 
 **Exit:** the pad holds drawings, photos and voice notes that persist, export and link to tasks.
 
+**Progress note 2026-11-17.** Built: migration 032 (`Kind`, `PadDrawings`, `RegionJson`; the plan's 031 was taken), the `pad_drawing` sync entry, purge in both paths, `PadCommands` create/get/save drawing and `MakeTaskFromRegion` with the revision rule, the `pad.*Drawing` and `makeTaskFromRegion` RPCs, the canvas (pen with pressure, highlighter, stroke eraser, palette, undo/redo, rectangle select, PNG preview stored as an attachment), photo notes, voice notes with timer, level meter, 30-minute cap and an audio-file fallback, Markdown export (preview plus strokes JSON) and the archive round trip. Decisions and deviations are in `docs/decisions.md` (2026-11-17). Tests: 6 + 3 Infrastructure/Desktop backend groups (strokes across restart, stale revisions, region fixed and `Missing` on delete, preview rules, purge, archive, export, RPC), frontend drawing model 7, canvas 6, voice 5 + 5, pad media 4. **Not done:** the native check (pen or mouse drawing, a task from a region, a voice note, restart). Spike #2 (microphone in the WebView) was never run, so recording is untested in the real WebView; the C# `MediaCapture` fallback is the next step if it fails. The box stays unticked until the native check passes, as with P6a.
+
 ### [ ] P11 — App lock
 
 **Depends on:** `ISecretStore` (delivered in P5; P7 is deferred) and P0's Windows Hello result. **Migration:** none. Settings

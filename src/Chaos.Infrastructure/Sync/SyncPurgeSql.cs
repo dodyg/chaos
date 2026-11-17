@@ -64,6 +64,7 @@ internal static class SyncPurgeSql
             "DELETE FROM SearchDocuments WHERE TargetKind = 4 AND TargetId = $k0;",
             "DELETE FROM Attachments WHERE OwnerKind = 3 AND OwnerId = $k0;",
             "DELETE FROM ScratchTaskLinks WHERE PadItemId = $k0;",
+            "DELETE FROM PadDrawings WHERE PadItemId = $k0;",
             "DELETE FROM ScratchPadTags WHERE PadItemId = $k0;",
             "DELETE FROM ScratchPadItems WHERE Id = $k0;",
         ],

@@ -946,6 +946,9 @@ internal sealed class RecordingPadStore(RecordingDataSession recorder, IPadStore
     public Task<IReadOnlyList<ScratchTaskLinkRecord>> ListTaskLinksAsync(string itemId, CancellationToken ct) => inner.ListTaskLinksAsync(itemId, ct);
     public Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => inner.FindTaskLinkAsync(taskId, ct);
     public Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct) => inner.SearchAsync(spaceId, text, limit, ct);
+    public Task<PadDrawingRecord?> GetDrawingAsync(string itemId, CancellationToken ct) => inner.GetDrawingAsync(itemId, ct);
+    public Task AddDrawingAsync(PadDrawingRecord drawing, CancellationToken ct) => inner.AddDrawingAsync(drawing, ct);
+    public Task<PadDrawingRecord?> UpdateDrawingAsync(PadDrawingRecord updated, long expectedVersion, CancellationToken ct) => inner.UpdateDrawingAsync(updated, expectedVersion, ct);
 
     public async Task AddAsync(PadItemRecord item, CancellationToken ct)
     {

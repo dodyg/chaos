@@ -1,5 +1,31 @@
 namespace Chaos.Application.Contracts;
 
+public enum PadItemKind
+{
+    Text = 0,
+    Drawing = 1,
+}
+
+/// <summary>
+/// The strokes of a drawing pad item (PLAN2 P10). <see cref="StrokesJson"/> is the whole drawing
+/// (<c>{"v":1,"strokes":[...]}</c>), merged whole when two devices edit it. Width and Height are
+/// the drawing units the strokes were drawn in. <see cref="Revision"/> is the editor's autosave
+/// counter: a save with an older revision never replaces newer strokes.
+/// </summary>
+public sealed record PadDrawingRecord(
+    string PadItemId,
+    string StrokesJson,
+    int Width,
+    int Height,
+    string? PreviewAttachmentId,
+    long Revision,
+    long Version,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+/// <summary>A rectangle in drawing units: the part of a drawing a task was made from.</summary>
+public sealed record PadRegion(double X, double Y, double W, double H);
+
 /// <summary>
 /// One Personal scratch pad item (PLAN §5 ScratchPadItems, §9): untitled raw Markdown with a
 /// manual position, optional archive and a draft version. DraftVersion is the highest editor
@@ -8,6 +34,8 @@ namespace Chaos.Application.Contracts;
 /// </summary>
 public sealed record PadItemRecord : AggregateRecord
 {
+    /// <summary>Typed text (default) or a drawing; the numbers are stored (migration 032).</summary>
+    public PadItemKind Kind { get; init; } = PadItemKind.Text;
     public required string SpaceId { get; init; }
     public required string RawMarkdown { get; init; }
     public required long Position { get; init; }
@@ -31,4 +59,5 @@ public sealed record ScratchTaskLinkRecord(
     string Quote,
     DateTimeOffset CreatedAtUtc,
     string? ContextBefore = null,
-    string? ContextAfter = null);
+    string? ContextAfter = null,
+    string? RegionJson = null);

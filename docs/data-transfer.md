@@ -100,6 +100,10 @@ A ZIP:
   with its ID in an HTML comment) and the diary entries.
 - `pad/<NNN> <first line> (<id8>).md` holds one file per Personal pad note, with its tags and
   archived flag.
+  A drawing note is `pad/<NNN> Drawing (<id8>).md` with `kind: "drawing"`, its size, and the PNG preview
+  linked from `attachments/`; the strokes sit beside it as `pad/<NNN> Drawing (<id8>).strokes.json`
+  (`{"v":1,"strokes":[{"tool","color","size","points":[[x,y,pressure],...]}]}`, in the drawing's own units).
+  Photos and voice notes are ordinary notes with their image or audio file under `attachments/`.
 - `pages/<title> (<id8>).md` holds one file per page. A page with pages under it also has a
   folder of the same name holding them, so the folders follow the page tree. Daily pages are
   `daily/<yyyy-MM-dd>.md`. The page's own front matter is written unchanged, with the app's

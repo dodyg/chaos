@@ -86,4 +86,56 @@ public sealed class PadRpcTests
             await Assert.That(found.Items.Select(x => x.Id)).Contains(itemId);
         }
     }
+    [Test]
+    public async Task Drawing_StrokesRegionTaskAndPreviewFields_SurviveARestartOverRpc()
+    {
+        const string strokes = "{\"v\":1,\"strokes\":[{\"tool\":\"pen\",\"color\":\"#111827\",\"size\":6,\"points\":[[5,5,0.5],[40,40,0.5]]}]}";
+        var root = TestPaths.NewDataRoot();
+        string itemId;
+        string taskId;
+        using (var storage = await OpenAsync(root))
+        {
+            var (pad, _) = Wire(storage);
+            var created = await pad.CreateDrawingAsync(new(Op(), 800, 600), CancellationToken.None);
+            await Assert.That(created.Ok).IsTrue();
+            await Assert.That(created.Items[0].Kind).IsEqualTo("drawing");
+            itemId = created.Items[0].Id;
+
+            var saved = await pad.SaveDrawingAsync(new(itemId, "2", strokes, null), CancellationToken.None);
+            await Assert.That(saved.Applied).IsTrue();
+            var stale = await pad.SaveDrawingAsync(new(itemId, "1", "{\"v\":1,\"strokes\":[]}", null), CancellationToken.None);
+            await Assert.That(stale.Ok).IsTrue();
+            await Assert.That(stale.Applied).IsFalse();
+            await Assert.That(stale.Drawing!.StrokesJson).IsEqualTo(strokes);
+
+            var bad = await pad.SaveDrawingAsync(new(itemId, "3", "not json", null), CancellationToken.None);
+            await Assert.That(bad.Ok).IsFalse();
+            await Assert.That(bad.Error!.Kind).IsEqualTo("validation");
+            var badRevision = await pad.SaveDrawingAsync(new(itemId, "zero", strokes, null), CancellationToken.None);
+            await Assert.That(badRevision.Ok).IsFalse();
+
+            var outside = await pad.MakeTaskFromRegionAsync(new(Op(), itemId, "2", new PadRegionDto(700, 500, 400, 400), "Too big", null, null, null, null, []), CancellationToken.None);
+            await Assert.That(outside.Ok).IsFalse();
+            var made = await pad.MakeTaskFromRegionAsync(new(Op(), itemId, "2", new PadRegionDto(100, 50, 200, 120), "Fix this part", null, null, null, null, []), CancellationToken.None);
+            await Assert.That(made.Ok).IsTrue();
+            taskId = made.Task!.Id;
+        }
+
+        using (var reopened = await OpenAsync(root))
+        {
+            var (pad, _) = Wire(reopened);
+            var drawing = await pad.GetDrawingAsync(new(itemId), CancellationToken.None);
+            await Assert.That(drawing.Drawing!.StrokesJson).IsEqualTo(strokes);
+            await Assert.That(drawing.Drawing.Revision).IsEqualTo("2");
+            await Assert.That(drawing.Drawing.Width).IsEqualTo(800);
+            var listed = (await pad.ListAsync(new(false, null), CancellationToken.None)).Items.Single();
+            await Assert.That(listed.Kind).IsEqualTo("drawing");
+            await Assert.That(listed.Width).IsEqualTo(800);
+            await Assert.That(listed.Tasks.Single().Region).IsEqualTo(new PadRegionDto(100, 50, 200, 120));
+            var anchor = (await pad.LocateAsync(new(taskId), CancellationToken.None)).Anchor!;
+            await Assert.That(anchor.State).IsEqualTo("Exact");
+            await Assert.That(anchor.Region).IsEqualTo(new PadRegionDto(100, 50, 200, 120));
+            await Assert.That(anchor.Start).IsNull();
+        }
+    }
 }

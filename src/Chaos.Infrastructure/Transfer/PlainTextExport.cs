@@ -69,9 +69,14 @@ public static class PlainTextExport
         foreach (var item in snapshot.PadItems)
         {
             padIndex++;
-            var firstLine = item.Markdown.Split('\n').Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "note";
+            var firstLine = item.Drawing is not null ? "Drawing" : item.Markdown.Split('\n').Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "note";
             var path = Unique(used, $"pad/{padIndex:000} {SafeFileName(firstLine, 50)} ({item.Id[..8]}).md");
             Add(zip, path, Links(PadMarkdown(item), path));
+            if (item.Drawing is { } drawing)
+            {
+                // The strokes travel as data beside the note, so the drawing can be rebuilt, not just looked at.
+                Add(zip, path[..^3] + ".strokes.json", drawing.StrokesJson);
+            }
         }
 
         // Pages: folders follow the page tree; a page with pages under it also names their folder.
@@ -226,6 +231,17 @@ public static class PlainTextExport
         text.Append("tags: ").Append(JsonSerializer.Serialize(item.Tags)).Append('\n');
         Front(text, "created", item.CreatedAtUtc);
         Front(text, "updated", item.UpdatedAtUtc);
+        if (item.Drawing is { } drawing)
+        {
+            Front(text, "kind", "drawing");
+            text.Append("width: ").Append(drawing.Width.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            text.Append("height: ").Append(drawing.Height.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            text.Append("---\n\n");
+            // The PNG preview is an attachment of the note; its chaos:attachment reference becomes a relative path.
+            text.Append(drawing.PreviewAttachmentId is { } preview ? $"![Drawing](chaos:attachment/{preview})\n" : "(An empty drawing.)\n");
+            return text.ToString();
+        }
+
         text.Append("---\n\n").Append(item.Markdown.TrimEnd()).Append('\n');
         return text.ToString();
     }

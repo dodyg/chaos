@@ -276,7 +276,7 @@ public static class SyncCatalog
         new SyncTable("ScratchPadItems", "pad", SyncMode.Merge, ["Id"],
             Groups:
             [
-                new("create", ["SpaceId", "CreatedAtUtc"]),
+                new("create", ["SpaceId", "Kind", "CreatedAtUtc"]),
                 new("text", ["RawMarkdown"]),
                 new("position", ["Position"]),
                 new("archived", ["ArchivedAtUtc"]),
@@ -286,10 +286,22 @@ public static class SyncCatalog
             ApplyOrder: 120),
 
         new SyncTable("ScratchTaskLinks", "scratch_task_link", SyncMode.Merge, ["PadItemId", "TaskId"],
-            Groups: [new("anchor", ["SourceRevision", "StartIndex", "EndIndex", "Quote", "ContextBefore", "ContextAfter", "CreatedAtUtc"])],
+            Groups: [new("anchor", ["SourceRevision", "StartIndex", "EndIndex", "Quote", "ContextBefore", "ContextAfter", "RegionJson", "CreatedAtUtc"])],
             UniqueRules: [new("UX_ScratchTaskLinks_Task", SyncUniqueRuleKind.KeepLowestRetireOther,
                 "A task anchors to one pad note; combining two anchors makes no sense, so the higher-ID link retires (§7.6).")],
             ApplyOrder: 130), // no DeletedAtUtc: a removal is a hard delete and travels as a purge
+
+        // A drawing item's strokes: one row per item, the strokes merged whole (latest wins). The
+        // preview attachment travels with them so a peer shows the picture before the strokes load.
+        // No tombstone: the row goes with its pad item (SyncPurgeSql "pad").
+        new SyncTable("PadDrawings", "pad_drawing", SyncMode.Merge, ["PadItemId"],
+            Groups:
+            [
+                new("strokes", ["StrokesJson", "Width", "Height", "CreatedAtUtc"]),
+                new("preview", ["PreviewAttachmentId"]),
+            ],
+            LocalColumns: ["Version", "Revision"],
+            ApplyOrder: 125),
 
         // ---- Recurrence ---------------------------------------------------------------------
         new SyncTable("RecurrenceSeries", "recurrence_series", SyncMode.Merge, ["Id"],

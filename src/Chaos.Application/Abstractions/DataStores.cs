@@ -240,6 +240,10 @@ public interface IPadStore
     Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct);
     /// <summary>IDs of active items in the space whose text matches the search words, best match first.</summary>
     Task<IReadOnlyList<string>> SearchAsync(string spaceId, string text, int limit, CancellationToken ct);
+    Task<PadDrawingRecord?> GetDrawingAsync(string itemId, CancellationToken ct);
+    Task AddDrawingAsync(PadDrawingRecord drawing, CancellationToken ct);
+    /// <summary>Replaces the strokes and preview when the stored Version is <paramref name="expectedVersion"/>; null otherwise.</summary>
+    Task<PadDrawingRecord?> UpdateDrawingAsync(PadDrawingRecord updated, long expectedVersion, CancellationToken ct);
 }
 
 /// <summary>

@@ -66,6 +66,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["diary_entry"] = Work,
         ["pad"] = Work,
         ["pad_tag"] = Work,
+        ["pad_drawing"] = Work,
         ["scratch_task_link"] = Work,
         ["reminder_rule"] = Work,
         ["waiting_detail"] = Work,
@@ -263,6 +264,9 @@ public sealed class SyncCatalogFlushCoverageTests
         var pad = new PadCommands(host.Store, host.Ids, host.Clock);
         var item = (await pad.CreateAsync(new CreatePadItemCommand(Op(), "buy milk"))).Item;
         expected["pad"] = item.Id;
+        var drawing = (await pad.CreateDrawingAsync(new CreatePadDrawingCommand(Op()))).Item;
+        await pad.SaveDrawingAsync(new SavePadDrawingCommand(drawing.Id, 1, "{\"v\":1,\"strokes\":[{\"points\":[[1,2,0.5]]}]}"));
+        expected["pad_drawing"] = drawing.Id;
         const string quote = "buy milk";
         var made = await pad.MakeTaskAsync(new MakeTaskFromPadCommand(Op(), item.Id, item.DraftVersion, 0, quote.Length, quote,
             "Buy milk", null, null, null, null, []));

@@ -36,7 +36,10 @@ public sealed record ExportTask
     public required IReadOnlyList<ExportDiaryEntry> Diary { get; init; }
 }
 
-public sealed record ExportPadItem(string Id, string Markdown, bool Archived, string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> Tags);
+/// <summary>The strokes of a drawing pad item (PLAN2 P10), exported as a JSON file beside the Markdown.</summary>
+public sealed record ExportDrawing(string StrokesJson, int Width, int Height, string? PreviewAttachmentId);
+
+public sealed record ExportPadItem(string Id, string Markdown, bool Archived, string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> Tags, ExportDrawing? Drawing = null);
 
 /// <summary>One active page: tree pages carry their parent, daily pages their date.</summary>
 public sealed record ExportPage(string Id, string? ParentId, string Title, string Markdown, string? DailyDate, string CreatedAtUtc, string UpdatedAtUtc);
@@ -125,9 +128,11 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             }, ct);
 
         var pad = await ListAsync(connection, """
-            SELECT Id, RawMarkdown, ArchivedAtUtc, CreatedAtUtc, UpdatedAtUtc FROM ScratchPadItems
-            WHERE DeletedAtUtc IS NULL ORDER BY ArchivedAtUtc IS NOT NULL, Position, Id;
-            """, r => new ExportPadItem(r.GetString(0), r.GetString(1), !r.IsDBNull(2), r.GetString(3), r.GetString(4), padTags.GetValueOrDefault(r.GetString(0)) ?? []), ct);
+            SELECT p.Id, p.RawMarkdown, p.ArchivedAtUtc, p.CreatedAtUtc, p.UpdatedAtUtc, d.StrokesJson, d.Width, d.Height, d.PreviewAttachmentId
+            FROM ScratchPadItems p LEFT JOIN PadDrawings d ON d.PadItemId = p.Id AND p.Kind = 1
+            WHERE p.DeletedAtUtc IS NULL ORDER BY p.ArchivedAtUtc IS NOT NULL, p.Position, p.Id;
+            """, r => new ExportPadItem(r.GetString(0), r.GetString(1), !r.IsDBNull(2), r.GetString(3), r.GetString(4), padTags.GetValueOrDefault(r.GetString(0)) ?? [],
+                r.IsDBNull(5) ? null : new ExportDrawing(r.GetString(5), r.GetInt32(6), r.GetInt32(7), r.IsDBNull(8) ? null : r.GetString(8))), ct);
 
         var pages = await ListAsync(connection, """
             SELECT Id, ParentPageId, Title, RawMarkdown, DailyDate, CreatedAtUtc, UpdatedAtUtc FROM Pages

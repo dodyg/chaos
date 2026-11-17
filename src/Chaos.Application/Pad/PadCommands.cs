@@ -16,6 +16,29 @@ public sealed record CreatePadItemCommand(string OperationId, string Markdown);
 /// </summary>
 public sealed record SavePadTextCommand(string ItemId, long ClientRevision, string Markdown);
 
+public sealed record CreatePadDrawingCommand(string OperationId, int Width = PadDrawingValidation.DefaultWidth, int Height = PadDrawingValidation.DefaultHeight);
+
+/// <summary>
+/// An autosave of a drawing's strokes, with the same revision rule as <see cref="SavePadTextCommand"/>.
+/// <see cref="PreviewAttachmentId"/> (null keeps the current one) names a PNG attachment of this
+/// item that becomes the preview; the previous preview is then removed.
+/// </summary>
+public sealed record SavePadDrawingCommand(string ItemId, long ClientRevision, string StrokesJson, string? PreviewAttachmentId = null);
+
+/// <summary>"Make task" on a rectangle of a drawing; the region is in the drawing's own units.</summary>
+public sealed record MakeTaskFromRegionCommand(
+    string OperationId,
+    string PadItemId,
+    long SourceRevision,
+    PadRegion Region,
+    string Title,
+    string? Notes,
+    string? ContainerId,
+    DateOnly? PlannedDate,
+    DateOnly? DueDate,
+    IReadOnlyList<string> TagIds,
+    CaptureTaskDraft? Draft = null);
+
 public sealed record PadItemChange(string ItemId, long ExpectedVersion);
 
 public sealed record PadItemsCommand(string OperationId, IReadOnlyList<PadItemChange> Items);
@@ -51,9 +74,13 @@ public sealed record CompletePadReviewCommand(string OperationId, IReadOnlyList<
 public sealed record PadTaskLink(ScratchTaskLinkRecord Link, string Title, bool Deleted);
 
 /// <summary>A pad item as the pad shows it: the row, its active tags and the tasks made from it.</summary>
-public sealed record PadItemView(PadItemRecord Item, IReadOnlyList<string> TagIds, IReadOnlyList<PadTaskLink> Tasks);
+public sealed record PadItemView(PadItemRecord Item, IReadOnlyList<string> TagIds, IReadOnlyList<PadTaskLink> Tasks, PadDrawingRecord? Drawing = null);
 
 public sealed record PadMutationResult(PadItemRecord Item, bool Replayed);
+
+public sealed record PadDrawingView(PadItemRecord Item, PadDrawingRecord Drawing);
+
+public sealed record PadDrawingSaveResult(PadItemRecord Item, PadDrawingRecord Drawing, bool Applied);
 
 public sealed record PadItemsResult(IReadOnlyList<PadItemRecord> Items, bool Replayed);
 
@@ -73,7 +100,7 @@ public enum PadAnchorState
 }
 
 /// <summary>Where a task's pad backlink points now (PLAN §9 stale-anchor fallback).</summary>
-public sealed record PadAnchor(string PadItemId, string TaskId, PadAnchorState State, int? Start, int? End, string Quote, bool Archived, bool Deleted);
+public sealed record PadAnchor(string PadItemId, string TaskId, PadAnchorState State, int? Start, int? End, string Quote, bool Archived, bool Deleted, PadRegion? Region = null);
 
 public sealed record PadLinkTarget(string Id, string Excerpt, bool Deleted);
 
@@ -212,6 +239,11 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
                 throw AppException.Validation("itemId", "This note was deleted. Restore it to keep writing; your text is still in the editor.");
             }
 
+            if (item.Kind != PadItemKind.Text)
+            {
+                throw AppException.Validation("itemId", "This note is a drawing. Use the drawing editor to change it.");
+            }
+
             if (command.ClientRevision <= item.DraftVersion)
             {
                 return new PadSaveResult(item, Applied: false);
@@ -333,12 +365,162 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
             }
 
             var item = await session.Pad.GetIncludingDeletedAsync(link.PadItemId, token) ?? throw NotFound();
+            if (link.RegionJson is not null)
+            {
+                // Regions are fixed coordinates in the drawing, so the spot never moves; a drawing
+                // that was deleted has nothing to point at.
+                var region = PadDrawingValidation.ParseRegion(link.RegionJson);
+                var regionState = region is null || item.DeletedAtUtc is not null ? PadAnchorState.Missing : PadAnchorState.Exact;
+                return new PadAnchor(item.Id, taskId, regionState, null, null, string.Empty, item.ArchivedAtUtc is not null, item.DeletedAtUtc is not null, region);
+            }
+
             var found = Locate(item.RawMarkdown, item.DraftVersion, link);
             var state = found is null ? PadAnchorState.Missing
                 : item.DraftVersion == link.SourceRevision && found.Value.Start == link.StartIndex ? PadAnchorState.Exact
                 : PadAnchorState.Relocated;
             return new PadAnchor(item.Id, taskId, state, found?.Start, found?.End, link.Quote, item.ArchivedAtUtc is not null, item.DeletedAtUtc is not null);
         }, ct);
+
+    // ---- Drawings (PLAN2 P10) ---------------------------------------------------------------
+
+    public async Task<PadMutationResult> CreateDrawingAsync(CreatePadDrawingCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var width = PadDrawingValidation.Side(command.Width, "width");
+        var height = PadDrawingValidation.Side(command.Height, "height");
+        var normalized = command with { Width = width, Height = height };
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, normalized.OperationId, "pad.create-drawing", normalized, now, async inner =>
+            {
+                var (_, space) = await PersonalSpaceAsync(session, inner);
+                var item = new PadItemRecord
+                {
+                    Id = ids.NewId().ToString(),
+                    SpaceId = space.Id,
+                    Kind = PadItemKind.Drawing,
+                    RawMarkdown = string.Empty,
+                    Position = await session.Pad.GetNextPositionAsync(space.Id, inner),
+                    DraftVersion = 0,
+                    Version = 1,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                };
+                await session.Pad.AddAsync(item, inner);
+                await session.Pad.AddDrawingAsync(new PadDrawingRecord(item.Id, PadDrawingValidation.EmptyStrokes, width, height, null, 0, 1, now, now), inner);
+                return new PadMutationResult(item, Replayed: false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
+
+    public async Task<PadDrawingView> GetDrawingAsync(string itemId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var item = await session.Pad.GetIncludingDeletedAsync(itemId, token) ?? throw NotFound();
+            var drawing = await session.Pad.GetDrawingAsync(itemId, token) ?? throw NotFound();
+            return new PadDrawingView(item, drawing);
+        }, ct);
+
+    /// <summary>
+    /// Autosave of a drawing: applies the strokes when the editor revision is newer than the
+    /// stored one, otherwise returns the stored state unchanged. Not an undo entry (the canvas
+    /// keeps its own undo while it is open).
+    /// </summary>
+    public async Task<PadDrawingSaveResult> SaveDrawingAsync(SavePadDrawingCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (command.ClientRevision < 1)
+        {
+            throw AppException.Validation("clientRevision", "The editor revision must be 1 or more.");
+        }
+
+        var strokes = PadDrawingValidation.Strokes(command.StrokesJson);
+        return await InWriteAsync(async (session, _, now, token) =>
+        {
+            var item = await session.Pad.GetIncludingDeletedAsync(command.ItemId, token) ?? throw NotFound();
+            var drawing = await session.Pad.GetDrawingAsync(command.ItemId, token) ?? throw NotFound();
+            if (item.DeletedAtUtc is not null)
+            {
+                throw AppException.Validation("itemId", "This drawing was deleted. Restore it to keep drawing; your strokes are still on the canvas.");
+            }
+
+            var preview = drawing.PreviewAttachmentId;
+            var previewChanged = command.PreviewAttachmentId is not null && command.PreviewAttachmentId != preview;
+            if (previewChanged)
+            {
+                var attachment = await session.Attachments.GetAsync(command.PreviewAttachmentId!, token);
+                if (attachment is null || attachment.OwnerKind != AttachmentOwnerKind.Pad || attachment.OwnerId != item.Id || attachment.MediaType != "image/png")
+                {
+                    throw AppException.Validation("previewAttachmentId", "The drawing preview must be a PNG attached to this drawing.");
+                }
+
+                if (preview is not null && await session.Attachments.GetAsync(preview, token) is { } previous)
+                {
+                    await session.Attachments.UpdateAsync(previous with { DeletedAtUtc = now, Version = previous.Version + 1, UpdatedAtUtc = now }, previous.Version, token);
+                }
+
+                preview = command.PreviewAttachmentId;
+            }
+
+            var newer = command.ClientRevision > drawing.Revision;
+            if (!newer && !previewChanged)
+            {
+                return new PadDrawingSaveResult(item, drawing, Applied: false);
+            }
+
+            var saved = await session.Pad.UpdateDrawingAsync(
+                drawing with
+                {
+                    StrokesJson = newer ? strokes : drawing.StrokesJson,
+                    Revision = Math.Max(drawing.Revision, command.ClientRevision),
+                    PreviewAttachmentId = preview,
+                    Version = drawing.Version + 1,
+                    UpdatedAtUtc = now,
+                },
+                drawing.Version, token) ?? throw Conflict();
+            var touched = await session.Pad.UpdateAsync(item with { Version = item.Version + 1, UpdatedAtUtc = now }, item.Version, token) ?? throw Conflict();
+            return new PadDrawingSaveResult(touched, saved, Applied: newer);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Creates the task and its backlink to a rectangle of a drawing in one transaction. The
+    /// region is kept in drawing units and never moves; the drawing is not changed.
+    /// </summary>
+    public async Task<MakeTaskFromPadResult> MakeTaskFromRegionAsync(MakeTaskFromRegionCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var draft = CaptureCommands.Normalize(command.Draft ?? new CaptureTaskDraft
+        {
+            Title = command.Title,
+            Notes = command.Notes,
+            ContainerId = command.ContainerId,
+            PlannedDate = command.PlannedDate,
+            DueDate = command.DueDate,
+            TagIds = command.TagIds,
+        }, command.Draft is null ? "task" : "draft");
+        var normalized = command with { Title = draft.Title, Notes = draft.Notes, ContainerId = draft.ContainerId, TagIds = draft.TagIds, Draft = draft };
+        return await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, normalized.OperationId, "pad.make-task-region", normalized, now, async inner =>
+            {
+                var item = await session.Pad.GetAsync(normalized.PadItemId, inner) ?? throw NotFound();
+                var drawing = item.Kind == PadItemKind.Drawing ? await session.Pad.GetDrawingAsync(item.Id, inner) : null;
+                if (drawing is null)
+                {
+                    throw AppException.Validation("padItemId", "That note is not a drawing.");
+                }
+
+                var regionJson = PadDrawingValidation.Region(normalized.Region, drawing.Width, drawing.Height);
+                var task = await CaptureCommands.CreateInSessionAsync(session, ids, profile, draft, normalized.OperationId, now, ["ScratchPad"], inner);
+                var link = new ScratchTaskLinkRecord(item.Id, task.Id, drawing.Revision, 0, 0, string.Empty, now, RegionJson: regionJson);
+                await session.Pad.AddTaskLinkAsync(link, inner);
+                return new MakeTaskFromPadResult(task, link, Replayed: false);
+            }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
 
     public async Task<PadReviewStatus> ReviewStatusAsync(CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) =>
@@ -520,7 +702,8 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
             }
         }
 
-        return new PadItemView(item, await session.Tags.ListPadTagIdsAsync(item.Id, token), links);
+        var drawing = item.Kind == PadItemKind.Drawing ? await session.Pad.GetDrawingAsync(item.Id, token) : null;
+        return new PadItemView(item, await session.Tags.ListPadTagIdsAsync(item.Id, token), links, drawing);
     }
 
     /// <summary>The tag and every active tag nested inside it.</summary>

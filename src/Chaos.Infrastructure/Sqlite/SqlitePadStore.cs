@@ -31,11 +31,12 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO ScratchPadItems (Id, SpaceId, RawMarkdown, Position, ArchivedAtUtc, DraftVersion, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-            VALUES ($id, $space, $markdown, $position, $archived, $draft, $version, $created, $updated, $deleted);
+            INSERT INTO ScratchPadItems (Id, SpaceId, Kind, RawMarkdown, Position, ArchivedAtUtc, DraftVersion, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $space, $kind, $markdown, $position, $archived, $draft, $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", item.Id);
         command.Parameters.AddWithValue("$space", item.SpaceId);
+        command.Parameters.AddWithValue("$kind", (int)item.Kind);
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(item.CreatedAtUtc));
         Bind(command, item);
         await command.ExecuteNonQueryAsync(ct);
@@ -74,8 +75,8 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO ScratchTaskLinks (PadItemId, TaskId, SourceRevision, StartIndex, EndIndex, Quote, CreatedAtUtc, ContextBefore, ContextAfter)
-            VALUES ($item, $task, $revision, $start, $end, $quote, $created, $before, $after);
+            INSERT INTO ScratchTaskLinks (PadItemId, TaskId, SourceRevision, StartIndex, EndIndex, Quote, CreatedAtUtc, ContextBefore, ContextAfter, RegionJson)
+            VALUES ($item, $task, $revision, $start, $end, $quote, $created, $before, $after, $region);
             """;
         command.Parameters.AddWithValue("$item", link.PadItemId);
         command.Parameters.AddWithValue("$task", link.TaskId);
@@ -86,6 +87,7 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(link.CreatedAtUtc));
         command.Parameters.AddWithValue("$before", SqliteProfileStore.OptionalValue(link.ContextBefore));
         command.Parameters.AddWithValue("$after", SqliteProfileStore.OptionalValue(link.ContextAfter));
+        command.Parameters.AddWithValue("$region", SqliteProfileStore.OptionalValue(link.RegionJson));
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -129,6 +131,57 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
         return ids;
     }
 
+    public async Task<PadDrawingRecord?> GetDrawingAsync(string itemId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM PadDrawings WHERE PadItemId = $id;";
+        command.Parameters.AddWithValue("$id", itemId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? new PadDrawingRecord(
+                reader.S("PadItemId"), reader.S("StrokesJson"), (int)reader.L("Width"), (int)reader.L("Height"),
+                reader.Sn("PreviewAttachmentId"), reader.L("Revision"), reader.L("Version"), reader.I("CreatedAtUtc"), reader.I("UpdatedAtUtc"))
+            : null;
+    }
+
+    public async Task AddDrawingAsync(PadDrawingRecord drawing, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO PadDrawings (PadItemId, StrokesJson, Width, Height, PreviewAttachmentId, Revision, Version, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ($id, $strokes, $width, $height, $preview, $revision, $version, $created, $updated);
+            """;
+        command.Parameters.AddWithValue("$id", drawing.PadItemId);
+        command.Parameters.AddWithValue("$created", StorageFormats.Instant(drawing.CreatedAtUtc));
+        BindDrawing(command, drawing);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<PadDrawingRecord?> UpdateDrawingAsync(PadDrawingRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE PadDrawings SET StrokesJson = $strokes, Width = $width, Height = $height, PreviewAttachmentId = $preview,
+                Revision = $revision, Version = $version, UpdatedAtUtc = $updated
+            WHERE PadItemId = $id AND Version = $expected;
+            """;
+        command.Parameters.AddWithValue("$id", updated.PadItemId);
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        BindDrawing(command, updated);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? await GetDrawingAsync(updated.PadItemId, ct) : null;
+    }
+
+    private static void BindDrawing(SqliteCommand command, PadDrawingRecord drawing)
+    {
+        command.Parameters.AddWithValue("$strokes", drawing.StrokesJson);
+        command.Parameters.AddWithValue("$width", drawing.Width);
+        command.Parameters.AddWithValue("$height", drawing.Height);
+        command.Parameters.AddWithValue("$preview", SqliteProfileStore.OptionalValue(drawing.PreviewAttachmentId));
+        command.Parameters.AddWithValue("$revision", drawing.Revision);
+        command.Parameters.AddWithValue("$version", drawing.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(drawing.UpdatedAtUtc));
+    }
+
     private static void Bind(SqliteCommand command, PadItemRecord item)
     {
         command.Parameters.AddWithValue("$markdown", item.RawMarkdown);
@@ -160,6 +213,7 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
             {
                 Id = reader.S("Id"),
                 SpaceId = reader.S("SpaceId"),
+                Kind = (PadItemKind)reader.L("Kind"),
                 RawMarkdown = reader.S("RawMarkdown"),
                 Position = reader.L("Position"),
                 ArchivedAtUtc = reader.In("ArchivedAtUtc"),
@@ -192,7 +246,8 @@ public sealed class SqlitePadStore(SqliteConnection connection) : IPadStore
                 reader.S("Quote"),
                 reader.I("CreatedAtUtc"),
                 reader.Sn("ContextBefore"),
-                reader.Sn("ContextAfter")));
+                reader.Sn("ContextAfter"),
+                reader.Sn("RegionJson")));
         }
 
         return rows;

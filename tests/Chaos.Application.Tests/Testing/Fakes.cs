@@ -511,6 +511,16 @@ public sealed class FakePadStore(List<PadItemRecord> rows, List<ScratchTaskLinkR
     public Task<IReadOnlyList<ScratchTaskLinkRecord>> ListTaskLinksAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<ScratchTaskLinkRecord>>(links.Where(x => x.PadItemId == id).ToList());
     public Task<ScratchTaskLinkRecord?> FindTaskLinkAsync(string taskId, CancellationToken ct) => Task.FromResult(links.FirstOrDefault(x => x.TaskId == taskId));
     public Task<IReadOnlyList<string>> SearchAsync(string space, string text, int limit, CancellationToken ct) => throw new NotSupportedException("Search runs against SQLite; see Chaos.Infrastructure.Tests.");
+    private readonly List<PadDrawingRecord> _drawings = [];
+    public Task<PadDrawingRecord?> GetDrawingAsync(string id, CancellationToken ct) => Task.FromResult(_drawings.FirstOrDefault(x => x.PadItemId == id));
+    public Task AddDrawingAsync(PadDrawingRecord drawing, CancellationToken ct) { _drawings.Add(drawing); return Task.CompletedTask; }
+    public Task<PadDrawingRecord?> UpdateDrawingAsync(PadDrawingRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        var index = _drawings.FindIndex(x => x.PadItemId == updated.PadItemId && x.Version == expectedVersion);
+        if (index < 0) { return Task.FromResult<PadDrawingRecord?>(null); }
+        _drawings[index] = updated;
+        return Task.FromResult<PadDrawingRecord?>(updated);
+    }
 }
 
 /// <summary>
