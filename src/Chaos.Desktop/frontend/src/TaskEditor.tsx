@@ -4,7 +4,7 @@ import { addDays } from "./MyDay";
 import type { PageRequest } from "./Pages";
 import { gitHubRpc, subtaskRpc, type taskRpc as TaskRpc, type containerRpc as ContainerRpc, type tagRpc as TagRpc, type markdownRpc as MarkdownRpc, type padRpc as PadRpc, type pageRpc,
   type diaryRpc as DiaryRpc, type historyRpc as HistoryRpc, type reminderRpc as ReminderRpc, type waitingRpc as WaitingRpc, type recurrenceRpc as RecurrenceRpc,
-  type ContainerResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type PageAnchorResponse, type PageBacklinkResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
+  type ContainerResponse, type DiaryEntryResponse, type GitHubTaskSyncResponse, type PadAnchorResponse, type PageAnchorResponse, type PageBacklinkResponse, type SectionResponse, type SubtaskOperationResponse, type SubtaskResponse, type TagResponse,
   type TaskOperationResponse, type TaskResponse } from "#neoastra";
 import { ArrowDown, ArrowUp, Bell, CalendarDays, FileText, Repeat, History, ListChecks, ListTodo, NotebookPen, SlidersHorizontal, StickyNote, SunMedium, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,7 @@ import { GitHubTaskNotice } from "./GitHubTaskNotice";
 import { MeetingTaskNotice } from "./meetings";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { extractChecklist, MarkdownPreview, type MarkdownLinks } from "./markdown";
-import { TaskJournal } from "./TaskJournal";
+import { TaskJournal, when } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
 import { TaskReminders, TaskWaiting } from "./Reminders";
 import { TagPicker } from "./tags";
@@ -163,7 +163,19 @@ export function TaskEditor({ editing, setEditing, viewingTask, setViewingTask, b
     return () => { current = false; };
   }, [editing.id, subtaskRevision]);
 
-  async function runSubtask(action: () => Promise<SubtaskOperationResponse>, after?: (saved: SubtaskResponse) => void) {
+  // The read-only view lists the task's live diary entries, oldest first.
+  const [diaryEntries, setDiaryEntries] = React.useState<DiaryEntryResponse[]>([]);
+  React.useEffect(() => {
+    setDiaryEntries([]);
+    if (!viewingTask) return;
+    let current = true;
+    void Promise.resolve(journalApi.diaryRpc.list({ taskId: editing.id, includeDeleted: false })).then(result => {
+      if (current && result?.ok) setDiaryEntries(result.entries.filter(entry => !entry.deleted));
+    }).catch(() => { /* the diary is supplementary in the view; the Diary tab still reports load errors */ });
+    return () => { current = false; };
+  }, [viewingTask, editing.id, editing.version]);
+
+  async function runSubtask(action:() => Promise<SubtaskOperationResponse>, after?: (saved: SubtaskResponse) => void) {
     if (busy) return;
     setBusy(true); setError(null);
     try {
@@ -239,6 +251,10 @@ function checklistPanel() {
         {(editing.plannedDate || editing.dueDate) && <div className="mt-3 grid gap-1 text-sm text-muted-foreground">{editing.plannedDate && <p><DateText kind="planned" date={editing.plannedDate} time={editing.plannedTime}/></p>}{editing.dueDate && <p><DateText kind="due" date={editing.dueDate} time={editing.dueTime}/></p>}</div>}
         <section className="mt-6"><h4 className="mb-2 font-semibold">Notes</h4>{editing.notes ? <MarkdownPreview key={editing.id} source={editing.notes} links={taskViewLinks}/> : <p className="text-sm text-muted-foreground">No notes.</p>}</section>
         {subtasks.length > 0 && <section className="mt-6"><h4 className="mb-2 font-semibold">Subtasks</h4><ul className="grid gap-3">{subtasks.map(subtask => <li key={subtask.id}><div className="flex items-center gap-2"><StatusBadge status={subtask.status}/><span className="font-medium">{subtask.title}</span></div>{subtask.notes && <MarkdownPreview source={subtask.notes} links={links} className="mt-2"/>}</li>)}</ul></section>}
+        {diaryEntries.length > 0 && <section className="mt-6" aria-label="Diary"><h4 className="mb-2 font-semibold">Diary<Count>{diaryEntries.length}</Count></h4><ol className="grid gap-2">{diaryEntries.map(entry => <li key={entry.id} className="grid gap-1.5 rounded-lg border bg-background p-3">
+          <span className="text-xs text-muted-foreground">{when(entry.entryAtUtc)}{entry.editedAtUtc && ` · edited ${when(entry.editedAtUtc)}`}</span>
+          <MarkdownPreview source={entry.markdown} links={links} compact className="text-sm"/>
+        </li>)}</ol></section>}
         <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>Edit task</Button>
       </div> : <><Tabs value={editorTab} onValueChange={setEditorTab} className="min-h-0 flex-1 gap-0">
         <div className="grid gap-3 border-b px-5 pt-4 pb-3">
