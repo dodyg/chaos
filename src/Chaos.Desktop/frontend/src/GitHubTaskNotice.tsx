@@ -64,23 +64,26 @@ export function GitHubTaskNotice({ taskId, version, revision, api = gitHubRpc, o
     finally { if (selectedTask.current === taskId) setWorking(false); }
   }
   return <div role="status" aria-label="GitHub sync status" className="grid gap-1 rounded-lg border bg-muted/50 px-3 py-2 text-xs">
-    <span>GitHub · {info.state}</span>
-    {info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}
-    {info.repository && <span dir="auto">{info.repository}</span>}
-    {info.assignees && <span dir="auto">{info.assignees.length ? `Assigned to ${info.assignees.join(", ")}` : "Unassigned"}</span>}
-    {info.issueUrl && <button type="button" className="w-fit underline" onClick={() => {
-      void markdownRpc.openExternal({ url: info.issueUrl! }).then(result => { if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the issue."); })
-        .catch(() => { if (selectedTask.current === taskId) setMessage("Could not open the issue."); });
-    }}>Open issue on GitHub</button>}
+    <details className="group/gh grid gap-1">
+      <summary className="flex cursor-pointer items-center gap-2 select-none"><span>GitHub · {info.state}</span>{info.syncing && <strong className="flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin"/>Syncing this issue…</strong>}</summary>
+      <div className="mt-1 grid gap-1">
+      {info.repository && <span dir="auto">{info.repository}</span>}
+      {info.assignees && <span dir="auto">{info.assignees.length ? `Assigned to ${info.assignees.join(", ")}` : "Unassigned"}</span>}
+      {info.issueUrl && <button type="button" className="w-fit underline" onClick={() => {
+        void markdownRpc.openExternal({ url: info.issueUrl! }).then(result => { if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the issue."); })
+          .catch(() => { if (selectedTask.current === taskId) setMessage("Could not open the issue."); });
+      }}>Open issue on GitHub</button>}
+      {info.assignedToMe !== null && info.state === "Linked" && <button type="button" className="w-fit underline" disabled={working} onClick={() => void assign()}>{info.assignedToMe ? "Unassign me" : "Assign me"}</button>}
+      <button type="button" className="w-fit underline" disabled={working} onClick={() => void action("keepAsOrdinaryTask")}>Keep as ordinary task</button>
+      <span className="text-muted-foreground">Sync sends issue changes and selected diary entries.</span>
+      </div>
+    </details>
     {info.pending && <strong>Not sent to GitHub yet.</strong>}
     {info.state === "Out of scope" && <span>This issue no longer matches the repository filter. Sync resumes if it matches again.</span>}
     {info.state === "Unavailable" && <span>The issue cannot be reached. Your task is kept here.</span>}
     {info.syncError && <span>{info.syncError}</span>}
     {info.hasConflict && <div><p>GitHub’s value was kept. Your local value is saved in task history.</p><button type="button" className="underline" disabled={working} onClick={() => void action("dismissConflict")}>Dismiss conflict</button></div>}
     {(info.syncError || info.state === "Unavailable") && <button type="button" className="w-fit underline" disabled={working} onClick={() => void action("retryTask")}>Retry</button>}
-    {info.assignedToMe !== null && info.state === "Linked" && <button type="button" className="w-fit underline" disabled={working} onClick={() => void assign()}>{info.assignedToMe ? "Unassign me" : "Assign me"}</button>}
     {message && <span>{message}</span>}
-    <button type="button" className="w-fit underline" disabled={working} onClick={() => void action("keepAsOrdinaryTask")}>Keep as ordinary task</button>
-    <span className="text-muted-foreground">Sync sends issue changes and selected diary entries.</span>
   </div>;
 }
