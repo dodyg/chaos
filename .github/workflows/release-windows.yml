@@ -1,0 +1,82 @@
+name: Release Windows
+
+# Publishes self-contained Chaos.Desktop builds for Windows x64 and ARM64.
+# - Push a tag like v1.2.3 to build both and attach the zips to a GitHub Release.
+# - Run manually (workflow_dispatch) to build the zips as workflow artifacts only.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.rid }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The committed lock files only cover win-x64 (Directory.Build.props), so x64 restores in
+          # locked mode like eng/publish-windows.ps1. win-arm64 is not locked yet.
+          - rid: win-x64
+            locked: "true"
+          - rid: win-arm64
+            locked: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish
+        shell: pwsh
+        run: >
+          dotnet publish src/Chaos.Desktop
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -m:1
+          -p:RestoreLockedMode=${{ matrix.locked }}
+          -o publish/${{ matrix.rid }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "Chaos.Desktop-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-${{ matrix.rid }}.zip"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "publish/${{ matrix.rid }}/*" -DestinationPath "dist/$name"
+          "ASSET=dist/$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chaos.Desktop-${{ matrix.rid }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Chaos.Desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" dist/*.zip
+          --repo "${{ github.repository }}"
+          --title "${{ github.ref_name }}"
+          --generate-notes
