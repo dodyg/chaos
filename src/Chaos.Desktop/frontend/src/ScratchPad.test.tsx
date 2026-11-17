@@ -165,3 +165,35 @@ test("a new note is stored only once something is typed; closed untouched it lea
   assert.deepEqual(creates, ["B"], "later typing saves the stored note instead of creating another");
   cleanup();
 });
+
+test("New site sends the address to the local summarizer, opens the summary note and reports a failure", async () => {
+  const notes: PadItemResponse[] = [];
+  const { api } = padApi(notes);
+  const added: string[] = [];
+  const errors: string[] = [];
+  const siteApi = { add: async (request: { url: string }) => {
+    added.push(request.url);
+    if (request.url.includes("down")) return { ok: false, item: null, error: { message: "Chaos could not reach the local model.", fields: [] } };
+    const created = note("s1", "https://example.com/a\n\n_Summarizing in the background…_\n", "0");
+    notes.push(created);
+    return { ok: true, item: created, error: null };
+  } } as unknown as typeof import("#neoastra").siteRpc;
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<ScratchPad api={api} tagApi={tagApi} siteApi={siteApi} captureApi={captureApi} registry={new DraftRegistry()} containers={[]}
+    tags={[]} revision={0} focus={null} links={{}} onChanged={() => {}} onOpenTask={() => {}} onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
+
+  await user.click(await screen.findByRole("button", { name: /New site/ }));
+  const input = await screen.findByLabelText("Web address");
+  await user.type(input, "https://down.example.com/x");
+  await user.click(screen.getByRole("button", { name: "Add site" }));
+  await waitFor(() => assert.deepEqual(errors, ["Chaos could not reach the local model."]));
+
+  await user.clear(input);
+  await user.type(input, "https://example.com/a");
+  await user.click(screen.getByRole("button", { name: "Add site" }));
+  await waitFor(() => assert.equal(added.at(-1), "https://example.com/a"));
+  await screen.findByRole("button", { name: /Open note: https:\/\/example\.com\/a/ });
+  assert.ok(screen.getByText(/written in the background/));
+  assert.equal(screen.queryByLabelText("Web address"), null, "the form closes once the site is added");
+  cleanup();
+});

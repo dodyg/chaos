@@ -1,7 +1,7 @@
 import React from "react";
-import { attachmentRpc, padRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
+import { attachmentRpc, padRpc, siteRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Camera, Copy, FileText, ListPlus, NotebookPen, PenLine, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Camera, Copy, FileText, Globe, ListPlus, NotebookPen, PenLine, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -82,6 +82,8 @@ type Props = {
   /** How voice notes record; tests pass a fake. */
   recorder?: RecorderEngine;
   tagApi?: typeof tagRpc;
+  /** "New site": fetches a page and has a local model summarize and tag it. */
+  siteApi?: typeof siteRpc;
   /** Quick-add preview used by Make task. */
   captureApi?: CapturePreviewApi;
   registry: DraftRegistry;
@@ -106,7 +108,7 @@ type Props = {
  * type, ordered by hand, tagged and archived; "Make task" on a selection with a backlink;
  * and a weekly review that suggests archiving old notes.
  */
-export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, recorder, tagApi = tagRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError, pageApi, today, onOpenPage }: Props) {
+export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, recorder, tagApi = tagRpc, siteApi = siteRpc, captureApi, registry, containers, tags, revision, focus, links, searchLinks, onChanged, onOpenTask, onError, pageApi, today, onOpenPage }: Props) {
   const [archived, setArchived] = React.useState(false);
   const [tagFilter, setTagFilter] = React.useState("");
   const [items, setItems] = React.useState<PadItemResponse[]>([]);
@@ -122,6 +124,9 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
   const [review, setReview] = React.useState<{ due: boolean; suggestions: PadItemResponse[] } | null>(null);
   const [reviewChoice, setReviewChoice] = React.useState<ReadonlySet<string> | null>(null);
   const [newKey, setNewKey] = React.useState(0);
+  /** The "New site" address form; `reading` while the page is fetched and the local model works. */
+  const [siteUrl, setSiteUrl] = React.useState<string | null>(null);
+  const [reading, setReading] = React.useState(false);
   /** The part of a drawing a task came from, outlined when that task opens the pad. */
   const [highlight, setHighlight] = React.useState<Region | null>(null);
   /**
@@ -143,6 +148,14 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
   // follows the loaded text; a saver with unsaved text is kept by the registry regardless.
   const saver = React.useMemo(() => open && open.kind !== "drawing" ? saverFor(registry, api, open) : null, [open?.id, open?.markdown, open?.kind, registry, api]);
   const snapshot = useSnapshot(saver);
+
+  // A site note is written in the background: while one still says so, check back until it is done.
+  const pendingSite = items.some(item => item.markdown.includes("Summarizing in the background"));
+  React.useEffect(() => {
+    if (!pendingSite) return;
+    const timer = setInterval(() => { void load().then(() => onChanged()).catch(() => undefined); }, 4000);
+    return () => clearInterval(timer);
+  }, [pendingSite, archived, tagFilter]);
 
   async function load() {
     const [list, removed, status] = await Promise.all([
@@ -268,6 +281,24 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
     await load();
     setOpenId(note.id);
     onChanged();
+  }
+
+  /** Store the address as a note at once; the summary and tags arrive later from the background reader. */
+  async function addSite() {
+    const url = (siteUrl ?? "").trim();
+    if (!url || reading) return;
+    if (saver) void saver.flush();
+    setReading(true); onError(null); setNotice(null);
+    try {
+      const result = await siteApi.add({ operationId: operationId(), url });
+      if (!result.ok || !result.item) throw new Error(result.error?.fields?.map(field => field.message).join("; ") || result.error?.message || "The site could not be added.");
+      setNewNote(null); setMakeTask(null); setMissingQuote(null); setHighlight(null); setArchived(false); setTagFilter("");
+      setSiteUrl(null);
+      await load();
+      setNotice("Site added. The summary is being written in the background and appears in the note when it is ready.");
+      onChanged();
+    } catch (e) { onError(e instanceof Error ? e.message : "The site could not be added."); }
+    finally { setReading(false); }
   }
 
   const photoInput = React.useRef<HTMLInputElement | null>(null);
@@ -491,11 +522,26 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
           <Button type="button" variant="outline" disabled={busy} onClick={() => photoInput.current?.click()} title="Make a note from a picture"><Camera/>New photo note</Button>
           <input ref={photoInput} type="file" accept="image/*" className="sr-only" tabIndex={-1} aria-label="Photo file" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; void addPhoto(file); }}/>
         </>}
+        {!archived && <Button type="button" variant={siteUrl !== null ? "secondary" : "outline"} disabled={busy || reading} onClick={() => setSiteUrl(value => value === null ? "" : null)} title="Summarize a web page with the local model"><Globe/>New site</Button>}
         {!archived && <Button type="button" variant="outline" disabled={busy} onClick={() => void createDrawing()} title="Draw on a blank canvas"><PenLine/>New drawing</Button>}
         {!archived && <Button type="button" disabled={busy} onClick={createNote} title="New note (Ctrl+Shift+P)"><Plus/>New note</Button>}
       </>}/>
 
     {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+
+    {!archived && siteUrl !== null && <form className="grid gap-2 rounded-xl border bg-card p-4" aria-label="New site"
+      onSubmit={event => { event.preventDefault(); void addSite(); }}>
+      <label htmlFor="pad-site-url" className="text-sm font-medium">Web address</label>
+      <div className="flex flex-wrap gap-2">
+        <Input id="pad-site-url" className="min-w-64 flex-1" type="text" inputMode="url" autoFocus placeholder="https://example.com/article" value={siteUrl} disabled={reading}
+          onChange={event => setSiteUrl(event.target.value)} onKeyDown={event => { if (event.key === "Escape" && !reading) setSiteUrl(null); }}/>
+        <Button type="submit" disabled={reading || !siteUrl.trim()}>{reading ? "Adding…" : "Add site"}</Button>
+        <Button type="button" variant="ghost" disabled={reading} onClick={() => setSiteUrl(null)}>Cancel</Button>
+      </div>
+      <p className="text-xs text-muted-foreground" role="status">{reading
+        ? "Saving the address…"
+        : "The address is saved at once. A small local model (Ollama) then summarizes the page in the background, says whether it is worth reading and tags the note. If the site refuses, the note keeps the address and says so."}</p>
+    </form>}
 
     {showReview && (reviewChoice === null
       ? <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/50 px-4 py-3 text-sm">

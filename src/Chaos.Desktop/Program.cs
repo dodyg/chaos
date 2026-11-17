@@ -13,6 +13,8 @@ using Chaos.Application.Containers;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
 using Chaos.Application.Pages;
+using Chaos.Application.Sites;
+using Chaos.Infrastructure.Sites;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
@@ -158,6 +160,9 @@ internal static class Program
             _ = activations.HandleAsync(initialIntent, CancellationToken.None);
         }
 
+        // "New site" (pad): pages are fetched here and summarized by a small local model (Ollama).
+        using var siteFetcher = new HttpSitePageFetcher();
+        using var siteSummarizer = new OllamaSiteSummarizer();
         using var releaseFeed = new Chaos.Infrastructure.Updates.GitHubReleaseFeed();
 
         try
@@ -198,6 +203,7 @@ internal static class Program
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks, sync: githubEngine));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System))));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -481,6 +487,8 @@ internal static class Program
 [JsonSerializable(typeof(LinkResolveResponse))]
 [JsonSerializable(typeof(OpenExternalRequest))]
 [JsonSerializable(typeof(OpenExternalResponse))]
+[JsonSerializable(typeof(SiteAddRequest))]
+[JsonSerializable(typeof(SiteAddResponse))]
 [JsonSerializable(typeof(PadListRequest))]
 [JsonSerializable(typeof(PadTaskLinkResponse))]
 [JsonSerializable(typeof(PadItemResponse))]

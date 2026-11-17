@@ -1022,3 +1022,13 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - **Export.** Markdown writes `kind: "drawing"` front matter, the preview image link and `<note>.strokes.json` beside it. The JSON archive needs no change: it round-trips every table, so `PadDrawings` comes back with the item and its preview.
 - **Not done here:** the native check (draw with a pen, make a task from a region, record a voice note, restart) and the audio fallback if recording is blocked in the WebView.
 
+
+## 2026-11-17
+
+- **"New site" on the Personal pad uses a local Ollama model.** `SiteNoteCommands` fetches a page
+  (`HttpSitePageFetcher`: http(s), 5 MiB, 30 s), reduces it to text (`HtmlText`), and asks a small
+  open model through Ollama's `/api/chat` with a JSON schema (`OllamaSiteSummarizer`, default
+  `qwen2.5:3b` at `http://localhost:11434`; override with `CHAOS_LLM_URL` / `CHAOS_LLM_MODEL`).
+  The note is stored at once with the address and a "Summarizing in the background" placeholder; the pad polls until the background reader replaces it (or leaves the address with a short failure note and `reading/unread` when the site refuses). It never overwrites a note the person edited meanwhile. The answer (summary, read/skim/skip verdict, reason, up to 3 topic tags) becomes one pad note;
+  tags are `reading/worth-it`, `reading/skim` or `reading/skip` plus the topics. No model is
+  bundled: Ollama is a separate install, and a missing server or model gives a readable error.
