@@ -197,6 +197,11 @@ test("the panel lists files, inserts a reference, removes with an undo and renam
   const { container } = render(<AttachmentPanel api={fake} ownerKind="task" ownerId="t1" onInsert={markdown => inserted.push(markdown)}/>);
   const buttons = (label: RegExp) => [...container.querySelectorAll("button")].filter(button => label.test(button.textContent ?? ""));
   await screen.findByText("plan.pdf");
+  // Images preview by default (the first file is a PNG); a PDF starts closed.
+  await waitFor(() => assert.ok(container.querySelector('img[src^="blob:test/"]')));
+  assert.equal(container.querySelector("iframe"), null);
+  fireEvent.click(buttons(/^Hide preview$/)[0]);
+  await waitFor(() => assert.equal(container.querySelector("img"), null));
   fireEvent.click(buttons(/^Insert$/)[1]);
   assert.deepEqual(inserted, [`[plan.pdf](chaos:attachment/${pdfId})`]);
 

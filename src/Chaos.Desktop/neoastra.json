@@ -1,0 +1,48 @@
+{
+  "$schema": "neoastra-project-v1.schema.json",
+  "version": 1,
+  "app": {
+    "identifier": "dev.neoastra.app",
+    "displayName": "Chaos.Desktop"
+  },
+  "frontend": {
+    "root": "frontend",
+    "devCommand": [
+      "npm",
+      "run",
+      "dev",
+      "--",
+      "--host",
+      "127.0.0.1"
+    ],
+    "devUrl": "http://127.0.0.1:5173/",
+    "buildCommand": [
+      "npm",
+      "run",
+      "build"
+    ],
+    "dist": "frontend/dist",
+    "spaFallback": "index.html",
+    "backendCommand": [
+      "dotnet",
+      "watch",
+      "run"
+    ],
+    "contractCommand": [
+      "dotnet",
+      "build",
+      "--no-restore"
+    ],
+    "packageManager": "npm",
+    "packageManagerCommand": [
+      "npm"
+    ],
+    "lockfile": "frontend/package-lock.json",
+    "generatedContract": "obj/neoastra/neoastra.ts"
+  },
+  "assets": {
+    "origin": "app://neoastra",
+    "cacheHashedAssets": true,
+    "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src blob:; object-src blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+  }
+}

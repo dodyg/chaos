@@ -288,7 +288,10 @@ export function AttachmentPanel({ api = attachmentRpc, ownerKind, ownerId, reloa
   const [items, setItems] = React.useState<readonly AttachmentDto[] | null>(null);
   const [message, setMessage] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const [previewId, setPreviewId] = React.useState<string | null>(null);
+  // Images preview by default; other previewable files start closed. A toggled file is the opposite of its default.
+  const [toggled, setToggled] = React.useState<ReadonlySet<string>>(new Set());
+  const isOpen = (row: AttachmentDto) => (row.preview === "image") !== toggled.has(row.id);
+  const toggle = (row: AttachmentDto) => setToggled(current => { const next = new Set(current); if (!next.delete(row.id)) next.add(row.id); return next; });
   const [renaming, setRenaming] = React.useState<{ id: string; name: string } | null>(null);
   const [removed, setRemoved] = React.useState<AttachmentDto | null>(null);
   const [dragging, setDragging] = React.useState(false);
@@ -354,13 +357,13 @@ export function AttachmentPanel({ api = attachmentRpc, ownerKind, ownerId, reloa
         </div>
         <div className="flex flex-wrap items-center gap-0.5">
           {onInsert && <Button type="button" variant="ghost" size="xs" onClick={() => onInsert(attachmentMarkdown(item))} title="Insert a reference at the cursor"><Plus/>Insert</Button>}
-          {item.preview !== "none" && item.preview !== "text" && item.bytes === "present" && <Button type="button" variant="ghost" size="xs" aria-expanded={previewId === item.id} onClick={() => setPreviewId(previewId === item.id ? null : item.id)}>{previewId === item.id ? <EyeOff/> : <Eye/>}{previewId === item.id ? "Hide preview" : "Preview"}</Button>}
+          {item.preview !== "none" && item.preview !== "text" && item.bytes === "present" && <Button type="button" variant="ghost" size="xs" aria-expanded={isOpen(item)} onClick={() => toggle(item)}>{isOpen(item) ? <EyeOff/> : <Eye/>}{isOpen(item) ? "Hide preview" : "Preview"}</Button>}
           <AttachmentActions api={api} item={item} onMessage={setMessage}/>
           {item.preview === "image" && item.bytes === "present" && item.width && item.height && <Button type="button" variant="ghost" size="xs" onClick={() => setEditing(item)}><Crop/>Edit image</Button>}
           <Button type="button" variant="ghost" size="xs" onClick={() => setRenaming({ id: item.id, name: item.fileName })}><Pencil/>Rename</Button>
           <Button type="button" variant="ghost" size="xs" className="text-destructive" onClick={() => void remove(item)}><Trash2/>Remove</Button>
         </div>
-        {previewId === item.id && <AttachmentBody api={api} item={item}/>}
+        {isOpen(item) && item.preview !== "none" && item.preview !== "text" && item.bytes === "present" && <AttachmentBody api={api} item={item}/>}
       </li>)}
     </ul>}
     {editing && <ImageEditor api={api} item={editing} onClose={() => setEditing(null)} onSaved={saved => { setMessage(`Edited ${saved.fileName}. Undo is in the edit history.`); void load(); onChanged?.(); }}/>}
