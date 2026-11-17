@@ -41,8 +41,11 @@ public sealed record ExportPadItem(string Id, string Markdown, bool Archived, st
 /// <summary>One active page: tree pages carry their parent, daily pages their date.</summary>
 public sealed record ExportPage(string Id, string? ParentId, string Title, string Markdown, string? DailyDate, string CreatedAtUtc, string UpdatedAtUtc);
 
+/// <summary>One active attachment whose owner is active too.</summary>
+public sealed record ExportAttachment(string Id, int OwnerKind, string OwnerId, string FileName, string Sha256);
+
 /// <summary>Active (not deleted) data read once, in display order, for the plain-text exports.</summary>
-public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, IReadOnlyList<ExportTask> Tasks, IReadOnlyList<ExportPadItem> PadItems, IReadOnlyList<ExportPage>? Pages = null)
+public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, IReadOnlyList<ExportTask> Tasks, IReadOnlyList<ExportPadItem> PadItems, IReadOnlyList<ExportPage>? Pages = null, IReadOnlyList<ExportAttachment>? Attachments = null)
 {
     /// <summary>Reads the snapshot inside one read transaction, so every part agrees.</summary>
     public static async Task<ExportSnapshot> ReadAsync(SqliteConnection connection, CancellationToken ct)
@@ -131,8 +134,18 @@ public sealed record ExportSnapshot(IReadOnlyList<ExportContainer> Containers, I
             WHERE DeletedAtUtc IS NULL ORDER BY DailyDate IS NOT NULL, DailyDate, Position, Id;
             """, r => new ExportPage(r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetString(5), r.GetString(6)), ct);
 
+        var attachments = await ListAsync(connection, """
+            SELECT a.Id, a.OwnerKind, a.OwnerId, a.FileName, a.Sha256 FROM Attachments a
+            WHERE a.DeletedAtUtc IS NULL AND (
+                (a.OwnerKind = 1 AND EXISTS (SELECT 1 FROM Tasks t WHERE t.Id = a.OwnerId AND t.DeletedAtUtc IS NULL))
+             OR (a.OwnerKind = 2 AND EXISTS (SELECT 1 FROM DiaryEntries d JOIN Tasks t ON t.Id = d.TaskId WHERE d.Id = a.OwnerId AND d.DeletedAtUtc IS NULL AND t.DeletedAtUtc IS NULL))
+             OR (a.OwnerKind = 3 AND EXISTS (SELECT 1 FROM ScratchPadItems p WHERE p.Id = a.OwnerId AND p.DeletedAtUtc IS NULL))
+             OR (a.OwnerKind = 4 AND EXISTS (SELECT 1 FROM Pages g WHERE g.Id = a.OwnerId AND g.DeletedAtUtc IS NULL)))
+            ORDER BY a.CreatedAtUtc, a.Id;
+            """, r => new ExportAttachment(r.GetString(0), r.GetInt32(1), r.GetString(2), r.GetString(3), r.GetString(4)), ct);
+
         snapshot.Commit();
-        return new ExportSnapshot(containers, tasks, pad, pages);
+        return new ExportSnapshot(containers, tasks, pad, pages, attachments);
     }
 
     /// <summary>Full slash-delimited display paths of active tags, by tag ID.</summary>

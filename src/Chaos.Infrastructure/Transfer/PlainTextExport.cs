@@ -19,12 +19,36 @@ public static class PlainTextExport
     // ---------------------------------------------------------------- Markdown
 
     /// <summary>Writes a ZIP: README.md, one Markdown file per task under tasks/&lt;list&gt;/, one per pad note under pad/.</summary>
-    public static void WriteMarkdownZip(ExportSnapshot snapshot, Stream output, DateTimeOffset now)
+    public static void WriteMarkdownZip(ExportSnapshot snapshot, Stream output, DateTimeOffset now, Func<string, Stream?>? openAttachment = null)
     {
         using var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
         Add(zip, "README.md", MarkdownReadme(now));
 
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Attached files sit under attachments/<id>-<safe name>; chaos:attachment/<id> references in the
+        // notes become relative paths to them, so the export reads correctly without Chaos.
+        var attachmentPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var attachment in snapshot.Attachments ?? [])
+        {
+            using var source = openAttachment?.Invoke(attachment.Sha256);
+            if (source is null)
+            {
+                continue; // the bytes are not on this device; the reference stays as it was
+            }
+
+            var attachmentPath = $"attachments/{attachment.Id}-{SafeFileName(attachment.FileName, 100)}";
+            var attachmentEntry = zip.CreateEntry(attachmentPath, CompressionLevel.NoCompression);
+            using (var target = attachmentEntry.Open())
+            {
+                source.CopyTo(target);
+            }
+
+            attachmentPaths[attachment.Id] = attachmentPath;
+        }
+
+        string Links(string markdown, string filePath) => RewriteAttachmentLinks(markdown, filePath, attachmentPaths);
+
         var containers = snapshot.Containers.ToDictionary(c => c.Id, StringComparer.Ordinal);
         var folders = new Dictionary<string, string>(StringComparer.Ordinal);
         var index = 0;
@@ -38,7 +62,7 @@ public static class PlainTextExport
         {
             var folder = folders[task.ContainerId];
             var path = Unique(used, $"{folder}/{SafeFileName(task.Title, 60)} ({task.Id[..8]}).md");
-            Add(zip, path, TaskMarkdown(task, containers[task.ContainerId]));
+            Add(zip, path, Links(TaskMarkdown(task, containers[task.ContainerId]), path));
         }
 
         var padIndex = 0;
@@ -47,7 +71,7 @@ public static class PlainTextExport
             padIndex++;
             var firstLine = item.Markdown.Split('\n').Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "note";
             var path = Unique(used, $"pad/{padIndex:000} {SafeFileName(firstLine, 50)} ({item.Id[..8]}).md");
-            Add(zip, path, PadMarkdown(item));
+            Add(zip, path, Links(PadMarkdown(item), path));
         }
 
         // Pages: folders follow the page tree; a page with pages under it also names their folder.
@@ -69,13 +93,30 @@ public static class PlainTextExport
         {
             if (page.DailyDate is { } date)
             {
-                Add(zip, Unique(used, $"daily/{date}.md"), PageMarkdown(page));
+                var dailyPath = Unique(used, $"daily/{date}.md");
+                Add(zip, dailyPath, Links(PageMarkdown(page), dailyPath));
                 continue;
             }
 
             var folder = page.ParentId is { } parentId && byId.TryGetValue(parentId, out var parent) ? FolderOf(parent, 0) : "pages";
-            Add(zip, Unique(used, $"{folder}/{SafeFileName(page.Title, 60)} ({page.Id[..8]}).md"), PageMarkdown(page));
+            var pagePath = Unique(used, $"{folder}/{SafeFileName(page.Title, 60)} ({page.Id[..8]}).md");
+            Add(zip, pagePath, Links(PageMarkdown(page), pagePath));
         }
+    }
+
+    /// <summary>Rewrites <c>chaos:attachment/&lt;id&gt;</c> to the relative path of the exported file; unknown ids are left alone.</summary>
+    public static string RewriteAttachmentLinks(string markdown, string filePath, IReadOnlyDictionary<string, string> attachmentPaths)
+    {
+        if (attachmentPaths.Count == 0 || !markdown.Contains("chaos:attachment/", StringComparison.Ordinal))
+        {
+            return markdown;
+        }
+
+        var up = string.Concat(Enumerable.Repeat("../", filePath.Count(ch => ch == '/')));
+        return System.Text.RegularExpressions.Regex.Replace(markdown, "chaos:attachment/([0-9A-Fa-f-]{36})", match =>
+            attachmentPaths.TryGetValue(match.Groups[1].Value, out var target)
+                ? up + string.Join('/', target.Split('/').Select(Uri.EscapeDataString))
+                : match.Value);
     }
 
     /// <summary>

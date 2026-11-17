@@ -88,6 +88,9 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     private string? _recoveryNotice = recoveryNotice?.Message;
     private string? _lastExportDirectory;
 
+    /// <summary>Where exports and saved attachment copies go: the folder last used, else the default.</summary>
+    public string ExportDirectory => _lastExportDirectory ?? DefaultExportDirectory;
+
     public static string DefaultExportDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Chaos exports");
 

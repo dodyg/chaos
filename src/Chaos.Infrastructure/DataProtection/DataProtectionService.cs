@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.DataProtection;
 
-public sealed record RestoreOutcome(string RestoredFrom, string SafetyBackupFileName, long SchemaVersion, DataCounts Counts);
+public sealed record RestoreOutcome(string RestoredFrom, string SafetyBackupFileName, long SchemaVersion, DataCounts Counts, int MissingAttachments = 0);
 
 public sealed record ResetOutcome(bool BackupsDeleted, int BackupFilesDeleted);
 
@@ -71,6 +71,16 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
         {
             var staged = DatabaseReplacement.StagedPath(options);
             await Transfer.JsonArchive.BuildDatabaseAsync(archive, staged, clock.GetUtcNow(), ct);
+            // The archive's files were verified when it was read; they go into the live store before the swap, so a failure here changes nothing.
+            if (backups.LiveAttachments is { } live)
+            {
+                foreach (var (hash, bytes) in archive.Attachments)
+                {
+                    using var content = new MemoryStream(bytes, writable: false);
+                    await live.PutAsync(content, long.MaxValue, hash, ct);
+                }
+            }
+
             return await ReplaceWithStagedAsync(staged, "restore from an archive", sourceName, ct);
         }, ct);
 
@@ -96,7 +106,9 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
             throw new AppException(AppErrorKind.StorageUnavailable, "The backup could not be copied intact. Nothing was changed.");
         }
 
-        return await ReplaceWithStagedAsync(staged, "restore from a backup", fileName, ct);
+        // Attached files come back from the shared backup store first, so a problem there stops the restore before anything is replaced.
+        var missingAttachments = await backups.RestoreAttachmentsAsync(BackupManager.ReadAttachmentHashes(staged), ct);
+        return (await ReplaceWithStagedAsync(staged, "restore from a backup", fileName, ct)) with { MissingAttachments = missingAttachments };
     }
 
     /// <summary>
@@ -181,6 +193,13 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
 
                 await OpenAndPrepareAsync(options, clock.GetUtcNow(), token);
                 SqliteConnection.ClearAllPools();
+                // The attached files are local data too; the backups' copies go only with the backups.
+                await BackupManager.DeleteAllAsync(backups.LiveAttachments, token);
+                if (deleteBackups)
+                {
+                    await BackupManager.DeleteAllAsync(backups.BackupAttachments, token);
+                }
+
                 return null;
             }, ct);
         }, ct);

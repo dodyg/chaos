@@ -1,5 +1,5 @@
 import React from "react";
-import { pageRpc, summaryRpc, type CaptureDraftDto, type CaptureSubtaskDto, type ContainerResponse, type PageResponse, type PageRevisionResponse, type PageSummaryResponse, type SummaryDetailDto, type TagResponse } from "#neoastra";
+import { attachmentRpc, pageRpc, summaryRpc, type CaptureDraftDto, type CaptureSubtaskDto, type ContainerResponse, type PageResponse, type PageRevisionResponse, type PageSummaryResponse, type SummaryDetailDto, type TagResponse } from "#neoastra";
 import { BookOpen, CalendarDays, ChevronRight, Copy, FileText, Focus, History, Link2, ListPlus, ListTree, Minimize2, MoveRight, PenLine, Plus, RotateCcw, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { joinPage, knownKeys, pageProperties, parseFrontMatter, setProperty, spl
 import { headingsOf, wordCount } from "./outline";
 import { lineDiff, diffStats } from "./lineDiff";
 import { backgroundColors, backgroundScenes } from "./MyDayBackground";
+import { attachmentBackgroundName, isWebBackground, usePageImage } from "./attachments";
 import { titleFromSelection } from "./ScratchPad";
 
 export type PageApi = typeof pageRpc;
@@ -65,13 +66,25 @@ export function selectionSubtasks(text: string): CaptureSubtaskDto[] {
   }).filter(subtask => subtask.title);
 }
 
-/** Page background from front matter: a My Day scene, a colour, or (later) an attachment. */
-export function pageBackgroundStyle(value: string | null): { style?: React.CSSProperties; note?: string } {
+/**
+ * Page background from front matter: a My Day scene, a colour, or an image attached to the page
+ * (`attachments/<name>`, resolved by `image`: undefined while loading, `{ url: null }` when missing).
+ * A web address is never loaded.
+ */
+export function pageBackgroundStyle(value: string | null, image?: { url: string | null }): { style?: React.CSSProperties; note?: string } {
   if (!value) return {};
+  if (isWebBackground(value)) return { note: "A web address is not used as a background. Attach the image to this page and write attachments/<file name> instead." };
+  const file = attachmentBackgroundName(value);
+  if (file) {
+    if (image === undefined) return {};
+    return image.url
+      ? { style: { backgroundImage: `url("${image.url}")`, backgroundSize: "cover", backgroundPosition: "center" } }
+      : { note: `No image named “${file}” is attached to this page, so it has no background.` };
+  }
   const scene = backgroundScenes.find(item => item.id === value.toLowerCase());
   if (scene) return { style: { backgroundImage: `url("${scene.url}")`, backgroundSize: "cover", backgroundPosition: "center" } };
   if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(value)) return { style: { backgroundColor: value } };
-  if (value.startsWith("attachments/")) return { note: "Image backgrounds arrive with attachments. The page shows no background for now." };
+  if (/^attachments\//i.test(value)) return { note: "Write attachments/ followed by the file name of an image attached to this page." };
   return { note: `“${value}” is not a scene or a colour, so the page has no background.` };
 }
 
@@ -143,9 +156,9 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
   const [anchor, setAnchor] = React.useState<{ start: number; end: number; key: number } | null>(null);
   const [missingQuote, setMissingQuote] = React.useState<string | null>(null);
   const [allDaily, setAllDaily] = React.useState(false);
-  const [pageBackground, setPageBackground] = React.useState<{ key: string; value: string | null } | null>(null);
+  const [pageBackground, setPageBackground] = React.useState<{ key: string; style: React.CSSProperties | undefined } | null>(null);
   const selectedKey = selected ? (selected.kind === "page" ? selected.pageId : `daily-${selected.date}`) : null;
-  const sharedBackground = pageBackground?.key === selectedKey ? pageBackgroundStyle(pageBackground.value).style : undefined;
+  const sharedBackground = pageBackground?.key === selectedKey ? pageBackground.style : undefined;
   const pendingRewrite = React.useRef<{ name: string; pageId: string } | null>(null);
 
   async function load() {
@@ -333,7 +346,7 @@ export function Pages({ api = pageRpc, summaryApi = summaryRpc, captureApi, regi
         ? <EmptyState title="Pages are for writing you keep.">Add a page for meeting notes, a project write-up or a recipe collection.</EmptyState>
         : <PageEditor key={selected.kind === "page" ? selected.pageId : `daily-${selected.date}`} selected={selected} api={api} summaryApi={summaryApi} captureApi={captureApi} registry={registry}
             containers={containers} tags={tags} tree={tree} revision={revision} today={today} anchor={anchor} links={links} searchLinks={searchLinks} busy={busy}
-            onBackground={value => setPageBackground({ key: selectedKey!, value })} onOpen={open} onChanged={async () => { await load(); onChanged(); }} onOpenTask={onOpenTask} onOpenSummary={onOpenSummary} onCreateTag={onCreateTag} onError={onError} onNotice={setNotice}/>}
+            onBackground={style => setPageBackground({ key: selectedKey!, style })} onOpen={open} onChanged={async () => { await load(); onChanged(); }} onOpenTask={onOpenTask} onOpenSummary={onOpenSummary} onCreateTag={onCreateTag} onError={onError} onNotice={setNotice}/>}
     </div>
   </div>;
 }
@@ -364,7 +377,7 @@ type EditorProps = {
   searchLinks?: (query: string) => Promise<LinkCandidate[]>;
   busy: boolean;
   onOpen: (next: Selected) => void;
-  onBackground: (value: string | null) => void;
+  onBackground: (style: React.CSSProperties | undefined) => void;
   onChanged: () => Promise<void>;
   onOpenTask: (taskId: string) => void;
   onOpenSummary: (summaryId: string) => void;
@@ -425,8 +438,10 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
   const { head, body, frontMatter } = splitPage(markdown);
   const properties = pageProperties(frontMatter);
   const prefix = joinPage(head, "").length;
-  const background = pageBackgroundStyle(properties.background);
-  React.useEffect(() => { onBackground(properties.background); }, [properties.background]);
+  const attachmentApi = links.attachmentApi ?? attachmentRpc;
+  const backgroundImage = usePageImage(attachmentApi, page?.id ?? null, attachmentBackgroundName(properties.background));
+  const background = pageBackgroundStyle(properties.background, backgroundImage);
+  React.useEffect(() => { onBackground(background.style); }, [background.style?.backgroundImage, background.style?.backgroundColor]);
   const headings = React.useMemo(() => headingsOf(body), [body]);
   const words = React.useMemo(() => wordCount(body), [body]);
 
@@ -581,7 +596,7 @@ function PageEditor({ selected, api, summaryApi, captureApi, registry, container
   const pageLinks: MarkdownLinks = { ...links, outline: true };
 
   const editorArea = <div className="grid gap-2">
-    {editing ? <MarkdownEditor key={isDaily ? "daily" : page?.id} id={isDaily ? "page-daily" : `page-${page?.id}`} label={isDaily ? "Daily page" : "Page"} value={body} onChange={editBody}
+    {editing ? <MarkdownEditor key={isDaily ? "daily" : page?.id} id={isDaily ? "page-daily" : `page-${page?.id}`} label={isDaily ? "Daily page" : "Page"} attachmentOwner={page ? { kind: "page", id: page.id } : undefined} attachmentApi={links.attachmentApi} value={body} onChange={editBody}
       onBlur={() => void saver?.flush()} onSelectionChange={(start, end) => setSelection({ start, end })} selectRange={selectRange} outline grow
       links={pageLinks} searchLinks={searchLinks} rows={focusMode ? 24 : 16} areaClassName="min-h-80"
       placeholder={isDaily ? "How did today go? This page is kept once you write in it." : "Write anything. Lists work as an outline: Tab, Shift+Tab, Alt+↑ and Alt+↓."}

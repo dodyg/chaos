@@ -29,6 +29,33 @@ public sealed record PageFrontMatter(
 
     public string? Icon => Scalar("icon");
     public string? Background => Scalar("background");
+
+    /// <summary>The attached image a page's <c>background:</c> names (<c>attachments/&lt;file name&gt;</c>), or null.</summary>
+    public string? BackgroundAttachmentName => AttachmentBackgroundName(Background);
+
+    /// <summary>
+    /// The file name in an <c>attachments/&lt;name&gt;</c> value: one file name, no folders, drive
+    /// letters, web addresses, parent paths or control characters. Mirrors <c>attachmentBackgroundName</c>
+    /// in the front end; both are tested against the same table.
+    /// </summary>
+    public static string? AttachmentBackgroundName(string? value)
+    {
+        const string prefix = "attachments/";
+        var text = (value ?? "").Trim();
+        if (!text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var name = text[prefix.Length..].Trim();
+        if (name.Length == 0 || name.Length > 200 || name.Contains("..", StringComparison.Ordinal)
+            || name.Any(ch => ch is '/' or '\\' or ':' || ch <= '\u001f') || name[^1] is '.' or ' ')
+        {
+            return null;
+        }
+
+        return name;
+    }
     public IReadOnlyList<string> Tags => [.. List("tags").Select(tag => tag.TrimStart('#').Trim()).Where(tag => tag.Length > 0)];
     public IReadOnlyList<string> Aliases => [.. List("aliases").Select(alias => alias.Trim()).Where(alias => alias.Length > 0)];
 

@@ -69,7 +69,10 @@ test("a page's title and text travel through one autosave, and helpers read sele
   assert.deepEqual(selectionSubtasks("- Order tiles\n  - choose colour\n  - [x] measure\n- Lunch"), [{ title: "choose colour", done: false }, { title: "measure", done: true }]);
   assert.ok(pageBackgroundStyle("lighthouse").style?.backgroundImage);
   assert.equal(pageBackgroundStyle("#2f6f4e").style?.backgroundColor, "#2f6f4e");
-  assert.match(pageBackgroundStyle("attachments/plan.jpg").note ?? "", /attachments/);
+  assert.match(pageBackgroundStyle("attachments/plan.jpg", { url: null }).note ?? "", /No image named/);
+  assert.equal(pageBackgroundStyle("attachments/plan.jpg").note, undefined); // still loading: no note yet
+  assert.equal(pageBackgroundStyle("attachments/plan.jpg", { url: "blob:x" }).style?.backgroundImage, 'url("blob:x")');
+  assert.match(pageBackgroundStyle("https://example.com/x.png").note ?? "", /web address/i);
 });
 
 test("the tree nests pages; front matter shows as properties and the body alone is in the editor", async () => {

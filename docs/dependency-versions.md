@@ -137,3 +137,17 @@ that distinction. No credential retrieval was run during the offline test gate.
 | --- | --- | --- | --- |
 | Ical.Net | 5.2.4 | MIT | ICS parsing and recurrence expansion (Chaos.Infrastructure). Brings NodaTime 3.2.2 (Apache-2.0). |
 | System.Security.Cryptography.ProtectedData | 10.0.0 | MIT | DPAPI for the secret store (Chaos.Desktop.Windows). |
+
+## SixLabors.ImageSharp (P9 follow-up, 2026-11-17)
+
+- **Version:** 4.1.3 (latest stable at the time), pinned in `Directory.Packages.props` and referenced
+  only by `Chaos.Infrastructure`. Used behind `IImageProcessor` (`ImageSharpProcessor`) for image
+  crop, rotate, flip, resize and thumbnails, so the library can be replaced without touching callers.
+- **Formats:** PNG, JPEG, WebP and single-frame GIF (GIF edits come out as PNG). Animated GIFs are
+  refused rather than flattened. HEIC is not supported by ImageSharp: such files stay viewable as
+  files but cannot be edited and have no thumbnail.
+- **Licence: Six Labors Split License.** Free for open-source use, and for companies and
+  individuals under the revenue threshold in the licence; **a paid commercial licence is required
+  above it**, and a licence key is needed for some commercial uses. This was chosen over SkiaSharp
+  (MIT) knowingly; check the licence terms before shipping a commercial build.
+- Thumbnails are cached as local files under `<data root>/thumbnails` (not synced, rebuilt on demand).

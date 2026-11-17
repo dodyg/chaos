@@ -355,7 +355,7 @@ export function ScratchPad({ api = padRpc, tagApi = tagRpc, captureApi, registry
             : isOpen && snapshot && saver
             ? <div className="grid min-w-0 flex-1 gap-2">
                 {missingQuote !== null && <Banner tone="warning" onDismiss={() => setMissingQuote(null)}>The text this task came from was changed or removed. It said: “{missingQuote}”</Banner>}
-                <MarkdownEditor key={isNew ? `new-${newNote?.key}` : `${item.id}-${newKey}`} id={isNew ? "pad-new" : `pad-${item.id}`} label="Note" value={snapshot.text} onChange={value => saver.edit(value)}
+                <MarkdownEditor key={isNew ? `new-${newNote?.key}` : `${item.id}-${newKey}`} id={isNew ? "pad-new" : `pad-${item.id}`} label="Note" attachmentOwner={isNew && newNote?.itemId === null ? undefined : { kind: "pad", id: item.id }} value={snapshot.text} onChange={value => saver.edit(value)}
                   onBlur={() => void saver.flush()} onSelectionChange={(start, end) => setSelection({ start, end })} selectRange={selectRange}
                   links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
                 <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>

@@ -44,6 +44,7 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     public IBoardStore Boards { get; } = new SqliteBoardStore(connection);
     public ISavedViewStore SavedViews { get; } = new SqliteSavedViewStore(connection, notes);
     public ICalendarStore Calendars { get; } = new SqliteCalendarStore(connection, notes);
+    public IAttachmentStore Attachments { get; } = new SqliteAttachmentStore(connection);
 
     /// <summary>Device-only writers note their changes here; the store reads the notes inside the same transaction.</summary>
     public Chaos.Application.Activity.IActivityRecorder Activity => notes;

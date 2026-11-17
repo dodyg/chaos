@@ -23,6 +23,7 @@ public enum ChangeKind
     Waiting = 12,
     FollowUp = 13,
     Page = 14,
+    Attachment = 15,
 }
 
 internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
@@ -211,6 +212,7 @@ public sealed class RecordingDataSession : IDataSession
     public IBoardStore Boards => _inner.Boards;
     public ISavedViewStore SavedViews => _inner.SavedViews;
     public ICalendarStore Calendars => _inner.Calendars;
+    public IAttachmentStore Attachments => new RecordingAttachmentStore(this, _inner.Attachments);
     public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
@@ -458,6 +460,7 @@ public sealed class RecordingDataSession : IDataSession
         _ when commandKind.StartsWith("tag.", StringComparison.Ordinal) => ChangeKind.Tag,
         "pad.make-task" or "page.make-task" => null,
         _ when commandKind.StartsWith("page.", StringComparison.Ordinal) => ChangeKind.Page,
+        _ when commandKind.StartsWith("attachment.", StringComparison.Ordinal) => ChangeKind.Attachment,
         _ when commandKind.StartsWith("pad.", StringComparison.Ordinal) => ChangeKind.Pad,
         _ => null,
     };
@@ -475,6 +478,7 @@ public sealed class RecordingDataSession : IDataSession
                 ChangeKind.Subtask => (await _inner.Subtasks.GetIncludingDeletedAsync(change.Id, ct))?.Title,
                 ChangeKind.Pad => PadExcerpt.Of((await _inner.Pad.GetIncludingDeletedAsync(change.Id, ct))?.RawMarkdown),
                 ChangeKind.Page => (await _inner.Pages.GetIncludingDeletedAsync(change.Id, ct))?.Title,
+                ChangeKind.Attachment => (await _inner.Attachments.GetIncludingDeletedAsync(change.Id, ct))?.FileName,
                 _ => null,
             };
             if (name is not null)
@@ -996,6 +1000,35 @@ internal sealed class RecordingPageStore(RecordingDataSession recorder, IPageSto
         if (applied is not null)
         {
             recorder.RecordEntity(ChangeKind.Page, applied.Id, before, applied.Version);
+        }
+
+        return applied;
+    }
+}
+
+internal sealed class RecordingAttachmentStore(RecordingDataSession recorder, IAttachmentStore inner) : IAttachmentStore
+{
+    public Task<AttachmentRecord?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+    public Task<AttachmentRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => inner.GetIncludingDeletedAsync(id, ct);
+    public Task<IReadOnlyList<AttachmentRecord>> ListByOwnerAsync(AttachmentOwnerKind kind, string ownerId, bool includeDeleted, CancellationToken ct) => inner.ListByOwnerAsync(kind, ownerId, includeDeleted, ct);
+    public Task<IReadOnlyList<AttachmentRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct) => inner.ListBySpaceAsync(spaceId, ct);
+    public Task<bool> IsHashReferencedAsync(string sha256, CancellationToken ct) => inner.IsHashReferencedAsync(sha256, ct);
+    public Task<AttachmentLocalStateRecord?> GetLocalStateAsync(string sha256, CancellationToken ct) => inner.GetLocalStateAsync(sha256, ct);
+    public Task SetLocalStateAsync(AttachmentLocalStateRecord state, CancellationToken ct) => inner.SetLocalStateAsync(state, ct);
+
+    public async Task AddAsync(AttachmentRecord attachment, CancellationToken ct)
+    {
+        await inner.AddAsync(attachment, ct);
+        recorder.RecordEntity<AttachmentRecord>(ChangeKind.Attachment, attachment.Id, null, attachment.Version);
+    }
+
+    public async Task<AttachmentRecord?> UpdateAsync(AttachmentRecord updated, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.Attachment, updated.Id) ? null : await inner.GetIncludingDeletedAsync(updated.Id, ct);
+        var applied = await inner.UpdateAsync(updated, expectedVersion, ct);
+        if (applied is not null)
+        {
+            recorder.RecordEntity(ChangeKind.Attachment, applied.Id, before, applied.Version);
         }
 
         return applied;

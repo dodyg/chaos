@@ -16,6 +16,7 @@ internal static class SyncPurgeSql
             "DELETE FROM SearchDocuments WHERE TaskId = $k0;",
             "DELETE FROM SubtaskTags WHERE SubtaskId IN (SELECT Id FROM Subtasks WHERE TaskId = $k0);",
             "DELETE FROM GitHubChecklistItems WHERE SubtaskId IN (SELECT Id FROM Subtasks WHERE TaskId = $k0);",
+            "DELETE FROM Attachments WHERE (OwnerKind = 1 AND OwnerId = $k0) OR (OwnerKind = 2 AND OwnerId IN (SELECT Id FROM DiaryEntries WHERE TaskId = $k0));",
             "DELETE FROM GitHubCommentLinks WHERE DiaryEntryId IN (SELECT Id FROM DiaryEntries WHERE TaskId = $k0);",
             "DELETE FROM GitHubIssueWrites WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE TaskId = $k0);",
             "UPDATE GitHubIssueLinks SET TaskId = NULL, State = 3, LocalDirty = 0, LocalDirtySinceUtc = NULL WHERE TaskId = $k0;",
@@ -52,6 +53,7 @@ internal static class SyncPurgeSql
         [
             "DELETE FROM SearchIndex WHERE rowid IN (SELECT RowId FROM SearchDocuments WHERE TargetKind = 3 AND TargetId = $k0);",
             "DELETE FROM SearchDocuments WHERE TargetKind = 3 AND TargetId = $k0;",
+            "DELETE FROM Attachments WHERE OwnerKind = 2 AND OwnerId = $k0;",
             "DELETE FROM GitHubCommentLinks WHERE DiaryEntryId = $k0;",
             "DELETE FROM DiaryRevisions WHERE EntryId = $k0;",
             "DELETE FROM DiaryEntries WHERE Id = $k0;",
@@ -60,6 +62,7 @@ internal static class SyncPurgeSql
         [
             "DELETE FROM SearchIndex WHERE rowid IN (SELECT RowId FROM SearchDocuments WHERE TargetKind = 4 AND TargetId = $k0);",
             "DELETE FROM SearchDocuments WHERE TargetKind = 4 AND TargetId = $k0;",
+            "DELETE FROM Attachments WHERE OwnerKind = 3 AND OwnerId = $k0;",
             "DELETE FROM ScratchTaskLinks WHERE PadItemId = $k0;",
             "DELETE FROM ScratchPadTags WHERE PadItemId = $k0;",
             "DELETE FROM ScratchPadItems WHERE Id = $k0;",
@@ -68,6 +71,7 @@ internal static class SyncPurgeSql
         [
             "DELETE FROM SearchIndex WHERE rowid IN (SELECT RowId FROM SearchDocuments WHERE TargetKind = 5 AND TargetId = $k0);",
             "DELETE FROM SearchDocuments WHERE TargetKind = 5 AND TargetId = $k0;",
+            "DELETE FROM Attachments WHERE OwnerKind = 4 AND OwnerId = $k0;",
             "DELETE FROM PageTaskLinks WHERE PageId = $k0;",
             "DELETE FROM PageTags WHERE PageId = $k0;",
             "DELETE FROM PageRevisions WHERE PageId = $k0;",
@@ -102,6 +106,7 @@ internal static class SyncPurgeSql
             "UPDATE GitHubRepositories SET TargetSectionId = NULL WHERE TargetSectionId = $k0;",
             "DELETE FROM Sections WHERE Id = $k0;",
         ],
+        "attachment" => ["DELETE FROM Attachments WHERE Id = $k0;"],
         "task_template" => ["DELETE FROM TaskTemplates WHERE Id = $k0;"],
         "recurrence_series" =>
         [

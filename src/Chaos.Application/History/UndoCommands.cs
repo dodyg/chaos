@@ -132,6 +132,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.Diary => await session.Diary.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, "diary entry") : (null, null),
         ChangeKind.Pad => await session.Pad.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, PadExcerpt.Of(row.RawMarkdown)) : (null, null),
         ChangeKind.Page => await session.Pages.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Title) : (null, null),
+        ChangeKind.Attachment => await session.Attachments.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.FileName) : (null, null),
         ChangeKind.RecurrenceSeries => await session.Recurrence.GetSeriesAsync(change.Id, ct) is { } row ? (row.Version, "recurrence series") : (null, null),
         ChangeKind.RecurrenceOccurrence => await session.Recurrence.GetOccurrenceAsync(change.Id, ct) is { } row ? (row.Version, "recurrence occurrence") : (null, null),
         ChangeKind.ReminderRule => await session.ReminderRules.GetAsync(change.Id, ct) is { } row ? (row.Version, "reminder rule") : (null, null),
@@ -243,6 +244,12 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                     id => session.Pages.GetIncludingDeletedAsync(id, ct),
                     (current, before) => (before ?? current with { DeletedAtUtc = now }) with { DraftVersion = current.DraftVersion, Version = current.Version + 1, UpdatedAtUtc = now },
                     (row, expected) => session.Pages.UpdateAsync(row, expected, ct));
+            case ChangeKind.Attachment:
+                // Undo of an add tombstones the row; the bytes stay until a purge finds nothing naming them.
+                return await RevertAsync(change, label, row => row.FileName,
+                    id => session.Attachments.GetIncludingDeletedAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Attachments.UpdateAsync(row, expected, ct));
             default:
                 throw new AppException(AppErrorKind.StorageUnavailable, "The saved undo information names an unknown kind of item. Nothing was changed.");
         }

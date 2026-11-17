@@ -7,9 +7,9 @@ using Microsoft.Data.Sqlite;
 namespace Chaos.Infrastructure.DataProtection;
 
 /// <summary>What a purge would remove (or removed): deleted items only, never active ones.</summary>
-public sealed record PurgeCounts(long Tasks, long Subtasks, long DiaryEntries, long PadItems, long Lists, long Sections, long Tags, long Templates, long Pages = 0)
+public sealed record PurgeCounts(long Tasks, long Subtasks, long DiaryEntries, long PadItems, long Lists, long Sections, long Tags, long Templates, long Pages = 0, long Attachments = 0)
 {
-    public long Total => Tasks + Subtasks + DiaryEntries + PadItems + Lists + Sections + Tags + Templates + Pages;
+    public long Total => Tasks + Subtasks + DiaryEntries + PadItems + Lists + Sections + Tags + Templates + Pages + Attachments;
 }
 
 public sealed record PurgeOutcome(PurgeCounts Removed, IReadOnlyList<string> OsNotificationIds);
@@ -24,7 +24,7 @@ public sealed record PurgeOutcome(PurgeCounts Removed, IReadOnlyList<string> OsN
 /// only once nothing refers to them. The database is then compacted so the removed text does
 /// not stay in free pages. Backups made earlier still contain the items until they rotate out.
 /// </summary>
-public sealed class DataPurge(SqliteApplicationStore store)
+public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.Attachments.IAttachmentFileStore? files = null)
 {
     public const string PurgedTitle = "Permanently deleted task";
 
@@ -46,6 +46,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
     /// <summary>Purges every deleted item, or one deleted task when <paramref name="taskId"/> is given.</summary>
     public async Task<PurgeOutcome> PurgeAsync(string? taskId, CancellationToken ct)
     {
+        IReadOnlyList<string> orphanedHashes = [];
         var outcome = await store.ExecuteAsync(async (session, token) =>
         {
             var connection = ((SqliteDataSession)session).Connection;
@@ -68,8 +69,10 @@ public sealed class DataPurge(SqliteApplicationStore store)
             Select(connection, taskId);
             var counts = Count(connection, taskId is null);
             var osIds = Strings(connection, "SELECT OsNotificationId FROM NotificationJobs WHERE OsNotificationId IS NOT NULL AND TaskId IN (SELECT Id FROM temp.PurgeTasks);");
+            var attachmentHashes = Strings(connection, "SELECT DISTINCT Sha256 FROM Attachments WHERE Id IN (SELECT Id FROM temp.PurgeAttachments);");
             ScrubSummaries(connection);
             DeleteSelected(connection);
+            orphanedHashes = ForgetUnreferencedHashes(connection, attachmentHashes);
             if (taskId is null)
             {
                 DeleteUnreferencedContainersAndTags(connection);
@@ -88,7 +91,75 @@ public sealed class DataPurge(SqliteApplicationStore store)
             return Task.FromResult<object?>(null);
         }, ct);
 
+        // The rows are gone for good, so bytes nothing else names go too. (The backups keep their own copies.)
+        if (files is not null)
+        {
+            foreach (var hash in orphanedHashes)
+            {
+                await files.DeleteAsync(hash, ct);
+            }
+
+            // Emptying the trash also clears files an image edit left behind (kept for undo) once they are an hour old.
+            if (taskId is null)
+            {
+                await SweepUnreferencedFilesAsync(TimeSpan.FromHours(1), ct);
+            }
+        }
+
         return outcome;
+    }
+
+    /// <summary>Removes stored files older than <paramref name="minAge"/> that no attachment row names. Returns how many went.</summary>
+    public async Task<int> SweepUnreferencedFilesAsync(TimeSpan minAge, CancellationToken ct)
+    {
+        if (files is null)
+        {
+            return 0;
+        }
+
+        var referenced = await store.QueryAsync(async (session, token) =>
+        {
+            var connection = ((SqliteDataSession)session).Connection;
+            return Strings(connection, "SELECT DISTINCT Sha256 FROM Attachments;").ToHashSet(StringComparer.Ordinal);
+        }, ct);
+        var stale = new List<string>();
+        var cutoff = DateTimeOffset.UtcNow - minAge;
+        await foreach (var blob in files.ListAsync(ct))
+        {
+            if (!referenced.Contains(blob.Sha256) && blob.ModifiedUtc <= cutoff)
+            {
+                stale.Add(blob.Sha256);
+            }
+        }
+
+        foreach (var hash in stale)
+        {
+            await files.DeleteAsync(hash, ct);
+        }
+
+        return stale.Count;
+    }
+
+    /// <summary>Drops this device's byte state for hashes no attachment names any more; returns those hashes, whose files may now go.</summary>
+    private static IReadOnlyList<string> ForgetUnreferencedHashes(SqliteConnection connection, IReadOnlyList<string> candidates)
+    {
+        var orphans = new List<string>();
+        foreach (var hash in candidates)
+        {
+            using var check = connection.CreateCommand();
+            check.CommandText = "SELECT EXISTS (SELECT 1 FROM Attachments WHERE Sha256 = $sha);";
+            check.Parameters.AddWithValue("$sha", hash);
+            if (Convert.ToInt64(check.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
+            {
+                using var forget = connection.CreateCommand();
+                forget.CommandText = "DELETE FROM AttachmentLocalState WHERE Sha256 = $sha;";
+                forget.Parameters.AddWithValue("$sha", hash);
+                forget.ExecuteNonQuery();
+                orphans.Add(hash);
+            }
+        }
+
+        return orphans;
     }
 
     /// <summary>Fills temp tables with the IDs to purge.</summary>
@@ -100,7 +171,8 @@ public sealed class DataPurge(SqliteApplicationStore store)
             CREATE TEMP TABLE IF NOT EXISTS PurgeDiary (Id TEXT PRIMARY KEY);
             CREATE TEMP TABLE IF NOT EXISTS PurgePad (Id TEXT PRIMARY KEY);
             CREATE TEMP TABLE IF NOT EXISTS PurgePages (Id TEXT PRIMARY KEY);
-            DELETE FROM temp.PurgeTasks; DELETE FROM temp.PurgeSubtasks; DELETE FROM temp.PurgeDiary; DELETE FROM temp.PurgePad; DELETE FROM temp.PurgePages;
+            CREATE TEMP TABLE IF NOT EXISTS PurgeAttachments (Id TEXT PRIMARY KEY);
+            DELETE FROM temp.PurgeTasks; DELETE FROM temp.PurgeSubtasks; DELETE FROM temp.PurgeDiary; DELETE FROM temp.PurgePad; DELETE FROM temp.PurgePages; DELETE FROM temp.PurgeAttachments;
             """);
 
         using var tasks = connection.CreateCommand();
@@ -115,6 +187,12 @@ public sealed class DataPurge(SqliteApplicationStore store)
             INSERT INTO temp.PurgeDiary SELECT Id FROM DiaryEntries WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR ($all = 1 AND DeletedAtUtc IS NOT NULL);
             INSERT INTO temp.PurgePad SELECT Id FROM ScratchPadItems WHERE $all = 1 AND DeletedAtUtc IS NOT NULL;
             INSERT INTO temp.PurgePages SELECT Id FROM Pages WHERE $all = 1 AND DeletedAtUtc IS NOT NULL;
+            INSERT INTO temp.PurgeAttachments SELECT Id FROM Attachments
+                WHERE ($all = 1 AND DeletedAtUtc IS NOT NULL)
+                   OR (OwnerKind = 1 AND OwnerId IN (SELECT Id FROM temp.PurgeTasks))
+                   OR (OwnerKind = 2 AND OwnerId IN (SELECT Id FROM temp.PurgeDiary))
+                   OR (OwnerKind = 3 AND OwnerId IN (SELECT Id FROM temp.PurgePad))
+                   OR (OwnerKind = 4 AND OwnerId IN (SELECT Id FROM temp.PurgePages));
             """;
         rest.Parameters.AddWithValue("$all", all);
         rest.ExecuteNonQuery();
@@ -129,12 +207,13 @@ public sealed class DataPurge(SqliteApplicationStore store)
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Sections WHERE DeletedAtUtc IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Tasks t WHERE t.SectionId = Sections.Id AND t.Id NOT IN (SELECT Id FROM temp.PurgeTasks)) AND NOT EXISTS (SELECT 1 FROM GitHubRepositories r WHERE r.TargetSectionId = Sections.Id);"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM Tags WHERE DeletedAtUtc IS NOT NULL;"),
         !all ? 0 : Scalar(connection, "SELECT count(*) FROM TaskTemplates WHERE DeletedAtUtc IS NOT NULL;"),
-        Scalar(connection, "SELECT count(*) FROM temp.PurgePages;"));
+        Scalar(connection, "SELECT count(*) FROM temp.PurgePages;"),
+        Scalar(connection, "SELECT count(*) FROM temp.PurgeAttachments;"));
 
     private static void DeleteSelected(SqliteConnection connection)
     {
         // Undo entries that mention any purged item can no longer be applied.
-        var ids = Strings(connection, "SELECT Id FROM temp.PurgeTasks UNION ALL SELECT Id FROM temp.PurgeSubtasks UNION ALL SELECT Id FROM temp.PurgeDiary UNION ALL SELECT Id FROM temp.PurgePad UNION ALL SELECT Id FROM temp.PurgePages;");
+        var ids = Strings(connection, "SELECT Id FROM temp.PurgeTasks UNION ALL SELECT Id FROM temp.PurgeSubtasks UNION ALL SELECT Id FROM temp.PurgeDiary UNION ALL SELECT Id FROM temp.PurgePad UNION ALL SELECT Id FROM temp.PurgePages UNION ALL SELECT Id FROM temp.PurgeAttachments;");
         foreach (var id in ids)
         {
             using var undo = connection.CreateCommand();
@@ -143,6 +222,7 @@ public sealed class DataPurge(SqliteApplicationStore store)
             undo.ExecuteNonQuery();
         }
 
+        Execute(connection, "DELETE FROM Attachments WHERE Id IN (SELECT Id FROM temp.PurgeAttachments);");
         Execute(connection, """
             DELETE FROM SearchIndex WHERE rowid IN (
                 SELECT RowId FROM SearchDocuments

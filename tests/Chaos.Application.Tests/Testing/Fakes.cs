@@ -89,6 +89,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ISavedViewStore SavedViews => throw new NotSupportedException("This test store does not implement saved views; they are tested against SQLite.");
         public Chaos.Application.Activity.IActivityRecorder Activity => Chaos.Application.Activity.NullActivityRecorder.Instance;
         public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
+        public IAttachmentStore Attachments => throw new NotSupportedException("This test store does not implement attachments; they are tested against SQLite.");
     }
 }
 

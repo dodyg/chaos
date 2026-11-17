@@ -1,4 +1,6 @@
 using Chaos.Application.Abstractions;
+using Chaos.Application.Attachments;
+using Chaos.Infrastructure.Attachments;
 using Chaos.Application.Contracts;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
@@ -45,6 +47,9 @@ internal sealed class DataHost : IDisposable
     public required ImportCommands Imports { get; init; }
     public required DataPurge Purge { get; init; }
     public required TaskCommands Tasks { get; init; }
+    public required FileAttachmentStore Files { get; init; }
+    public required FileAttachmentStore BackupFiles { get; init; }
+    public required AttachmentCommands Attachments { get; init; }
 
     public SqliteApplicationStore Store => Storage.Store;
 
@@ -54,7 +59,9 @@ internal sealed class DataHost : IDisposable
         clock ??= new ManualClock(Start);
         ids ??= new GuidIds();
         var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", ids, clock, CancellationToken.None);
-        var backups = new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, "0.1.0", clock, afterBackupCopy);
+        var files = new FileAttachmentStore(storage.Options.AttachmentsDirectory);
+        var backupFiles = new FileAttachmentStore(storage.Options.BackupAttachmentsDirectory);
+        var backups = new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, "0.1.0", clock, afterBackupCopy, files, backupFiles);
         return new DataHost
         {
             Root = root,
@@ -63,10 +70,13 @@ internal sealed class DataHost : IDisposable
             Ids = ids,
             Backups = backups,
             Protection = new DataProtectionService(storage.Store, storage.Options, backups, ids, clock),
-            Transfer = new DataTransfer(storage.Store, "0.1.0", clock),
+            Transfer = new DataTransfer(storage.Store, "0.1.0", clock, files),
             Imports = new ImportCommands(storage.Store, ids, clock),
-            Purge = new DataPurge(storage.Store),
+            Purge = new DataPurge(storage.Store, files),
             Tasks = new TaskCommands(storage.Store, ids, clock),
+            Files = files,
+            BackupFiles = backupFiles,
+            Attachments = new AttachmentCommands(storage.Store, files, ids, clock, storage.Options.UploadsDirectory, null, new ImageSharpProcessor(), storage.Options.ThumbnailsDirectory),
         };
     }
 

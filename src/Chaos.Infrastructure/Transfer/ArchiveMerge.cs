@@ -86,9 +86,9 @@ public static class ArchiveMerge
             });
         }
 
-        if (Rows(archive, "RecurrenceSeries").Any() || Rows(archive, "ReminderRules").Any() || Rows(archive, "WeekPlans").Any() || Rows(archive, "ScratchPadItems").Any() || Rows(archive, "Pages").Any())
+        if (Rows(archive, "RecurrenceSeries").Any() || Rows(archive, "ReminderRules").Any() || Rows(archive, "WeekPlans").Any() || Rows(archive, "ScratchPadItems").Any() || Rows(archive, "Pages").Any() || Rows(archive, "Attachments").Any())
         {
-            warnings.Add(new ImportIssue(0, "file", "Merging adds tasks with their subtasks, tags and diary. Recurrence, reminders, plans, the Personal pad, pages and history come back only with Restore."));
+            warnings.Add(new ImportIssue(0, "file", "Merging adds tasks with their subtasks, tags and diary. Recurrence, reminders, plans, the Personal pad, pages, attached files and history come back only with Restore."));
         }
 
         return new ImportDraft(ImportSourceKind.ChaosJson, sourceName, fileFingerprint, tasks, [], warnings);

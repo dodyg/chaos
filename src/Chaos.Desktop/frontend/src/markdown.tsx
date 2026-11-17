@@ -10,12 +10,15 @@ import type { Root, RootContent, PhrasingContent, ListItem, TableCell } from "md
 import type { Root as HastRoot, ElementContent } from "hast";
 import { ChevronRight, ImageOff, Link2Off, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { attachmentRpc } from "#neoastra";
+import { AttachmentCard, internalAttachmentId, thumbnailThresholdBytes, useAttachmentUrl, useThumbnailUrl, type AttachmentApi, type AttachmentInfo } from "./attachments";
 
 /**
  * Markdown for notes, diary entries and (later) pad items (PLAN §9). Source stays raw GFM.
  * Rendering walks the mdast tree into React elements: there is no HTML string anywhere, raw
  * HTML in the source is shown as text except for isolated image tags with web URLs. Markdown
- * images remain placeholders, and only http/https/mailto links are clickable — through the host
+ * images stay placeholders unless they are `chaos:attachment/<id>` (read from this computer, never
+ * the internet), and only http/https/mailto links are clickable — through the host
  * opener, after a click. Internal links are `[label](chaos:task/<id>)`: they resolve by ID,
  * so a rename keeps working and a deleted target shows a recoverable broken-link state.
  */
@@ -151,7 +154,22 @@ export type MarkdownLinks = {
   onOpenList?: (containerId: string) => void;
   /** Read mode for pages: headings and list items with children fold, headings get anchors. */
   outline?: boolean;
+  /** Attached files for `chaos:attachment/<id>` references, keyed by lowercase ID; set by the preview after it resolves them. */
+  attachments?: ReadonlyMap<string, AttachmentInfo>;
+  /** Where attachments are resolved and read from; tests pass a fake, the app uses the host. */
+  attachmentApi?: AttachmentApi;
 };
+
+/** IDs of every `chaos:attachment/` reference in a document, as image or link, outside code. */
+export function attachmentIds(source: string): string[] {
+  const ids = new Set<string>();
+  const visit = (node: Root | RootContent) => {
+    if (node.type === "link" || node.type === "image") { const id = internalAttachmentId(node.url); if (id) ids.add(id.toLowerCase()); }
+    if ("children" in node) for (const child of node.children) visit(child as RootContent);
+  };
+  visit(parseMarkdown(source));
+  return [...ids];
+}
 
 export type PageLinkTarget = { id: string; title: string; icon: string | null; deleted: boolean; dailyDate: string | null };
 
@@ -197,8 +215,18 @@ export function MarkdownPreview({ source, links = {}, compact = false, className
     void resolveNames(names.split("\n")).then(targets => { if (current) setResolvedNames(new Map(targets.map(target => [(target.name ?? target.title).toLowerCase(), target]))); }).catch(() => { if (current) setResolvedNames(undefined); });
     return () => { current = false; };
   }, [names, resolveNames]);
+  const fileIds = React.useMemo(() => attachmentIds(source).sort().join(","), [source]);
+  const [resolvedFiles, setResolvedFiles] = React.useState<ReadonlyMap<string, AttachmentInfo> | undefined>(undefined);
+  const fileApi = links.attachmentApi ?? attachmentRpc;
+  React.useEffect(() => {
+    if (!fileIds) { setResolvedFiles(undefined); return; }
+    let current = true;
+    void fileApi.resolve({ ids: fileIds.split(",") }).then(result => { if (current) setResolvedFiles(new Map((result.ok ? result.attachments : []).map(item => [item.id.toLowerCase(), item]))); }).catch(() => { if (current) setResolvedFiles(new Map()); });
+    return () => { current = false; };
+  }, [fileIds, fileApi]);
   const effective = { ...links, ...(resolved ? { targets: resolved } : {}), ...(resolvedPads ? { padTargets: resolvedPads } : {}),
-    ...(resolvedPages ? { pageTargets: resolvedPages } : {}), ...(resolvedNames ? { nameTargets: resolvedNames } : {}) };
+    ...(resolvedPages ? { pageTargets: resolvedPages } : {}), ...(resolvedNames ? { nameTargets: resolvedNames } : {}),
+    ...(resolvedFiles ? { attachments: resolvedFiles } : {}), attachmentApi: fileApi };
   if (!source.trim()) return <p className="text-muted-foreground italic">Nothing written yet.</p>;
   return <div data-slot="markdown" className={cn("markdown grid min-w-0 [overflow-wrap:anywhere]", compact ? "gap-1.5" : "gap-3", className)}>
     {links.outline ? renderSections(tree.children, effective) : renderBlocks(tree.children, effective)}
@@ -304,7 +332,7 @@ function htmlImage(source: string, links: MarkdownLinks, key: number): React.Rea
   return <PreviewImage key={key} src={src} alt={image.getAttribute("alt") ?? ""} width={dimension("width")} height={dimension("height")} links={links}/>;
 }
 
-function PreviewImage({ src, alt, width, height, links }: { src: string; alt: string; width?: number; height?: number; links: MarkdownLinks }) {
+function PreviewImage({ src, alt, width, height, links, fullSrc }: { src: string; alt: string; width?: number; height?: number; links: MarkdownLinks; fullSrc?: string | null }) {
   const [image, setImage] = React.useState(src);
   const [failed, setFailed] = React.useState<{ error: string; issueUrl?: string } | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -334,7 +362,7 @@ function PreviewImage({ src, alt, width, height, links }: { src: string; alt: st
       <Dialog.Overlay className="fixed inset-0 z-50 bg-black/80"/>
       <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 flex h-[min(94vh,1000px)] w-[min(96vw,1400px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border bg-background p-3 shadow-xl focus:outline-none">
         <div className="flex shrink-0 items-center justify-between gap-3 pb-2"><Dialog.Title className="truncate text-sm font-medium">{alt || "Image"}</Dialog.Title><Dialog.Close asChild><button type="button" className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="Close image"><X className="size-5"/></button></Dialog.Close></div>
-        <div className="flex min-h-0 flex-1 overflow-auto"><img src={image} alt={alt} referrerPolicy="no-referrer" className="m-auto h-auto max-w-none shrink-0"/></div>
+        <div className="flex min-h-0 flex-1 overflow-auto"><img src={fullSrc ?? image} alt={alt} referrerPolicy="no-referrer" className="m-auto h-auto max-w-none shrink-0"/></div>
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;
@@ -415,8 +443,10 @@ function renderPhrasing(node: PhrasingContent, links: MarkdownLinks, key: number
     case "html": return htmlImage(node.value, links, key) ?? <code key={key} className="rounded bg-muted px-1 font-mono text-[0.85em]" title="HTML is shown as text">{node.value}</code>;
     case "image": case "imageReference": {
       const alt = node.alt || "image";
+      const fileId = node.type === "image" ? internalAttachmentId(node.url) : null;
+      if (fileId) return <AttachmentImage key={key} id={fileId} alt={alt} links={links}/>;
       return <span key={key} role="img" aria-label={`Image not loaded: ${alt}`} className="inline-flex items-center gap-1 rounded border border-dashed px-1.5 py-0.5 text-xs text-muted-foreground">
-        <ImageOff className="size-3.5"/>{alt} · images arrive with attachments
+        <ImageOff className="size-3.5"/>{alt} · images from the web are not loaded
       </span>;
     }
     case "link": return <MarkdownLink key={key} url={node.url} links={links}>{renderInline(node.children, links)}</MarkdownLink>;
@@ -426,7 +456,31 @@ function renderPhrasing(node: PhrasingContent, links: MarkdownLinks, key: number
   }
 }
 
+/** An attached image shown in place, from this computer's bytes. */
+function AttachmentImage({ id, alt, links }: { id: string; alt: string; links: MarkdownLinks }) {
+  const api = links.attachmentApi ?? attachmentRpc;
+  const item = links.attachments?.get(id.toLowerCase());
+  const [enlarged, setEnlarged] = React.useState(false);
+  const large = !!item && item.preview === "image" && Number(item.byteSize) >= thumbnailThresholdBytes;
+  const thumb = useThumbnailUrl(api, item, large);
+  // A large image shows its thumbnail; the full bytes are only read when there is no thumbnail or it is enlarged.
+  const full = useAttachmentUrl(api, item && item.preview === "image" && (!large || thumb.failed || enlarged) ? item : undefined);
+  const { url, error } = large && thumb.url ? { url: thumb.url, error: null } : full;
+  if (!links.attachments) return <span role="status" className="text-sm text-muted-foreground">Loading image…</span>;
+  if (!item) return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" role="img" aria-label={`Missing file: ${alt}`}><ImageOff className="size-3.5"/>{alt} · missing file</span>;
+  if (item.preview !== "image") return <AttachmentCard api={api} item={item} label={alt}/>;
+  if (error) return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" role="img" aria-label={`Image not loaded: ${alt}`}><ImageOff className="size-3.5"/>{alt} · {error === "Not on this computer" ? "not on this computer" : error}</span>;
+  if (!url) return <span role="status" className="text-sm text-muted-foreground">Loading image…</span>;
+  return <span onClickCapture={() => { if (large) setEnlarged(true); }}><PreviewImage src={url} alt={alt === "image" ? item.fileName : alt} width={large ? undefined : item.width ?? undefined} height={large ? undefined : item.height ?? undefined} links={links} fullSrc={large && enlarged ? full.url : null}/></span>;
+}
+
 function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLinks; children: React.ReactNode }) {
+  const fileId = internalAttachmentId(url);
+  if (fileId) {
+    if (!links.attachments) return <span className="text-muted-foreground">{children}</span>;
+    return <AttachmentCard api={links.attachmentApi ?? attachmentRpc} item={links.attachments.get(fileId.toLowerCase())} label={children}/>;
+  }
+
   const taskId = internalTaskId(url);
   const linkClass = "inline cursor-pointer rounded-sm text-left text-primary underline underline-offset-2 hover:text-primary/80 focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none";
   if (taskId) {
@@ -476,7 +530,7 @@ function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLi
     return <button type="button" className={linkClass} title={url} onClick={() => links.onOpenExternal?.(url)}>{children}</button>;
   }
 
-  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task, page, list and pad-note links open.">{children}</span>;
+  return <span className="text-muted-foreground underline decoration-dotted" title="This link was blocked: only web, email, task, page, list, pad-note and attachment links open.">{children}</span>;
 }
 
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {

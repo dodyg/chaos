@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownPreview, htmlToMarkdown, type MarkdownLinks } from "./markdown";
+import { attachmentRpc } from "#neoastra";
+import { AttachmentPanel, attachmentMarkdown, uploadFile, type AttachmentApi, type AttachmentOwnerKind } from "./attachments";
 import { formatEdit, linkQueryAt, listLinkMarkdown, padLinkMarkdown, pageLinkMarkdown, taskLinkMarkdown, type FormatAction, type TextEdit } from "./markdownEditing";
 import { continueList, indentItem, moveItem, outdentItem } from "./outline";
 
@@ -38,6 +40,10 @@ type Props = {
   hint?: React.ReactNode;
   /** Text area rows grow with the text instead of scrolling (pages). */
   grow?: boolean;
+  /** What files added here belong to. Without it the editor has no attachments (the item does not exist yet). */
+  attachmentOwner?: { kind: AttachmentOwnerKind; id: string };
+  /** Where attachments are added and read; tests pass a fake, the app uses the host. */
+  attachmentApi?: AttachmentApi;
 };
 
 const tools: { action: FormatAction; label: string; icon: React.ReactNode; shortcut?: string }[] = [
@@ -62,7 +68,7 @@ const tools: { action: FormatAction; label: string; icon: React.ReactNode; short
  * links, and a sanitized preview. Edits go through the browser's own insertText command when
  * available so Ctrl+Z inside the text keeps working.
  */
-export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName, onSelectionChange, selectRange, autoFocus, outline, hint, grow }: Props) {
+export function MarkdownEditor({ id, label, value, onChange, rows = 5, placeholder, disabled, searchLinks, links, onBlur, areaClassName, onSelectionChange, selectRange, autoFocus, outline, hint, grow, attachmentOwner, attachmentApi }: Props) {
   const area = React.useRef<HTMLTextAreaElement | null>(null);
   const pendingSelection = React.useRef<[number, number] | null>(null);
   const [mode, setMode] = React.useState<"source" | "preview">("source");
@@ -71,6 +77,11 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
   const [active, setActive] = React.useState(0);
   const [expanded, setExpanded] = React.useState(false);
   const listId = `${id}-links`;
+  const [attachmentKey, setAttachmentKey] = React.useState(0);
+  const [attachmentNote, setAttachmentNote] = React.useState("");
+  // Uploads finish after later renders; the latest closure inserts into the latest text.
+  const insertReference = React.useRef<(markdown: string) => void>(() => undefined);
+  const previewLinks = React.useMemo(() => attachmentApi ? { ...links, attachmentApi } : links, [links, attachmentApi]);
 
   /**
    * Expanded, the editor fills the whole content area right of the sidebar. It is drawn in a
@@ -190,7 +201,42 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
     }
   }
 
+  /** Puts a reference on its own line at the caret (or the end when the text area is not focused). */
+  insertReference.current = (markdown: string) => {
+    const element = area.current;
+    const start = element ? element.selectionStart : value.length;
+    const end = element ? element.selectionEnd : value.length;
+    const before = value.slice(0, start);
+    const lead = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+    const insert = `${lead}${markdown}\n`;
+    apply({ start, end, insert, selectionStart: start + insert.length, selectionEnd: start + insert.length });
+  };
+
+  /** Adds files from a paste, a drop or the panel: each is uploaded, then referenced where the caret is. */
+  async function attachFiles(files: File[]) {
+    if (!attachmentOwner || files.length === 0) return;
+    const api = attachmentApi;
+    setAttachmentNote(files.length === 1 ? `Adding ${files[0].name || "the pasted file"}…` : `Adding ${files.length} files…`);
+    const problems: string[] = [];
+    for (const file of files) {
+      try {
+        const added = await uploadFile(api ?? attachmentRpc, attachmentOwner.kind, attachmentOwner.id, file);
+        insertReference.current(attachmentMarkdown(added));
+      } catch (error) { problems.push(`${file.name || "That file"}: ${error instanceof Error ? error.message : "could not be added."}`); }
+    }
+    setAttachmentKey(key => key + 1);
+    setAttachmentNote(problems.join(" "));
+  }
+
+  function drop(event: React.DragEvent<HTMLTextAreaElement>) {
+    if (!attachmentOwner || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    void attachFiles([...event.dataTransfer.files]);
+  }
+
   function paste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = attachmentOwner ? [...(event.clipboardData?.files ?? [])] : [];
+    if (files.length > 0) { event.preventDefault(); void attachFiles(files); return; }
     const html = event.clipboardData?.getData("text/html");
     if (!html) return; // plain text pastes natively
     const markdown = htmlToMarkdown(html);
@@ -230,7 +276,7 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
           onChange={event => { onChange(event.target.value); trackLinkQuery(event.target.value, event.target.selectionStart); }}
           onSelect={event => { trackLinkQuery(event.currentTarget.value, event.currentTarget.selectionStart); onSelectionChange?.(event.currentTarget.selectionStart, event.currentTarget.selectionEnd); }}
           autoFocus={autoFocus}
-          onKeyDown={keyDown} onPaste={paste} onBlur={() => { setTimeout(() => setLinkQuery(null), 150); onBlur?.(); }}/>
+          onKeyDown={keyDown} onPaste={paste} onDrop={drop} onDragOver={event => { if (attachmentOwner && event.dataTransfer?.types.includes("Files")) event.preventDefault(); }} onBlur={() => { setTimeout(() => setLinkQuery(null), 150); onBlur?.(); }}/>
         {showList && <ul id={listId} role="listbox" aria-label="Link to a task, page or note" className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md">
           {candidates.map((candidate, index) => <li key={candidate.id} id={`${listId}-${index}`} role="option" aria-selected={index === active}
             className={cn("cursor-pointer truncate rounded-sm px-2 py-1.5", index === active && "bg-accent text-accent-foreground")}
@@ -238,7 +284,11 @@ export function MarkdownEditor({ id, label, value, onChange, rows = 5, placehold
         </ul>}
       </div>
       {hint ?? <p className="text-[0.7rem] text-muted-foreground">Markdown. Type <kbd className="font-mono">[[</kbd> to link a task, page or note.</p>}
-    </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", expanded ? "row-span-2 min-h-0 overflow-y-auto" : areaClassName)}><MarkdownPreview source={value} links={links}/></div>}
+    </> : <div className={cn("min-h-24 rounded-md border bg-background px-3 py-2 text-sm", expanded ? "row-span-2 min-h-0 overflow-y-auto" : areaClassName)}><MarkdownPreview source={value} links={previewLinks}/></div>}
+    {attachmentOwner && <>
+      <AttachmentPanel api={attachmentApi} ownerKind={attachmentOwner.kind} ownerId={attachmentOwner.id} reloadKey={attachmentKey} onInsert={mode === "source" ? markdown => insertReference.current(markdown) : undefined}/>
+      {attachmentNote && <p role="status" className="text-xs text-muted-foreground">{attachmentNote}</p>}
+    </>}
   </div>;
 
   if (!expanded) return editor;

@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Attachments;
 using Chaos.Infrastructure.DataProtection;
 using Chaos.Infrastructure.Migrations;
 using Chaos.Infrastructure.Search;
@@ -33,8 +34,11 @@ public sealed record ArchiveManifest
     public required IReadOnlyList<string> NotIncluded { get; init; }
 }
 
-public sealed record ArchiveContent(ArchiveManifest Manifest, IReadOnlyList<ArchiveTable> Tables)
+/// <summary>An archive read and fully verified. <see cref="Attachments"/> holds the bytes of attached files by SHA-256, already checked against the manifest.</summary>
+public sealed record ArchiveContent(ArchiveManifest Manifest, IReadOnlyList<ArchiveTable> Tables, IReadOnlyDictionary<string, byte[]>? AttachmentFiles = null)
 {
+    public IReadOnlyDictionary<string, byte[]> Attachments { get; } = AttachmentFiles ?? new Dictionary<string, byte[]>();
+
     public ArchiveTable? Table(string name) => Tables.FirstOrDefault(table => table.Name == name);
 }
 
@@ -51,6 +55,10 @@ public static class JsonArchive
 {
     public const string ManifestEntry = "manifest.json";
     public const string DataEntry = "data.json";
+    public const string AttachmentFolder = "attachments/";
+
+    /// <summary>The archive path of an attachment's bytes: content-addressed, so identical files are stored once.</summary>
+    public static string AttachmentEntry(string sha256) => AttachmentFolder + sha256;
 
     public const string ImportPolicyText =
         "Restore replaces all local data with this archive after a safety backup. " +
@@ -79,6 +87,7 @@ public static class JsonArchive
         ["ActivityLogEntities"] = "system event stream, device-local",
         ["ActivityCursors"] = "event stream consumer positions, device-local",
         ["JobRuns"] = "background job diagnostics, device-local",
+        ["AttachmentLocalState"] = "which attachment bytes this device holds, device-local",
         ["DeviceSettings"] = "this device's identity and device-only settings",
     };
 
@@ -132,7 +141,8 @@ public static class JsonArchive
     }
 
     /// <summary>Writes a complete archive ZIP to <paramref name="output"/> from an open connection.</summary>
-    public static async Task<ArchiveManifest> WriteAsync(SqliteConnection connection, Stream output, string appVersion, DateTimeOffset now, CancellationToken ct)
+    public static async Task<ArchiveManifest> WriteAsync(SqliteConnection connection, Stream output, string appVersion, DateTimeOffset now, CancellationToken ct,
+        IAttachmentFileStore? attachments = null)
     {
         long schemaVersion;
         IReadOnlyList<ArchiveTable> tables;
@@ -144,21 +154,56 @@ public static class JsonArchive
         }
 
         var data = SerializeTables(tables);
+
+        // Attached files: each distinct file once, checksummed, so an import can refuse a tampered one.
+        var files = new List<ArchiveFileEntry> { new(DataEntry, Sha256(data), data.Length) };
+        var attachmentBytes = new List<(string Hash, byte[] Bytes)>();
+        var notIncluded = new List<string>([.. ExcludedTables.Select(pair => $"{pair.Key}: {pair.Value}"), "SearchIndex: search index, rebuilt", "NotificationJobs OS schedule columns: belong to this device"]);
+        if (tables.FirstOrDefault(table => table.Name == "Attachments") is { } attachmentTable)
+        {
+            var shaColumn = attachmentTable.Columns.ToList().IndexOf("Sha256");
+            foreach (var hash in attachmentTable.Rows.Select(row => row[shaColumn] as string).Where(AttachmentHash.IsValid).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            {
+                await using var stream = attachments is null ? null : await attachments.OpenReadAsync(hash!, 0, ct);
+                if (stream is null)
+                {
+                    notIncluded.Add($"attachment {hash}: its bytes are not on this device");
+                    continue;
+                }
+
+                using var memory = new MemoryStream();
+                await stream.CopyToAsync(memory, ct);
+                var bytes = memory.ToArray();
+                if (!string.Equals(Sha256(bytes), hash, StringComparison.Ordinal))
+                {
+                    notIncluded.Add($"attachment {hash}: its stored bytes are damaged");
+                    continue;
+                }
+
+                attachmentBytes.Add((hash!, bytes));
+                files.Add(new ArchiveFileEntry(AttachmentEntry(hash!), hash!, bytes.Length));
+            }
+        }
+
         var manifest = new ArchiveManifest
         {
             SchemaVersion = schemaVersion,
             AppVersion = appVersion,
             ExportedAtUtc = now,
             ImportPolicy = ImportPolicyText,
-            Files = [new ArchiveFileEntry(DataEntry, Sha256(data), data.Length)],
+            Files = files,
             Tables = tables.ToDictionary(table => table.Name, table => (long)table.Rows.Count, StringComparer.Ordinal),
-            NotIncluded = [.. ExcludedTables.Select(pair => $"{pair.Key}: {pair.Value}"), "SearchIndex: search index, rebuilt", "NotificationJobs OS schedule columns: belong to this device"],
+            NotIncluded = notIncluded,
         };
 
         using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
         {
             await WriteEntryAsync(zip, ManifestEntry, JsonSerializer.SerializeToUtf8Bytes(manifest, BackupManager.ManifestJson), ct);
             await WriteEntryAsync(zip, DataEntry, data, ct);
+            foreach (var (hash, bytes) in attachmentBytes)
+            {
+                await WriteEntryAsync(zip, AttachmentEntry(hash), bytes, ct, CompressionLevel.NoCompression);
+            }
         }
 
         return manifest;
@@ -169,9 +214,11 @@ public static class JsonArchive
     {
         using var zip = SafeArchive.Open(input);
         var names = zip.Entries.Select(entry => entry.FullName).ToHashSet(StringComparer.Ordinal);
-        if (!names.SetEquals([ManifestEntry, DataEntry]))
+        var attachmentNames = names.Where(name => name.StartsWith(AttachmentFolder, StringComparison.Ordinal)).ToList();
+        names.ExceptWith(attachmentNames);
+        if (!names.SetEquals([ManifestEntry, DataEntry]) || attachmentNames.Any(name => !AttachmentHash.IsValid(name[AttachmentFolder.Length..])))
         {
-            throw AppException.Validation("file", "This is not a Chaos archive: it must contain exactly manifest.json and data.json.");
+            throw AppException.Validation("file", "This is not a Chaos archive: it must contain exactly manifest.json and data.json, plus attachments/<hash> files.");
         }
 
         ArchiveManifest manifest;
@@ -202,7 +249,27 @@ public static class JsonArchive
             throw AppException.Validation("file", "The archive's data does not match its checksum, so it may be damaged or edited.");
         }
 
-        return new ArchiveContent(manifest, DeserializeTables(data));
+        // Every attached file must be declared and match its checksum before anything is written anywhere.
+        if (attachmentNames.FirstOrDefault(name => manifest.Files.All(file => file.Path != name)) is not null)
+        {
+            throw AppException.Validation("file", "The archive holds a file its manifest does not list, so it may have been edited.");
+        }
+
+        var attachmentFiles = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var file in manifest.Files.Where(file => file.Path.StartsWith(AttachmentFolder, StringComparison.Ordinal)))
+        {
+            var entry = zip.GetEntry(file.Path) ?? throw AppException.Validation("file", "The archive's manifest lists a file that is not in it.");
+            var bytes = SafeArchive.ReadEntry(entry);
+            var hash = file.Path[AttachmentFolder.Length..];
+            if (file.Sha256 != hash || bytes.Length != file.Bytes || Sha256(bytes) != hash)
+            {
+                throw AppException.Validation("file", "An attached file in this archive does not match its checksum, so the archive may be damaged or edited. Nothing was imported.");
+            }
+
+            attachmentFiles[hash] = bytes;
+        }
+
+        return new ArchiveContent(manifest, DeserializeTables(data), attachmentFiles);
     }
 
     /// <summary>
@@ -492,9 +559,9 @@ public static class JsonArchive
         _ => throw new FormatException("unsupported value"),
     };
 
-    private static async Task WriteEntryAsync(ZipArchive zip, string name, byte[] content, CancellationToken ct)
+    private static async Task WriteEntryAsync(ZipArchive zip, string name, byte[] content, CancellationToken ct, CompressionLevel level = CompressionLevel.Optimal)
     {
-        var entry = zip.CreateEntry(name, CompressionLevel.Optimal);
+        var entry = zip.CreateEntry(name, level);
         await using var stream = entry.Open();
         await stream.WriteAsync(content, ct);
     }

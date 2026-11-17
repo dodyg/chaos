@@ -23,7 +23,7 @@ public sealed record ImportSource(ImportDraft Draft, CsvTable? Csv, IReadOnlyDic
 /// leaves a truncated file under the final name. Chaos never deletes or overwrites anything in
 /// the export folder except the file it is writing.
 /// </summary>
-public sealed class DataTransfer(SqliteApplicationStore store, string appVersion, TimeProvider clock)
+public sealed class DataTransfer(SqliteApplicationStore store, string appVersion, TimeProvider clock, Chaos.Application.Attachments.IAttachmentFileStore? attachments = null)
 {
     public const long MaxImportBytes = 100L * 1024 * 1024;
 
@@ -61,10 +61,11 @@ public sealed class DataTransfer(SqliteApplicationStore store, string appVersion
                 switch (format)
                 {
                     case ExportFormat.Json:
-                        await JsonArchive.WriteAsync(connection, output, appVersion, now, token);
+                        await JsonArchive.WriteAsync(connection, output, appVersion, now, token, attachments);
                         break;
                     default:
-                        PlainTextExport.WriteMarkdownZip(await ExportSnapshot.ReadAsync(connection, token), output, now);
+                        PlainTextExport.WriteMarkdownZip(await ExportSnapshot.ReadAsync(connection, token), output, now,
+                            attachments is null ? null : hash => attachments.OpenReadAsync(hash, 0, token).GetAwaiter().GetResult());
                         break;
                 }
 

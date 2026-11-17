@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Attachments;
 using Chaos.Application.Boards;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
@@ -90,6 +91,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["page"] = Pages,
         ["page_tag"] = Pages,
         ["page_task_link"] = Pages,
+        ["attachment"] = Pages,
 
         ["github_connection"] = GitHub,
         ["github_repository"] = GitHub,
@@ -356,6 +358,11 @@ public sealed class SyncCatalogFlushCoverageTests
         var made = await new PageCommands(host.Store, host.Ids, host.Clock).MakeTaskAsync(
             new MakeTaskFromPageCommand(Op(), page.Id, 0, start, start + quote.Length, quote, new CaptureTaskDraft { Title = "Call the bank" }));
         expected["page_task_link"] = $"{page.Id}|{made.Task.Id}";
+
+        var attachments = host.Attachments;
+        var upload = await attachments.BeginAsync(new BeginAttachmentUploadCommand(AttachmentOwnerKind.Page, page.Id, "flush.txt", 5));
+        await attachments.ChunkAsync(upload.UploadId, 0, "hello"u8.ToArray());
+        expected["attachment"] = (await attachments.CommitAsync(new CommitAttachmentCommand(Op(), upload.UploadId))).Attachment.Id;
     }
 
     /// <summary>A connection, a repository with milestones-as-projects, an imported issue with

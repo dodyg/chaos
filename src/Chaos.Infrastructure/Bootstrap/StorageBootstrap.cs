@@ -15,6 +15,18 @@ public sealed record StorageOptions
 
     public string BackupsDirectory => Path.Combine(DataRoot, "backups");
 
+    /// <summary>Attachment bytes of the local file store, by hash (PLAN2 §9.1).</summary>
+    public string AttachmentsDirectory => Path.Combine(DataRoot, "attachments");
+
+    /// <summary>Attachment copies shared by every backup; backups reference them by hash.</summary>
+    public string BackupAttachmentsDirectory => Path.Combine(BackupsDirectory, "attachments");
+
+    /// <summary>Cached image thumbnails; disposable, rebuilt on demand and never synced.</summary>
+    public string ThumbnailsDirectory => Path.Combine(DataRoot, "thumbnails");
+
+    /// <summary>Chunked uploads in progress; anything here is disposable.</summary>
+    public string UploadsDirectory => Path.Combine(DataRoot, "uploads");
+
     public static StorageOptions FromDataRoot(string dataRoot) => new() { DataRoot = dataRoot };
 }
 

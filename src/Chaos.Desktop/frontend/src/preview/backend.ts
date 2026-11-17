@@ -544,6 +544,19 @@ function addPage(title: string, markdown: string, parentPageId: string | null, d
   record(dailyDate ? "Start daily page" : `Add page “${title}”`);
   return pages.find(p => p.id === id)!;
 }
+/** Attachments (PLAN2 P9): the preview page has no files, so lists are empty and adding is refused with a readable message. */
+function attachmentHandlers(): Record<string, Handler> {
+  const unavailable = () => ({ ...fail("Files can only be attached in the desktop app."), attachment: null, attachments: [], uploadId: "", chunkBytes: 0, maxFileBytes: "0", base64: "", totalSize: "0", path: null });
+  return {
+    "attachment.list": () => ok({ attachments: [] }),
+    "attachment.resolve": () => ok({ attachments: [] }),
+    "attachment.pageImage": () => ok({ attachment: null }),
+    "attachment.cancel": () => ok({}),
+    "attachment.begin": unavailable, "attachment.chunk": unavailable, "attachment.commit": unavailable, "attachment.rename": unavailable,
+    "attachment.delete": unavailable, "attachment.restore": unavailable, "attachment.read": unavailable, "attachment.open": unavailable,
+    "attachment.showInFolder": unavailable, "attachment.saveCopy": unavailable, "attachment.editImage": unavailable, "attachment.thumbnail": unavailable,
+  };
+}
 function pageHandlers(): Record<string, Handler> {
   const live = () => pages.filter(p => !p.deleted);
   const find = (id: string) => pages.find(p => p.id === id);
@@ -725,6 +738,7 @@ const handlers: Record<string, Handler> = {
   ...googleHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
+  ...attachmentHandlers(),
   "markdown.resolveLinks": () => ok({ targets: [] }),
   "pad.resolveLinks": () => ok({ targets: [] }),
   // One sample task was made from a pad note whose quote is a long link, like real ones often are.

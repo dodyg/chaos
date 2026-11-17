@@ -260,7 +260,7 @@ function checklistPanel() {
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
         <form id="task-editor-form" className="hidden" onSubmit={event => { event.preventDefault(); void autosave.flush(); }}/>
           <TabsContent value="notes" className="grid grid-cols-[minmax(0,1fr)] gap-4">
-            <MarkdownEditor id="task-notes" label="Notes" value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}
+            <MarkdownEditor id="task-notes" label="Notes" attachmentOwner={{ kind: "task", id: editing.id }} value={editing.notes} onChange={notes => change({ notes })} placeholder="Add details… Markdown works here." links={links} searchLinks={searchLinks}
               areaClassName="min-h-[max(16rem,calc(100vh-24rem))]"/>
             {checklistPanel()}
             {padAnchor && <p className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">

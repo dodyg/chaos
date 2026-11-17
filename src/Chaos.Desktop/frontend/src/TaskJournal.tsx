@@ -214,7 +214,7 @@ export function TaskJournal({ task, api = { diaryRpc, historyRpc }, githubApi = 
           </div>
           {editing?.id === item.diary.id
             ? <form className="grid gap-2" onSubmit={e => { e.preventDefault(); const entry = editing; void mutate(() => api.diaryRpc.edit({ operationId: operationId(), entryId: entry.id, expectedVersion: entry.version, markdown: entry.markdown }), "Could not save the diary entry.", () => setEditing(null)); }}>
-                <MarkdownEditor id={`diary-${item.diary.id}`} label="Diary entry" rows={3} value={editing.markdown} onChange={markdown => setEditing({ ...editing, markdown })} disabled={disabled} links={links} searchLinks={searchLinks}/>
+                <MarkdownEditor id={`diary-${item.diary.id}`} label="Diary entry" attachmentOwner={{ kind: "diary", id: item.diary.id }} rows={3} value={editing.markdown} onChange={markdown => setEditing({ ...editing, markdown })} disabled={disabled} links={links} searchLinks={searchLinks}/>
                 <div className="flex gap-2"><Button size="sm" disabled={disabled || !editing.markdown.trim()}>Save entry</Button><Button type="button" size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button></div>
               </form>
             : <MarkdownPreview source={item.diary.markdown} links={links} compact className="text-sm"/>}

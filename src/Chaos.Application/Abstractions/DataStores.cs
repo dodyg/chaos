@@ -37,6 +37,7 @@ public interface IDataSession
     IBoardStore Boards { get; }
     ISavedViewStore SavedViews { get; }
     ICalendarStore Calendars { get; }
+    IAttachmentStore Attachments { get; }
     /// <summary>Device-only writers note their changes here (PLAN2 §6.4 rule 3).</summary>
     Chaos.Application.Activity.IActivityRecorder Activity { get; }
 }
@@ -578,4 +579,22 @@ public interface ICalendarStore
     Task<CalendarEventLinkRecord?> FindLinkAsync(string taskId, CancellationToken ct);
     Task<IReadOnlyList<CalendarEventLinkRecord>> ListLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
     Task AddLinkAsync(CalendarEventLinkRecord link, CancellationToken ct);
+}
+
+/// <summary>Attachment metadata and this device's byte state (PLAN2 §9.1; migration 031). The bytes themselves are in <c>IAttachmentFileStore</c>.</summary>
+public interface IAttachmentStore
+{
+    /// <summary>An active attachment.</summary>
+    Task<AttachmentRecord?> GetAsync(string id, CancellationToken ct);
+    Task<AttachmentRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct);
+    /// <summary>Attachments of one owner, oldest first; deleted ones only when asked.</summary>
+    Task<IReadOnlyList<AttachmentRecord>> ListByOwnerAsync(AttachmentOwnerKind kind, string ownerId, bool includeDeleted, CancellationToken ct);
+    /// <summary>Every active attachment of a space, for lookups by name (page backgrounds).</summary>
+    Task<IReadOnlyList<AttachmentRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
+    Task AddAsync(AttachmentRecord attachment, CancellationToken ct);
+    Task<AttachmentRecord?> UpdateAsync(AttachmentRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>True when any row, deleted or not, still names these bytes.</summary>
+    Task<bool> IsHashReferencedAsync(string sha256, CancellationToken ct);
+    Task<AttachmentLocalStateRecord?> GetLocalStateAsync(string sha256, CancellationToken ct);
+    Task SetLocalStateAsync(AttachmentLocalStateRecord state, CancellationToken ct);
 }

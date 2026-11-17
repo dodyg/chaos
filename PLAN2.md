@@ -2241,9 +2241,9 @@ the request byte for byte (fixture test).
 **Exit:** a drafted plan appears in the draft, can be adjusted or undone, and nothing changes
 until the person confirms.
 
-### [ ] P9 — Attachments (local) and page image backgrounds
+### [x] P9 — Attachments (local) and page image backgrounds
 
-**Depends on:** P1 and P0's file-viewing result. **Migration:** `030_attachments.sql`. **Read:**
+**Depends on:** P1 and P0's file-viewing result. **Migration:** `031_attachments.sql` (030 went to P6a). **Read:**
 section 9.1.
 
 1. Add `Attachments` (synced) and `AttachmentLocalState` (`LocalOnly`), with catalog entries.
@@ -2283,6 +2283,8 @@ section 9.1.
 
 **Exit:** attachments work fully offline, survive backup/restore and archive round trips, and
 never load anything from the internet.
+
+**Progress note 2026-11-17.** Landed: migration 031, `IAttachmentFileStore` (provider-neutral; local folder store, `AttachmentStoreMigrator` for moving to an S3-compatible store, contract check in the test project, see `docs/attachment-storage.md`), magic-number sniffing and header-based image sizes, upload sessions (1 MiB chunks, 4 at once, 1 hour), undoable add/rename/delete/restore, purge by hash reference counting, shared content-addressed backup store with retention and restore, JSON archive with per-file checksums (a tampered file is refused before anything is written), Markdown export with rewritten references, the `attachment` RPC service, editor paste/drop and the attachment panel on task notes, diary entries, pad notes and pages, in-place images, file cards and PDF/video/audio previews, and `background: attachments/<name>` (C# and TS parsers tested against one table). Image library follow-up (same day): SixLabors.ImageSharp 4.1.3 behind `IImageProcessor` gives thumbnails (images of 2 MiB or more show a cached 640 px JPEG inline), and an Edit image dialog (crop by drag or pixels, rotate, flip, longest side) that replaces the attachment's file with undo; edited-away files are cleared when the trash is purged and they are an hour old. Deviations: audio/video durations are not read (`DurationMs` stays null), HEIC cannot be edited or thumbnailed; deleting an owner does not tombstone its attachments, they stay hidden with it and are removed when the owner is purged; archive Merge does not carry attachments (Restore does). Not checked: the native pass (paste a screenshot, preview a PDF, back up and restore in the real app) and whether the WebView allows `blob:` for img/media/frame, since this repo sets no CSP of its own.
 
 ### [ ] P10 — Pad drawing, photos and voice notes
 
@@ -2733,8 +2735,8 @@ If a number is already taken when you start, use the next free number and update
 | 028 | P6 | Google accounts |
 | 029 | P7 | AI settings, summary narrative columns |
 | 030 | P6a | Activity log, entities, cursors, job runs (028 and 029 were actually used by P5 and P6, so 030 is the next free number; later rows shift when they land) |
-| 030 | P9 | Attachments, attachment local state |
-| 031 | P10 | Pad item kind, drawings, region links |
+| 031 | P9 | Attachments, attachment local state (030 was already taken by P6a) |
+| 032 | P10 | Pad item kind, drawings, region links |
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |
 | 033 | P14 | Account binding, devices display table |
 | 034 | P17 | Reminder acknowledgements, GitHub runner device |

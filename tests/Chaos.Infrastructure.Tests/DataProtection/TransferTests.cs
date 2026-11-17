@@ -375,6 +375,7 @@ public sealed class TransferTests
             public IBoardStore Boards => inner.Boards;
             public ISavedViewStore SavedViews => inner.SavedViews;
             public ICalendarStore Calendars => inner.Calendars;
+            public IAttachmentStore Attachments => inner.Attachments;
             public Chaos.Application.Activity.IActivityRecorder Activity => inner.Activity;
         }
 

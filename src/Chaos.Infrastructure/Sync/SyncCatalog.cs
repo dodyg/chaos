@@ -556,6 +556,20 @@ public static class SyncCatalog
                 "A task anchors to one page selection; combining makes no sense (§7.6).")],
             ApplyOrder: 420), // no DeletedAtUtc: a removal is a hard delete and travels as a purge
 
+        // ---- Attachments (P9) ------------------------------------------------------------------
+        // The row syncs; the bytes do not (P16 moves them). OwnerId is polymorphic, so there is no
+        // foreign key; an owner's purge removes its attachments (SyncPurgeSql).
+        new SyncTable("Attachments", "attachment", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "OwnerKind", "OwnerId", "CreatedAtUtc"]),
+                new("name", ["FileName", "OriginalFileName"]),
+                new("file", ["MediaType", "ByteSize", "Sha256", "Width", "Height", "DurationMs"]), // changes only when an image is edited (crop, rotate, resize), and then all together
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 440),
+
         new SyncTable("ScratchPadTags", "pad_tag", SyncMode.Merge, ["PadItemId", "TagId"],
             Groups: [new("deleted", ["DeletedAtUtc"])],
             ApplyOrder: 140),
@@ -574,6 +588,7 @@ public static class SyncCatalog
         new SyncTable("WeekPlanRevisions", "week_plan_revision", SyncMode.LocalOnly, ["WeekPlanId", "Revision"], ApplyOrder: 509), // per-device snapshot numbering
         new SyncTable("RecurrenceSeriesRevisions", "recurrence_series_revision", SyncMode.LocalOnly, ["SeriesId", "Revision"], ApplyOrder: 510), // per-device revision numbering
         new SyncTable("PageRevisions", "page_revision", SyncMode.LocalOnly, ["PageId", "Number"], ApplyOrder: 511), // per-device version history; sync.merged writes a local revision (§7.7)
+        new SyncTable("AttachmentLocalState", "attachment_local_state", SyncMode.LocalOnly, ["Sha256"], ApplyOrder: 539), // whether this device holds the bytes (PLAN2 §9.1)
         new SyncTable("GitHubSyncRuns", "github_sync_run", SyncMode.LocalOnly, ["Id"], ApplyOrder: 512), // runner diagnostics (§7.11)
         new SyncTable("GitHubIssueWrites", "github_issue_write", SyncMode.LocalOnly, ["IssueLinkId"], ApplyOrder: 513), // only the runner device queues GitHub writes (§7.11)
         new SyncTable("GitHubCommentCheckpoints", "github_comment_checkpoint", SyncMode.LocalOnly, ["IssueLinkId"], ApplyOrder: 514), // runner pagination state (§7.11)

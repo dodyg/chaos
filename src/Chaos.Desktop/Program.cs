@@ -84,8 +84,13 @@ internal static class Program
 
         // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
         // reminder engine and take back OS notification schedules before files are replaced.
+        // Attachment bytes live behind IAttachmentFileStore (PLAN2 §9.1); this is the one place the provider is chosen.
+        var attachmentFiles = Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.Create(storage.Options);
+        var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, new GuidIdGenerator(), TimeProvider.System, storage.Options.UploadsDirectory,
+            images: new Chaos.Infrastructure.Attachments.ImageSharpProcessor(), thumbnailsDirectory: storage.Options.ThumbnailsDirectory);
         var protection = new DataProtectionService(storage.Store, storage.Options,
-            new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, TimeProvider.System), new GuidIdGenerator(), TimeProvider.System);
+            new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, TimeProvider.System, null,
+                attachmentFiles, Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.CreateBackupStore(storage.Options)), new GuidIdGenerator(), TimeProvider.System);
         protection.Quiesce = (work, ct) => reminderEngine.RunPausedAsync(async () =>
         {
             foreach (var osId in await protection.ListScheduledOsNotificationIdsAsync(ct))
@@ -97,8 +102,8 @@ internal static class Program
         }, ct);
         using var backupScheduler = new BackupScheduler(protection, TimeProvider.System, jobRuns, activityFeed);
         backupScheduler.Start();
-        var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System),
-            new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store), storage.RecoveryNotice,
+        var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System, attachmentFiles),
+            new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store, attachmentFiles), storage.RecoveryNotice,
             async (osIds, ct) =>
             {
                 foreach (var osId in osIds)
@@ -191,6 +196,7 @@ internal static class Program
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks, sync: githubEngine));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -530,6 +536,27 @@ internal static class Program
 [JsonSerializable(typeof(PageAppendRequest))]
 [JsonSerializable(typeof(PageFromPadRequest))]
 [JsonSerializable(typeof(PageAppendPadRequest))]
+[JsonSerializable(typeof(AttachmentDto))]
+[JsonSerializable(typeof(AttachmentListRequest))]
+[JsonSerializable(typeof(AttachmentResolveRequest))]
+[JsonSerializable(typeof(AttachmentListResponse))]
+[JsonSerializable(typeof(AttachmentBeginRequest))]
+[JsonSerializable(typeof(AttachmentBeginResponse))]
+[JsonSerializable(typeof(AttachmentChunkRequest))]
+[JsonSerializable(typeof(AttachmentCommitRequest))]
+[JsonSerializable(typeof(AttachmentCancelRequest))]
+[JsonSerializable(typeof(AttachmentOperationResponse))]
+[JsonSerializable(typeof(AttachmentSimpleResponse))]
+[JsonSerializable(typeof(AttachmentRenameRequest))]
+[JsonSerializable(typeof(AttachmentItemRequest))]
+[JsonSerializable(typeof(AttachmentReadRequest))]
+[JsonSerializable(typeof(AttachmentReadResponse))]
+[JsonSerializable(typeof(AttachmentActionRequest))]
+[JsonSerializable(typeof(AttachmentActionResponse))]
+[JsonSerializable(typeof(AttachmentPageImageRequest))]
+[JsonSerializable(typeof(AttachmentCropDto))]
+[JsonSerializable(typeof(AttachmentEditImageRequest))]
+[JsonSerializable(typeof(AttachmentThumbnailRequest))]
 [JsonSerializable(typeof(CaptureSpanDto))]
 [JsonSerializable(typeof(CapturePreviewRequest))]
 [JsonSerializable(typeof(CaptureTokenDto))]

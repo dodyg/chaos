@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Attachments;
 using Chaos.Application.Contracts;
 using Chaos.Infrastructure.Migrations;
 using Chaos.Infrastructure.Sqlite;
@@ -36,6 +37,13 @@ public sealed record BackupManifest
     public required string ChecksumSha256 { get; init; }
     public required long SizeBytes { get; init; }
     public required DataCounts Counts { get; init; }
+
+    /// <summary>
+    /// SHA-256 of every attached file this backup needs (PLAN2 §9.1). The bytes are not in the
+    /// backup file: they sit once, by hash, in the shared <c>backups/attachments</c> store, and
+    /// retention removes one only when no remaining backup lists it.
+    /// </summary>
+    public IReadOnlyList<string> AttachmentHashes { get; init; } = [];
 }
 
 /// <summary>One file in the backups folder as listed: a manifest when it has one, else what is known.</summary>
@@ -55,7 +63,8 @@ public sealed record DatabaseFileCheck(bool Valid, string? Problem, long SchemaV
 /// after a new backup has succeeded and never deletes files it cannot read a manifest for.
 /// Backups are ordinary local files protected by the device account; they are not encrypted.
 /// </summary>
-public sealed class BackupManager(SqliteConnectionSource source, string backupsDirectory, string appVersion, TimeProvider clock, Action<string>? afterCopyTestHook = null)
+public sealed class BackupManager(SqliteConnectionSource source, string backupsDirectory, string appVersion, TimeProvider clock, Action<string>? afterCopyTestHook = null,
+    IAttachmentFileStore? liveAttachments = null, IAttachmentFileStore? backupAttachments = null)
 {
     public const int DailyToKeep = 7;
     public const int WeeklyToKeep = 4;
@@ -75,6 +84,12 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
     private DateTimeOffset? _lastErrorAtUtc;
 
     public string BackupsDirectory => backupsDirectory;
+
+    /// <summary>Where this device keeps attached files; null when the host has no attachment store (older tests).</summary>
+    public IAttachmentFileStore? LiveAttachments => liveAttachments;
+
+    /// <summary>The shared store backups keep their attachment copies in.</summary>
+    public IAttachmentFileStore? BackupAttachments => backupAttachments;
 
     /// <summary>The most recent backup made by this process, or null.</summary>
     public BackupManifest? LastSuccess { get { lock (_statusSync) return _lastSuccess; } }
@@ -144,6 +159,10 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
                 throw new AppException(AppErrorKind.StorageUnavailable, $"The new backup failed its check ({check.Problem}), so it was discarded. Your data was not changed.");
             }
 
+            // Attached files: copy the ones the shared backup store lacks, before the backup counts as made.
+            var attachmentHashes = ReadAttachmentHashes(partialPath);
+            await CopyAttachmentsToBackupStoreAsync(attachmentHashes, ct);
+
             var checksum = ComputeChecksum(partialPath);
             var size = new FileInfo(partialPath).Length;
             File.Move(partialPath, finalPath);
@@ -158,6 +177,7 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
                 ChecksumSha256 = checksum,
                 SizeBytes = size,
                 Counts = check.Counts,
+                AttachmentHashes = attachmentHashes,
             };
             WriteManifest(manifest);
 
@@ -265,7 +285,150 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
             deleted.Add(fileName);
         }
 
+        SweepBackupAttachments();
         return deleted;
+    }
+
+    /// <summary>
+    /// Removes attachment copies no remaining backup lists. Skipped while any backup file has no
+    /// readable description, because its needs are then unknown and its files must not be lost.
+    /// </summary>
+    public void SweepBackupAttachments()
+    {
+        if (backupAttachments is null)
+        {
+            return;
+        }
+
+        var entries = List();
+        if (entries.Any(entry => entry.Manifest is null))
+        {
+            return;
+        }
+
+        var needed = entries.SelectMany(entry => entry.Manifest!.AttachmentHashes).ToHashSet(StringComparer.Ordinal);
+        var stale = new List<string>();
+        var listing = backupAttachments.ListAsync(CancellationToken.None).GetAsyncEnumerator();
+        try
+        {
+            while (listing.MoveNextAsync().AsTask().GetAwaiter().GetResult())
+            {
+                if (!needed.Contains(listing.Current.Sha256))
+                {
+                    stale.Add(listing.Current.Sha256);
+                }
+            }
+        }
+        finally
+        {
+            listing.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+
+        foreach (var hash in stale)
+        {
+            backupAttachments.DeleteAsync(hash, CancellationToken.None).GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>The distinct attachment hashes a database file names, deleted rows included (undo can bring those back).</summary>
+    public static IReadOnlyList<string> ReadAttachmentHashes(string databasePath)
+    {
+        try
+        {
+            using var connection = OpenFile(databasePath, SqliteOpenMode.ReadOnly);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT DISTINCT Sha256 FROM Attachments ORDER BY Sha256;";
+            var hashes = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                hashes.Add(reader.GetString(0));
+            }
+
+            return hashes;
+        }
+        catch (SqliteException)
+        {
+            return []; // a database from before attachments
+        }
+    }
+
+    private async Task CopyAttachmentsToBackupStoreAsync(IReadOnlyList<string> hashes, CancellationToken ct)
+    {
+        if (liveAttachments is null || backupAttachments is null)
+        {
+            return;
+        }
+
+        foreach (var hash in hashes)
+        {
+            if (await backupAttachments.ExistsAsync(hash, ct))
+            {
+                continue;
+            }
+
+            await using var stream = await liveAttachments.OpenReadAsync(hash, 0, ct);
+            if (stream is null)
+            {
+                System.Diagnostics.Trace.TraceWarning("Chaos backup: attached file {0} is not on this device, so it is not in the backup.", hash);
+                continue;
+            }
+
+            await backupAttachments.PutAsync(stream, long.MaxValue, hash, ct);
+        }
+    }
+
+    /// <summary>
+    /// Brings the attachment files a database names back from the shared backup store into the
+    /// live store (restore). Returns how many the backups do not hold, which show as "not on
+    /// this computer" instead of failing the restore.
+    /// </summary>
+    public async Task<int> RestoreAttachmentsAsync(IReadOnlyList<string> hashes, CancellationToken ct)
+    {
+        if (liveAttachments is null || backupAttachments is null)
+        {
+            return 0;
+        }
+
+        var missing = 0;
+        foreach (var hash in hashes)
+        {
+            if (await liveAttachments.ExistsAsync(hash, ct))
+            {
+                continue;
+            }
+
+            await using var stream = await backupAttachments.OpenReadAsync(hash, 0, ct);
+            if (stream is null)
+            {
+                missing++;
+                continue;
+            }
+
+            await liveAttachments.PutAsync(stream, long.MaxValue, hash, ct);
+        }
+
+        return missing;
+    }
+
+    /// <summary>Removes every blob of a store through its own interface, so it works for any provider.</summary>
+    public static async Task DeleteAllAsync(IAttachmentFileStore? store, CancellationToken ct)
+    {
+        if (store is null)
+        {
+            return;
+        }
+
+        var hashes = new List<string>();
+        await foreach (var blob in store.ListAsync(ct))
+        {
+            hashes.Add(blob.Sha256);
+        }
+
+        foreach (var hash in hashes)
+        {
+            await store.DeleteAsync(hash, ct);
+        }
     }
 
     /// <summary>The retention rule as a pure function, newest first by creation instant (UTC calendar).</summary>
@@ -318,7 +481,8 @@ public sealed class BackupManager(SqliteConnectionSource source, string backupsD
             SELECT EXISTS (SELECT 1 FROM OperationReceipts WHERE CommittedAtUtc > $since)
                 OR EXISTS (SELECT 1 FROM TaskHistory WHERE RecordedAtUtc > $since)
                 OR EXISTS (SELECT 1 FROM ScratchPadItems WHERE UpdatedAtUtc > $since)
-                OR EXISTS (SELECT 1 FROM Pages WHERE UpdatedAtUtc > $since);
+                OR EXISTS (SELECT 1 FROM Pages WHERE UpdatedAtUtc > $since)
+                OR EXISTS (SELECT 1 FROM Attachments WHERE UpdatedAtUtc > $since);
             """;
         command.Parameters.AddWithValue("$since", latest is null ? "" : StorageFormats.Instant(latest.CreatedAtUtc));
         return Convert.ToInt64(await command.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) == 1;
