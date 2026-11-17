@@ -70,12 +70,17 @@ jobs:
         run: |
           # MSIX versions are strictly major.minor.patch; untagged runs use a placeholder.
           $version = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME.TrimStart('v') } else { '0.0.0' }
-          $msixArgs = @('-Arch', '${{ matrix.arch }}', '-PublishDir', 'publish/${{ matrix.rid }}', '-Version', $version)
+          $msixArgs = @{
+            Arch = '${{ matrix.arch }}'
+            PublishDir = 'publish/${{ matrix.rid }}'
+            Version = $version
+          }
           if ($env:CERT_BASE64 -and $env:PUBLISHER) {
             $pfx = Join-Path $env:RUNNER_TEMP 'msix.pfx'
             [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_BASE64))
-            $msixArgs += @('-Publisher', $env:PUBLISHER, '-CertificatePath', $pfx,
-                       '-CertificatePassword', (ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force))
+            $msixArgs.Publisher = $env:PUBLISHER
+            $msixArgs.CertificatePath = $pfx
+            $msixArgs.CertificatePassword = ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force
           }
           & ./eng/package-msix.ps1 @msixArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
