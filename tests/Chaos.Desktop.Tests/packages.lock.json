@@ -103,6 +103,11 @@
         "resolved": "3.2.2",
         "contentHash": "dmju5W0UYC3QP/UJM0juKAZkH0HSDMp0gH91A0+mT9M0kgyM2Jm67hUZPl/WRQLq8Lijjqmdk8kyAViWFWM7dA=="
       },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.156.1",
+        "contentHash": "BFSUQxmxG9KI2UV7MW1Xb4XhCLSB7Rwsg9E94KelNi8L6ptGXnHIOm3yqU/y3djwg4ZNiBWhOB8XAGUVaF9LuA=="
+      },
       "SQLitePCLRaw.bundle_e_sqlite3": {
         "type": "Transitive",
         "resolved": "2.1.13",
@@ -185,7 +190,8 @@
           "Chaos.Domain": "[1.0.0, )",
           "Chaos.Sync": "[1.0.0, )",
           "Ical.Net": "[5.2.4, )",
-          "Microsoft.Data.Sqlite": "[10.0.14, )"
+          "Microsoft.Data.Sqlite": "[10.0.14, )",
+          "SkiaSharp": "[4.156.1, )"
         }
       },
       "chaos.sync": {
@@ -220,6 +226,15 @@
           "NeoAstra.Core": "1.12.0"
         }
       },
+      "SkiaSharp": {
+        "type": "CentralTransitive",
+        "requested": "[4.156.1, )",
+        "resolved": "4.156.1",
+        "contentHash": "DFlbYk/Rxnqm+UM/EaynxLlucc07+fuWzT84KsyT8aCDAT1PZOPlp5eATD7eYczTgV771bnxQKSrLbNmUCaSLQ==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.Win32": "4.156.1"
+        }
+      },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",
         "requested": "[10.0.0, )",
@@ -243,6 +258,11 @@
         "type": "Transitive",
         "resolved": "1.12.0",
         "contentHash": "tQw9c/WZNlymfAO0wmbKiQDZoAgt4dxTzp3xU1OiVVkmXCJCQBxYu2e72Rf6FYaEM44B3XvlSPF/E4k3LHsSGg=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "4.156.1",
+        "contentHash": "BFSUQxmxG9KI2UV7MW1Xb4XhCLSB7Rwsg9E94KelNi8L6ptGXnHIOm3yqU/y3djwg4ZNiBWhOB8XAGUVaF9LuA=="
       },
       "SQLitePCLRaw.lib.e_sqlite3": {
         "type": "Transitive",

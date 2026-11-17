@@ -13,8 +13,8 @@
     <PackageVersion Include="TUnit" Version="1.81.16" />
     <!-- Calendar feeds (PLAN2 P5): ICS parsing and recurrence expansion. -->
     <PackageVersion Include="Ical.Net" Version="5.2.4" />
-    <!-- Image editing and thumbnails (PLAN2 P9 follow-up): SixLabors.ImageSharp, Six Labors Split License. -->
-    <PackageVersion Include="SixLabors.ImageSharp" Version="4.1.3" />
+    <!-- Image editing and thumbnails (PLAN2 P9 follow-up): SkiaSharp, MIT. -->
+    <PackageVersion Include="SkiaSharp" Version="4.156.1" />
     <!-- OS-protected secret store (DPAPI) for calendar feed addresses (PLAN2 P5). -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>

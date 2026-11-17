@@ -76,7 +76,7 @@ internal sealed class DataHost : IDisposable
             Tasks = new TaskCommands(storage.Store, ids, clock),
             Files = files,
             BackupFiles = backupFiles,
-            Attachments = new AttachmentCommands(storage.Store, files, ids, clock, storage.Options.UploadsDirectory, null, new ImageSharpProcessor(), storage.Options.ThumbnailsDirectory),
+            Attachments = new AttachmentCommands(storage.Store, files, ids, clock, storage.Options.UploadsDirectory, null, new SkiaImageProcessor(), storage.Options.ThumbnailsDirectory),
         };
     }
 

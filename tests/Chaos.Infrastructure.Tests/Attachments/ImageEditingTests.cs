@@ -4,31 +4,30 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Tasks;
 using Chaos.Infrastructure.Tests.DataProtection;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Gif;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace Chaos.Infrastructure.Tests.Attachments;
 
 /// <summary>PLAN2 P9 follow-up: crop, rotate, flip, resize and thumbnails through the image processor.</summary>
 public sealed class ImageEditingTests
 {
-    private static byte[] Make(int width, int height, Action<Image<Rgba32>>? paint = null, string format = "png")
-    {
-        using var image = new Image<Rgba32>(width, height, new Rgba32(10, 20, 30, 255));
-        paint?.Invoke(image);
-        using var output = new MemoryStream();
-        switch (format)
-        {
-            case "jpeg": image.Save(output, new JpegEncoder()); break;
-            case "gif": image.Save(output, new GifEncoder()); break;
-            default: image.Save(output, new PngEncoder()); break;
-        }
+    private static readonly SKColor Background = new(10, 20, 30, 255);
 
-        return output.ToArray();
+    private static byte[] Make(int width, int height, Action<SKBitmap>? paint = null, string format = "png")
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        bitmap.Erase(Background);
+        paint?.Invoke(bitmap);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(format == "jpeg" ? SKEncodedImageFormat.Jpeg : SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
+
+    /// <summary>A single-frame 8 x 6 GIF (Skia cannot write GIFs, so the bytes are fixed).</summary>
+    private static byte[] StillGif() => Convert.FromHexString("474946383961080006008000000a141effffff21f904000a0000002c0000000008000600000206848fa9cb7d05003b");
+
+    /// <summary>A two-frame 8 x 8 animated GIF.</summary>
+    private static byte[] AnimatedGif() => Convert.FromHexString("474946383961080008008000000a141effffff21ff0b4e45545343415045322e30030100000021f904000a0000002c0000000008000800000206848fa9cbed5d0021f904000a0000002c0000000008000800000206848fa9cbed5d003b");
 
     private static async Task<string> NewTaskAsync(DataHost host)
     {
@@ -55,8 +54,8 @@ public sealed class ImageEditingTests
     private static async Task<(int Width, int Height)> SizeOfAsync(DataHost host, AttachmentRecord row)
     {
         await using var stream = (await host.Files.OpenReadAsync(row.Sha256, 0, CancellationToken.None))!;
-        var info = await Image.IdentifyAsync(stream);
-        return (info.Width, info.Height);
+        using var codec = SKCodec.Create(stream);
+        return (codec.Info.Width, codec.Info.Height);
     }
 
     [Test]
@@ -86,15 +85,15 @@ public sealed class ImageEditingTests
     {
         using var host = await DataHost.StartAsync();
         var task = await NewTaskAsync(host);
-        var original = await AddAsync(host, task, "dot.png", Make(4, 2, image => image[0, 0] = new Rgba32(255, 0, 0, 255)));
+        var original = await AddAsync(host, task, "dot.png", Make(4, 2, bitmap => bitmap.SetPixel(0, 0, new SKColor(255, 0, 0, 255))));
         var operation = DataHost.Op();
 
         var edited = (await host.Attachments.EditImageAsync(new EditImageCommand(operation, original.Id, original.Version, new ImageEdit(true, false, 0, null, null)))).Attachment;
         await using (var stream = (await host.Files.OpenReadAsync(edited.Sha256, 0, CancellationToken.None))!)
         {
-            using var pixels = await Image.LoadAsync<Rgba32>(stream);
-            await Assert.That(pixels[3, 0]).IsEqualTo(new Rgba32(255, 0, 0, 255));
-            await Assert.That(pixels[0, 0]).IsEqualTo(new Rgba32(10, 20, 30, 255));
+            using var pixels = SKBitmap.Decode(stream);
+            await Assert.That(pixels.GetPixel(3, 0)).IsEqualTo(new SKColor(255, 0, 0, 255));
+            await Assert.That(pixels.GetPixel(0, 0)).IsEqualTo(Background);
         }
 
         await new UndoCommands(host.Store, host.Ids, host.Clock).UndoAsync(new(DataHost.Op(), operation));
@@ -134,21 +133,11 @@ public sealed class ImageEditingTests
         using var host = await DataHost.StartAsync();
         var task = await NewTaskAsync(host);
 
-        byte[] animated;
-        using (var image = new Image<Rgba32>(8, 8, new Rgba32(1, 2, 3, 255)))
-        {
-            using var second = new Image<Rgba32>(8, 8, new Rgba32(9, 9, 9, 255));
-            image.Frames.AddFrame(second.Frames.RootFrame);
-            using var output = new MemoryStream();
-            image.Save(output, new GifEncoder());
-            animated = output.ToArray();
-        }
-
-        var moving = await AddAsync(host, task, "moving.gif", animated);
+        var moving = await AddAsync(host, task, "moving.gif", AnimatedGif());
         var refusal = await Assert.That(async () => await host.Attachments.EditImageAsync(new EditImageCommand(DataHost.Op(), moving.Id, moving.Version, new ImageEdit(false, false, 90, null, null)))).Throws<AppException>();
         await Assert.That(refusal!.Message).Contains("Animated");
 
-        var still = await AddAsync(host, task, "still.gif", Make(8, 6, null, "gif"));
+        var still = await AddAsync(host, task, "still.gif", StillGif());
         var converted = (await host.Attachments.EditImageAsync(new EditImageCommand(DataHost.Op(), still.Id, still.Version, new ImageEdit(false, false, 90, null, null)))).Attachment;
         await Assert.That(converted.MediaType).IsEqualTo("image/png");
         await Assert.That(converted.FileName).IsEqualTo("still.png");
@@ -164,7 +153,7 @@ public sealed class ImageEditingTests
         var text = await AddAsync(host, task, "a.txt", "hello"u8.ToArray());
 
         var thumbnail = await host.Attachments.ThumbnailAsync(big.Id);
-        using (var decoded = Image.Load(thumbnail))
+        using (var decoded = SKBitmap.Decode(thumbnail))
         {
             await Assert.That((decoded.Width, decoded.Height)).IsEqualTo((AttachmentCommands.ThumbnailSide, AttachmentCommands.ThumbnailSide / 2));
         }

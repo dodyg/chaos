@@ -87,7 +87,7 @@ internal static class Program
         // Attachment bytes live behind IAttachmentFileStore (PLAN2 §9.1); this is the one place the provider is chosen.
         var attachmentFiles = Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.Create(storage.Options);
         var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, new GuidIdGenerator(), TimeProvider.System, storage.Options.UploadsDirectory,
-            images: new Chaos.Infrastructure.Attachments.ImageSharpProcessor(), thumbnailsDirectory: storage.Options.ThumbnailsDirectory);
+            images: new Chaos.Infrastructure.Attachments.SkiaImageProcessor(), thumbnailsDirectory: storage.Options.ThumbnailsDirectory);
         var protection = new DataProtectionService(storage.Store, storage.Options,
             new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, TimeProvider.System, null,
                 attachmentFiles, Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.CreateBackupStore(storage.Options)), new GuidIdGenerator(), TimeProvider.System);
