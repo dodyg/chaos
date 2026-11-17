@@ -32,8 +32,13 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
             foreach (var issue in issues)
             {
                 if (issue.PullRequest is not null) continue;
-                if (issue.Id <= 0 || issue.Number <= 0 || string.IsNullOrEmpty(issue.NodeId) || string.IsNullOrWhiteSpace(issue.Title) || issue.Title.Length > 256 || (issue.Body?.Length ?? 0) > 65536)
-                    throw AppException.Validation("issue", "GitHub returned an issue outside the supported size or identity limits.");
+                // GitHub counts characters (code points), not UTF-16 units, so emoji must not push an issue over its limits.
+                var reason = issue.Id <= 0 || issue.Number <= 0 || string.IsNullOrEmpty(issue.NodeId) ? "it has no valid identity"
+                    : string.IsNullOrWhiteSpace(issue.Title) ? "its title is blank"
+                    : ScalarCount(issue.Title) > TaskTitle.MaxUnicodeScalarValues ? $"its title is longer than {TaskTitle.MaxUnicodeScalarValues} characters"
+                    : ScalarCount(issue.Body) > 65536 ? "its body is longer than 65,536 characters" : null;
+                if (reason is not null)
+                    throw AppException.Validation("issue", $"GitHub returned issue #{issue.Number} outside the supported size or identity limits: {reason}.");
                 if (!GitHubIssueAddress.TryParse(issue.HtmlUrl, out var address) || !address.IsIn(repo.Owner, repo.Name) || address.Number != issue.Number)
                     throw AppException.Validation("issue", "The issue moved during retrieval. Run sync again to refresh its destination.");
                 var link = await s.GitHub.FindLinkByIssueAsync(connection.Id, issue.Id, token);
@@ -275,6 +280,8 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         if (container is null || container.ArchivedAtUtc is not null) throw AppException.Validation("targetContainerId", "Choose an active destination for this repository before syncing.");
         if (sectionId is not null && (await s.Sections.GetAsync(sectionId, ct))?.ContainerId != containerId) throw AppException.Validation("targetSectionId", "Choose an active destination section before syncing.");
     }
+
+    private static int ScalarCount(string? text) => text is null ? 0 : text.Length - text.Count(char.IsHighSurrogate);
 
     private static async Task<TaskAggregateSnapshot> Snapshot(IDataSession s, TaskRecord task, CancellationToken ct) =>
         new(task, await s.Subtasks.ListByTaskAsync(task.Id, ct), await s.Tags.ListTaskTagIdsAsync(task.Id, ct));

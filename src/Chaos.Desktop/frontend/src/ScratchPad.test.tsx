@@ -124,7 +124,7 @@ test("a failed save survives leaving the pad and is offered for retry or copy on
 
   renderPad(api, registry);
   const closed = await screen.findByRole("button", { name: "Open note: draft with more" });
-  assert.match(closed.textContent ?? "", /Not saved/);
+  assert.match(closed.closest("li, article, div.flex")?.parentElement?.textContent ?? "", /Not saved/);
   await user.click(closed);
   assert.equal((await screen.findByLabelText("Note") as HTMLTextAreaElement).value, "draft with more");
   const alert = screen.getByRole("alert");

@@ -1,7 +1,7 @@
 import React from "react";
 import { attachmentRpc, padRpc, siteRpc, tagRpc, type pageRpc, type CaptureDraftDto, type ContainerResponse, type PadItemResponse, type TagResponse } from "#neoastra";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Camera, Copy, FileText, Globe, ListPlus, NotebookPen, PenLine, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Camera, Copy, FileText, Globe, ListPlus, NotebookPen, PenLine, Pencil, Plus, RotateCcw, StickyNote, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -460,11 +460,12 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
                   links={links} searchLinks={searchLinks} rows={8} autoFocus placeholder="Write anything. Markdown works here." areaClassName="min-h-48"/>
                 <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)}/>
               </div>
-            : <button type="button" className="min-w-0 flex-1 rounded-md px-1 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${label}`} onClick={() => void select(item)}>
-                {isDrawing ? <DrawingPreview attachmentApi={attachmentApi} attachmentId={item.previewAttachmentId} label="Drawing note preview"/> : text.trim() ? <MarkdownPreview source={text} links={links} compact className="pointer-events-none max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
-                {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — open the note to retry.</span>}
-              </button>}
+            : <div className="min-w-0 flex-1 px-1 text-left">
+                {isDrawing ? <button type="button" className="block w-full rounded-md text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label={`Open note: ${label}`} onClick={() => void select(item)}><DrawingPreview attachmentApi={attachmentApi} attachmentId={item.previewAttachmentId} label="Drawing note preview"/></button> : text.trim() ? <MarkdownPreview source={text} links={links} compact className="max-h-40 overflow-hidden text-sm"/> : <span className="text-muted-foreground italic">Empty note</span>}
+                {draft?.status === "failed" && <span className="mt-1 block text-xs text-destructive">Not saved — edit the note to retry.</span>}
+              </div>}
           <div className="flex shrink-0 gap-0.5">
+            {!placeholder && !isOpen && !isDrawing && <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy} aria-label={`Open note: ${label}`} title="Edit" onClick={() => void select(item)}><Pencil/></Button>}
             {!archived && !isNew && <>
               <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === 0} aria-label={`Move note ${label} up`} title="Move up" onClick={() => void reorder(item, index - 1)}><ArrowUp/></Button>
               <Button variant="ghost" size="icon-sm" className="text-muted-foreground" disabled={busy || index === ordered.length - 1} aria-label={`Move note ${label} down`} title="Move down" onClick={() => void reorder(item, index + 1)}><ArrowDown/></Button>
