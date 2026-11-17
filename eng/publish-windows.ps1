@@ -4,7 +4,7 @@
 #
 # -Arch arm64 publishes win-arm64 instead; that RID is not in the lock files yet, so it restores unlocked.
 #
-# Usage:  pwsh -File eng/publish-windows.ps1 [-Arch x64|arm64] [-o <folder>] [extra dotnet publish arguments]
+# Usage:  pwsh -File eng/publish-windows.ps1 [-Arch x64|arm64] [--output <folder>] [extra dotnet publish arguments]
 
 param(
     [ValidateSet("x64", "arm64")]

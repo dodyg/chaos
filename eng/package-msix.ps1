@@ -43,7 +43,7 @@ if ($PublishDir) {
 } else {
     Remove-Item -Recurse -Force $publish -ErrorAction SilentlyContinue
     Write-Host "== publish (self-contained win-$Arch) =="
-    & (Join-Path $PSScriptRoot "publish-windows.ps1") -Arch $Arch -o $publish "-p:Version=$Version"
+    & (Join-Path $PSScriptRoot "publish-windows.ps1") -Arch $Arch --output $publish "-p:Version=$Version"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
