@@ -2,7 +2,7 @@ import React from "react";
 import { DateText, friendlyDate, relativeDays, useToday } from "./dates";
 import { ContextMenu } from "radix-ui";
 import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TagResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
-import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, ListChecks, Settings2, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, ListChecks, Search, Settings2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +56,8 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
     setChosenLayout({ containerId, layout: next });
     saveLayout(containerId, next);
   }
+  const [search, setSearch] = React.useState("");
+  React.useEffect(() => { setSearch(""); }, [containerId]);
   const [selecting, setSelecting] = React.useState(false);
   const [picked, setPicked] = React.useState<ReadonlySet<string>>(new Set());
   const [bulkNotice, setBulkNotice] = React.useState<string | null>(null);
@@ -78,7 +80,10 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   const newTaskCategory: Category | null = listDefault ?? focus;
   const focusedTasks = focus ? tasks.filter(task => (asCategory(task.category) ?? "Personal") === focus) : tasks;
   const hiddenByFocus = tasks.length - focusedTasks.length;
-  const visibleTasks = focusedTasks.filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)));
+  const needle = search.trim().toLowerCase();
+  const visibleTasks = focusedTasks
+    .filter(task => completionFilter === "all" || (completionFilter === "finished" ? isFinished(task.status) : !isFinished(task.status)))
+    .filter(task => !needle || task.title.toLowerCase().includes(needle) || (task.notes ?? "").toLowerCase().includes(needle));
   // "All" keeps finished tasks out of the sections, in one folded Finished group at the end.
   const sectionedTasks = completionFilter === "all" ? visibleTasks.filter(task => !isFinished(task.status)) : visibleTasks;
   const finishedTasks = completionFilter === "all" ? visibleTasks.filter(task => isFinished(task.status)) : [];
@@ -224,6 +229,11 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
           {boardable && <LayoutSwitch layout={layout} onLayout={changeLayout} disabled={busy}/>}
           {!boardShown && <Button type="button" variant={selecting ? "secondary" : "outline"} size="sm" aria-pressed={selecting} disabled={busy} onClick={() => { setSelecting(value => !value); setPicked(new Set()); setBulkNotice(null); }}><ListChecks/>Select</Button>}
           {!boardShown && <SegmentedRadio label="Completion" value={completionFilter} options={completionChoices} onChange={setCompletionFilter}/>}
+          {!boardShown && <div className="relative w-52">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"/>
+            <Input type="search" aria-label="Search tasks" className="h-8 pl-8 text-sm" placeholder="Search tasks" autoComplete="off" value={search}
+              onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}/>
+          </div>}
           <p role="status" className="text-xs text-muted-foreground">Showing {boardShown ? focusedTasks.length : visibleTasks.length} of {tasks.length} tasks{hiddenByFocus > 0 && ` · ${hiddenByFocus} ${focus === "Work" ? "personal" : "work"} hidden by focus`}</p>
           {hiddenByFocus > 0 && <Button type="button" variant="ghost" size="sm" onClick={() => setFocus(null)}>Show all</Button>}
         </div>
@@ -234,7 +244,9 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
           onSelectAll={() => { setBulkNotice(null); setPicked(new Set(visibleTasks.map(task => task.id))); }} onClear={() => { setBulkNotice(null); setPicked(new Set()); }} onExit={() => { setSelecting(false); setPicked(new Set()); setBulkNotice(null); }}/>}
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
-        {!boardShown && focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>}
+        {!boardShown && focusedTasks.length > 0 && visibleTasks.length === 0 && (needle
+          ? <EmptyState title={`No tasks match “${search.trim()}”.`}>Clear the search to see everything in this list.</EmptyState>
+          : <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>)}
         {boardShown && <Board key={`board:${containerId}`} containerId={containerId} tags={tags} focus={focus} busy={busy} revision={revision} onOpen={onOpen}
           onChanged={() => { refresh().catch((e: unknown) => setError(String(e))); changed(); }}/>}
         {!boardShown && <>
