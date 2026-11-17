@@ -204,7 +204,7 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     Id = ids.NewId().ToString(),
                     SpaceId = space.Id,
                     RawMarkdown = normalized.Markdown,
-                    Position = await session.Pad.GetNextPositionAsync(space.Id, inner),
+                    Position = await TopPositionAsync(session, space.Id, inner),
                     DraftVersion = 0,
                     Version = 1,
                     CreatedAtUtc = now,
@@ -270,6 +270,37 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
 
     public async Task<PadMutationResult> RestoreAsync(PadItemCommand command, CancellationToken ct = default) =>
         await ChangeOneAsync(command, "pad.restore", (item, _) => item.DeletedAtUtc is null ? null : item with { DeletedAtUtc = null }, ct);
+
+    /// <summary>First rank handed out in a space; leaves ~a million slots above it for newer notes.</summary>
+    private const long TopBase = RankOrdering.Gap * 1_000_000;
+
+    /// <summary>
+    /// Rank that puts a new item before every visible one. Ranks stay non-negative, so when no
+    /// slot is left above the current first item (older data starting at 0) the siblings are
+    /// shifted down once, keeping their text, version-less timestamps and relative order.
+    /// </summary>
+    private static async Task<long> TopPositionAsync(IDataSession session, string spaceId, CancellationToken ct)
+    {
+        var siblings = await session.Pad.ListBySpaceAsync(spaceId, archived: false, ct);
+        if (siblings.Count == 0)
+        {
+            return TopBase;
+        }
+
+        if (siblings[0].Position >= RankOrdering.Gap)
+        {
+            return siblings[0].Position - RankOrdering.Gap;
+        }
+
+        for (var index = 0; index < siblings.Count; index++)
+        {
+            var row = siblings[index];
+            _ = await session.Pad.UpdateAsync(row with { Position = TopBase + (RankOrdering.Gap * (index + 1)), Version = row.Version + 1 }, row.Version, ct)
+                ?? throw Conflict();
+        }
+
+        return TopBase;
+    }
 
     /// <summary>Manual order among the visible (unarchived) items, with the shared rank rules.</summary>
     public async Task<PadMutationResult> ReorderAsync(ReorderPadItemCommand command, CancellationToken ct = default)
@@ -400,7 +431,7 @@ public sealed class PadCommands(IApplicationStore store, IIdGenerator ids, TimeP
                     SpaceId = space.Id,
                     Kind = PadItemKind.Drawing,
                     RawMarkdown = string.Empty,
-                    Position = await session.Pad.GetNextPositionAsync(space.Id, inner),
+                    Position = await TopPositionAsync(session, space.Id, inner),
                     DraftVersion = 0,
                     Version = 1,
                     CreatedAtUtc = now,

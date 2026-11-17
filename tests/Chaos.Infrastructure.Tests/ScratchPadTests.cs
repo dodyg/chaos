@@ -369,16 +369,17 @@ public sealed class ScratchPadTests
         var a = await host.NoteAsync("a");
         var b = await host.NoteAsync("b");
         var c = await host.NoteAsync("c");
-        var cItem = (await host.Pad.GetAsync(c)).Item;
-        await host.Pad.ReorderAsync(new(Op(), c, cItem.Version, 0));
-        await Assert.That(string.Join(",", (await host.Pad.ListAsync(false, null)).Select(x => x.Item.Id))).IsEqualTo(string.Join(",", c, a, b));
+        await Assert.That(string.Join(",", (await host.Pad.ListAsync(false, null)).Select(x => x.Item.Id))).IsEqualTo(string.Join(",", c, b, a));
+        var aItem = (await host.Pad.GetAsync(a)).Item;
+        await host.Pad.ReorderAsync(new(Op(), a, aItem.Version, 0));
+        await Assert.That(string.Join(",", (await host.Pad.ListAsync(false, null)).Select(x => x.Item.Id))).IsEqualTo(string.Join(",", a, c, b));
 
         var bItem = (await host.Pad.GetAsync(b)).Item;
         await host.Pad.DeleteAsync(new(Op(), b, bItem.Version));
         await Assert.That((await host.Pad.ListDeletedAsync()).Select(x => x.Id)).IsEquivalentTo([b]);
         var deleted = (await host.Pad.ListDeletedAsync()).Single();
         await host.Pad.RestoreAsync(new(Op(), b, deleted.Version));
-        await Assert.That(string.Join(",", (await host.Pad.ListAsync(false, null)).Select(x => x.Item.Id))).IsEqualTo(string.Join(",", c, a, b));
+        await Assert.That(string.Join(",", (await host.Pad.ListAsync(false, null)).Select(x => x.Item.Id))).IsEqualTo(string.Join(",", a, c, b));
     }
 
     [Test]
