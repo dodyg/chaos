@@ -1,15 +1,20 @@
-# Builds the Chaos MSIX (PLAN §13/§16: self-contained win-x64 publish + MSIX artifact).
+# Builds the Chaos MSIX (PLAN §13/§16: self-contained publish + MSIX artifact) for x64 or arm64.
 #
-#   pwsh -File eng/package-msix.ps1                       # unsigned package (inspect or sign later)
+#   pwsh -File eng/package-msix.ps1                       # unsigned x64 package (inspect or sign later)
+#   pwsh -File eng/package-msix.ps1 -Arch arm64           # unsigned ARM64 package
+#   pwsh -File eng/package-msix.ps1 -Arch arm64 -PublishDir publish/win-arm64   # package an existing publish
 #   pwsh -File eng/package-msix.ps1 -CertificatePath dev.pfx -CertificatePassword (Read-Host -AsSecureString) `
 #        -Publisher "CN=Chaos Dev"                        # signed; Publisher must equal the certificate subject
 #
 # Windows installs only signed packages whose certificate it trusts. For a development machine,
 # create a test certificate yourself (docs/acceptance.md, "Installing the package") — this script
 # never creates certificates or changes the certificate store.
-# Output: artifacts/msix/Chaos_<version>_x64.msix
+# Output: artifacts/msix/Chaos_<version>_<arch>.msix
 
 param(
+    [ValidateSet("x64", "arm64")]
+    [string]$Arch = "x64",
+    [string]$PublishDir,
     [string]$Version = "0.1.0",
     [string]$Publisher = "CN=Chaos Dev",
     [string]$CertificatePath,
@@ -30,12 +35,17 @@ $makeappx = Get-ChildItem $kits -Recurse -Filter makeappx.exe -ErrorAction Silen
     Where-Object { $_.Directory.Name -eq "x64" } | Sort-Object FullName | Select-Object -Last 1
 if ($null -eq $makeappx) { throw "makeappx.exe not found: install the Windows 10/11 SDK (App packaging tools)." }
 
-Remove-Item -Recurse -Force $publish, $layout -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $layout -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $out | Out-Null
 
-Write-Host "== publish (self-contained win-x64) =="
-& (Join-Path $PSScriptRoot "publish-windows.ps1") -o $publish "-p:Version=$Version"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($PublishDir) {
+    $publish = (Resolve-Path $PublishDir).Path
+} else {
+    Remove-Item -Recurse -Force $publish -ErrorAction SilentlyContinue
+    Write-Host "== publish (self-contained win-$Arch) =="
+    & (Join-Path $PSScriptRoot "publish-windows.ps1") -Arch $Arch -o $publish "-p:Version=$Version"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 Write-Host "== layout =="
 Copy-Item -Recurse $publish $layout
@@ -43,13 +53,14 @@ New-Item -ItemType Directory -Force (Join-Path $layout "Images") | Out-Null
 Copy-Item -Force (Join-Path $root "packaging/Images/*") (Join-Path $layout "Images")
 $manifest = (Get-Content (Join-Path $root "packaging/AppxManifest.xml") -Raw).
     Replace('$VERSION$', "$Version.0").
+    Replace('$ARCH$', $Arch).
     Replace('$PUBLISHER$', [System.Security.SecurityElement]::Escape($Publisher))
 Set-Content (Join-Path $layout "AppxManifest.xml") $manifest -Encoding utf8NoBOM
 # A loose debug database or log from a local run must never ship.
 Get-ChildItem $layout -Recurse -Include *.pdb, *.db, *.db-wal, *.db-shm | Remove-Item -Force
 
 Write-Host "== pack =="
-$package = Join-Path $out "Chaos_${Version}_x64.msix"
+$package = Join-Path $out "Chaos_${Version}_$Arch.msix"
 & $makeappx.FullName pack /d $layout /p $package /o /h SHA256
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

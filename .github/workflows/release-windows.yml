@@ -1,8 +1,12 @@
 name: Release Windows
 
-# Publishes self-contained Chaos.Desktop builds for Windows x64 and ARM64.
-# - Push a tag like v1.2.3 to build both and attach the zips to a GitHub Release.
-# - Run manually (workflow_dispatch) to build the zips as workflow artifacts only.
+# Publishes self-contained Chaos.Desktop builds for Windows x64 and ARM64, as a zip and an MSIX installer each.
+# - Push a tag like v1.2.3 to build both and attach them to a GitHub Release.
+# - Run manually (workflow_dispatch) to build them as workflow artifacts only.
+#
+# MSIX signing: Windows installs only signed packages. Set the repository secrets
+#   MSIX_CERTIFICATE_BASE64 (base64 of the .pfx), MSIX_CERTIFICATE_PASSWORD and MSIX_PUBLISHER
+#   (the certificate subject, e.g. "CN=Chaos") to sign; without them the .msix is built unsigned.
 
 on:
   push:
@@ -23,8 +27,10 @@ jobs:
           # The committed lock files only cover win-x64 (Directory.Build.props), so x64 restores in
           # locked mode like eng/publish-windows.ps1. win-arm64 is not locked yet.
           - rid: win-x64
+            arch: x64
             locked: "true"
           - rid: win-arm64
+            arch: arm64
             locked: "false"
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +59,33 @@ jobs:
           Compress-Archive -Path "publish/${{ matrix.rid }}/*" -DestinationPath "dist/$name"
           "ASSET=dist/$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      - name: Build MSIX installer
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          CERT_BASE64: ${{ secrets.MSIX_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MSIX_CERTIFICATE_PASSWORD }}
+          PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
+        run: |
+          # MSIX versions are strictly major.minor.patch; untagged runs use a placeholder.
+          $version = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME.TrimStart('v') } else { '0.0.0' }
+          $msixArgs = @('-Arch', '${{ matrix.arch }}', '-PublishDir', 'publish/${{ matrix.rid }}', '-Version', $version)
+          if ($env:CERT_BASE64 -and $env:PUBLISHER) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'msix.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_BASE64))
+            $msixArgs += @('-Publisher', $env:PUBLISHER, '-CertificatePath', $pfx,
+                       '-CertificatePassword', (ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force))
+          }
+          & ./eng/package-msix.ps1 @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item artifacts/msix/*.msix dist/
+          if ($pfx) { Remove-Item $pfx -Force }
+
       - uses: actions/upload-artifact@v4
         with:
           name: Chaos.Desktop-${{ matrix.rid }}
-          path: ${{ env.ASSET }}
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -77,7 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
-          gh release create "${{ github.ref_name }}" dist/*.zip
+          gh release create "${{ github.ref_name }}" dist/*.zip dist/*.msix
           --repo "${{ github.repository }}"
           --title "${{ github.ref_name }}"
           --generate-notes
