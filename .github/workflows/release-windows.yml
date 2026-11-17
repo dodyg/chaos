@@ -35,15 +35,15 @@ jobs:
 
       - name: Publish
         shell: pwsh
-        run: >
-          dotnet publish src/Chaos.Desktop
-          -c Release
-          -r ${{ matrix.rid }}
-          --self-contained true
-          -m:1
-          -p:RestoreLockedMode=${{ matrix.locked }}
-          ${{ github.ref_type == 'tag' && format('-p:Version={0}', substring(github.ref_name, 1)) || '' }}
-          -o publish/${{ matrix.rid }}
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        # Tagged builds carry the tag's version (v1.2.3 -> 1.2.3) so the in-app update check can compare it.
+        run: |
+          $version = @()
+          if ($env:REF_TYPE -eq 'tag') { $version = @("-p:Version=$($env:REF_NAME.TrimStart('v'))") }
+          dotnet publish src/Chaos.Desktop -c Release -r ${{ matrix.rid }} --self-contained true -m:1 -p:RestoreLockedMode=${{ matrix.locked }} @version -o publish/${{ matrix.rid }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package
         shell: pwsh
