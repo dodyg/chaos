@@ -30,6 +30,9 @@ public sealed record CalendarOperationResponse(bool Ok, TaskErrorResponse? Error
 public sealed record CalendarRefreshRequest(string? SourceId = null, bool OnlyDue = false);
 public sealed record CalendarRefreshResultDto(string SourceId, bool Ok, bool Changed, int EventCount, string? Error);
 public sealed record CalendarRefreshResponse(bool Ok, IReadOnlyList<CalendarRefreshResultDto> Results, IReadOnlyList<CalendarSourceDto> Sources, TaskErrorResponse? Error);
+public sealed record CalendarActivityRequest();
+/// <summary>Whether a Google calendar or a feed is being fetched right now.</summary>
+public sealed record CalendarActivityResponse(bool Ok, bool Google, bool Feed);
 public sealed record CalendarMakeTaskRequest(string OperationId, string SourceId, string EventId, string? ContainerId = null);
 public sealed record CalendarMakeTaskResponse(bool Ok, TaskResponse? Task, bool Replayed, TaskErrorResponse? Error);
 public sealed record CalendarTaskLinksRequest(IReadOnlyList<string> TaskIds);
@@ -94,6 +97,13 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
                 [.. (await commands.ListAsync(ct)).Select(Map)], null);
         }
         catch (AppException error) { return new(false, [], [], TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    [NeoRpcMethod("activity")]
+    public ValueTask<CalendarActivityResponse> ActivityAsync(CalendarActivityRequest request, CancellationToken ct)
+    {
+        var (google, feed) = refresher.Activity;
+        return ValueTask.FromResult(new CalendarActivityResponse(true, google, feed));
     }
 
     [NeoRpcMethod("makeTask")]

@@ -1,4 +1,5 @@
 import React from "react";
+import { trackSync } from "./syncActivity";
 import { calendarsRpc, googleCalendarRpc, type CalendarSourceDto, type GoogleAccountDto, type GoogleCalendarChoiceDto } from "#neoastra";
 import { Link2, LogIn, RefreshCw, Unplug } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ function ChosenRow({ source, api, onUpdated, onError }: { source: CalendarSource
   async function refresh() {
     setWorking(true);
     try {
-      const result = await api.refresh({ sourceId: source.id, onlyDue: false });
+      const result = await trackSync("calendar", api.refresh({ sourceId: source.id, onlyDue: false }));
       const fresh = result.sources.find(item => item.id === source.id);
       if (fresh) onUpdated(fresh);
       if (!result.ok) onError(result.error?.message ?? "Could not refresh.");

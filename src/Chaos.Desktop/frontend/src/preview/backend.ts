@@ -305,6 +305,7 @@ function calendarsHandlers(): Record<string, Handler> {
       return ok({ source: next, refreshError: null });
     },
     "calendars.remove": (r: { sourceId: string }) => { const index = calendarSources.findIndex(s => s.id === r.sourceId); if (index >= 0) calendarSources.splice(index, 1); return ok({}); },
+    "calendars.activity": () => ok({ google: false, feed: false }),
     "calendars.refresh": () => { for (const s of calendarSources) { s.lastAttemptUtc = now(); s.lastSuccessUtc = now(); s.lastError = null; } return ok({ results: calendarSources.map(s => ({ sourceId: s.id, ok: true, changed: false, eventCount: 0, error: null })), sources: calendarSources }); },
     "calendars.makeTask": (r: { sourceId: string; eventId: string }) => {
       const sample = meetingSamples.find(m => m.sourceId === r.sourceId && m.eventId === r.eventId);

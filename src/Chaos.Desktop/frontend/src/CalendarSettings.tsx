@@ -4,6 +4,7 @@ import { CalendarDays, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, InlineError } from "@/components/common";
+import { trackSync } from "./syncActivity";
 
 type Api = Pick<typeof calendarsRpc, "list" | "addFeed" | "update" | "remove" | "refresh">;
 
@@ -33,7 +34,7 @@ function SourceRow({ source, api, onUpdated, onRemoved, onError }: {
   async function refresh() {
     setWorking(true);
     try {
-      const result = await api.refresh({ sourceId: source.id, onlyDue: false });
+      const result = await trackSync("calendar", api.refresh({ sourceId: source.id, onlyDue: false }));
       const fresh = result.sources.find(item => item.id === source.id);
       if (fresh) onUpdated(fresh);
       if (!result.ok) onError(result.error?.message ?? "Could not refresh.");

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Banner, Field } from "@/components/common";
+import { trackSync, setSyncObserved } from "./syncActivity";
 
 type Api = typeof githubRpc;
 const emptyFilter: GitHubFilterDto = { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 };
@@ -75,9 +76,11 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
     const finished = status?.sync?.finishedAtUtc;
     if (!status?.sync?.running && finished && finished !== notifiedFinish.current) { notifiedFinish.current = finished; onSyncedRef.current?.(); }
   }, [status?.sync?.running, status?.sync?.finishedAtUtc]);
+  React.useEffect(() => { setSyncObserved("github", status?.sync?.running === true); }, [status?.sync?.running]);
+  React.useEffect(() => () => setSyncObserved("github", false), []);
   async function syncNow(repositoryId: string | null = null) {
     await run(async () => {
-      const result = await api.syncNow({ repositoryId });
+      const result = await trackSync("github", api.syncNow({ repositoryId }));
       if (!result.ok) throw new Error(result.error?.message ?? "Could not start GitHub sync.");
       setStatus(current => current ? { ...current, sync: result.sync } : current);
       await load();

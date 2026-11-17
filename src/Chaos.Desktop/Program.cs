@@ -386,6 +386,8 @@ internal static class Program
 [JsonSerializable(typeof(CalendarRefreshRequest))]
 [JsonSerializable(typeof(CalendarRefreshResultDto))]
 [JsonSerializable(typeof(CalendarRefreshResponse))]
+[JsonSerializable(typeof(CalendarActivityRequest))]
+[JsonSerializable(typeof(CalendarActivityResponse))]
 [JsonSerializable(typeof(CalendarMakeTaskRequest))]
 [JsonSerializable(typeof(CalendarMakeTaskResponse))]
 [JsonSerializable(typeof(CalendarTaskLinksRequest))]

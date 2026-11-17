@@ -427,7 +427,7 @@ export function Board({ containerId = "", viewId, tags, focus, busy, revision, o
       : target.beforeTaskId === card.task.id ? "before" as const
         : target.afterTaskId === card.task.id ? "after" as const : null;
     return <section key={key} aria-label={`${lane.title} · ${column.title} column`}
-      className={cn("flex w-64 shrink-0 grid-cols-1 flex-col gap-1.5 rounded-lg bg-muted/40 p-2 outline-none transition-colors",
+      className={cn("flex w-64 min-w-64 flex-1 grid-cols-1 flex-col gap-1.5 rounded-lg bg-muted/40 p-2 outline-none transition-colors",
         menu === null && "focus-within:ring-1 focus-within:ring-primary/40", target && "bg-primary/10 ring-1 ring-primary/40")}
       {...cellDrop(column, lane, inLane)}>
       <h4 className="flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase select-none">
@@ -459,7 +459,7 @@ export function Board({ containerId = "", viewId, tags, focus, busy, revision, o
       onSave={next => void saveSettings(next)} onCancel={() => setShowSettings(false)}/>}
     {(loadError ?? error) && <InlineError>{loadError ?? error}</InlineError>}
     {notice && <div role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">{notice}</div>}
-    {board && !loadError && <div className="-mx-1 overflow-x-auto px-1 pb-1">
+    {board && !loadError && <div data-board-wide className="-mx-1 overflow-x-auto px-1 pb-1">
       <div className="grid w-max min-w-full gap-4">
         {lanes.map(lane => <section key={lane.key} aria-label={multipleLanes ? `${lane.title} swimlane` : "Board lanes"} className="grid gap-1.5">
           {multipleLanes && <h3 className="flex items-center px-1 text-xs font-semibold tracking-wider text-muted-foreground uppercase">{lane.title}<Count>{cards.filter(card => card.laneKey === lane.key && visibleColumnKeys.has(card.columnKey)).length}</Count></h3>}

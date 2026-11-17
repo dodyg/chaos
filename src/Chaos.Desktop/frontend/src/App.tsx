@@ -36,6 +36,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { SyncLogo } from "./SyncLogo";
+import { trackSync } from "./syncActivity";
 import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities, statuses } from "@/components/common";
 
 const viewIcons: Record<string, React.ReactNode> = { Today: <CalendarCheck/>, Upcoming: <CalendarRange/>, Overdue: <AlarmClock/>, Waiting: <Hourglass/>, RecentlyCompleted: <CircleCheckBig/>, AssignedToMe: <UserRound/> };
@@ -435,7 +437,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       if (running || document.visibilityState === "hidden") return;
       running = true;
       try {
-        const result = await calendarsRpc.refresh({ sourceId: null, onlyDue: true });
+        const result = await trackSync("calendar", calendarsRpc.refresh({ sourceId: null, onlyDue: true }));
         if (result.ok && result.results.some(item => item.changed)) changedRef.current();
       } catch { /* outside the desktop host, or offline: the host's own timer keeps trying */ }
       finally { running = false; }
@@ -742,7 +744,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
-      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt="" className="size-5"/>Chaos</h1>
+      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
@@ -823,7 +825,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       backgroundImage: backgroundImage(dayBackground.background) ? `url("${backgroundImage(dayBackground.background)}")` : undefined,
       backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
     } : undefined}>
-    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : view === "calendar" ? "max-w-7xl px-[clamp(1rem,3vw,2rem)] pt-6 pb-10" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
+    <div id="main-content" tabIndex={-1} onKeyDown={event => handleListKeys(event, taskId => void taskRpc.get({ taskId }).then(result => { if (result.ok && result.task) void addToMyDay(result.task); }))} className={cn("mx-auto grid w-full min-w-0 content-start gap-5", view === "pages" || view === "daily" ? "" : view === "calendar" ? "max-w-7xl px-[clamp(1rem,3vw,2rem)] pt-6 pb-10" : "max-w-4xl px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 has-[[data-board-wide]]:max-w-none", "outline-none", view === "myday" && dayBackground.background.kind !== "default" && "min-h-[calc(100vh-40px)] bg-background/90")}>
       {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
       {warning && <Banner tone="warning" onDismiss={() => setWarning(null)}>{warning}</Banner>}
       {notice && <Banner tone="warning" onDismiss={() => setNotice(null)}>{notice}</Banner>}

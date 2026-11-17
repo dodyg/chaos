@@ -32,6 +32,11 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
     }
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private int _googleActive;
+    private int _feedActive;
+
+    /// <summary>What is being fetched right now, whoever started it (the timer, window focus or a button). The sidebar logo shows it.</summary>
+    public (bool Google, bool Feed) Activity => (Volatile.Read(ref _googleActive) > 0, Volatile.Read(ref _feedActive) > 0);
 
     /// <summary>True when at least one feed or Google source is enabled; the host fetches only then.</summary>
     public async Task<bool> HasSourcesAsync(CancellationToken ct = default) =>
@@ -86,9 +91,18 @@ public sealed class CalendarRefresher(IApplicationStore store, ISecretStore secr
             var blockedAccounts = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var source in plan.sources)
             {
-                outcomes.Add(source.Provider == CalendarProvider.Google
-                    ? await RefreshGoogleAsync(source, plan.states[source.Id], blockedAccounts, ct)
-                    : await RefreshOneAsync(source, plan.states[source.Id], plan.Zone, ct));
+                var isGoogle = source.Provider == CalendarProvider.Google;
+                Interlocked.Increment(ref isGoogle ? ref _googleActive : ref _feedActive);
+                try
+                {
+                    outcomes.Add(isGoogle
+                        ? await RefreshGoogleAsync(source, plan.states[source.Id], blockedAccounts, ct)
+                        : await RefreshOneAsync(source, plan.states[source.Id], plan.Zone, ct));
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref isGoogle ? ref _googleActive : ref _feedActive);
+                }
             }
 
             return outcomes;
