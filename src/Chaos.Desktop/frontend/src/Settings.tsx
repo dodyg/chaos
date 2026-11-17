@@ -3,7 +3,7 @@ import { CalendarSettings } from "./CalendarSettings";
 import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
-import { shellRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto } from "#neoastra";
+import { shellRpc, updatesRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto, type UpdateCheckResponse } from "#neoastra";
 import { Keyboard, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Banner, Field, PageHeader } from "@/components/common";
 
 type Api = typeof shellRpc;
+type UpdatesApi = typeof updatesRpc;
 export type SettingsLink = "notifications" | "summaries" | "myweek" | "data";
 
 const dateFormats: { value: string; text: string }[] = [
@@ -45,7 +46,7 @@ function ShortcutState({ status }: { status: ShortcutStatusDto | undefined }) {
  * with whether Windows accepted them, keeping Chaos in the notification area, and Quit. Other
  * settings stay next to what they change and are linked from here.
  */
-export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
+export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; updatesApi?: UpdatesApi; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
   const [saved, setSaved] = React.useState<ProfileSettingsResponse | null>(null);
   const [draft, setDraft] = React.useState<ProfileSettingsResponse | null>(null);
   const [zones, setZones] = React.useState<string[]>([]);
@@ -55,6 +56,16 @@ export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced, 
   const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [tab, setTab] = React.useState("general");
+  const [update, setUpdate] = React.useState<UpdateCheckResponse | null>(null);
+  const [checking, setChecking] = React.useState(false);
+
+  async function checkForUpdates() {
+    if (checking) return;
+    setChecking(true); setUpdate(null);
+    try { setUpdate(await updatesApi.check({})); }
+    catch (e) { setUpdate({ ok: false, status: "Failed", currentVersion: status?.appVersion ?? "", latestVersion: null, publishedAtUtc: null, message: e instanceof Error ? e.message : "Could not check for updates." }); }
+    finally { setChecking(false); }
+  }
 
   async function load() {
     const [settings, zoneList, shell] = await Promise.all([api.settings({}), api.zones({}), api.status({})]);
@@ -136,7 +147,19 @@ export function Settings({ api = shellRpc, onSaved, onNavigate, onGitHubSynced, 
           <span>Keep Chaos in the notification area when its window is closed, so reminders and summaries keep coming.
             {status && !status.trayAvailable && <span className="block text-xs text-muted-foreground">No notification-area icon is available right now, so closing the window quits Chaos.</span>}</span>
         </label>
-        <p className="text-xs text-muted-foreground">Chaos {status?.appVersion ?? ""}</p>
+        <div className="grid gap-2">
+          <p className="text-xs text-muted-foreground">Chaos {status?.appVersion ?? ""}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" disabled={checking} onClick={() => void checkForUpdates()}>{checking ? "Checking…" : "Check for updates"}</Button>
+            {update?.status === "Available" && <Button type="button" size="sm" onClick={() => void updatesApi.openReleases({})}>Open download page</Button>}
+          </div>
+          {update && <p role={update.ok ? "status" : "alert"} className={update.ok ? "text-sm text-muted-foreground" : "text-sm text-destructive"}>
+            {update.status === "Available" ? `Chaos ${update.latestVersion} is available. You have ${update.currentVersion}.`
+              : update.status === "UpToDate" ? `You have the latest version (${update.currentVersion}).`
+              : update.status === "NoReleases" ? "No releases have been published yet."
+              : update.message ?? "Could not check for updates."}
+          </p>}
+        </div>
       </Section></TabsContent>
 
       {tab !== "appearance" && tab !== "more" && tab !== "github" && tab !== "calendars" && <div className="flex flex-wrap items-center gap-2">

@@ -42,6 +42,7 @@ jobs:
           --self-contained true
           -m:1
           -p:RestoreLockedMode=${{ matrix.locked }}
+          ${{ github.ref_type == 'tag' && format('-p:Version={0}', substring(github.ref_name, 1)) || '' }}
           -o publish/${{ matrix.rid }}
 
       - name: Package

@@ -158,6 +158,8 @@ internal static class Program
             _ = activations.HandleAsync(initialIntent, CancellationToken.None);
         }
 
+        using var releaseFeed = new Chaos.Infrastructure.Updates.GitHubReleaseFeed();
+
         try
         {
             return RunWindow();
@@ -178,6 +180,7 @@ internal static class Program
                 activityPublisher.Attach(payload => committed.PublishAsync(payload).AsTask());
                 rpc.AddActivityRpcService(new ActivityRpcService(activityFeed));
                 rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync));
+                rpc.AddUpdatesRpcService(new UpdatesRpcService(releaseFeed, new Chaos.Desktop.Platform.ShellBrowser(), AppVersion()));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks, githubEngine));
                 rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
                 rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
@@ -267,6 +270,10 @@ internal static class Program
 [JsonSerializable(typeof(ShortcutStatusDto))]
 [JsonSerializable(typeof(ShellStatusRequest))]
 [JsonSerializable(typeof(ShellStatusResponse))]
+[JsonSerializable(typeof(UpdateCheckRequest))]
+[JsonSerializable(typeof(UpdateCheckResponse))]
+[JsonSerializable(typeof(OpenReleasesRequest))]
+[JsonSerializable(typeof(OpenReleasesResponse))]
 [JsonSerializable(typeof(ProfileSettingsRequest))]
 [JsonSerializable(typeof(ProfileSettingsResponse))]
 [JsonSerializable(typeof(ProfileSettingsUpdateRequest))]
