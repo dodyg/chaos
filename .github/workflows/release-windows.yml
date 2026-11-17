@@ -77,7 +77,7 @@ jobs:
             $msixArgs += @('-Publisher', $env:PUBLISHER, '-CertificatePath', $pfx,
                        '-CertificatePassword', (ConvertTo-SecureString $env:CERT_PASSWORD -AsPlainText -Force))
           }
-          & ./eng/package-msix.ps1 @args ./eng/package-msix.ps1 @msixArgs
+          & ./eng/package-msix.ps1 @msixArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item artifacts/msix/*.msix dist/
           if ($pfx) { Remove-Item $pfx -Force }
