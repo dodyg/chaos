@@ -2,7 +2,7 @@ import React from "react";
 import { DateText, friendlyDate, relativeDays, useToday } from "./dates";
 import { ContextMenu } from "radix-ui";
 import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TagResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
-import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, Settings2, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, ListChecks, Settings2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import { Board, LayoutSwitch, loadLayout, saveLayout, type BoardLayout } from ".
 import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { rowClass } from "./taskRow";
+import { BulkBar } from "./BulkBar";
 import { CategoryEdge, CategoryMenuItems, asCategory, categoryIcon, categoryTone, type Category, type Focus } from "./category";
 
 const operationId = () => crypto.randomUUID();
@@ -55,6 +56,9 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
     setChosenLayout({ containerId, layout: next });
     saveLayout(containerId, next);
   }
+  const [selecting, setSelecting] = React.useState(false);
+  const [picked, setPicked] = React.useState<ReadonlySet<string>>(new Set());
+  const [bulkNotice, setBulkNotice] = React.useState<string | null>(null);
   const [sectionDrop, setSectionDrop] = React.useState<string | null>(null);
   const [sectionTitle, setSectionTitle] = React.useState("");
   const drag = useDragReorder();
@@ -81,6 +85,39 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   const unsectioned = sectionedTasks.filter(task => task.sectionId === null);
   const knownSectionIds = new Set(sections.map(section => section.id));
   const unknownSections = [...new Set(sectionedTasks.map(task => task.sectionId).filter((id): id is string => id !== null && !knownSectionIds.has(id)))];
+  // Select mode ends when another list opens, and only tasks that are shown count.
+  React.useEffect(() => { setSelecting(false); setPicked(new Set()); setBulkNotice(null); }, [containerId]);
+  const chosen = visibleTasks.filter(task => picked.has(task.id));
+  function togglePicked(id: string) {
+    setBulkNotice(null);
+    setPicked(current => { const next = new Set(current); if (!next.delete(id)) next.add(id); return next; });
+  }
+  /** Applies one change to every ticked task, one after another; the rest still go through if one is refused. */
+  async function bulk(describe: string, apply: (task: TaskResponse) => Promise<TaskOperationResponse> | null) {
+    if (busy || chosen.length === 0) return;
+    setBusy(true); setError(null); setBulkNotice(null);
+    let changedCount = 0, failed = 0, firstProblem = "";
+    try {
+      for (const task of chosen) {
+        const pending = apply(task);
+        if (!pending) continue;
+        const result = await pending;
+        if (result.ok && result.task) {
+          changedCount++;
+          const saved = result.task;
+          setEditing(current => current?.id === saved.id ? { ...current, ...saved } : current);
+        } else { failed++; firstProblem ||= result.error?.fields?.map(f => f.message).join("; ") || result.error?.message || "refused"; }
+      }
+      await refresh(); changed();
+      setBulkNotice(changedCount === 0 && failed === 0 ? "Nothing needed changing." : `${describe}: ${changedCount} ${changedCount === 1 ? "task" : "tasks"} updated.`);
+      if (failed > 0) setError(`${failed} ${failed === 1 ? "task" : "tasks"} could not be changed (${firstProblem}).`);
+    } catch (e) { setError(e instanceof Error ? e.message : "The bulk change could not be saved."); }
+    finally { setBusy(false); }
+  }
+  const editWith = (task: TaskResponse, patch: { category?: Category; priority?: string }) => taskApi.edit({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, title: task.title, notes: task.notes,
+    plannedDate: task.plannedDate || null, plannedTime: task.plannedTime || null, plannedZoneId: task.plannedZoneId || null,
+    dueDate: task.dueDate || null, dueTime: task.dueTime || null, dueZoneId: task.dueZoneId || null,
+    priority: patch.priority ?? task.priority, estimateMinutes: task.estimateMinutes, category: patch.category ?? task.category });
   function reorderTask(task: TaskResponse, insertionIndex: number) {
     void run(() => taskApi.reorder({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, insertionIndex }));
   }
@@ -140,6 +177,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
       onDragStart={event => event.dataTransfer?.setData?.(taskDragType, task.id)}
       {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) => move(byId(id), insertionIndex))}>
       <CategoryEdge category={task.category}/>
+      {selecting && <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Select ${task.title}`} checked={picked.has(task.id)} disabled={busy} onChange={() => togglePicked(task.id)}/>}
       {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
       <input type="checkbox" className="size-4 shrink-0 accent-primary" aria-label={`Mark ${task.title} as done`} checked={task.status === "Done"} disabled={busy} onChange={e => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}/>
       <div className="grid min-w-0 flex-1 gap-0.5">
@@ -184,10 +222,16 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
 
         <div className="flex flex-wrap items-center gap-3">
           {boardable && <LayoutSwitch layout={layout} onLayout={changeLayout} disabled={busy}/>}
+          {!boardShown && <Button type="button" variant={selecting ? "secondary" : "outline"} size="sm" aria-pressed={selecting} disabled={busy} onClick={() => { setSelecting(value => !value); setPicked(new Set()); setBulkNotice(null); }}><ListChecks/>Select</Button>}
           {!boardShown && <SegmentedRadio label="Completion" value={completionFilter} options={completionChoices} onChange={setCompletionFilter}/>}
           <p role="status" className="text-xs text-muted-foreground">Showing {boardShown ? focusedTasks.length : visibleTasks.length} of {tasks.length} tasks{hiddenByFocus > 0 && ` · ${hiddenByFocus} ${focus === "Work" ? "personal" : "work"} hidden by focus`}</p>
           {hiddenByFocus > 0 && <Button type="button" variant="ghost" size="sm" onClick={() => setFocus(null)}>Show all</Button>}
         </div>
+        {selecting && !boardShown && <BulkBar count={chosen.length} shown={visibleTasks.length} busy={busy} notice={bulkNotice}
+          onCategory={category => void bulk(`Made ${category}`, task => task.category === category ? null : editWith(task, { category }))}
+          onPriority={priority => void bulk(`Priority ${label(priority)}`, task => task.priority === priority ? null : editWith(task, { priority }))}
+          onDone={() => void bulk("Marked done", task => task.status === "Done" ? null : taskApi.setStatus({ operationId: operationId(), taskId: task.id, expectedVersion: task.version, status: "Done", subtaskChoice: null }))}
+          onSelectAll={() => { setBulkNotice(null); setPicked(new Set(visibleTasks.map(task => task.id))); }} onClear={() => { setBulkNotice(null); setPicked(new Set()); }} onExit={() => { setSelecting(false); setPicked(new Set()); setBulkNotice(null); }}/>}
         {tasks.length === 0 && <EmptyState title="No tasks in this list.">Type above and press Enter to capture one. Ctrl+N jumps here from anywhere.</EmptyState>}
         {tasks.length > 0 && focusedTasks.length === 0 && <EmptyState title={`No ${focus?.toLowerCase()} tasks in this list.`}>Switch the focus to All to see its {hiddenByFocus} other {hiddenByFocus === 1 ? "task" : "tasks"}.</EmptyState>}
         {!boardShown && focusedTasks.length > 0 && visibleTasks.length === 0 && <EmptyState title={`No ${completionFilter} tasks.`}>Choose All to see everything in this list.</EmptyState>}
