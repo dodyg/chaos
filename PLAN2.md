@@ -197,7 +197,8 @@ The adapter for each port lives in `Infrastructure` (portable) or `Desktop.Windo
 - **Network calls.** **Never make a network call inside a write transaction.** Read what you
   need, call the network outside the transaction, then write the result in a new transaction.
   Use expected versions to detect anything that changed in between.
-- **Change events.** Publish change events only after commit.
+- **Change events.** Publish change events only after commit. From P6a, change events come from
+  the activity log (6.4), written in the same transaction and pushed after commit.
 - **Migrations.** Never edit an applied migration; its checksum is enforced. Add a new numbered
   file, and raise the schema ceiling in the code that checks it (search for the current highest
   number, 23, to find it).
@@ -438,6 +439,111 @@ Dependency rules for the new projects:
 | Receipts, undo, search index, backups, notification jobs, GitHub checkpoints and runs, calendar event cache, sync bookkeeping, device settings | yes | **no** | no | Rebuilt or derived per device |
 | Secrets (AI keys, Google and Chaos refresh tokens) | **no** (credential store) | no | no | Chaos tokens are issued by the server; their hashes are kept there |
 | Accounts, devices, sessions, subscription-link tokens | no | no | yes | Server only |
+| Activity log, activity cursors, job runs (6.4) | yes | **no** | no | Device-local system event stream; not exported |
+
+### 6.4 Activity log (the system event stream)
+
+Added 2026-11-17 by the owner. Implemented by package **P6a**, which is the next package to
+implement (see section 15).
+
+**What it is.** A durable, device-local, machine-readable record of every committed change and
+every background job run. It is **for the system, not for the person**. In-process consumers read
+it in order and act on it. It has no prose and no UI of its own. It replaces the `IChangePublisher`
+of section 2.3, which was declared but was never implemented or called.
+
+**Why.** Today the only shared signal is the database itself. Writes come from user commands and
+also from background work on its own timers: `ReminderEngine` (30 s), `CalendarRefreshScheduler`,
+`BackupScheduler` and `GitHubSyncScheduler`/`GitHubSyncEngine`. None of these tell anyone what they
+did, so the frontend polls: `SyncLogo` every 4 s, `GitHubSettings` and `GitHubTaskNotice` every
+1 s while syncing, `Reminders` and `Summaries` on intervals, and many views reload on window focus.
+
+**Consumers, in the order they arrive:**
+1. UI refresh (P6a)
+2. reminder resync for changed tasks
+3. view-alert evaluation on change (11.2)
+4. GitHub outbound wake-up
+5. sync status (P15)
+6. the open-editor rule in 7.10
+
+Clock-driven work keeps its timers: reminders coming due, calendar refresh intervals and backups.
+The log replaces polling for **data changes**, not for schedules.
+
+**Tables** (migration `030_activity_log.sql`, all `LocalOnly`, never in the archive):
+
+- `ActivityLog(Seq INTEGER PRIMARY KEY AUTOINCREMENT, OperationId TEXT NOT NULL, OccurredAtUtc TEXT NOT NULL, Source TEXT NOT NULL CHECK (Source IN ('user','schedule','sync','import','undo','system')), Action TEXT NOT NULL, Outcome TEXT NOT NULL CHECK (Outcome IN ('ok','failed')), JobRunId TEXT NULL, DetailJson TEXT NULL, DetailVersion INTEGER NOT NULL DEFAULT 1)`
+  - one row per write transaction that changed something
+  - an operation spanning several transactions repeats its `OperationId`
+- `ActivityLogEntities(Seq INTEGER NOT NULL REFERENCES ActivityLog(Seq), Kind TEXT NOT NULL, EntityKey TEXT NOT NULL, Op TEXT NOT NULL CHECK (Op IN ('upsert','delete')), Version INTEGER NULL, PRIMARY KEY (Seq, Kind, EntityKey))`
+  - `Kind` and `EntityKey` use the sync catalog's names and key format (7.2, 7.3)
+  - `Version` is the row's version after the change, when the table has one
+  - consumers use `Version` to skip changes they have already seen or that are already superseded, so processing an entry twice is harmless
+- `ActivityCursors(Consumer TEXT PRIMARY KEY, Seq INTEGER NOT NULL, UpdatedAtUtc TEXT NOT NULL)`
+  - for host-side consumers that must survive a restart
+  - the UI does not register here: each window starts from the current head
+- `JobRuns(Id TEXT PRIMARY KEY, Job TEXT NOT NULL, StartedAtUtc TEXT NOT NULL, FinishedAtUtc TEXT NULL, Outcome TEXT NOT NULL CHECK (Outcome IN ('running','ok','noop','failed')), Error TEXT NULL, ActivityCount INTEGER NOT NULL DEFAULT 0)`
+  - every scheduled pass, including passes that do nothing
+  - the last 200 runs per job are kept
+  - this is diagnostics plus "is X running / when did X last run". It is kept out of the event stream on purpose, so a 30 s tick does not add 2,880 log rows a day.
+
+**Capture rules.**
+
+1. **Operation context.** An ambient `ActivityScope` (`AsyncLocal`) carries `Source`, `Action`,
+   `OperationId` and `JobRunId`. It is opened at the entry points:
+   - every RPC method (`Source=user`, `Action=<service>.<method>`). NeoAstra 1.12 has no RPC
+     middleware, so each method opens it through one helper.
+   - every scheduler or engine pass (`Source=schedule`, or `sync` for GitHub)
+   - undo, import and the remote-change applier (7.4)
+   
+   A write with no scope throws in tests and Debug builds. In Release it is recorded as
+   `Source=system`, `Action=unscoped`, so nothing is ever lost.
+2. **Synced tables: from the triggers.** `ActivityCapture` runs inside
+   `SqliteApplicationStore.ExecuteAsync`, immediately before `ISyncCapture.Flush`, which deletes
+   `SyncPending` while sync is off.
+   - It reads the distinct `(Kind, EntityKey)` pairs in `SyncPending`. A `__purge` group becomes
+     `Op=delete`.
+   - It reads `Version` by key where the table has one.
+   - It writes one `ActivityLog` row and its entity rows.
+   
+   Commands do not change for this.
+3. **Device-only tables: explicit notes.** `LocalOnly` tables have no triggers. Their writers call
+   `IActivityRecorder.Note(kind, key, op, version)` inside their transaction:
+   - notification jobs
+   - view matches and alerts
+   - the calendar event cache and source state
+   - Google account state
+   
+   Churning caches note one **summary entity** rather than every row. For example, a calendar
+   refresh notes `calendar_source/<id>`, not each `CalendarEvents` row.
+4. **Remote apply.** Triggers are suppressed while applying (7.3), so the applier notes every
+   entity it applied, with `Source=sync`.
+5. **Rollback and failure.**
+   - A rolled-back transaction leaves no activity row. This comes free from writing in the same
+     transaction.
+   - A failed job pass records `Outcome=failed` in `JobRuns`, plus an `ActivityLog` row with
+     `Outcome=failed` and no entities, in its own small transaction.
+   - User validation rejections are not logged.
+6. **Action names are a closed list in code** (`ActivityActions`). A contract test fails on any
+   action written that is not in the list. `DetailJson` is versioned by `DetailVersion`.
+
+**Ordering.** All writes go through the one serialized writer, and `Seq` is assigned inside the
+writing transaction. So `Seq` order is commit order. A consumer that has read everything up to
+`Seq = N` can never later see a newly committed row with a smaller `Seq`. Consumers must not
+assume the numbers are contiguous.
+
+**Delivery to the UI.**
+1. After commit, the store reports the new head `Seq` to `IActivityNotifier`. The Desktop host
+   coalesces these reports, about every 100 ms.
+2. It publishes the NeoAstra RPC event `activity.committed { seq }` (`NeoRpcEvent<T>.PublishAsync`).
+3. The frontend calls `activity.since({ after, limit })`. This returns entries with their
+   entities, or `reset: true` when `after` is older than the oldest retained row; the window then
+   reloads everything.
+4. `activity.jobs` returns each job's current state (running, last run, outcome) for the sync
+   indicators.
+
+**Retention.** The backup check's timer prunes the log. It deletes rows below the lowest
+`ActivityCursors.Seq`, but always keeps at least 7 days. A hard cap of 30 days or 200,000 rows,
+whichever is reached first, stops a stalled consumer from growing the log forever. A consumer whose
+cursor is pruned past gets a reset.
 
 ---
 
@@ -1498,6 +1604,10 @@ Every package follows the same pattern:
 
 The steps below add only what is specific to each package.
 
+> **Priority override (owner, 2026-11-17).** **P6a — Activity log and pushed UI refresh** is
+> high priority and is the next package to implement, ahead of every other open package. It is
+> placed after P6 so the numbering of later packages does not change.
+
 ### [ ] P0 — Close Phase 1 and prove the Phase 2 integrations
 
 **Depends on:** nothing. **Migration:** none.
@@ -1974,6 +2084,90 @@ waiting on a Workspace admin to create the project).
 **Progress note 2026-11-16 (Google Calendar).** Migration 029 (028 was taken), `GoogleAccounts` (synced) and `GoogleAccountState` (device-local); `GoogleCalendarClient` over plain REST (no Google SDK, so no file token store; decision recorded), installed-app loopback flow with PKCE through `ISystemBrowser`; `GoogleCalendarCommands` (connect, list calendars, choose, disconnect with revoke) and Google sources in `CalendarRefresher` (5-minute tick, refresh on window focus, only what is due); `googleCalendar` RPC and Settings → Calendars → Google Calendar; `google-oauth.json` git-ignored with an example. Scopes and the windowed-refresh rule were checked against Google's current documentation and are in `docs/decisions.md` (2026-11-16, P6). Tests: 10 client cases over a fake transport (list, events, declined/cancelled/transparent, paging, expiry, 401 retry, policy block, offline, revoke, PKCE sign-in, cancelled sign-in), 12 real-SQLite cases (no requests when nothing is connected, token only in the secret store and in no file or export, stable source ids, replace-the-window, due-only, expiry keeps the cache, blocked/offline not hammered, sign in on this device, disconnect and failed revoke, not configured) and 8 jsdom tests. **Not done: the live check (release gate).** It needs the SilverKey Internal OAuth client in `google-oauth.json`, an interactive desktop and a real account; the box stays unticked until it has passed or is recorded as blocked. Smallest next action: create the Desktop OAuth client in the SilverKey Google Cloud project, drop its `google-oauth.json` beside the app, then connect, decline a meeting in Google, see it vanish within 5 minutes, and disconnect.
 
 **Live check (2026-11-16).** Passed on a real Google account in the app: set up the client in Settings, connect, meetings show in the calendar, and a meeting added in Google appeared automatically on the 5-minute refresh. A meeting assigned in Google also appeared on its own, and after it was declined/cancelled in Google it disappeared from Chaos. After Disconnect every Google meeting was gone from the calendar. The live check has passed, so P6 is ticked. Not looked at: Google's own permissions page to confirm that the access was revoked there (the revoke call is best effort and Chaos says so when Google cannot be reached).
+
+### [ ] P6a — Activity log and pushed UI refresh (HIGH PRIORITY — next to implement)
+
+**Priority.** Added by the owner on 2026-11-17. This is the next package to implement. It goes
+ahead of every other open package, including the open items of P0–P3 and P7 onwards. Later
+consumers (reminder resync, view alerts, GitHub wake-up, P15, the 7.10 editor rule) build on it.
+
+**Depends on:** P1 (triggers and `SyncPending`). **Migration:** `030_activity_log.sql` (the next
+free number when written; update Appendix A if it is taken). **Read:** section 6.4, 7.3,
+`SqliteApplicationStore.cs`, `ChangePublisher.cs`, `SyncFlush.cs`, `SyncCatalog.cs`, the four
+schedulers in `src/Chaos.Desktop/Platform/`, and the frontend files listed in step 5.
+
+1. **Migration and catalog.**
+   - Create `ActivityLog`, `ActivityLogEntities`, `ActivityCursors` and `JobRuns` (6.4).
+   - Add them to the sync catalog as `LocalOnly`.
+   - Exclude them from the JSON archive and from restore merges.
+2. **Application.**
+   - `ActivityScope` (Source, Action, OperationId, JobRunId).
+   - `IActivityRecorder` (`Note` for device-only writes).
+   - `IJobRuns` (`StartAsync`, `FinishAsync` with outcome and error).
+   - `ActivityActions`, the closed list of action names.
+   - Delete the unused `IChangePublisher` and `ChangeCollector`, or re-point them at the notifier.
+     Record which in `docs/decisions.md`.
+3. **Infrastructure.**
+   - `ActivityCapture` in `SqliteApplicationStore.ExecuteAsync`, before the sync flush (6.4 rule 2).
+   - Head notification after commit.
+   - The `since` / `head` / `jobs` reads, and pruning.
+   - Real-SQLite tests:
+     - a commit writes exactly one row with its entities and versions
+     - a rollback writes none
+     - a transaction with no changes writes none
+     - a delete becomes `Op=delete`
+     - capture works with `SyncState.Enabled = 0` and with it on (the outbox is unchanged)
+     - device-only notes are recorded
+     - `Seq` follows commit order across interleaved callers
+     - pruning respects cursors, the 7-day floor and the hard cap, and a pruned cursor gets `reset`
+4. **Desktop host.**
+   - Open the `ActivityScope` in every RPC method through one helper.
+   - Wrap each pass of `ReminderEngine`, `CalendarRefreshScheduler`, `BackupScheduler` and
+     `GitHubSyncScheduler`/`GitHubSyncEngine` in a `JobRuns` entry and a `schedule`/`sync` scope.
+   - Add explicit notes where those passes write device-only tables (6.4 rule 3).
+   - `ActivityRpcService` (`activity`: `since`, `head`, `jobs`) and the event
+     `activity.committed`, coalesced to about 100 ms.
+   - Tests:
+     - a guard test that every `[NeoRpcMethod]` that writes runs inside a scope (unscoped writes
+       throw under test)
+     - a scheduler pass records a job run and, when it changed data, an activity row with its
+       `JobRunId`
+5. **Frontend.**
+   - `activity.ts`: subscribe to `activity.committed`, coalesce, call `activity.since`, and
+     dispatch to `useActivity(kinds, handler)` and `useJobs()`. On `reset`, reload everything.
+     If the subscription fails, fall back to today's focus reload.
+   - Migrate off polling:
+     - `SyncLogo` (4 s), with `syncActivity.ts` observing job state from `useJobs()`
+     - `GitHubSettings` and `GitHubTaskNotice` (1 s while syncing)
+     - `Reminders` and `Summaries` (interval loads)
+   - Refresh on relevant entity kinds, so host-made changes appear without a focus change:
+     - My Day, My Week, the lists, Board, Calendar, saved views and the task editor
+   - Out of scope: `App.tsx`'s 1 s shell-activation poll (not a data change; it moves only if
+     shell activations later become an event).
+   - Preview backend: an in-memory activity feed with the same shape.
+6. **Tests.**
+   - jsdom:
+     - a pushed `activity.committed` reloads the affected view and not unrelated ones
+     - `reset` reloads everything
+     - the migrated components start no interval timers (fake timers assert none are pending)
+     - focus reload is still the fallback when subscribing fails
+   - Desktop: a change made by a scheduler pass reaches a subscribed client through `since`.
+   - **Native check:**
+     - With My Day open and focused, let the reminder engine or a GitHub sync change a task. It
+       updates within about 1 s with no focus change.
+     - The sidebar logo animates during a GitHub sync with no status poll running.
+7. **Docs.**
+   - Record in `docs/decisions.md`: the scope helper, the summary-entity choice per device-only
+     table, the retention numbers, and the `IChangePublisher` outcome.
+   - Update 2.3's "Change events" rule to point at 6.4.
+
+**Exit:**
+- Every committed write has exactly one activity row with a source and an action, and a
+  rolled-back write has none.
+- Every scheduler pass appears in `JobRuns`.
+- Changes made by background work show in the open UI within about 1 s without a poll or focus
+  change.
+- The polls listed in step 5 are gone.
 
 ### [ ] P7 — AI providers, keys, privacy and AI summaries
 
@@ -2529,6 +2723,7 @@ If a number is already taken when you start, use the next free number and update
 | 027 | P5 | Calendar sources, events cache, source state, event links |
 | 028 | P6 | Google accounts |
 | 029 | P7 | AI settings, summary narrative columns |
+| 030 | P6a | Activity log, entities, cursors, job runs (028 and 029 were actually used by P5 and P6, so 030 is the next free number; later rows shift when they land) |
 | 030 | P9 | Attachments, attachment local state |
 | 031 | P10 | Pad item kind, drawings, region links |
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |
