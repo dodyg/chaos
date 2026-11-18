@@ -114,7 +114,7 @@ public static class SyncJson
                 values[value.Name] = value.Value.ValueKind switch
                 {
                     JsonValueKind.String => value.Value.GetString(),
-                    JsonValueKind.Number => value.Value.TryGetInt64(out var whole) ? whole : value.Value.GetDouble(),
+                    JsonValueKind.Number => value.Value.TryGetInt64(out var whole) ? (object)whole : value.Value.GetDouble(),
                     JsonValueKind.True => 1L,
                     JsonValueKind.False => 0L,
                     JsonValueKind.Null => null,
