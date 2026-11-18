@@ -8,7 +8,8 @@ namespace Chaos.Server.Web;
 
 internal sealed record WebList(Guid Id, string Name, bool IsInbox, long Position, bool IsArchived);
 internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes, long Status, DateOnly? PlannedDate,
-    DateOnly? DueDate, bool IsRecurring, long Priority, long Position)
+    DateOnly? DueDate, bool IsRecurring, long Priority, long Position, TimeOnly? PlannedTime, string? PlannedZoneId,
+    TimeOnly? DueTime, string? DueZoneId)
 {
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
@@ -29,23 +30,27 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
         var now = clock.GetUtcNow();
         var (today, zone) = await LocalDayAsync(account, now, ct);
         var day = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        // A timed due date in another zone can already be overdue on the next UTC calendar day.
+        var lastPossibleDueDay = DateOnly.FromDateTime(now.UtcDateTime).AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var lists = (await ListsAsync(account, ct)).Where(list => !list.IsArchived).ToDictionary(list => list.Id);
         var plan = await DayPositionsAsync(account, day, ct);
         var missedOccurrences = await MissedOccurrencesAsync(account, now, ct);
         var missedKeys = missedOccurrences.Select(id => id.ToString("D")).ToArray();
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
-            SELECT * FROM "SyncEntities"
+            SELECT "AccountId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "LastSeq", "UpdatedAt"
+            FROM "SyncEntities"
             WHERE "AccountId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+              AND COALESCE("Groups" -> 'status' -> 'values' ->> 'Status', '0') NOT IN ('4', '5')
               AND ("Groups" -> 'planned' -> 'values' ->> 'PlannedDate' = {day}
-                OR "Groups" -> 'due' -> 'values' ->> 'DueDate' IS NOT NULL
+                OR "Groups" -> 'due' -> 'values' ->> 'DueDate' <= {lastPossibleDueDay}
                 OR "EntityKey" = ANY({missedKeys}))
             """).AsNoTracking().ToListAsync(ct);
-        var tasks = rows.Select(row => (row.EntityKey, Entity: new WebEntity(row)))
-            .Select(row => (row.Entity, Task: ReadTask(row.EntityKey, row.Entity, account, includeNotes: false)))
-            .Where(row => row.Task is { IsTerminal: false } task && lists.ContainsKey(task.ListId) &&
-                (task.PlannedDate == today || task.DueDate == today || IsOverdue(task, row.Entity, today, zone, now)
+        var tasks = rows.Select(row => ReadTask(row.EntityKey, new WebEntity(row), account, includeNotes: false))
+            .OfType<WebTask>()
+            .Where(task => !task.IsTerminal && lists.ContainsKey(task.ListId) &&
+                (task.PlannedDate == today || task.DueDate == today || IsOverdue(task, today, zone, now)
                     || (task.DueDate is null && missedOccurrences.Contains(task.Id))))
-            .Select(row => row.Task!)
             .OrderBy(task => !plan.ContainsKey(task.Id))
             .ThenBy(task => plan.GetValueOrDefault(task.Id))
             .ThenByDescending(task => task.Priority)
@@ -73,8 +78,10 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
     {
         var key = listId.ToString("D");
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
-            SELECT * FROM "SyncEntities"
+            SELECT "AccountId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "LastSeq", "UpdatedAt"
+            FROM "SyncEntities"
             WHERE "AccountId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND "Groups" -> 'place' -> 'values' ->> 'ContainerId' = {key}
             """).AsNoTracking().ToListAsync(ct);
         return rows.Select(row => ReadTask(row.EntityKey, new WebEntity(row), account, includeNotes: false))
@@ -208,25 +215,27 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
             ? new WebTask(id, listId, title, includeNotes ? entity.Text("notes", "Notes") : null,
                 entity.Number("status", "Status") ?? NotStarted, entity.Date("planned", "PlannedDate"), entity.Date("due", "DueDate"),
                 entity.Text("create", "RecurrenceOccurrenceKey") is not null,
-                entity.Number("priority", "Priority") ?? 0, entity.Number("position", "Position") ?? 0)
+                entity.Number("priority", "Priority") ?? 0, entity.Number("position", "Position") ?? 0,
+                entity.Time("planned", "PlannedTime"), entity.Text("planned", "PlannedZoneId"),
+                entity.Time("due", "DueTime"), entity.Text("due", "DueZoneId"))
             : null;
 
     private static bool InPersonalSpace(WebEntity entity, Account account) =>
         account.PersonalSpaceId is { } spaceId && entity.Id("create", "SpaceId") == spaceId;
 
-    private static bool IsOverdue(WebTask task, WebEntity entity, DateOnly today, TimeZoneInfo profileZone, DateTimeOffset now)
+    private static bool IsOverdue(WebTask task, DateOnly today, TimeZoneInfo profileZone, DateTimeOffset now)
     {
         if (task.DueDate is not { } due)
         {
             return false;
         }
 
-        if (!TimeOnly.TryParseExact(entity.Text("due", "DueTime"), "HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+        if (task.DueTime is not { } time)
         {
             return due < today;
         }
 
-        var zone = FindZone(entity.Text("due", "DueZoneId")) ?? profileZone;
+        var zone = FindZone(task.DueZoneId) ?? profileZone;
         return due.ToDateTime(time) < TimeZoneInfo.ConvertTime(now, zone).DateTime;
     }
 
@@ -248,6 +257,9 @@ internal sealed class WebEntity(SyncEntityRow row)
 
     public DateOnly? Date(string group, string column) =>
         DateOnly.TryParseExact(Text(group, column), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : null;
+
+    public TimeOnly? Time(string group, string column) =>
+        TimeOnly.TryParseExact(Text(group, column), "HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time) ? time : null;
 
     private object? Value(string group, string column) => Groups.GetValueOrDefault(group)?.Values.Values.GetValueOrDefault(column);
 }

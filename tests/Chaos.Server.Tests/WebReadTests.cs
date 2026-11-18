@@ -50,7 +50,8 @@ public sealed class WebReadTests(PostgresServer postgres)
             Row("day_plan_item", Guid.NewGuid(),
                 ("create", Fields(("DayPlanId", plan.ToString("D")), ("TaskId", planned.ToString("D")))),
                 ("position", Fields(("Position", 0L)))),
-            TaskRow(due, "Due today", ("due", Fields(("DueDate", today.ToString("yyyy-MM-dd")))), ("priority", Fields(("Priority", 4L)))),
+            TaskRow(due, "Due today", ("due", Fields(("DueDate", today.ToString("yyyy-MM-dd")), ("DueTime", "15:30:00"), ("DueZoneId", "UTC"))),
+                ("priority", Fields(("Priority", 4L)))),
             TaskRow(planned, "Planned today", ("planned", Fields(("PlannedDate", today.ToString("yyyy-MM-dd"))))),
             TaskRow(overdue, "Overdue", ("due", Fields(("DueDate", today.AddDays(-1).ToString("yyyy-MM-dd"))))),
             Row("recurrence_series", series, ("rule", Fields(("RuleJson", """{"payload":{"zoneId":"UTC","anchorTime":null}}""")))),
@@ -75,6 +76,7 @@ public sealed class WebReadTests(PostgresServer postgres)
         await Assert.That(view.Tasks.Select(task => task.Title).ToArray()).IsEquivalentTo(["Planned today", "Due today", "Overdue", "Missed recurrence"]);
         await Assert.That(view.Tasks[0].Id).IsEqualTo(planned);
         await Assert.That(view.Tasks[1].Id).IsEqualTo(due);
+        await Assert.That(view.Tasks[1].DueTime).IsEqualTo(new TimeOnly(15, 30));
         await Assert.That(view.Tasks[3].IsRecurring).IsTrue();
         await Assert.That(view.Tasks[0].Notes).IsNull();
         var lists = (await owner.GetFromJsonAsync<WebList[]>("/v1/web/lists"))!;
@@ -91,6 +93,10 @@ public sealed class WebReadTests(PostgresServer postgres)
         await Assert.That(foreignTask.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
         var foreignToday = (await other.GetFromJsonAsync<WebToday>($"/v1/web/today?accountId={account.Id}"))!;
         await Assert.That(foreignToday.Tasks.Count).IsEqualTo(0);
+        using var foreignWrite = await WebFlow.PostAsync(other, await WebFlow.SessionAsync(other), $"/v1/web/tasks/{planned}/complete");
+        await Assert.That(foreignWrite.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        using var recurringWrite = await WebFlow.PostAsync(owner, await WebFlow.SessionAsync(owner), $"/v1/web/tasks/{recurring}/complete");
+        await Assert.That(recurringWrite.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
 
         SyncEntityRow TaskRow(Guid id, string title, params (string Name, SyncGroupValues Values)[] extras) =>
             Row("task", id,

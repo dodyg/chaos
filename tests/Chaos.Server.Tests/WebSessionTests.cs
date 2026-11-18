@@ -28,6 +28,8 @@ public sealed class WebSessionTests(PostgresServer postgres)
         await Assert.That(cookie).Contains("httponly").And.Contains("secure").And.Contains("samesite=lax").And.Contains("path=/v1/web");
         await Assert.That(signedIn.Headers.Location?.OriginalString).IsEqualTo("/app");
         var session = await WebFlow.SessionAsync(browser);
+        var offlineMarker = signedIn.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith("chaos.web-offline=", StringComparison.Ordinal));
+        await Assert.That(offlineMarker).StartsWith($"chaos.web-offline={session.DeviceId:D};").And.Contains("secure").And.Contains("path=/app");
 
         var desktop = new DesktopFlow(server);
         var tokens = await desktop.SignInAsync(Email);

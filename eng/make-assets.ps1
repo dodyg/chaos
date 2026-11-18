@@ -12,7 +12,8 @@ Add-Type -AssemblyName System.Drawing
 $root = Split-Path -Parent $PSScriptRoot
 $iconDir = if ($OutDir) { $OutDir } else { Join-Path $root "src/Chaos.Desktop/Icons" }
 $logoDir = if ($OutDir) { $OutDir } else { Join-Path $root "packaging/Images" }
-New-Item -ItemType Directory -Force $iconDir, $logoDir | Out-Null
+$webIconDir = if ($OutDir) { $OutDir } else { Join-Path $root "src/Chaos.Web/public/icons" }
+New-Item -ItemType Directory -Force $iconDir, $logoDir, $webIconDir | Out-Null
 
 # Mark geometry in a 100x100 box: start point, then cubic Bezier segments (c1, c2, end).
 $start = @(10, 64)
@@ -24,7 +25,7 @@ $segments = @(
 )
 $sparks = @(@(78, 78, 4.5), @(64, 90, 3), @(91, 62, 2.5))   # x, y, radius
 
-function New-Mark([int]$width, [int]$height, [double]$markScale) {
+function New-Mark([int]$width, [int]$height, [double]$markScale, [switch]$Maskable) {
     $bitmap = New-Object System.Drawing.Bitmap $width, $height
     $g = [System.Drawing.Graphics]::FromImage($bitmap)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
@@ -45,7 +46,8 @@ function New-Mark([int]$width, [int]$height, [double]$markScale) {
         (New-Object System.Drawing.PointF ([float]($x + $side)), ([float]($y + $side))),
         [System.Drawing.Color]::FromArgb(255, 14, 165, 233),
         [System.Drawing.Color]::FromArgb(255, 7, 89, 133))
-    $g.FillPath($gradient, $tile)
+    if ($Maskable) { $g.FillRectangle($gradient, [float]$x, [float]$y, [float]$side, [float]$side) }
+    else { $g.FillPath($gradient, $tile) }
 
     $unit = $side * $markScale / 100.0
     $ox = $width / 2.0 - 50 * $unit; $oy = $height / 2.0 - 46 * $unit   # mark sits slightly high in its box
@@ -128,6 +130,12 @@ foreach ($name in $logos.Keys) {
     $spec = $logos[$name]
     [System.IO.File]::WriteAllBytes((Join-Path $logoDir $name), (Get-PngBytes (New-Mark $spec[0] $spec[1] $spec[2])))
 }
+
+# Web manifest and iOS home-screen icons use the same mark as the desktop.
+[System.IO.File]::WriteAllBytes((Join-Path $webIconDir "icon-192.png"), (Get-PngBytes (New-Mark 192 192 0.74)))
+[System.IO.File]::WriteAllBytes((Join-Path $webIconDir "icon-512.png"), (Get-PngBytes (New-Mark 512 512 0.74)))
+[System.IO.File]::WriteAllBytes((Join-Path $webIconDir "maskable-512.png"), (Get-PngBytes (New-Mark 512 512 0.66 -Maskable)))
+[System.IO.File]::WriteAllBytes((Join-Path $webIconDir "apple-touch-icon.png"), (Get-PngBytes (New-Mark 180 180 0.66 -Maskable)))
 
 if ($OutDir) {
     foreach ($size in 16, 24, 32, 256) {

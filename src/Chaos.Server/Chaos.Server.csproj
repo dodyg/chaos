@@ -7,6 +7,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- The only projects allowed to use EF Core (Directory.Build.targets, PLAN2 §2.1). -->
     <ChaosAllowEfCore>true</ChaosAllowEfCore>
+    <MobileWebProject>$(MSBuildProjectDirectory)/../Chaos.Web</MobileWebProject>
+    <DefaultItemExcludes>$(DefaultItemExcludes);wwwroot/app/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,5 +31,19 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Chaos.Server.Tests" />
   </ItemGroup>
+
+  <Target Name="RestoreMobileWeb"
+          Inputs="$(MobileWebProject)/package.json;$(MobileWebProject)/package-lock.json"
+          Outputs="$(MobileWebProject)/node_modules/.package-lock.json">
+    <Exec WorkingDirectory="$(MobileWebProject)" Command="npm ci --no-audit --no-fund" />
+  </Target>
+
+  <Target Name="BuildMobileWeb" BeforeTargets="AssignTargetPaths" DependsOnTargets="RestoreMobileWeb"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec WorkingDirectory="$(MobileWebProject)" Command="npm run build" />
+    <ItemGroup>
+      <Content Include="wwwroot/app/**/*" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 
 </Project>

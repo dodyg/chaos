@@ -29,7 +29,7 @@ internal static class WebSessionSetup
             options.Cookie.HttpOnly = true;
             options.Cookie.SameSite = SameSiteMode.Lax;
             options.Cookie.SecurePolicy = environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
-            options.ExpireTimeSpan = TimeSpan.FromDays(30);
+            options.ExpireTimeSpan = WebSession.Lifetime;
             options.SlidingExpiration = true;
             options.EventsType = typeof(WebSession);
         });
@@ -56,6 +56,8 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
     public const string Platform = "web";
     public const int ClientSchema = 1;
     public const string DeviceHeader = "Chaos-Web-Device";
+    private const string OfflineMarker = "chaos.web-offline";
+    internal static readonly TimeSpan Lifetime = TimeSpan.FromDays(30);
 
     // Browsers send the session they rendered so a cookie change in another tab cannot silently
     // switch the account underneath a screen, pending write, or offline cache.
@@ -89,6 +91,7 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
             new Claim(DesktopClient.DeviceIdClaim, deviceId.ToString("D")),
         ], Scheme);
         await http.SignInAsync(Scheme, new ClaimsPrincipal(identity), new AuthenticationProperties { IsPersistent = true });
+        SetOfflineMarker(http, deviceId, now + Lifetime);
     }
 
     public override async Task ValidatePrincipal(CookieValidatePrincipalContext context)
@@ -111,6 +114,7 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
 
     public override Task RedirectToLogin(RedirectContext<CookieAuthenticationOptions> context)
     {
+        ClearOfflineMarker(context.HttpContext);
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         return Task.CompletedTask;
     }
@@ -126,10 +130,12 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
         var session = await http.AuthenticateAsync(Scheme);
         var caller = WebCaller.From(http.User);
         var tokens = antiforgery.GetAndStoreTokens(http);
+        var expires = session.Properties!.ExpiresUtc;
+        SetOfflineMarker(http, caller.DeviceId, expires);
         return Results.Ok(new
         {
             caller.DeviceId,
-            ExpiresAt = session.Properties!.ExpiresUtc,
+            ExpiresAt = expires,
             AntiforgeryToken = tokens.RequestToken,
             AntiforgeryHeader = tokens.HeaderName,
         });
@@ -139,17 +145,41 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
     {
         var caller = WebCaller.From(http.User);
         var now = clock.GetUtcNow();
-        var device = await db.Devices.SingleOrDefaultAsync(d => d.Id == caller.DeviceId && d.AccountId == caller.AccountId && d.RevokedAt == null, ct);
-        if (device is not null)
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
         {
-            device.RevokedAt = now;
-            db.AuditEvents.Add(new AuditEvent { AccountId = caller.AccountId, DeviceId = caller.DeviceId, Kind = AuditKinds.DeviceRevoked, At = now });
-            await db.SaveChangesAsync(ct);
-        }
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var removed = await db.Devices.Where(d => d.Id == caller.DeviceId && d.AccountId == caller.AccountId && d.RevokedAt == null)
+                .ExecuteUpdateAsync(update => update.SetProperty(d => d.RevokedAt, now), ct);
+            if (removed > 0)
+            {
+                db.AuditEvents.Add(new AuditEvent { AccountId = caller.AccountId, DeviceId = caller.DeviceId, Kind = AuditKinds.DeviceRevoked, At = now });
+                await db.SaveChangesAsync(ct);
+            }
+
+            await transaction.CommitAsync(ct);
+        });
 
         await http.SignOutAsync(Scheme);
+        ClearOfflineMarker(http);
         return Results.NoContent();
     }
+
+    // This is a device ID, never an authentication credential. The shell uses it to hide a
+    // previous account's cached views if the browser changed sign-ins before going offline.
+    private static void SetOfflineMarker(HttpContext http, Guid deviceId, DateTimeOffset? expires)
+    {
+        var options = OfflineCookieOptions(http);
+        options.Expires = expires;
+        http.Response.Cookies.Append(OfflineMarker, deviceId.ToString("D"), options);
+    }
+
+    private static void ClearOfflineMarker(HttpContext http) =>
+        http.Response.Cookies.Delete(OfflineMarker, OfflineCookieOptions(http));
+
+    private static CookieOptions OfflineCookieOptions(HttpContext http) =>
+        new() { Path = AppPath, SameSite = SameSiteMode.Lax, Secure = http.Request.IsHttps };
 }
 
 internal sealed class WebAntiforgery(IAntiforgery antiforgery) : IEndpointFilter
