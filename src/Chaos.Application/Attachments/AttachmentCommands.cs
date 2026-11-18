@@ -20,7 +20,7 @@ public sealed record EditImageCommand(string OperationId, string AttachmentId, l
 public sealed record AttachmentResult(AttachmentRecord Attachment, bool Replayed);
 
 /// <summary>An attachment with what the UI needs to show it: whether this device has the bytes and how to preview them.</summary>
-public sealed record AttachmentView(AttachmentRecord Attachment, AttachmentBytesState Bytes, AttachmentPreview Preview, bool CanOpen);
+public sealed record AttachmentView(AttachmentRecord Attachment, AttachmentBytesState Bytes, AttachmentPreview Preview, bool CanOpen, AttachmentTransferInfo? Transfer = null);
 
 /// <summary>One slice of an attachment's bytes, for the renderer to assemble into a Blob.</summary>
 public sealed record AttachmentChunk(long Offset, long TotalSize, byte[] Bytes);
@@ -82,6 +82,32 @@ public sealed class AttachmentCommands
 
     public IAttachmentFileStore Files => _files;
 
+    /// <summary>Set when sync can fetch bytes that are on the service but not here (PLAN2 §9.2); null means this device only has what it holds.</summary>
+    public IAttachmentAvailability? Availability { get; set; }
+
+    /// <summary>
+    /// Opens a file's bytes. When they are not here and the online service may have them, fetches them first: opening a large file
+    /// is what makes it download ("Downloading… 34%").
+    /// </summary>
+    private async Task<Stream> OpenBytesAsync(AttachmentRecord row, long offset, CancellationToken ct)
+    {
+        if (await _files.OpenReadAsync(row.Sha256, offset, ct) is { } here)
+        {
+            return here;
+        }
+
+        if (Availability is { } availability && await availability.EnsureAvailableAsync(row.Sha256, row.ByteSize, ct)
+            && await _files.OpenReadAsync(row.Sha256, offset, ct) is { } fetched)
+        {
+            return fetched;
+        }
+
+        var info = Availability is { } describer ? await describer.DescribeAsync(row.Sha256, false, ct) : null;
+        throw info is { State: AttachmentSyncState.Blocked }
+            ? AppException.NotFound("This file was blocked by the malware check, so it is not available.")
+            : info is { Message: { Length: > 0 } message } ? AppException.NotFound($"{message}. This file is not on this computer yet.") : BytesMissing();
+    }
+
     // ---- Reads -------------------------------------------------------------------------------
 
     public async Task<IReadOnlyList<AttachmentView>> ListAsync(AttachmentOwnerKind ownerKind, string ownerId, CancellationToken ct = default)
@@ -137,7 +163,7 @@ public sealed class AttachmentCommands
         }
 
         var count = (int)Math.Min(Math.Clamp(length, 1, AttachmentLimits.UploadChunkBytes), row.ByteSize - offset);
-        await using var stream = await _files.OpenReadAsync(row.Sha256, offset, ct) ?? throw BytesMissing();
+        await using var stream = await OpenBytesAsync(row, offset, ct);
         var buffer = new byte[count];
         var filled = 0;
         while (filled < count)
@@ -158,7 +184,7 @@ public sealed class AttachmentCommands
     public async Task<(AttachmentRecord Attachment, Stream Content)> OpenAsync(string attachmentId, CancellationToken ct = default)
     {
         var row = await _store.QueryAsync(async (session, token) => await session.Attachments.GetAsync(attachmentId, token), ct) ?? throw NotFound();
-        return (row, await _files.OpenReadAsync(row.Sha256, 0, ct) ?? throw BytesMissing());
+        return (row, await OpenBytesAsync(row, 0, ct));
     }
 
     /// <summary>The image attachment of a page with this display name, for page backgrounds; null when there is none.</summary>
@@ -451,7 +477,7 @@ public sealed class AttachmentCommands
                     throw AppException.Validation("image", "Only PNG, JPEG, GIF and WebP images can be edited.");
                 }
 
-                await using var source = await _files.OpenReadAsync(row.Sha256, 0, inner) ?? throw BytesMissing();
+                await using var source = await OpenBytesAsync(row, 0, inner);
                 var edited = await images.EditAsync(source, row.MediaType, edit, inner);
                 using var content = new MemoryStream(edited.Bytes, writable: false);
                 var stored = await _files.PutAsync(content, _limits.MaxFileBytes, null, inner);
@@ -492,7 +518,7 @@ public sealed class AttachmentCommands
             }
         }
 
-        await using var source = await _files.OpenReadAsync(row.Sha256, 0, ct) ?? throw BytesMissing();
+        await using var source = await OpenBytesAsync(row, 0, ct);
         var made = await images.ThumbnailAsync(source, ThumbnailSide, ct);
         if (cache is not null)
         {
@@ -518,8 +544,12 @@ public sealed class AttachmentCommands
     public async Task<AttachmentView> DescribeAsync(AttachmentRecord row, CancellationToken ct = default)
     {
         var present = await _files.ExistsAsync(row.Sha256, ct);
-        return new AttachmentView(row, present ? AttachmentBytesState.Present : AttachmentBytesState.Missing,
-            AttachmentSafety.PreviewOf(row.MediaType), !AttachmentSafety.IsBlocked(row.FileName));
+        var transfer = Availability is { } availability ? await availability.DescribeAsync(row.Sha256, present, ct) : null;
+        var bytes = present ? AttachmentBytesState.Present
+            : transfer?.State == AttachmentSyncState.Downloading ? AttachmentBytesState.Downloading
+            : transfer?.State == AttachmentSyncState.DownloadFailed ? AttachmentBytesState.Failed
+            : AttachmentBytesState.Missing;
+        return new AttachmentView(row, bytes, AttachmentSafety.PreviewOf(row.MediaType), !AttachmentSafety.IsBlocked(row.FileName), transfer);
     }
 
     private static async Task RequireOwnerAsync(IDataSession session, AttachmentOwnerKind kind, string ownerId, CancellationToken token)

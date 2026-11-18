@@ -142,6 +142,111 @@ namespace Chaos.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Chaos.Server.Data.BlobPartRow", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PartIndex")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ByteSize")
+                        .HasColumnType("integer");
+
+                    b.HasKey("AccountId", "Sha256", "PartIndex");
+
+                    b.ToTable("BlobParts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_BlobParts_PartIndex", "\"PartIndex\" >= 0 AND \"ByteSize\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobRow", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<long>("ByteSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("text");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("UnreferencedSince")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("WrappedKey")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("AccountId", "Sha256");
+
+                    b.HasIndex("UnreferencedSince")
+                        .HasDatabaseName("IX_Blobs_UnreferencedSince");
+
+                    b.ToTable("Blobs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Blobs_ByteSize", "\"ByteSize\" >= 0");
+
+                            t.HasCheckConstraint("CK_Blobs_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("CK_Blobs_State", "\"State\" IN ('Clean', 'Blocked')");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobUploadRow", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Sha256")
+                        .HasColumnType("text");
+
+                    b.Property<long>("ByteSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("PartCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AccountId", "Sha256");
+
+                    b.HasIndex("UpdatedAt")
+                        .HasDatabaseName("IX_BlobUploads_UpdatedAt");
+
+                    b.ToTable("BlobUploads", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_BlobUploads_ByteSize", "\"ByteSize\" >= 0 AND \"PartCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_BlobUploads_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
+                        });
+                });
+
             modelBuilder.Entity("Chaos.Server.Data.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -517,6 +622,33 @@ namespace Chaos.Server.Data.Migrations
                 {
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany("Logins")
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobPartRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.BlobUploadRow", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId", "Sha256")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobUploadRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
                         .HasForeignKey("AccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

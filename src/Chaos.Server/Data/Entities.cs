@@ -138,3 +138,57 @@ public sealed class SyncChangeRow
     public Guid? OriginDevice { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+/// <summary>The states of a stored blob (PLAN2 §9.2). A <c>Blocked</c> blob is never served.</summary>
+public static class BlobStates
+{
+    public const string Clean = "Clean";
+    public const string Blocked = "Blocked";
+
+    public static readonly IReadOnlyList<string> All = [Clean, Blocked];
+}
+
+/// <summary>One attachment's bytes on the service, per account (PLAN2 §8.2). The bytes are encrypted in the object store.</summary>
+public sealed class BlobRow
+{
+    public Guid AccountId { get; set; }
+
+    /// <summary>Lowercase hex SHA-256 of the plaintext.</summary>
+    public required string Sha256 { get; set; }
+
+    public long ByteSize { get; set; }
+    public required string State { get; set; }
+
+    /// <summary>The scanner's detection name for a blocked blob; never anything from the file.</summary>
+    public string? Detail { get; set; }
+
+    /// <summary>The object key; empty for a blocked blob, whose bytes are not kept.</summary>
+    public required string StorageKey { get; set; }
+
+    public required byte[] WrappedKey { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>Since when no live attachment references the hash; the blob goes after the grace period (PLAN2 §9.2).</summary>
+    public DateTimeOffset? UnreferencedSince { get; set; }
+}
+
+/// <summary>An upload that has started and not yet completed.</summary>
+public sealed class BlobUploadRow
+{
+    public Guid AccountId { get; set; }
+    public required string Sha256 { get; set; }
+    public long ByteSize { get; set; }
+    public int PartCount { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public Guid? DeviceId { get; set; }
+}
+
+/// <summary>One received part of an upload; its bytes are in the object store.</summary>
+public sealed class BlobPartRow
+{
+    public Guid AccountId { get; set; }
+    public required string Sha256 { get; set; }
+    public int PartIndex { get; set; }
+    public int ByteSize { get; set; }
+}

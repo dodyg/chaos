@@ -15,7 +15,7 @@ namespace Chaos.Infrastructure.Service;
 /// in memory. Refreshing is single-flight, so concurrent callers share one refresh (the server revokes a refresh token that is
 /// used twice). No message or exception here contains a token, a code or a verifier.
 /// </summary>
-public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
+public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, IDisposable
 {
     public const string ClientId = "chaos-desktop";
     public const string RefreshKey = "chaos/service/refresh";
@@ -366,7 +366,144 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         }
     }
 
-    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? rawJson = null, DeviceIdentity? protocolFor = null, HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
+    // ---- Blobs (PLAN2 §9.2) ---------------------------------------------------------------------
+
+    public async Task<RemoteBlob?> HeadAsync(string sha256, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Head, $"v1/blobs/{sha256}", null, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureBlobSuccessAsync(response, ct);
+        var state = response.Headers.TryGetValues("X-Chaos-Blob-State", out var values) ? values.First() : "Clean";
+        return new RemoteBlob(state, response.Content.Headers.ContentLength ?? 0);
+    }
+
+    public async Task<RemoteUpload> StartUploadAsync(string sha256, long size, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}", null, ct, $"{{\"size\":{size.ToString(CultureInfo.InvariantCulture)}}}");
+        await EnsureBlobSuccessAsync(response, ct);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var root = document.RootElement;
+        var state = root.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+        var received = root.TryGetProperty("received", out var r) ? r.EnumerateArray().Select(e => e.GetInt32()).ToList() : [];
+        return new RemoteUpload(state, root.GetProperty("partSize").GetInt32(), root.GetProperty("partCount").GetInt32(), received);
+    }
+
+    public async Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Put, $"v1/blobs/{sha256}?part={index.ToString(CultureInfo.InvariantCulture)}", null, ct, rawBytes: bytes.ToArray());
+        await EnsureBlobSuccessAsync(response, ct);
+    }
+
+    public async Task<RemoteBlob> CompleteUploadAsync(string sha256, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}/complete", null, ct);
+        await EnsureBlobSuccessAsync(response, ct);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        return new RemoteBlob(document.RootElement.GetProperty("state").GetString() ?? "Clean", document.RootElement.TryGetProperty("size", out var size) ? size.GetInt64() : 0);
+    }
+
+    public async Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct)
+    {
+        var response = await SendAuthorizedAsync(HttpMethod.Get, $"v1/blobs/{sha256}", null, ct, completion: HttpCompletionOption.ResponseHeadersRead, range: offset > 0 ? offset : null);
+        try
+        {
+            await EnsureBlobSuccessAsync(response, ct);
+            return new ResponseStream(response, await response.Content.ReadAsStreamAsync(ct));
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Keeps the response alive while its body is read, and turns a dropped connection into the service's offline failure.</summary>
+    private sealed class ResponseStream(HttpResponseMessage response, Stream body) : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await body.ReadAsync(buffer, cancellationToken);
+            }
+            catch (Exception error) when (error is IOException or HttpRequestException)
+            {
+                throw new ChaosServiceException(ServiceFailure.Offline, "The connection to the online service was lost.", error);
+            }
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                body.Dispose();
+                response.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Turns the service's blob problem codes into <see cref="BlobTransferException"/>; anything else is the general failure.</summary>
+    private static async Task EnsureBlobSuccessAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var code = response.RequestMessage?.Method == HttpMethod.Head ? null : await ReadCodeAsync(response, ct);
+        var kind = code switch
+        {
+            "blocked" => BlobFailureKind.Blocked,
+            "quota" => BlobFailureKind.Quota,
+            "too-large" => BlobFailureKind.TooLarge,
+            "hash-mismatch" => BlobFailureKind.HashMismatch,
+            "scanner-unavailable" => BlobFailureKind.ScannerUnavailable,
+            "no-upload" => BlobFailureKind.NotFound,
+            _ => response.StatusCode == HttpStatusCode.NotFound ? BlobFailureKind.NotFound : BlobFailureKind.Other,
+        };
+        if (kind == BlobFailureKind.Other)
+        {
+            await EnsureSuccessAsync(response, ct);
+        }
+
+        throw new BlobTransferException(kind, await ReadDetailAsync(response, ct) ?? "The online service refused the file.");
+    }
+
+    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? rawJson = null, DeviceIdentity? protocolFor = null, HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead, byte[]? rawBytes = null, long? range = null)
     {
         var options = Require();
         for (var attempt = 0; ; attempt++)
@@ -381,6 +518,16 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
             else if (rawJson is not null)
             {
                 request.Content = new StringContent(rawJson, Encoding.UTF8, "application/json");
+            }
+            else if (rawBytes is not null)
+            {
+                request.Content = new ByteArrayContent(rawBytes);
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            }
+
+            if (range is { } from)
+            {
+                request.Headers.Range = new RangeHeaderValue(from, null);
             }
 
             if (protocolFor is not null)

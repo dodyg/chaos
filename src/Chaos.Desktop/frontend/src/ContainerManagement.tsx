@@ -1,5 +1,5 @@
 import React from "react";
-import { containerRpc, type ContainerResponse, type SectionResponse, type ProgressResponse } from "#neoastra";
+import { attachmentRpc, containerRpc, type ContainerResponse, type SectionResponse, type ProgressResponse } from "#neoastra";
 import { useDragReorder } from "./dragReorder";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,26 @@ import { Progress } from "@/components/ui/progress";
 import { DeletedItems, Field, InlineError } from "@/components/common";
 
 const id = () => crypto.randomUUID();
+
+/**
+ * "Keep available offline" (PLAN2 §9.2): this computer downloads every file attached to the list's tasks, whatever its size. The choice
+ * is device-local. Nothing shows until the host has answered, so a computer that cannot ask (no service) never offers it.
+ */
+export function KeepOffline({ containerId, api = attachmentRpc }: { containerId: string; api?: Pick<typeof attachmentRpc, "offlineContainers" | "setOffline"> }) {
+  const [offline, setOffline] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    setOffline(null);
+    void Promise.resolve().then(() => api.offlineContainers({})).then(result => { if (active && result.ok) setOffline(result.containerIds.includes(containerId)); }).catch(() => { if (active) setOffline(null); });
+    return () => { active = false; };
+  }, [containerId, api]);
+  if (offline === null) return null;
+  return <label className="flex items-start gap-2">
+    <input type="checkbox" className="mt-1" checked={offline} onChange={event => { const next = event.target.checked; setOffline(next); void api.setOffline({ containerId, offline: next }).then(result => { if (!result.ok) setOffline(!next); }).catch(() => setOffline(!next)); }}/>
+    <span>Keep available offline<span className="block text-xs text-muted-foreground">Download every file attached to this list's tasks to this computer, whatever its size.</span></span>
+  </label>;
+}
+
 export function ContainerManagement({ container, containers, sections, taskRevision, onChanged, onDeleted, api = containerRpc }: { container: ContainerResponse; containers: ContainerResponse[]; sections: SectionResponse[]; taskRevision: string; onChanged: () => Promise<void>; onDeleted: () => Promise<void>; api?: typeof containerRpc }) {
   const [name, setName] = React.useState(container.name);
   const [deadline, setDeadline] = React.useState(container.deadlineDate ?? "");
@@ -49,6 +69,7 @@ export function ContainerManagement({ container, containers, sections, taskRevis
         <CardHeader className="px-4"><CardTitle><h3>Details</h3></CardTitle></CardHeader>
         <CardContent className="grid gap-4 px-4">
           <form className="flex items-end gap-2" onSubmit={e => { e.preventDefault(); void run(() => api.rename({ operationId: id(), containerId: container.id, expectedVersion: container.version, name })); }}><Field label="Name" className="flex-1"><Input value={name} required onChange={e => setName(e.target.value)}/></Field><Button variant="outline" disabled={busy}>Rename</Button></form>
+          <KeepOffline containerId={container.id}/>
           <Field label="Default category for new tasks"><NativeSelect value={container.defaultCategory ?? ""} disabled={busy} onChange={e => { const value = e.target.value || null; void run(() => api.setDefaultCategory({ operationId: id(), containerId: container.id, expectedVersion: container.version, defaultCategory: value })); }}>
             <NativeSelectOption value="">No default (follow focus)</NativeSelectOption>
             <NativeSelectOption value="Work">Work</NativeSelectOption>

@@ -115,6 +115,8 @@ public sealed class SyncStatusReader(SqliteApplicationStore store, SyncEngine en
         "sync.parked" => ("Changes from another device could not be applied yet. Syncing again may fix it; if it does not, update Chaos on this computer.", ["Sync now", "Dismiss"]),
         "sync.rejected" => ("The online service did not accept a change from this computer. If it says to update Chaos, do that first.", ["Sync now", "Dismiss"]),
         "sync.invalid" or "sync.conflict" or "sync.adopt" or "sync.unexpected" => ("A change from another device could not be applied. Your own data is unchanged.", ["Sync now", "Dismiss"]),
+        "attachment.blocked" => ("The online service's malware check blocked this file. It stays on this computer and is not shared with your other devices. Remove it if you do not trust it.", ["Dismiss"]),
+        "attachment.quota" => ("Your online storage is full, so this file was not uploaded. It stays on this computer. Remove files you no longer need; Chaos tries again every hour.", ["Dismiss"]),
         _ => ("Look at what changed and dismiss this when you are done.", ["Dismiss"]),
     };
 

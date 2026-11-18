@@ -13,7 +13,7 @@ import { ImageEditor } from "./ImageEditor";
  * Markdown only ever holds `chaos:attachment/<id>` references.
  */
 
-export type AttachmentApi = Pick<typeof attachmentRpc, "list" | "resolve" | "begin" | "chunk" | "commit" | "cancel" | "rename" | "delete" | "restore" | "read" | "open" | "showInFolder" | "saveCopy" | "pageImage" | "editImage" | "thumbnail">;
+export type AttachmentApi = Pick<typeof attachmentRpc, "list" | "resolve" | "begin" | "chunk" | "commit" | "cancel" | "rename" | "delete" | "restore" | "read" | "open" | "showInFolder" | "saveCopy" | "pageImage" | "editImage" | "thumbnail"> & Partial<Pick<typeof attachmentRpc, "retry">>;
 export type AttachmentOwnerKind = "task" | "diary" | "pad" | "page";
 export type AttachmentInfo = AttachmentDto;
 
@@ -238,6 +238,22 @@ export function AttachmentBody({ api, item, className }: { api: AttachmentApi; i
   }
 }
 
+/** Sync states that are still moving; the panel looks again while any file is in one. */
+const movingStates: ReadonlySet<string> = new Set(["downloading", "uploading", "uploadpending", "notdownloaded"]);
+const retryStates: ReadonlySet<string> = new Set(["uploadfailed", "downloadfailed", "overquota"]);
+
+/** What the online service is doing with a file ("Downloading 34%", "Blocked by malware check", "Upload failed — retry"), or that it is not here. */
+export function TransferNote({ api, item, onRetried }: { api: AttachmentApi; item: AttachmentDto; onRetried?: () => void }) {
+  const text = item.note ?? (item.bytes !== "present" ? "Not on this computer" : "");
+  if (!text) return null;
+  const blocked = item.sync === "blocked";
+  return <span data-slot="transfer-note" data-sync={item.sync} className={cn("inline-flex items-center gap-1 text-xs", blocked ? "font-medium text-destructive" : "text-muted-foreground")}>
+    <span role="status">{text}</span>
+    {item.percent != null && (item.sync === "downloading" || item.sync === "uploading") && <progress aria-label={text} className="h-1.5 w-16" max={100} value={item.percent}/>}
+    {retryStates.has(item.sync) && api.retry && <Button type="button" variant="ghost" size="xs" onClick={() => void api.retry!({ attachmentId: item.id }).then(() => onRetried?.())}>Retry</Button>}
+  </span>;
+}
+
 /** Open, Show in folder and Save a copy, as the host allows them: files that can run code only offer the last two. */
 export function AttachmentActions({ api, item, onMessage }: { api: AttachmentApi; item: AttachmentDto; onMessage: (message: string) => void }) {
   async function run(action: "open" | "showInFolder" | "saveCopy") {
@@ -263,7 +279,7 @@ export function AttachmentCard({ api, item, label }: { api: AttachmentApi; item:
   return <span data-slot="attachment-card" className="my-1 grid gap-1.5 rounded-md border bg-muted/30 p-2 text-sm">
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <KindIcon item={item}/><span className="min-w-0 truncate font-medium">{label}</span><span className="text-xs text-muted-foreground">{formatBytes(item.byteSize)}</span>
-      {item.bytes !== "present" && <span className="text-xs text-muted-foreground">Not on this computer</span>}
+      <TransferNote api={api} item={item}/>
       {previewable && item.bytes === "present" && <Button type="button" variant="ghost" size="xs" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? <EyeOff/> : <Eye/>}{open ? "Hide preview" : "Preview"}</Button>}
       <AttachmentActions api={api} item={item} onMessage={setMessage}/>
     </span>
@@ -302,6 +318,13 @@ export function AttachmentPanel({ api = attachmentRpc, ownerKind, ownerId, reloa
     if (result?.ok) setItems(result.attachments); else if (result) setMessage(result.error?.message ?? "");
   }, [api, ownerKind, ownerId]);
   React.useEffect(() => { void load(); }, [load, reloadKey]);
+  // Downloads, uploads and waiting files change on their own; look again every couple of seconds while any is moving.
+  const moving = items?.some(row => movingStates.has(row.sync)) ?? false;
+  React.useEffect(() => {
+    if (!moving) return;
+    const timer = setInterval(() => void load(), 2500);
+    return () => clearInterval(timer);
+  }, [moving, load]);
 
   async function add(files: File[]) {
     if (files.length === 0) return;
@@ -353,7 +376,7 @@ export function AttachmentPanel({ api = attachmentRpc, ownerKind, ownerId, reloa
               </form>
             : <span className="min-w-0 truncate font-medium" title={item.fileName}>{item.fileName}</span>}
           <span className="text-xs text-muted-foreground">{formatBytes(item.byteSize)}</span>
-          {item.bytes !== "present" && <span className="text-xs text-muted-foreground">Not on this computer</span>}
+          <TransferNote api={api} item={item} onRetried={() => void load()}/>
         </div>
         <div className="flex flex-wrap items-center gap-0.5">
           {onInsert && <Button type="button" variant="ghost" size="xs" onClick={() => onInsert(attachmentMarkdown(item))} title="Insert a reference at the cursor"><Plus/>Insert</Button>}

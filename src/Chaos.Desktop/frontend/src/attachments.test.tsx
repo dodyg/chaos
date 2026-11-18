@@ -39,7 +39,7 @@ const goneId = "00000000-0000-4000-8000-0000000000a4";
 
 function item(id: string, fileName: string, mediaType: string, preview: string, patch: Partial<AttachmentDto> = {}): AttachmentDto {
   return { id, ownerKind: "task", ownerId: "t1", fileName, mediaType, byteSize: "12", sha256: id.replace(/-/g, "").padEnd(64, "0"), width: preview === "image" ? 40 : null, height: preview === "image" ? 30 : null,
-    version: "1", createdAtUtc: "2026-11-17T08:00:00Z", bytes: "present", preview, canOpen: !/\.exe$/i.test(fileName), ...patch };
+    version: "1", createdAtUtc: "2026-11-17T08:00:00Z", bytes: "present", preview, canOpen: !/\.exe$/i.test(fileName), sync: "none", percent: null, note: null, ...patch };
 }
 
 const files = new Map<string, AttachmentDto>([

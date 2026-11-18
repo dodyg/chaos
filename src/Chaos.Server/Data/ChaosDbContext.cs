@@ -17,6 +17,9 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<SyncEntityRow> SyncEntities => Set<SyncEntityRow>();
     public DbSet<SyncChangeRow> SyncChanges => Set<SyncChangeRow>();
+    public DbSet<BlobRow> Blobs => Set<BlobRow>();
+    public DbSet<BlobUploadRow> BlobUploads => Set<BlobUploadRow>();
+    public DbSet<BlobPartRow> BlobParts => Set<BlobPartRow>();
 
     /// <summary>Provider options shared by the service, the design-time factory and the tests.</summary>
     public static DbContextOptionsBuilder Configure(DbContextOptionsBuilder builder, string connectionString)
@@ -38,6 +41,9 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new AuditEventConfiguration());
         modelBuilder.ApplyConfiguration(new SyncEntityConfiguration());
         modelBuilder.ApplyConfiguration(new SyncChangeConfiguration());
+        modelBuilder.ApplyConfiguration(new BlobConfiguration());
+        modelBuilder.ApplyConfiguration(new BlobUploadConfiguration());
+        modelBuilder.ApplyConfiguration(new BlobPartConfiguration());
     }
 
     private static string InList(IEnumerable<string> values) => string.Join(", ", values.Select(v => $"'{v}'"));
@@ -130,6 +136,47 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.HasIndex(x => new { x.AccountId, x.ChangeId }).IsUnique().HasDatabaseName("UX_SyncChanges_ChangeId");
             e.HasIndex(x => new { x.AccountId, x.CreatedAt }).HasDatabaseName("IX_SyncChanges_CreatedAt");
             e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    private sealed class BlobConfiguration : IEntityTypeConfiguration<BlobRow>
+    {
+        public void Configure(EntityTypeBuilder<BlobRow> e)
+        {
+            e.ToTable("Blobs", t =>
+            {
+                t.HasCheckConstraint("CK_Blobs_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
+                t.HasCheckConstraint("CK_Blobs_ByteSize", "\"ByteSize\" >= 0");
+                t.HasCheckConstraint("CK_Blobs_State", $"\"State\" IN ({InList(BlobStates.All)})");
+            });
+            e.HasKey(x => new { x.AccountId, x.Sha256 });
+            e.HasIndex(x => x.UnreferencedSince).HasDatabaseName("IX_Blobs_UnreferencedSince");
+            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    private sealed class BlobUploadConfiguration : IEntityTypeConfiguration<BlobUploadRow>
+    {
+        public void Configure(EntityTypeBuilder<BlobUploadRow> e)
+        {
+            e.ToTable("BlobUploads", t =>
+            {
+                t.HasCheckConstraint("CK_BlobUploads_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
+                t.HasCheckConstraint("CK_BlobUploads_ByteSize", "\"ByteSize\" >= 0 AND \"PartCount\" >= 0");
+            });
+            e.HasKey(x => new { x.AccountId, x.Sha256 });
+            e.HasIndex(x => x.UpdatedAt).HasDatabaseName("IX_BlobUploads_UpdatedAt");
+            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    private sealed class BlobPartConfiguration : IEntityTypeConfiguration<BlobPartRow>
+    {
+        public void Configure(EntityTypeBuilder<BlobPartRow> e)
+        {
+            e.ToTable("BlobParts", t => t.HasCheckConstraint("CK_BlobParts_PartIndex", "\"PartIndex\" >= 0 AND \"ByteSize\" > 0"));
+            e.HasKey(x => new { x.AccountId, x.Sha256, x.PartIndex });
+            e.HasOne<BlobUploadRow>().WithMany().HasForeignKey(x => new { x.AccountId, x.Sha256 }).OnDelete(DeleteBehavior.Cascade);
         }
     }
 

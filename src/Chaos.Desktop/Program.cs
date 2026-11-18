@@ -153,6 +153,11 @@ internal static class Program
         using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
             new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
         syncEngine.Start();
+        // Attachment bytes (PLAN2 P16): uploads follow the metadata, downloads follow the 5 MiB / pinned / on-open rules. A finished sync cycle wakes it.
+        using var attachmentTransfer = new Chaos.Infrastructure.Attachments.AttachmentTransfer(storage.Store, attachmentFiles, serviceClient, TimeProvider.System);
+        attachmentCommands.Availability = attachmentTransfer;
+        syncEngine.CycleFinished += _ => attachmentTransfer.Wake();
+        attachmentTransfer.Start();
         var syncStatus = new Chaos.Infrastructure.Sync.SyncStatusReader(storage.Store, syncEngine);
         var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, TimeProvider.System, syncEngine.Wake);
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
@@ -228,7 +233,7 @@ internal static class Program
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System))));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory));
+                rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory, transfer: attachmentTransfer));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -620,6 +625,10 @@ internal static class Program
 [JsonSerializable(typeof(AttachmentCropDto))]
 [JsonSerializable(typeof(AttachmentEditImageRequest))]
 [JsonSerializable(typeof(AttachmentThumbnailRequest))]
+[JsonSerializable(typeof(AttachmentRetryRequest))]
+[JsonSerializable(typeof(AttachmentOfflineRequest))]
+[JsonSerializable(typeof(AttachmentOfflineListRequest))]
+[JsonSerializable(typeof(AttachmentOfflineResponse))]
 [JsonSerializable(typeof(CaptureSpanDto))]
 [JsonSerializable(typeof(CapturePreviewRequest))]
 [JsonSerializable(typeof(CaptureTokenDto))]

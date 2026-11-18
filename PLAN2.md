@@ -2599,7 +2599,7 @@ synced `Devices` table for display names). **Read:** section 7.13 and 8.6.
 of both, without duplicate tags or lists. Signing out and deleting the account behave as the
 dialogs promise.
 
-### [ ] P15 — Realtime, sync status and attention
+### [x] P15 — Realtime, sync status and attention
 
 **Depends on:** P14. **Migration:** none.
 
@@ -2632,7 +2632,26 @@ always see whether everything is synced.
 
 ### [ ] P16 — Attachment sync, malware checks and offline lists
 
-**Depends on:** P15 and P9. **Server migration:** `S003_Blobs` (EF Core). **Read:** section 9.2 and 8.5.
+**Depends on:** P15 and P9. **Server migration:** `S003_Blobs` (EF Core). **Client migration:** `034_attachment_sync.sql`
+(`AttachmentLocalState` gains `Remote`, `NextTryUtc`, `Failures`; new local table `OfflineContainers`). **Read:** section 9.2 and 8.5.
+
+**Progress note 2026-11-18 (items 1 to 3 done, except as listed).** Server (`Chaos.Server/Blobs`): ports `IBlobStore`, `IMalwareScanner`,
+`IKeyWrapper`; `BlobCrypto` (AES-256-GCM, 1 MiB chunks, random nonce, chunk index authenticated, so a swapped, truncated or tampered chunk
+fails); adapters `FileBlobStore`, `FileKeyWrapper` (master key file), `ClamAvScanner` (clamd INSTREAM), `EicarScanner` (development
+only; any other host must set `Clam:Host`, `Blob:Directory` and `KeyVault:MasterKeyPath`). Endpoints `HEAD|POST|PUT ?part=N|GET /v1/blobs/{sha}`
+and `POST .../complete`; a blocked blob keeps a `Blocked` row and no bytes, so every device can see the state; a scanner that is down never
+means clean (the parts stay, the device retries). Quota is checked at start and counted atomically at completion (`quota`, audited).
+`BlobSweepService` removes blobs no live attachment references for 7 days and unfinished uploads after a day. Account deletion removes
+the objects. `/health/ready` now checks the store and scanner. Client: `IBlobTransport` (implemented by `ChaosServiceClient`),
+`AttachmentTransfer` (upload queue one file at a time and resumable; automatic download up to 5 MiB; pinned lists, the pad and pages
+prefetch; on-open download shared between callers; back-off per hash), `AttachmentCommands.Availability` so opening a missing file fetches
+it, attachment DTO `sync`/`percent`/`note`, `attachment.retry|setOffline|offlineContainers`, the attention items `attachment.blocked` and
+`attachment.quota`, the `TransferNote` in the attachment panel and card, and the "Keep available offline" checkbox in list and project
+settings. Tests: `BlobTests` (16, server side) and `BlobSyncTests` (7, two real desktops).
+Not done: an S3-compatible `IBlobStore` and the MinIO and ClamAV containers in the AppHost (only the local-folder store exists); a vault
+`IKeyWrapper`; the live ClamAV integration test (the clamd client is written but untested against a real daemon); downloads restart
+instead of resuming from a byte offset; "Keep available offline" is offered for lists and projects but not shown in the sidebar; no live
+check over a real network.
 
 1. Server:
    - Blob endpoints: resumable upload, verify the hash, scan through `IMalwareScanner`, encrypt
@@ -2663,7 +2682,7 @@ opened. A file containing EICAR is blocked on both devices.
 
 ### [ ] P17 — Cross-device behaviour: reminders, GitHub runner, calendars, summaries
 
-**Depends on:** P15. **Migration:** `034_cross_device.sql` (`ReminderAcknowledgements`, synced;
+**Depends on:** P15. **Migration:** `035_cross_device.sql` (`ReminderAcknowledgements`, synced;
 `GitHubConnections.RunnerDeviceId`). **Read:** sections 7.5 and 7.11.
 
 1. **Reminder acknowledgements.** Every Done/Dismiss/Snooze action writes an acknowledgement row
@@ -2875,8 +2894,9 @@ If a number is already taken when you start, use the next free number and update
 | 032 | P10 | Pad item kind, drawings, region links |
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |
 | 033 | P14 | Account binding, devices display table |
-| 034 | P17 | Reminder acknowledgements, GitHub runner device |
-| 035 | P19 | Place reminders (only if D1) |
+| 034 | P16 | Attachment transfer state (`Remote`, `NextTryUtc`, `Failures`), `OfflineContainers` (P16 took 034 because P17 had not landed) |
+| 035 | P17 | Reminder acknowledgements, GitHub runner device |
+| 036 | P19 | Place reminders (only if D1) |
 | S001–S004 | P12, P13, P16, P18 | Server EF Core migrations: accounts/auth with OpenIddict, sync, blobs, calendar feed tokens |
 
 ## Appendix B — Dependencies to resolve and pin

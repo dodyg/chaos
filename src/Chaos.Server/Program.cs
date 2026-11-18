@@ -1,6 +1,7 @@
 using Chaos.Server;
 using Chaos.Server.Api;
 using Chaos.Server.Auth;
+using Chaos.Server.Blobs;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
 using Chaos.ServiceDefaults;
@@ -26,6 +27,7 @@ builder.AddNpgsqlDbContext<ChaosDbContext>(
 builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
 builder.Services.AddServiceRateLimits();
 builder.Services.AddSyncService(builder.Configuration);
+builder.Services.AddBlobService(builder.Configuration, builder.Environment);
 
 var app = builder.Build();
 

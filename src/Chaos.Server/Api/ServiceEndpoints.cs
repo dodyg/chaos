@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Chaos.Server.Auth;
+using Chaos.Server.Blobs;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -61,6 +62,7 @@ public static class ServiceEndpoints
         v1.MapDelete("/account", DeleteAccount);
         v1.MapDelete("/devices/{id:guid}", RevokeDevice);
         v1.MapSyncEndpoints();
+        v1.MapBlobEndpoints();
     }
 
     private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>
@@ -204,7 +206,7 @@ public static class ServiceEndpoints
     /// Deletes the account and everything the service holds for it (PLAN2 §8.6). It needs a sign-in made in the last ten minutes
     /// and the typed phrase. Other devices learn the next time they call (401 <c>account-deleted</c>) and keep their local data.
     /// </summary>
-    private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
+    private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, ChaosDbContext db, BlobService blobs, TimeProvider clock, CancellationToken ct)
     {
         if (Caller(user) is not { } caller)
         {
@@ -248,6 +250,8 @@ public static class ServiceEndpoints
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
         });
+        // The rows are gone with the account (cascade); now the encrypted objects and any unfinished upload parts (PLAN2 §8.6).
+        await blobs.DeleteAccountObjectsAsync(caller.AccountId, ct);
         return Results.NoContent();
     }
 
