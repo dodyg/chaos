@@ -761,7 +761,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
-      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1>
+      <div className="flex items-center gap-2 px-2 pb-3"><h1 className="flex items-center gap-2 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1><div className="ml-auto min-w-0"><SyncIndicator compact onOpen={() => { setEditing(null); setShowTagSettings(false); setSettingsTab("account"); setView("settings"); }}/></div></div>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
@@ -820,7 +820,6 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       </SidebarSection>
       <DeletedItems className="pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
       <div className="sticky -bottom-4 mt-auto -mx-3 -mb-4 bg-sidebar">
-      <div className="px-2 pt-1"><SyncIndicator onOpen={() => { setEditing(null); setShowTagSettings(false); setSettingsTab("account"); setView("settings"); }}/></div>
       <nav aria-label="App" className="flex items-stretch gap-0.5 border-t border-sidebar-border bg-sidebar px-2 py-1.5">
         {([
           ["notifications", "Notifications", "Alerts", <Bell/>],

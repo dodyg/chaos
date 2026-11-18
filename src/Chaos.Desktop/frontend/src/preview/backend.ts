@@ -391,6 +391,16 @@ function accountHandlers(): Record<string, Handler> {
     },
   };
 }
+// Sync status (PLAN2 P15): the preview always shows a synced fake account so the sidebar indicator can be seen.
+function syncStatusHandlers(): Record<string, Handler> {
+  let lastSynced = new Date().toISOString();
+  const status = () => ok({ kind: "Synced", lastSyncedUtc: lastSynced, pending: 0, detail: null, attention: [] });
+  return {
+    "syncStatus.status": status,
+    "syncStatus.syncNow": () => { lastSynced = new Date().toISOString(); return status(); },
+    "syncStatus.dismiss": status,
+  };
+}
 function calendarHandlers(): Record<string, Handler> {
   type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showMeetings?: boolean; showCompleted?: boolean } | null;
   const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
@@ -772,6 +782,7 @@ const handlers: Record<string, Handler> = {
   ...calendarsHandlers(),
   ...googleHandlers(),
   ...accountHandlers(),
+  ...syncStatusHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
   ...attachmentHandlers(),

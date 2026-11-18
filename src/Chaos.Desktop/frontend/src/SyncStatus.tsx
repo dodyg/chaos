@@ -47,6 +47,17 @@ export function statusLabel(status: SyncStatusResponse): string {
   }
 }
 
+/** The short form for the sidebar header, where there is room for one word. The full text stays in the tooltip. */
+export function shortLabel(status: SyncStatusResponse): string {
+  switch (status.kind) {
+    case "Synced": return "Synced";
+    case "Syncing": return "Syncing…";
+    case "Offline": return status.pending > 0 ? `Offline (${status.pending})` : "Offline";
+    case "NeedsAttention": return `Attention (${status.attention.length})`;
+    default: return statusLabel(status);
+  }
+}
+
 const icons: Record<string, React.ReactNode> = {
   Synced: <Check/>, Syncing: <RefreshCw className="animate-spin motion-reduce:animate-none"/>, Offline: <CloudOff/>,
   NeedsAttention: <AlertTriangle/>, SignedOut: <LogOut/>, UpdateNeeded: <AlertTriangle/>,
@@ -56,13 +67,14 @@ const icons: Record<string, React.ReactNode> = {
  * The small indicator in the sidebar footer (PLAN2 P15 item 3). It never blocks and is never modal; a computer that never used an
  * account shows nothing. Clicking opens Settings → Account, where the Sync page lives.
  */
-export function SyncIndicator({ api = syncStatusRpc, onOpen }: { api?: SyncApi; onOpen: () => void }) {
+export function SyncIndicator({ api = syncStatusRpc, onOpen, compact = false }: { api?: SyncApi; onOpen: () => void; compact?: boolean }) {
   const { status } = useSyncStatus(api);
   if (status.kind === "Hidden") return null;
+  const label = compact ? shortLabel(status) : statusLabel(status);
   const warn = status.kind === "NeedsAttention" || status.kind === "UpdateNeeded" || status.kind === "SignedOut";
   return <button type="button" data-sync-state={status.kind} title={status.detail ?? statusLabel(status)} onClick={onOpen}
     className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left text-xs outline-none hover:bg-sidebar-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 [&_svg]:size-3.5 [&_svg]:shrink-0 ${warn ? "text-destructive" : "text-muted-foreground"}`}>
-    {icons[status.kind]}<span role="status" className="truncate">{statusLabel(status)}</span>
+    {icons[status.kind]}<span role="status" className="truncate">{label}</span>
   </button>;
 }
 
