@@ -42,7 +42,7 @@ public sealed class SyncEngineOptions
 }
 
 /// <summary>What the engine is doing right now, for the status indicator (PLAN2 P15 item 3).</summary>
-public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool UpdateNeeded, bool Streaming, DateTimeOffset? LastSuccessAt = null);
+public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool UpdateNeeded, bool Streaming, DateTimeOffset? LastSuccessAt = null, string? FailureDetail = null);
 
 /// <summary>What one sync cycle did.</summary>
 public sealed record SyncCycleResult(bool Ran, long Pushed, long Pulled, bool SnapshotUsed, string? Problem);
@@ -302,7 +302,7 @@ public sealed class SyncEngine : IDisposable
                 await UploadCalendarCachesAsync(ct);
                 await RecordAsync(error: null, pushed > 0, pulled > 0 || snapshot, ct);
                 var finished = _clock.GetUtcNow();
-                SetRuntime(r => r with { Failure = null, LastSuccessAt = finished });
+                SetRuntime(r => r with { Failure = null, FailureDetail = null, LastSuccessAt = finished });
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, null));
             }
             catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
@@ -321,7 +321,7 @@ public sealed class SyncEngine : IDisposable
                     _ => error.Message,
                 };
                 await RecordAsync(problem, false, false, ct);
-                SetRuntime(r => r with { Failure = error.Kind });
+                SetRuntime(r => r with { Failure = error.Kind, FailureDetail = problem });
 
                 // Signed out or refused is not something a retry fixes; only connectivity is.
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
@@ -467,7 +467,13 @@ public sealed class SyncEngine : IDisposable
         {
             var json = JsonSerializer.Serialize(cache);
             var response = await _service.CallAsync(HttpMethod.Post, "v1/sync/calendar-cache", json, ct);
-            if (!response.Ok) throw new ChaosServiceException(ServiceFailure.Refused, ProblemText(response));
+            if (!response.Ok)
+            {
+                var detail = response.Status == 404
+                    ? "The online service does not support calendar sync yet. Update or restart the server."
+                    : ProblemText(response);
+                throw new ChaosServiceException(ServiceFailure.Refused, detail);
+            }
         }
     }
 

@@ -92,7 +92,13 @@ public sealed class SyncStatusReader(SqliteApplicationStore store, SyncEngine en
             return new SyncStatus(SyncStatusKind.UpdateNeeded, lastSynced, pending, attention, "Update Chaos to keep syncing.");
         }
 
-        if (runtime.Failure is not null)
+        if (runtime.Failure is not null and not ServiceFailure.Offline)
+        {
+            return new SyncStatus(SyncStatusKind.NeedsAttention, lastSynced, pending, attention,
+                runtime.FailureDetail ?? "The online service could not complete sync. Try syncing again.");
+        }
+
+        if (runtime.Failure == ServiceFailure.Offline)
         {
             return new SyncStatus(SyncStatusKind.Offline, lastSynced, pending, attention,
                 pending > 0 ? $"Offline. {pending} {(pending == 1 ? "change is" : "changes are")} waiting." : "Offline. Nothing is waiting.");
