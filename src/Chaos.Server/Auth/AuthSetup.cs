@@ -29,6 +29,13 @@ public static class DesktopClient
     /// <summary>The device the sign-in is for: sent on the authorize request and bound into the tokens.</summary>
     public const string DeviceIdParameter = "device_id";
     public const string DeviceIdClaim = "device_id";
+
+    /// <summary>When the person last proved who they are (Unix seconds), carried through refreshes; account deletion needs it to be recent (PLAN2 §8.6).</summary>
+    public const string AuthTimeClaim = "auth_time";
+
+    /// <summary>The words in a refused token or request that tell the desktop why, so it can go offline-only (PLAN2 P14 item 3).</summary>
+    public const string DeviceRevokedCode = "device-revoked";
+    public const string AccountDeletedCode = "account-deleted";
 }
 
 public static class AuthSetup
@@ -77,7 +84,7 @@ public static class AuthSetup
 
         openiddict.AddServer(options =>
         {
-            options.SetAuthorizationEndpointUris("/connect/authorize").SetTokenEndpointUris("/connect/token");
+            options.SetAuthorizationEndpointUris("/connect/authorize").SetTokenEndpointUris("/connect/token").SetRevocationEndpointUris("/connect/revocation");
             options.AllowAuthorizationCodeFlow().AllowRefreshTokenFlow();
             options.RequireProofKeyForCodeExchange();
             options.RegisterScopes(Scopes.OfflineAccess, DesktopClient.Scope);
@@ -191,6 +198,7 @@ public static class AuthSetup
             {
                 Permissions.Endpoints.Authorization,
                 Permissions.Endpoints.Token,
+                Permissions.Endpoints.Revocation,
                 Permissions.GrantTypes.AuthorizationCode,
                 Permissions.GrantTypes.RefreshToken,
                 Permissions.ResponseTypes.Code,

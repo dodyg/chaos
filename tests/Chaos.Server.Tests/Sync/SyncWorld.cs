@@ -83,12 +83,16 @@ internal sealed class SyncDevice : IAsyncDisposable
 
     public SqliteApplicationStore Store => Storage.Store;
 
-    public static async Task<SyncDevice> StartAsync(TestServer server, string email, DateTimeOffset start, SyncEngineOptions? options = null)
+    /// <summary>
+    /// <paramref name="joined"/> false makes a computer that is signed in but has not joined: sync is off and its profile, Personal space and
+    /// Inbox IDs are its own random ones, as a computer with its own data would have (the account's join flow then takes over).
+    /// </summary>
+    public static async Task<SyncDevice> StartAsync(TestServer server, string email, DateTimeOffset start, SyncEngineOptions? options = null, bool joined = true)
     {
         var root = Path.Combine(Path.GetTempPath(), "chaos-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var clock = new ManualClock(start);
-        var ids = new SharedSeedIds();
+        IIdGenerator ids = joined ? new SharedSeedIds() : new GuidIdGenerator();
         var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.2.1", ids, clock, CancellationToken.None);
         var network = new FlakyNetwork(server.Factory.Server.CreateHandler());
         var secrets = new MemorySecretStore();
@@ -105,7 +109,11 @@ internal sealed class SyncDevice : IAsyncDisposable
             Root = root, Storage = storage, Clock = clock, Ids = ids, Client = client, Engine = engine, Network = network, Secrets = secrets,
             Tasks = new TaskCommands(storage.Store, ids, clock),
         };
-        await device.ExecuteAsync("UPDATE SyncState SET Enabled = 1 WHERE Id = 1;");
+        if (joined)
+        {
+            await device.ExecuteAsync("UPDATE SyncState SET Enabled = 1 WHERE Id = 1;");
+        }
+
         return device;
     }
 
@@ -202,11 +210,11 @@ internal sealed class SyncWorld : IAsyncDisposable
     public static async Task<SyncWorld> StartAsync(PostgresServer postgres, Dictionary<string, string?>? settings = null, Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configure = null) =>
         new() { Server = await TestServer.StartAsync(postgres, settings, configure) };
 
-    public async Task<SyncDevice> AddDeviceAsync(DateTimeOffset? start = null, SyncEngineOptions? options = null)
+    public async Task<SyncDevice> AddDeviceAsync(DateTimeOffset? start = null, SyncEngineOptions? options = null, bool joined = true)
     {
-        var device = await SyncDevice.StartAsync(Server, Email, start ?? new DateTimeOffset(2026, 11, 15, 9, 0, 0, TimeSpan.Zero), options);
+        var device = await SyncDevice.StartAsync(Server, Email, start ?? new DateTimeOffset(2026, 11, 15, 9, 0, 0, TimeSpan.Zero), options, joined);
         _devices.Add(device);
-        if (_devices.Count == 1)
+        if (joined && _devices.Count == 1)
         {
             // P14 binds the account's canonical ids on the first device; the tests do it directly.
             await using var db = ServerDatabase.Open(Server.ConnectionString);

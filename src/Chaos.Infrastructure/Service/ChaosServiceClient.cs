@@ -84,7 +84,11 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
     // ---- Sign-in -------------------------------------------------------------------------------------
 
-    public async Task<ServiceAccount> SignInAsync(CancellationToken ct)
+    public Task<ServiceAccount> SignInAsync(CancellationToken ct) => SignInCoreAsync(fresh: false, ct);
+
+    public Task<ServiceAccount> ReauthenticateAsync(CancellationToken ct) => SignInCoreAsync(fresh: true, ct);
+
+    private async Task<ServiceAccount> SignInCoreAsync(bool fresh, CancellationToken ct)
     {
         var options = Require();
         var device = await _identity.GetAsync(ct);
@@ -95,7 +99,8 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         using var redirect = new LoopbackRedirect(CallbackPath);
         var url = new Uri(options.BaseAddress, "connect/authorize?" + Query(
             ("client_id", ClientId), ("response_type", "code"), ("scope", Scope), ("redirect_uri", redirect.Uri.ToString()),
-            ("state", state), ("code_challenge", challenge), ("code_challenge_method", "S256"), ("device_id", device.Id.ToString("D"))));
+            ("state", state), ("code_challenge", challenge), ("code_challenge_method", "S256"), ("device_id", device.Id.ToString("D")),
+            ("prompt", fresh ? "login" : "")));
         if (!_browser.Open(url))
         {
             throw new ChaosServiceException(ServiceFailure.Other, "Chaos could not open your web browser to sign in.");
@@ -133,6 +138,18 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
     public async Task SignOutAsync(CancellationToken ct)
     {
+        // Tell the service first, while the token still exists: a revoked refresh token can never be used again, even if a copy
+        // were kept. With no connection the token is simply forgotten here (best effort).
+        if (_options() is not null && await _secrets.GetAsync(RefreshKey, ct) is { } refresh)
+        {
+            await TryRevokeAsync(refresh, ct);
+        }
+
+        await ForgetSignInAsync(ct);
+    }
+
+    private async Task ForgetSignInAsync(CancellationToken ct)
+    {
         lock (_cacheGate)
         {
             _accessToken = null;
@@ -140,6 +157,24 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
         await _secrets.DeleteAsync(RefreshKey, ct);
         await _secrets.DeleteAsync(EmailKey, ct);
+    }
+
+    private async Task TryRevokeAsync(string refreshToken, CancellationToken ct)
+    {
+        try
+        {
+            using var shortCall = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            shortCall.CancelAfter(TimeSpan.FromSeconds(5));
+            await PostFormAsync("connect/revocation", [("client_id", ClientId), ("token", refreshToken), ("token_type_hint", "refresh_token")], shortCall.Token);
+        }
+        catch (ChaosServiceException)
+        {
+            // Offline or unreachable: the token is removed from this computer either way.
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Took too long: same.
+        }
     }
 
     // ---- Account and devices -------------------------------------------------------------------------
@@ -151,7 +186,27 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         var dto = await response.Content.ReadFromJsonAsync<AccountDto>(Json, ct) ?? throw new ChaosServiceException(ServiceFailure.Other, "The service sent an unreadable answer.");
         await _secrets.SetAsync(EmailKey, dto.Email, ct);
         return new ServiceAccount(dto.Email, dto.DisplayName, dto.StorageBytes, dto.StorageQuotaBytes,
-            [.. dto.Devices.Select(d => new ServiceDevice(d.Id, d.Name, d.Platform, d.ClientVersion, d.CreatedAt, d.LastSeenAt, d.Current))]);
+            [.. dto.Devices.Select(d => new ServiceDevice(d.Id, d.Name, d.Platform, d.ClientVersion, d.CreatedAt, d.LastSeenAt, d.Current))],
+            dto.Id,
+            dto.Canonical is { } ids ? new AccountCanonicalIds(dto.Id, ids.ProfileId, ids.PersonalSpaceId, ids.InboxId) : null,
+            dto.Counts is { } counts ? new AccountContentCounts(counts.Tasks, counts.Lists, counts.Tags, counts.Pages) : null);
+    }
+
+    public async Task<(bool Bound, AccountCanonicalIds Canonical)> BindAccountAsync(Guid profileId, Guid personalSpaceId, Guid inboxId, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Post, "v1/account/bind", new { profileId, personalSpaceId, inboxId }, ct);
+        await EnsureSuccessAsync(response, ct);
+        var answer = await response.Content.ReadFromJsonAsync<BindDto>(Json, ct) ?? throw new ChaosServiceException(ServiceFailure.Other, "The service sent an unreadable answer.");
+        var account = await GetAccountAsync(ct);
+        return (answer.Bound, new AccountCanonicalIds(account.AccountId ?? Guid.Empty, answer.Canonical.ProfileId, answer.Canonical.PersonalSpaceId, answer.Canonical.InboxId));
+    }
+
+    public async Task DeleteAccountAsync(string confirmation, CancellationToken ct)
+    {
+        using var response = await SendAuthorizedAsync(HttpMethod.Delete, "v1/account", new { confirmation }, ct);
+        await EnsureSuccessAsync(response, ct);
+        // The service dropped every token with the account, so there is nothing to revoke; just forget them here.
+        await ForgetSignInAsync(ct);
     }
 
     public async Task RevokeDeviceAsync(Guid deviceId, CancellationToken ct)
@@ -195,8 +250,8 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
                 if (response.Status == HttpStatusCode.BadRequest && IsGrantError(response.Body))
                 {
                     // Revoked, reused or expired: this sign-in is over, so do not keep a token that can never work.
-                    await SignOutAsync(ct);
-                    throw new ChaosServiceException(ServiceFailure.SignInAgain, "Your sign-in to the online service ended. Sign in again.");
+                    await ForgetSignInAsync(ct);
+                    throw GrantEnded(response.Body);
                 }
 
                 throw new ChaosServiceException(ServiceFailure.Other, "The online service did not renew the sign-in.");
@@ -240,6 +295,22 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
             token = _accessToken ?? string.Empty;
             return _accessToken is not null && _clock.GetUtcNow() < _accessExpires;
         }
+    }
+
+    /// <summary>The refresh was refused because the device or the account is gone (the service says which), or the sign-in simply ended.</summary>
+    private static ChaosServiceException GrantEnded(string body)
+    {
+        if (body.Contains("device-revoked", StringComparison.Ordinal))
+        {
+            return new ChaosServiceException(ServiceFailure.DeviceRevoked, "This computer was removed from your account. It keeps its data and works offline.");
+        }
+
+        if (body.Contains("account-deleted", StringComparison.Ordinal))
+        {
+            return new ChaosServiceException(ServiceFailure.AccountDeleted, "Your account was deleted. This computer keeps its data and works offline.");
+        }
+
+        return new ChaosServiceException(ServiceFailure.SignInAgain, "Your sign-in to the online service ended. Sign in again.");
     }
 
     private static bool IsGrantError(string body)
@@ -294,10 +365,20 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
                 return response;
             }
 
+            var code = await ReadCodeAsync(response, ct);
             response.Dispose();
             lock (_cacheGate)
             {
                 _accessToken = null;
+            }
+
+            // A 401 that names its reason is final: a fresh token cannot bring a device or an account back.
+            if (code is "device-revoked" or "account-deleted")
+            {
+                await ForgetSignInAsync(ct);
+                throw code == "device-revoked"
+                    ? new ChaosServiceException(ServiceFailure.DeviceRevoked, "This computer was removed from your account. It keeps its data and works offline.")
+                    : new ChaosServiceException(ServiceFailure.AccountDeleted, "Your account was deleted. This computer keeps its data and works offline.");
             }
 
             if (attempt == 1)
@@ -343,6 +424,11 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         }
 
         var detail = await ReadDetailAsync(response, ct);
+        if (response.StatusCode == HttpStatusCode.Forbidden && await ReadCodeAsync(response, ct) == "fresh-sign-in-required")
+        {
+            throw new ChaosServiceException(ServiceFailure.FreshSignInRequired, detail ?? "Sign in again to confirm this.");
+        }
+
         throw response.StatusCode switch
         {
             HttpStatusCode.Unauthorized => new ChaosServiceException(ServiceFailure.SignInAgain, "The online service no longer accepts this sign-in. Sign in again."),
@@ -351,6 +437,19 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
                 new ChaosServiceException(ServiceFailure.Refused, detail ?? "The online service refused the request."),
             _ => new ChaosServiceException(ServiceFailure.Other, $"The online service answered with an error ({(int)response.StatusCode})."),
         };
+    }
+
+    private static async Task<string?> ReadCodeAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            return document.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static async Task<string?> ReadDetailAsync(HttpResponseMessage response, CancellationToken ct)
@@ -373,9 +472,15 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
     private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static string Query(params (string Name, string Value)[] pairs) =>
-        string.Join('&', pairs.Select(p => $"{Uri.EscapeDataString(p.Name)}={Uri.EscapeDataString(p.Value)}"));
+        string.Join('&', pairs.Where(p => p.Value.Length > 0).Select(p => $"{Uri.EscapeDataString(p.Name)}={Uri.EscapeDataString(p.Value)}"));
 
     private sealed record DeviceDto(Guid Id, string Name, string Platform, string ClientVersion, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Current);
 
-    private sealed record AccountDto(Guid Id, string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, List<DeviceDto> Devices);
+    private sealed record IdsDto(Guid ProfileId, Guid PersonalSpaceId, Guid InboxId);
+
+    private sealed record CountsDto(long Tasks, long Lists, long Tags, long Pages);
+
+    private sealed record BindDto(bool Bound, IdsDto Canonical);
+
+    private sealed record AccountDto(Guid Id, string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, List<DeviceDto> Devices, IdsDto? Canonical = null, CountsDto? Counts = null);
 }

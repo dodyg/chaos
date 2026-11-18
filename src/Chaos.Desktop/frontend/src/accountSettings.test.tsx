@@ -35,15 +35,22 @@ const account = (): AccountInfoDto => ({
 const errorOf = (kind: string, message: string) => ({ kind, message });
 const signedOutStatus = { ok: true, configured: true, signedIn: false, email: null, serviceHost: null, error: null };
 
-function rig(options: { configured?: boolean; signedIn?: boolean; signIn?: () => unknown; account?: () => unknown; revoke?: (id: string) => unknown; setAddress?: (address: string) => unknown } = {}) {
+const joinedPreview = { ok: true, case: "AlreadyJoined", local: { tasks: 0, lists: 0, tags: 0, pages: 0 }, account: null, defaultMode: "Merge", error: null };
+
+function rig(options: { configured?: boolean; signedIn?: boolean; signIn?: () => unknown; account?: () => unknown; revoke?: (id: string) => unknown; setAddress?: (address: string) => unknown; preview?: unknown; deleteAccount?: (confirmation: string) => unknown } = {}) {
   const calls: { method: string; request: unknown }[] = [];
   let configured = options.configured ?? true;
+  let joined = false;
   const api = {
     status: async () => ({ ok: true, configured, signedIn: options.signedIn ?? false, email: options.signedIn ? "me@example.com" : null, serviceHost: "sync.example.com", error: null }),
     account: async () => options.account ? options.account() : { ok: true, account: account(), error: null },
     signIn: async (request: unknown) => { calls.push({ method: "signIn", request }); return options.signIn ? options.signIn() : { ok: true, account: account(), error: null }; },
     cancelSignIn: async (request: unknown) => { calls.push({ method: "cancelSignIn", request }); return signedOutStatus; },
-    signOut: async (request: unknown) => { calls.push({ method: "signOut", request }); return signedOutStatus; },
+    leave: async (request: unknown) => { calls.push({ method: "leave", request }); return signedOutStatus; },
+    joinPreview: async () => joined ? joinedPreview : options.preview ?? joinedPreview,
+    join: async (request: unknown) => { joined = true; calls.push({ method: "join", request }); return { ok: true, case: "ChooseData", mode: (request as { mode: string }).mode, safetyBackup: "chaos-1.db", error: null }; },
+    deleteAccount: async (request: { confirmation: string }) => { calls.push({ method: "deleteAccount", request }); return options.deleteAccount ? options.deleteAccount(request.confirmation) : signedOutStatus; },
+    reauthenticate: async (request: unknown) => { calls.push({ method: "reauthenticate", request }); return { ok: true, account: account(), error: null }; },
     address: async () => ({ ok: true, address: configured ? "https://sync.example.com/" : null, source: configured ? "Setting" : "None", saved: configured ? "https://sync.example.com/" : null, error: null }),
     setAddress: async (request: { address: string }) => {
       calls.push({ method: "setAddress", request });
@@ -158,13 +165,110 @@ test("removing this computer signs out here", async () => {
   await screen.findByRole("button", { name: /Create an account or sign in/ });
 });
 
-test("sign out returns to the signed-out view", async () => {
+test("sign out asks what happens to the data, then returns to the signed-out view", async () => {
   const { api, calls } = rig({ signedIn: true });
   const user = userEvent.setup();
   render(<AccountSettings api={api}/>);
   await user.click(await screen.findByRole("button", { name: /Sign out/ }));
+  assert.equal(calls.filter(call => call.method === "leave").length, 0);
+  await user.click(within(screen.getByRole("group", { name: "Sign out" })).getByRole("button", { name: "Keep data on this device" }));
   await screen.findByRole("button", { name: /Create an account or sign in/ });
-  assert.ok(calls.some(call => call.method === "signOut"));
+  assert.deepEqual(calls.filter(call => call.method === "leave").map(call => call.request), [{ keepData: true }]);
+});
+
+test("sign out can remove the account's data from this device", async () => {
+  const { api, calls } = rig({ signedIn: true });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await user.click(await screen.findByRole("button", { name: /Sign out/ }));
+  await user.click(screen.getByRole("button", { name: "Remove the account's data from this device" }));
+  await screen.findByRole("button", { name: /Create an account or sign in/ });
+  assert.deepEqual(calls.filter(call => call.method === "leave").map(call => call.request), [{ keepData: false }]);
+});
+
+const local = { tasks: 4, lists: 2, tags: 3, pages: 1 };
+const remote = { tasks: 40, lists: 5, tags: 9, pages: 7 };
+
+test("the first device is offered to start syncing, with its own counts", async () => {
+  const { api, calls } = rig({ signedIn: true, preview: { ...joinedPreview, case: "FirstDevice", local } });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  const panel = await screen.findByRole("group", { name: "Start syncing" });
+  assert.ok(within(panel).getByText(/4 tasks, 2 lists, 3 tags, 1 pages/));
+  await user.click(within(panel).getByRole("button", { name: "Start syncing" }));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Start syncing" }), null));
+  assert.equal(calls.filter(call => call.method === "join").length, 1);
+});
+
+test("joining an account that has data shows both sides and defaults to merge", async () => {
+  const { api, calls } = rig({ signedIn: true, preview: { ...joinedPreview, case: "ChooseData", local, account: remote, defaultMode: "Merge" } });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  const panel = await screen.findByRole("group", { name: "Join your account" });
+  assert.ok(within(panel).getByText(/4 tasks, 2 lists, 3 tags, 1 pages/));
+  assert.ok(within(panel).getByText(/40 tasks, 5 lists, 9 tags, 7 pages/));
+  assert.equal((within(panel).getByRole("radio", { name: /Merge this computer's data/ }) as HTMLInputElement).checked, true);
+  assert.ok(within(panel).getByText(/safety backup/i));
+  await user.click(within(panel).getByRole("button", { name: "Merge and start syncing" }));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Join your account" }), null));
+  assert.deepEqual(calls.filter(call => call.method === "join").map(call => call.request), [{ mode: "Merge" }]);
+});
+
+test("replacing asks to confirm before it removes this computer's data", async () => {
+  const { api, calls } = rig({ signedIn: true, preview: { ...joinedPreview, case: "ChooseData", local, account: remote, defaultMode: "Merge" } });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  const panel = await screen.findByRole("group", { name: "Join your account" });
+  await user.click(within(panel).getByRole("radio", { name: /Replace this computer's data/ }));
+  await user.click(within(panel).getByRole("button", { name: "Replace and start syncing" }));
+  assert.equal(calls.filter(call => call.method === "join").length, 0);
+  await user.click(within(screen.getByRole("group", { name: "Confirm replacing" })).getByRole("button", { name: "Replace" }));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Join your account" }), null));
+  assert.deepEqual(calls.filter(call => call.method === "join").map(call => call.request), [{ mode: "Replace" }]);
+});
+
+test("a computer with no data defaults to taking the account's, with no data-loss prompt", async () => {
+  const { api, calls } = rig({ signedIn: true, preview: { ...joinedPreview, case: "ChooseData", local: { tasks: 0, lists: 0, tags: 0, pages: 0 }, account: remote, defaultMode: "Replace" } });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  const panel = await screen.findByRole("group", { name: "Join your account" });
+  assert.equal((within(panel).getByRole("radio", { name: /Replace this computer's data/ }) as HTMLInputElement).checked, true);
+  await user.click(within(panel).getByRole("button", { name: "Replace and start syncing" }));
+  await waitFor(() => assert.equal(calls.filter(call => call.method === "join").length, 1));
+});
+
+test("deleting the account needs the typed phrase", async () => {
+  const { api, calls } = rig({ signedIn: true });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await user.click(await screen.findByRole("button", { name: /Delete account/ }));
+  const form = screen.getByRole("group", { name: "Delete account" });
+  assert.ok(within(form).getByText(/data on this computer and your other devices stays/i));
+  const submit = within(form).getByRole("button", { name: "Delete my account" }) as HTMLButtonElement;
+  assert.equal(submit.disabled, true);
+  await user.type(within(form).getByLabelText("Type DELETE to confirm"), "DELETE");
+  assert.equal(submit.disabled, false);
+  await user.click(submit);
+  await screen.findByRole("button", { name: /Create an account or sign in/ });
+  assert.deepEqual(calls.filter(call => call.method === "deleteAccount").map(call => call.request), [{ confirmation: "DELETE" }]);
+});
+
+test("a deletion that needs a fresh sign-in signs in again and then goes through", async () => {
+  let attempts = 0;
+  const { api, calls } = rig({
+    signedIn: true,
+    deleteAccount: () => ++attempts === 1
+      ? { ok: false, configured: true, signedIn: true, email: null, serviceHost: null, error: errorOf("FreshSignInRequired", "Sign in again to confirm deleting your account.") }
+      : signedOutStatus,
+  });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await user.click(await screen.findByRole("button", { name: /Delete account/ }));
+  await user.type(screen.getByLabelText("Type DELETE to confirm"), "DELETE");
+  await user.click(screen.getByRole("button", { name: "Delete my account" }));
+  await user.click(await screen.findByRole("button", { name: "Sign in again to confirm" }));
+  await screen.findByRole("button", { name: /Create an account or sign in/ });
+  assert.deepEqual(calls.map(call => call.method).filter(m => m === "deleteAccount" || m === "reauthenticate"), ["deleteAccount", "reauthenticate", "deleteAccount"]);
 });
 
 test("an ended sign-in asks to sign in again", async () => {

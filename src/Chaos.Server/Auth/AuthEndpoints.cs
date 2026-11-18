@@ -176,12 +176,25 @@ public static class AuthEndpoints
     {
         var request = http.GetOpenIddictServerRequest() ?? throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
         var session = await http.AuthenticateAsync(SignInCookie.Scheme);
-        if (!session.Succeeded || !Guid.TryParse(session.Principal?.FindFirst(Claims.Subject)?.Value, out var accountId))
+        // prompt=login asks for a new proof of identity even when a sign-in cookie exists (account deletion needs a fresh one).
+        var forceLogin = request.HasPromptValue(PromptValues.Login);
+        if (forceLogin || !session.Succeeded || !Guid.TryParse(session.Principal?.FindFirst(Claims.Subject)?.Value, out var accountId))
         {
-            var query = http.Request.HasFormContentType
-                ? QueryString.Create(http.Request.Form.Select(p => KeyValuePair.Create(p.Key, (string?)p.Value.ToString())))
-                : http.Request.QueryString;
-            return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.PathBase + http.Request.Path + query }, [SignInCookie.Scheme]);
+            var pairs = http.Request.HasFormContentType
+                ? http.Request.Form.Select(p => KeyValuePair.Create(p.Key, (string?)p.Value.ToString()))
+                : http.Request.Query.Select(p => KeyValuePair.Create(p.Key, (string?)p.Value.ToString()));
+            if (forceLogin)
+            {
+                // The sign-in comes back here without the prompt, so it is asked for once.
+                var remaining = string.Join(' ', request.GetPromptValues().Where(v => v != PromptValues.Login));
+                pairs = pairs.Where(p => p.Key != Parameters.Prompt);
+                if (remaining.Length > 0)
+                {
+                    pairs = pairs.Append(KeyValuePair.Create(Parameters.Prompt, (string?)remaining));
+                }
+            }
+
+            return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.PathBase + http.Request.Path + QueryString.Create(pairs) }, [SignInCookie.Scheme]);
         }
 
         if (!Guid.TryParse(request.GetParameter(DesktopClient.DeviceIdParameter)?.ToString(), out var deviceId))
@@ -204,6 +217,9 @@ public static class AuthEndpoints
         identity.SetClaim(Claims.Subject, account.Id.ToString("D"));
         identity.SetClaim(Claims.Email, account.PrimaryEmail);
         identity.SetClaim(DesktopClient.DeviceIdClaim, deviceId.ToString("D"));
+        var signedAt = session.Properties?.IssuedUtc ?? DateTimeOffset.UnixEpoch;
+        // OpenIddict reads auth_time as a number, so it is typed as one.
+        identity.AddClaim(new Claim(DesktopClient.AuthTimeClaim, signedAt.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
         var principal = new ClaimsPrincipal(identity);
         principal.SetScopes(request.GetScopes());
         principal.SetDestinations(_ => [Destinations.AccessToken]);
@@ -228,10 +244,14 @@ public static class AuthEndpoints
         }
 
         // A deleted account or a revoked device stops at the next refresh (access tokens last 15 minutes at most).
-        if (!await db.Accounts.AnyAsync(a => a.Id == accountId && a.DeletedAt == null, http.RequestAborted)
-            || await DeviceRefusedAsync(db, accountId, deviceId, http.RequestAborted))
+        if (!await db.Accounts.AnyAsync(a => a.Id == accountId && a.DeletedAt == null, http.RequestAborted))
         {
-            return Fail(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Errors.InvalidGrant, "The token is no longer valid.");
+            return Fail(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Errors.InvalidGrant, $"The token is no longer valid ({DesktopClient.AccountDeletedCode}).");
+        }
+
+        if (await DeviceRefusedAsync(db, accountId, deviceId, http.RequestAborted))
+        {
+            return Fail(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Errors.InvalidGrant, $"The token is no longer valid ({DesktopClient.DeviceRevokedCode}).");
         }
 
         principal.SetDestinations(_ => [Destinations.AccessToken]);

@@ -84,6 +84,17 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
             return await ReplaceWithStagedAsync(staged, "restore from an archive", sourceName, ct);
         }, ct);
 
+    /// <summary>
+    /// Puts a backup back after a join failed once it had already emptied this computer (PLAN2 P14). The caller holds <see cref="GuardAsync{T}"/>.
+    /// </summary>
+    public async Task RestoreAfterFailedJoinAsync(string backupPath, CancellationToken ct)
+    {
+        var staged = DatabaseReplacement.StagedPath(options);
+        File.Copy(backupPath, staged, overwrite: true);
+        await backups.RestoreAttachmentsAsync(BackupManager.ReadAttachmentHashes(staged), ct);
+        await ReplaceWithStagedAsync(staged, "undo of joining an account", Path.GetFileName(backupPath), ct);
+    }
+
     private async Task<RestoreOutcome> RestoreBackupCoreAsync(string fileName, string expectedChecksum, CancellationToken ct)
     {
         var inspection = backups.Inspect(fileName);
@@ -166,7 +177,18 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
     public Task<ResetOutcome> ResetAsync(bool deleteBackups, CancellationToken ct) =>
         GuardAsync(() => ResetCoreAsync(deleteBackups, ct), ct);
 
-    private async Task<ResetOutcome> ResetCoreAsync(bool deleteBackups, CancellationToken ct)
+    /// <summary>
+    /// Joining an account with "replace" (PLAN2 §7.13): the same reset as "Delete all local data", except that this computer's
+    /// identity (<c>DeviceSettings</c>) is kept, so the account still knows the device. The caller already holds <see cref="GuardAsync{T}"/>.
+    /// </summary>
+    public async Task ResetKeepingDeviceAsync(CancellationToken ct)
+    {
+        var deviceSettings = await store.QueryAsync(async (session, token) =>
+            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection, token), ct);
+        await ResetCoreAsync(deleteBackups: false, ct, deviceSettings);
+    }
+
+    private async Task<ResetOutcome> ResetCoreAsync(bool deleteBackups, CancellationToken ct, IReadOnlyList<(string Key, string Value)>? deviceSettings = null)
     {
         var deleted = 0;
         await Quiesce(async () =>
@@ -191,7 +213,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
                     }
                 }
 
-                await OpenAndPrepareAsync(options, clock.GetUtcNow(), token);
+                await OpenAndPrepareAsync(options, clock.GetUtcNow(), token, deviceSettings);
                 SqliteConnection.ClearAllPools();
                 // The attached files are local data too; the backups' copies go only with the backups.
                 await BackupManager.DeleteAllAsync(backups.LiveAttachments, token);

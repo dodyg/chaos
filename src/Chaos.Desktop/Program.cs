@@ -153,6 +153,7 @@ internal static class Program
         using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
             new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
         syncEngine.Start();
+        var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, TimeProvider.System, syncEngine.Wake);
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
@@ -217,7 +218,7 @@ internal static class Program
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
                 rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
-                rpc.AddAccountRpcService(new AccountRpcService(serviceClient, serviceAddress));
+                rpc.AddAccountRpcService(new AccountRpcService(serviceClient, serviceAddress, accountJoin));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -428,6 +429,14 @@ internal static class Program
 [JsonSerializable(typeof(AccountRequest))]
 [JsonSerializable(typeof(AccountResponse))]
 [JsonSerializable(typeof(AccountDeviceRequest))]
+[JsonSerializable(typeof(ContentCountsDto))]
+[JsonSerializable(typeof(JoinPreviewRequest))]
+[JsonSerializable(typeof(JoinPreviewResponse))]
+[JsonSerializable(typeof(JoinRequest))]
+[JsonSerializable(typeof(JoinResponse))]
+[JsonSerializable(typeof(LeaveRequest))]
+[JsonSerializable(typeof(DeleteAccountRequest))]
+[JsonSerializable(typeof(DeviceIdentityResponse))]
 [JsonSerializable(typeof(ServiceAddressRequest))]
 [JsonSerializable(typeof(SetServiceAddressRequest))]
 [JsonSerializable(typeof(ServiceAddressResponse))]

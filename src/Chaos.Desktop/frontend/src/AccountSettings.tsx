@@ -1,11 +1,11 @@
 import React from "react";
-import { accountRpc, type AccountErrorDto, type AccountInfoDto, type ServiceAddressResponse } from "#neoastra";
-import { CloudOff, LogIn, LogOut, MonitorSmartphone, UserRound } from "lucide-react";
+import { accountRpc, type AccountErrorDto, type AccountInfoDto, type ContentCountsDto, type JoinPreviewResponse, type ServiceAddressResponse } from "#neoastra";
+import { CloudOff, LogIn, LogOut, MonitorSmartphone, Trash2, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/common";
 import { Input } from "@/components/ui/input";
 
-type Api = Pick<typeof accountRpc, "status" | "account" | "signIn" | "cancelSignIn" | "signOut" | "revokeDevice" | "address" | "setAddress">;
+type Api = Pick<typeof accountRpc, "status" | "account" | "signIn" | "cancelSignIn" | "leave" | "revokeDevice" | "address" | "setAddress" | "joinPreview" | "join" | "deleteAccount" | "reauthenticate">;
 
 const units = ["bytes", "KB", "MB", "GB", "TB"];
 export function formatBytes(bytes: number): string {
@@ -35,6 +35,127 @@ function DeviceRow({ device, busy, onRemove }: { device: AccountInfoDto["devices
       <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(false)}>Keep</Button>
     </div>}
   </li>;
+}
+
+const countsLine = (counts: ContentCountsDto) => `${counts.tasks} tasks, ${counts.lists} lists, ${counts.tags} tags, ${counts.pages} pages`;
+
+/**
+ * Joining the account after signing in (PLAN2 P14). The first device just starts syncing: its data becomes the account's. When the
+ * account already has data the person chooses, with both sides' counts shown: merge this computer's data into the account (the
+ * default whenever this computer has any), or replace it with the account's. Either way a safety backup is made first.
+ */
+function JoinPanel({ api, preview, onDone }: { api: Api; preview: JoinPreviewResponse; onDone: () => void }) {
+  const [mode, setMode] = React.useState(preview.defaultMode);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = React.useState(false);
+
+  async function join() {
+    setBusy(true); setError(null);
+    try {
+      const result = await api.join({ mode });
+      if (result.ok) onDone(); else setError(result.error?.message ?? "Joining did not finish.");
+    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+
+  if (preview.case === "FirstDevice") {
+    return <div role="group" aria-label="Start syncing" className="grid gap-2 rounded-md border bg-muted/40 p-3">
+      <p className="text-sm font-medium">Start syncing this computer</p>
+      <p className="text-sm text-muted-foreground">Your account has no data yet, so what is on this computer ({countsLine(preview.local)}) becomes your account's, and Chaos keeps it in step with your other devices.</p>
+      {error && <InlineError>{error}</InlineError>}
+      <div><Button type="button" size="sm" disabled={busy} onClick={() => void join()}>Start syncing</Button></div>
+    </div>;
+  }
+
+  const hasLocal = preview.local.tasks + preview.local.lists + preview.local.tags + preview.local.pages > 0;
+  return <div role="group" aria-label="Join your account" className="grid gap-3 rounded-md border bg-muted/40 p-3">
+    <p className="text-sm font-medium">Your account already has data</p>
+    <dl className="grid gap-1 text-sm">
+      <div className="flex flex-wrap gap-2"><dt className="font-medium">On this computer:</dt><dd>{countsLine(preview.local)}</dd></div>
+      <div className="flex flex-wrap gap-2"><dt className="font-medium">In your account:</dt><dd>{preview.account ? countsLine(preview.account) : "unknown"}</dd></div>
+    </dl>
+    <fieldset className="grid gap-2">
+      <legend className="text-sm font-medium">What should happen to this computer's data?</legend>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="radio" name="join-mode" className="mt-1" checked={mode === "Merge"} onChange={() => { setMode("Merge"); setReplaceConfirm(false); }}/>
+        <span><strong>Merge this computer's data into the account</strong><br/><span className="text-muted-foreground">Keeps both. Tags are combined; two lists with the same name stay separate, the second renamed "(2)".</span></span>
+      </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="radio" name="join-mode" className="mt-1" checked={mode === "Replace"} onChange={() => setMode("Replace")}/>
+        <span><strong>Replace this computer's data with the account's</strong><br/><span className="text-muted-foreground">What is only on this computer is removed from it.</span></span>
+      </label>
+    </fieldset>
+    <p className="text-xs text-muted-foreground">Chaos makes a safety backup first. You can restore it from Settings → Data &amp; backups.</p>
+    {error && <InlineError>{error}</InlineError>}
+    {mode === "Replace" && hasLocal && replaceConfirm
+      ? <div role="group" aria-label="Confirm replacing" className="flex flex-wrap items-center gap-2 text-sm">
+        <span>Remove this computer's {preview.local.tasks} tasks and everything else here, and use the account's?</span>
+        <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void join()}>Replace</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setReplaceConfirm(false)}>Keep my data</Button>
+      </div>
+      : <div><Button type="button" size="sm" disabled={busy} onClick={() => { if (mode === "Replace" && hasLocal) setReplaceConfirm(true); else void join(); }}>{mode === "Merge" ? "Merge and start syncing" : "Replace and start syncing"}</Button></div>}
+  </div>;
+}
+
+/** Sign out, asking what happens to this computer's data (PLAN2 §7.13 case 3). */
+function LeaveControl({ busy, onLeave }: { busy: boolean; onLeave: (keepData: boolean) => void }) {
+  const [asking, setAsking] = React.useState(false);
+  if (!asking) return <Button type="button" size="sm" variant="outline" className="ml-auto" disabled={busy} onClick={() => setAsking(true)}><LogOut/>Sign out</Button>;
+  return <div role="group" aria-label="Sign out" className="grid w-full gap-2 rounded-md border p-2 text-sm">
+    <p>Sign out of your account on this computer. What should happen to the data here?</p>
+    <div className="flex flex-wrap gap-2">
+      <Button type="button" size="sm" disabled={busy} onClick={() => { setAsking(false); onLeave(true); }}>Keep data on this device</Button>
+      <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => { setAsking(false); onLeave(false); }}>Remove the account's data from this device</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
+    </div>
+    <p className="text-xs text-muted-foreground">Keeping it leaves Chaos working on this computer without syncing. Removing it empties this computer; your account keeps its copy.</p>
+  </div>;
+}
+
+/**
+ * Deleting the account (PLAN2 §8.6): a typed phrase, and a sign-in made in the last ten minutes. The service says when that is too old,
+ * and then the person signs in again here and the deletion goes through. This computer's data is never touched.
+ */
+function DeleteAccountControl({ api, onDeleted }: { api: Api; onDeleted: () => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [phrase, setPhrase] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [needsSignIn, setNeedsSignIn] = React.useState(false);
+
+  async function remove() {
+    setBusy(true); setError(null);
+    try {
+      const result = await api.deleteAccount({ confirmation: phrase.trim() });
+      if (result.ok) { onDeleted(); return; }
+      if (result.error?.kind === "FreshSignInRequired") setNeedsSignIn(true);
+      setError(result.error?.message ?? "The account was not deleted.");
+    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+
+  async function signInAgain() {
+    setBusy(true); setError(null);
+    try {
+      const result = await api.reauthenticate({});
+      if (result.ok) { setNeedsSignIn(false); await remove(); return; }
+      setError(result.error?.message ?? "Sign-in did not finish.");
+    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+
+  if (!open) return <div><Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}><Trash2/>Delete account…</Button></div>;
+  return <form role="group" aria-label="Delete account" className="grid gap-2 rounded-md border border-destructive/50 p-3 text-sm" onSubmit={e => { e.preventDefault(); void remove(); }}>
+    <p className="font-medium">Delete your account</p>
+    <p>This removes your tasks, notes and other data from the online service, and every device is signed out. The data on this computer and your other devices stays where it is; each keeps working without syncing.</p>
+    <label htmlFor="delete-phrase" className="font-medium">Type DELETE to confirm</label>
+    <Input id="delete-phrase" className="max-w-48" autoComplete="off" spellCheck={false} value={phrase} onChange={e => setPhrase(e.target.value)}/>
+    {error && <InlineError>{error}</InlineError>}
+    <div className="flex flex-wrap gap-2">
+      {needsSignIn
+        ? <Button type="button" size="sm" variant="destructive" disabled={busy || phrase.trim() !== "DELETE"} onClick={() => void signInAgain()}>Sign in again to confirm</Button>
+        : <Button type="submit" size="sm" variant="destructive" disabled={busy || phrase.trim() !== "DELETE"}>Delete my account</Button>}
+      <Button type="button" size="sm" variant="ghost" onClick={() => { setOpen(false); setPhrase(""); setError(null); setNeedsSignIn(false); }}>Cancel</Button>
+    </div>
+  </form>;
 }
 
 const sourceNote: Record<string, string> = {
@@ -96,20 +217,28 @@ export function AccountSettings({ api = accountRpc }: { api?: Api }) {
   const [problem, setProblem] = React.useState<AccountErrorDto | null>(null);
   const [signingIn, setSigningIn] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [preview, setPreview] = React.useState<JoinPreviewResponse | null>(null);
 
-  const fail = React.useCallback((error: AccountErrorDto | null | undefined, fallback: string) => {
+  const fail =React.useCallback((error: AccountErrorDto | null | undefined, fallback: string) => {
     const next = error ?? { kind: "Other", message: fallback };
     setProblem(next);
     if (next.kind === "SignInAgain") { setSignedIn(false); setAccount(null); }
   }, []);
 
+  const loadPreview = React.useCallback(async () => {
+    try {
+      const result = await api.joinPreview({});
+      setPreview(result.ok && result.case !== "AlreadyJoined" ? result : null);
+    } catch { setPreview(null); }
+  }, [api]);
+
   const loadAccount = React.useCallback(async () => {
     setBusy(true);
     try {
       const result = await api.account({});
-      if (result.ok && result.account) { setAccount(result.account); setEmail(result.account.email); setProblem(null); } else fail(result.error, "Could not load your account.");
+      if (result.ok && result.account) { setAccount(result.account); setEmail(result.account.email); setProblem(null); await loadPreview(); } else fail(result.error, "Could not load your account.");
     } catch (e) { fail(null, String(e)); } finally { setBusy(false); }
-  }, [api, fail]);
+  }, [api, fail, loadPreview]);
 
   const [addressVersion, setAddressVersion] = React.useState(0);
   React.useEffect(() => {
@@ -128,15 +257,15 @@ export function AccountSettings({ api = accountRpc }: { api?: Api }) {
     setSigningIn(true); setProblem(null);
     try {
       const result = await api.signIn({});
-      if (result.ok && result.account) { setAccount(result.account); setEmail(result.account.email); setSignedIn(true); } else fail(result.error, "Sign-in did not finish.");
+      if (result.ok && result.account) { setAccount(result.account); setEmail(result.account.email); setSignedIn(true); await loadPreview(); } else fail(result.error, "Sign-in did not finish.");
     } catch (e) { fail(null, String(e)); } finally { setSigningIn(false); }
   }
 
-  async function signOut() {
+  async function leave(keepData: boolean) {
     setBusy(true); setProblem(null);
     try {
-      const result = await api.signOut({});
-      if (result.ok) { setSignedIn(result.signedIn); setEmail(null); setAccount(null); } else fail(result.error, "Could not sign out.");
+      const result = await api.leave({ keepData });
+      if (result.ok) { setSignedIn(result.signedIn); setEmail(null); setAccount(null); setPreview(null); } else fail(result.error, "Could not sign out.");
     } catch (e) { fail(null, String(e)); } finally { setBusy(false); }
   }
 
@@ -164,13 +293,15 @@ export function AccountSettings({ api = accountRpc }: { api?: Api }) {
       : signedIn ? <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-sm">Signed in as <strong dir="auto">{account?.email ?? email ?? "your account"}</strong>{host && <span className="text-muted-foreground"> on {host}</span>}</p>
-          <Button type="button" size="sm" variant="outline" className="ml-auto" disabled={busy} onClick={() => void signOut()}><LogOut/>Sign out</Button>
+          <LeaveControl busy={busy} onLeave={keepData => void leave(keepData)}/>
         </div>
+        {preview && <JoinPanel api={api} preview={preview} onDone={() => { setPreview(null); void loadAccount(); }}/>}
         {account && <>
           <p className="text-sm text-muted-foreground">Storage: {formatBytes(account.storageBytes)} of {formatBytes(account.storageQuotaBytes)} used.</p>
           <h4 className="text-sm font-semibold">Devices</h4>
           <ul className="grid gap-1.5" aria-label="Devices on this account">{account.devices.map(device => <DeviceRow key={device.id} device={device} busy={busy} onRemove={id => void removeDevice(id)}/>)}</ul>
         </>}
+        {account && <DeleteAccountControl api={api} onDeleted={() => { setSignedIn(false); setEmail(null); setAccount(null); setPreview(null); }}/>}
         {!account && !busy && problem && !signInAgain && <div><Button type="button" size="sm" variant="outline" onClick={() => void loadAccount()}>Try again</Button></div>}
       </div>
       : <div className="flex flex-wrap items-center gap-2">

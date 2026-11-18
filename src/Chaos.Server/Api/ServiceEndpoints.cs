@@ -13,7 +13,22 @@ public sealed record RegisterDeviceRequest(Guid DeviceId, string Name, string Pl
 
 public sealed record DeviceDto(Guid Id, string Name, string Platform, string ClientVersion, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Current);
 
-public sealed record AccountDto(Guid Id, string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, IReadOnlyList<DeviceDto> Devices);
+/// <summary>The account's canonical profile, Personal space and Inbox IDs (PLAN2 §7.13); absent until the first device binds them.</summary>
+public sealed record CanonicalIds(Guid ProfileId, Guid PersonalSpaceId, Guid InboxId);
+
+/// <summary>What the account holds right now, for the join dialog's "on the account" side (counts of live entities, content-free).</summary>
+public sealed record AccountCounts(long Tasks, long Lists, long Tags, long Pages);
+
+public sealed record AccountDto(Guid Id, string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, IReadOnlyList<DeviceDto> Devices,
+    CanonicalIds? Canonical = null, AccountCounts? Counts = null);
+
+public sealed record BindAccountRequest(Guid ProfileId, Guid PersonalSpaceId, Guid InboxId);
+
+/// <summary>Whether this call bound the IDs (the first device) and the IDs the account now has.</summary>
+public sealed record BindAccountResponse(bool Bound, CanonicalIds Canonical);
+
+/// <summary>What the person typed to confirm deleting the account (PLAN2 §8.6); the desktop asks for it and the service checks it too.</summary>
+public sealed record DeleteAccountRequest(string Confirmation);
 
 /// <summary>The versioned client API (PLAN2 §8.4 step 6, P12 item 4). Every query is filtered by the account in the token.</summary>
 public static class ServiceEndpoints
@@ -42,6 +57,8 @@ public static class ServiceEndpoints
         var v1 = app.MapGroup("/v1").RequireAuthorization().RequireRateLimiting(RateLimitPolicy).AddEndpointFilter<ActiveDeviceFilter>();
         v1.MapPost("/devices", RegisterDevice);
         v1.MapGet("/account", GetAccount);
+        v1.MapPost("/account/bind", BindAccount);
+        v1.MapDelete("/account", DeleteAccount);
         v1.MapDelete("/devices/{id:guid}", RevokeDevice);
         v1.MapSyncEndpoints();
     }
@@ -131,7 +148,107 @@ public static class ServiceEndpoints
             .OrderBy(d => d.CreatedAt)
             .Select(d => new DeviceDto(d.Id, d.Name, d.Platform, d.ClientVersion, d.CreatedAt, d.LastSeenAt, d.Id == caller.DeviceId))
             .ToListAsync(ct);
-        return Results.Ok(new AccountDto(account.Id, account.PrimaryEmail, account.DisplayName, account.StorageBytes, limits.Value.AccountQuotaBytes, devices));
+        var ids = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => new { a.ProfileId, a.PersonalSpaceId, a.InboxId }).FirstAsync(ct);
+        CanonicalIds? canonical = ids is { ProfileId: { } p, PersonalSpaceId: { } sp, InboxId: { } ib } ? new CanonicalIds(p, sp, ib) : null;
+        return Results.Ok(new AccountDto(account.Id, account.PrimaryEmail, account.DisplayName, account.StorageBytes, limits.Value.AccountQuotaBytes, devices, canonical, await CountAsync(db, caller.AccountId, ct)));
+    }
+
+    private static readonly string[] CountedKinds = ["task", "container", "tag", "page"];
+
+    /// <summary>Live (not purged, not in the trash) entities of the kinds the person recognises. Lists exclude each Inbox.</summary>
+    private static async Task<AccountCounts> CountAsync(ChaosDbContext db, Guid accountId, CancellationToken ct)
+    {
+        var rows = await db.Database.SqlQuery<KindCount>($"""
+            SELECT e."Kind" AS "Kind", count(*) AS "Count"
+            FROM "SyncEntities" e
+            WHERE e."AccountId" = {accountId} AND e."PurgedAt" IS NULL
+              AND e."Kind" = ANY ({CountedKinds})
+              AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+              AND NOT (e."Kind" = 'container' AND (e."Groups" -> 'create' -> 'values' ->> 'IsInbox') = '1')
+            GROUP BY e."Kind"
+            """).ToListAsync(ct);
+        long Of(string kind) => rows.FirstOrDefault(r => r.Kind == kind)?.Count ?? 0;
+        return new AccountCounts(Of("task"), Of("container"), Of("tag"), Of("page"));
+    }
+
+    private sealed record KindCount(string Kind, long Count);
+
+    /// <summary>
+    /// The first device binds its profile, Personal space and Inbox IDs as the account's canonical ones (PLAN2 §7.13 case 1).
+    /// Safe to repeat and to race: only the first call binds; every call answers with what the account has.
+    /// </summary>
+    private static async Task<IResult> BindAccount(ClaimsPrincipal user, BindAccountRequest request, ChaosDbContext db, CancellationToken ct)
+    {
+        if (Caller(user) is not { } caller)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (request.ProfileId == Guid.Empty || request.PersonalSpaceId == Guid.Empty || request.InboxId == Guid.Empty
+            || new[] { request.ProfileId, request.PersonalSpaceId, request.InboxId }.Distinct().Count() != 3)
+        {
+            return Results.Problem("The profile, Personal space and Inbox IDs are required and must differ.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // One conditional UPDATE decides who binds, so two devices racing cannot both win.
+        var bound = await db.Accounts.Where(a => a.Id == caller.AccountId && a.ProfileId == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.ProfileId, request.ProfileId).SetProperty(a => a.PersonalSpaceId, request.PersonalSpaceId).SetProperty(a => a.InboxId, request.InboxId), ct) == 1;
+        var ids = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => new { a.ProfileId, a.PersonalSpaceId, a.InboxId }).FirstAsync(ct);
+        return Results.Ok(new BindAccountResponse(bound, new CanonicalIds(ids.ProfileId!.Value, ids.PersonalSpaceId!.Value, ids.InboxId!.Value)));
+    }
+
+    public const string DeleteConfirmation = "DELETE";
+    public static readonly TimeSpan FreshSignInWindow = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Deletes the account and everything the service holds for it (PLAN2 §8.6). It needs a sign-in made in the last ten minutes
+    /// and the typed phrase. Other devices learn the next time they call (401 <c>account-deleted</c>) and keep their local data.
+    /// </summary>
+    private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
+    {
+        if (Caller(user) is not { } caller)
+        {
+            return Results.Unauthorized();
+        }
+
+        var now = clock.GetUtcNow();
+        if (!long.TryParse(user.FindFirst(DesktopClient.AuthTimeClaim)?.Value, out var signedAtSeconds)
+            || now - DateTimeOffset.FromUnixTimeSeconds(signedAtSeconds) > FreshSignInWindow)
+        {
+            return Results.Problem(detail: "Sign in again to confirm deleting your account.", statusCode: StatusCodes.Status403Forbidden,
+                extensions: new Dictionary<string, object?> { ["code"] = "fresh-sign-in-required" });
+        }
+
+        if (!string.Equals(request.Confirmation?.Trim(), DeleteConfirmation, StringComparison.Ordinal))
+        {
+            return Results.Problem(detail: $"Type {DeleteConfirmation} to confirm.", statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = "confirmation-required" });
+        }
+
+        var email = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.PrimaryEmail).FirstOrDefaultAsync(ct);
+        if (email is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var subject = caller.AccountId.ToString("D");
+            // Tokens first: they point at authorizations. The OpenIddict tables have no account column, only the subject.
+            await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreToken>().Where(t => t.Subject == subject).ExecuteDeleteAsync(ct);
+            await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization>().Where(a => a.Subject == subject).ExecuteDeleteAsync(ct);
+            await db.SyncChanges.Where(c => c.AccountId == caller.AccountId).ExecuteDeleteAsync(ct);
+            await db.SyncEntities.Where(e => e.AccountId == caller.AccountId).ExecuteDeleteAsync(ct);
+            await db.EmailCodes.Where(c => c.Email == email).ExecuteDeleteAsync(ct);
+            // Devices and logins go with the account row (cascade).
+            await db.Accounts.Where(a => a.Id == caller.AccountId).ExecuteDeleteAsync(ct);
+            db.AuditEvents.Add(new AuditEvent { AccountId = caller.AccountId, Kind = AuditKinds.AccountDeleted, At = now, DeviceId = caller.DeviceId });
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        });
+        return Results.NoContent();
     }
 
     private static async Task<IResult> RevokeDevice(ClaimsPrincipal user, Guid id, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
@@ -173,14 +290,22 @@ public sealed class ActiveDeviceFilter(ChaosDbContext db, TimeProvider clock) : 
         }
 
         var ct = context.HttpContext.RequestAborted;
-        if (!await db.Accounts.AsNoTracking().AnyAsync(a => a.Id == accountId && a.DeletedAt == null, ct)
-            || await AuthEndpoints.DeviceRefusedAsync(db, accountId, deviceId, ct))
+        if (!await db.Accounts.AsNoTracking().AnyAsync(a => a.Id == accountId && a.DeletedAt == null, ct))
         {
-            return Results.Unauthorized();
+            return Refuse(DesktopClient.AccountDeletedCode, "This account was deleted.");
+        }
+
+        if (await AuthEndpoints.DeviceRefusedAsync(db, accountId, deviceId, ct))
+        {
+            return Refuse(DesktopClient.DeviceRevokedCode, "This device was removed from the account.");
         }
 
         var now = clock.GetUtcNow();
         await db.Devices.Where(d => d.Id == deviceId && d.AccountId == accountId && d.RevokedAt == null).ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenAt, now), ct);
         return await next(context);
     }
+
+    /// <summary>A 401 that says why, so the desktop can tell "sign in again" from "this device is out of the account".</summary>
+    private static IResult Refuse(string code, string detail) =>
+        Results.Problem(detail: detail, statusCode: StatusCodes.Status401Unauthorized, extensions: new Dictionary<string, object?> { ["code"] = code });
 }

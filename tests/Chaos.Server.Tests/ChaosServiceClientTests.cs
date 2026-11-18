@@ -207,7 +207,7 @@ public sealed class ChaosServiceClientTests(PostgresServer postgres)
     }
 
     [Test]
-    public async Task RemovedDevice_NextRefresh_SignsItOutHere()
+    public async Task RemovedDevice_NextRefresh_SignsItOutHere_AndSaysItWasRemoved()
     {
         await using var server = await TestServer.StartAsync(postgres);
         var secretsA = new MemorySecretStore();
@@ -221,7 +221,7 @@ public sealed class ChaosServiceClientTests(PostgresServer postgres)
         server.Clock.Advance(TimeSpan.FromMinutes(16));
         var error = await Assert.That(async () => await a.GetAccessTokenAsync(CancellationToken.None)).Throws<ChaosServiceException>();
 
-        await Assert.That(error!.Kind).IsEqualTo(ServiceFailure.SignInAgain);
+        await Assert.That(error!.Kind).IsEqualTo(ServiceFailure.DeviceRevoked);
         await Assert.That(secretsA.Values.Count).IsEqualTo(0);
         await Assert.That((await a.GetSessionAsync(CancellationToken.None)).SignedIn).IsFalse();
         await Assert.That((await b.GetAccountAsync(CancellationToken.None)).Devices.Count).IsEqualTo(1);

@@ -50,6 +50,7 @@ public sealed class SyncEngine : IDisposable
 
     private readonly SqliteApplicationStore _store;
     private readonly SyncApplier _applier;
+    private readonly SyncAccountState _account;
     private readonly IChaosServiceClient _service;
     private readonly TimeProvider _clock;
     private readonly SyncEngineOptions _options;
@@ -65,6 +66,7 @@ public sealed class SyncEngine : IDisposable
     {
         _store = store;
         _applier = applier;
+        _account = new SyncAccountState(store);
         _service = service;
         _clock = clock;
         _options = options ?? new SyncEngineOptions();
@@ -223,8 +225,23 @@ public sealed class SyncEngine : IDisposable
 
                 (pulled, snapshot) = await PullAsync(state.Cursor, ct);
                 await RaiseParkedAttentionAsync(ct);
+
+                // A device that just joined first took what the account has (above); only now does the rest of its data go up
+                // (PLAN2 §7.13), so its older values never overwrite the account's newer ones. The flag survives a restart.
+                if (await _account.BackfillPendingAsync(ct))
+                {
+                    await _account.BackfillAsync(ct);
+                    pushed += await PushAsync(ct);
+                }
+
                 await RecordAsync(error: null, pushed > 0, pulled > 0 || snapshot, ct);
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, null));
+            }
+            catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
+            {
+                // The device was removed or the account deleted: offline-only from here on, with all local data kept (PLAN2 §8.6, P14 item 3).
+                await _account.DisableAsync(ct);
+                return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, error.Message));
             }
             catch (ChaosServiceException error)
             {

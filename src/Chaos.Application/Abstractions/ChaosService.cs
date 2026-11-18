@@ -17,6 +17,15 @@ public enum ServiceFailure
 
     /// <summary>Cancelled, timed out, or anything else; the message says what.</summary>
     Other = 4,
+
+    /// <summary>This device was removed from the account: it is offline-only now and keeps its data (PLAN2 P14 item 3).</summary>
+    DeviceRevoked = 5,
+
+    /// <summary>The account was deleted from the online service: this device is offline-only now and keeps its data (PLAN2 §8.6).</summary>
+    AccountDeleted = 6,
+
+    /// <summary>The service wants a sign-in made in the last few minutes before it will do this.</summary>
+    FreshSignInRequired = 7,
 }
 
 /// <summary>A service failure the person can read. The message never contains a token or a code.</summary>
@@ -37,8 +46,15 @@ public interface IDeviceIdentity
 /// <summary>A device registered to the account, as the service lists it.</summary>
 public sealed record ServiceDevice(Guid Id, string Name, string Platform, string ClientVersion, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Current);
 
-/// <summary>The signed-in account: email, devices and storage used.</summary>
-public sealed record ServiceAccount(string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, IReadOnlyList<ServiceDevice> Devices);
+/// <summary>The account's canonical profile, Personal space and Inbox IDs (PLAN2 §7.13).</summary>
+public sealed record AccountCanonicalIds(Guid AccountId, Guid ProfileId, Guid PersonalSpaceId, Guid InboxId);
+
+/// <summary>What the account holds: live tasks, lists, tags and pages (counts only).</summary>
+public sealed record AccountContentCounts(long Tasks, long Lists, long Tags, long Pages);
+
+/// <summary>The signed-in account: email, devices and storage used, with the canonical IDs and content counts once a device has bound them.</summary>
+public sealed record ServiceAccount(string Email, string? DisplayName, long StorageBytes, long StorageQuotaBytes, IReadOnlyList<ServiceDevice> Devices,
+    Guid? AccountId = null, AccountCanonicalIds? Canonical = null, AccountContentCounts? Counts = null);
 
 /// <summary>What Settings can say without asking the network: whether a sign-in is kept, and for which email.</summary>
 public sealed record ServiceSession(bool Configured, bool SignedIn, string? Email, string? ServiceHost);
@@ -59,8 +75,24 @@ public interface IChaosServiceClient
     /// <exception cref="ChaosServiceException">Cancelled, timed out, refused, offline or not configured.</exception>
     Task<ServiceAccount> SignInAsync(CancellationToken ct);
 
-    /// <summary>Forgets the sign-in on this device. The device stays registered until it is removed from the account.</summary>
+    /// <summary>
+    /// Signs in again and asks the service to make the person prove who they are anew, even if the browser still has a sign-in.
+    /// Needed before deleting the account (PLAN2 §8.6).
+    /// </summary>
+    Task<ServiceAccount> ReauthenticateAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Forgets the sign-in on this device and asks the service to revoke this device's refresh token (best effort: with no
+    /// connection the token is still removed here). The device stays registered until it is removed from the account.
+    /// </summary>
     Task SignOutAsync(CancellationToken ct);
+
+    /// <summary>Binds this device's profile, Personal space and Inbox IDs as the account's canonical ones, unless the account already has some. Returns what the account has and whether this call bound them.</summary>
+    Task<(bool Bound, AccountCanonicalIds Canonical)> BindAccountAsync(Guid profileId, Guid personalSpaceId, Guid inboxId, CancellationToken ct);
+
+    /// <summary>Deletes the account on the service (PLAN2 §8.6) and forgets the sign-in here. Needs a recent sign-in and the typed phrase.</summary>
+    /// <exception cref="ChaosServiceException">Kind <see cref="ServiceFailure.FreshSignInRequired"/> when the sign-in is too old.</exception>
+    Task DeleteAccountAsync(string confirmation, CancellationToken ct);
 
     Task<ServiceAccount> GetAccountAsync(CancellationToken ct);
 
