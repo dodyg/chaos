@@ -43,6 +43,7 @@ after Chaos exits; a plain run shows reminders inside the app.
 
 ## Documents
 
+- [Mobile web](docs/mobile-web.md) covers building Chaos.Server and installing the PWA from `/app`.
 - `docs/acceptance.md`: recorded checks and the interactive release checklist
 - `docs/desktop-support.md`: what the Windows shell does and its limits
 - `docs/data-transfer.md`: backup, export and import formats

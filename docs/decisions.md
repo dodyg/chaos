@@ -1056,3 +1056,17 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - **Server rules** (PLAN2 §8.1): one `ChaosDbContext` registered with Aspire's `AddNpgsqlDbContext`; explicit `IEntityTypeConfiguration<T>` mapping to the §8.2 names; code migrations named after the S-numbers (`S001_Accounts`, ...), reviewed as SQL before commit and never edited once applied; `Chaos.Server migrate` applies them and web startup never migrates; startup refuses pending or unknown migrations; a guard test on `HasPendingModelChanges()`; no lazy loading; no InMemory or SQLite provider, tests use real PostgreSQL with the real migrations; push transactions run inside the execution strategy, with the account row locked through `FromSql ... FOR UPDATE`.
 - **Versions: EF Core follows the newest stable Npgsql provider.** On 2026-11-18 Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 (stable) needs EF Core `[10.0.4, 11.0.0)`, and the 11.0 line is only at rc.3, which pins EF Core 11 rc.3 exactly. OpenIddict.EntityFrameworkCore 7.9.0's net11.0 asset needs EF Core Relational `>= 11.0.0`, so 7.9.0 with either provider fails restore with NU1107 (checked in a scratch project). OpenIddict 7.8.0 (net10.0 asset, EF Core 10) with Npgsql EF 10.0.3 and Aspire.Npgsql.EntityFrameworkCore.PostgreSQL 13.6.5 restores cleanly on net11.0 with warnings as errors. That set is pinned when the code moves to EF Core; all move to the 11 line together once Npgsql 11 is stable.
 - **The existing hand-written runner goes.** `ServerMigrationRunner`, `Migrations/S001_accounts.sql` and `Aspire.Npgsql` are replaced by `ChaosDbContext`, the EF Core `S001_Accounts` migration (now including the OpenIddict tables) and `Aspire.Npgsql.EntityFrameworkCore.PostgreSQL`. Nothing was deployed, so S001 is regenerated rather than amended.
+
+## 2026-11-18 (Mobile web after P16)
+
+- **Chaos.Server serves the mobile PWA at `/app`.** This is the phone-client follow-on to P16.
+  Use the existing server on a trusted HTTPS origin, public or private.
+- **Today and lists are the first release.** Task detail shows synced notes, dates and status.
+  Online add, complete, reopen and plan-today produce normal sync changes. Recurring task completion
+  and reopening use the desktop. The mobile app can read its saved views offline.
+- **Web sessions appear as revocable devices.** The existing sign-in pages issue an HttpOnly web
+  cookie with sliding expiry. Web writes require antiforgery validation. The service worker caches
+  only public assets. Offline views live in browser storage and are tied to the session's device ID.
+  The readable offline device marker has no authentication authority.
+
+[Mobile web plan and deployment notes](mobile-web.md)
