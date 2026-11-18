@@ -3,7 +3,7 @@
 //   postgres ── chaos (database)
 //      │
 //      ├── chaos-migrate   `Chaos.Server migrate`, runs once and exits
-//      └── chaos-server    starts after the migrator completes; http://127.0.0.1:5080
+//      └── chaos-server    starts after the migrator completes; https://localhost:5081 (and http://127.0.0.1:5080)
 //   mailpit                SMTP sink for sign-in codes; web UI on its http endpoint
 //
 // Later packages add their dependencies here: MinIO and ClamAV with attachment sync (P16).
@@ -35,7 +35,7 @@ var migrate = builder.AddDotnetProject("chaos-migrate", ServerProject, options =
     .WithReference(database)
     .WaitFor(database);
 
-builder.AddDotnetProject("chaos-server", ServerProject)
+builder.AddDotnetProject("chaos-server", ServerProject, options => options.LaunchProfileName = "https")
     .WithReference(database)
     .WaitFor(database)
     .WaitForCompletion(migrate)
