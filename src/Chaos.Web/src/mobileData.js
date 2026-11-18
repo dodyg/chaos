@@ -68,11 +68,11 @@ export async function forgetOfflineSession() {
   }
 }
 
-function storeViews(deviceId, path, data, lists) {
+function storeViews(deviceId, path, data, lists, appearance) {
   const updatedAt = new Date().toISOString();
   return cacheTransaction(previous => {
     if (previous.deviceId !== deviceId) return previous;
-    const snapshot = { ...previous, lists: { data: lists, updatedAt } };
+    const snapshot = { ...previous, lists: { data: lists, updatedAt }, appearance };
     delete snapshot.today;
     if (path === "/today") snapshot.myDay = { data, updatedAt };
     if (path.startsWith("/lists/")) snapshot.lastList = { path, data, updatedAt };
@@ -101,7 +101,7 @@ async function readOffline(path) {
       .find(entry => entry.data.tasks.some(task => task.id === id));
     if (source) record = { ...source, data: source.data.tasks.find(task => task.id === id) };
   }
-  return { data: record?.data ?? null, updatedAt: record?.updatedAt, lists: lists?.data ?? [] };
+  return { data: record?.data ?? null, updatedAt: record?.updatedAt, lists: lists?.data ?? [], appearance: snapshot.appearance ?? null };
 }
 
 async function request(path, { signal, session, method = "GET", body } = {}) {
@@ -195,10 +195,10 @@ export function useMobileData(path) {
         if (signal.aborted) return;
         const options = { signal, session };
         const listPicker = request("/lists", options);
-        const [data, lists] = await Promise.all([path === "/lists" ? listPicker : request(path, options), listPicker]);
+        const [data, lists, appearance] = await Promise.all([path === "/lists" ? listPicker : request(path, options), listPicker, request("/appearance", options)]);
         if (signal.aborted) return;
-        setState({ mode: "ready", path, data, lists, session });
-        void storeViews(session.deviceId, path, data, lists).catch(() => undefined);
+        setState({ mode: "ready", path, data, lists, appearance, session });
+        void storeViews(session.deviceId, path, data, lists, appearance).catch(() => undefined);
       } catch (error) {
         if (signal.aborted) return;
         if (error.status === 401) {
@@ -220,7 +220,7 @@ export function useMobileData(path) {
     return () => controller.abort();
   }, [path, refresh, revision]);
 
-  const current = state.path === path ? state : { ...emptyView, lists: state.lists, session: state.session };
+  const current = state.path === path ? state : { ...emptyView, lists: state.lists, session: state.session, appearance: state.appearance };
   return { ...current, connected, refresh };
 }
 

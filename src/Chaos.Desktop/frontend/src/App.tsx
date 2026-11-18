@@ -1,3 +1,4 @@
+import { useAppearanceSync } from "./appearanceSync";
 import { TaskViewContext } from "./TaskViewAction";
 import { TaskEditor } from "./TaskEditor";
 import { ListPage } from "./ListPage";
@@ -78,6 +79,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const summaryApi = api.summaryRpc ?? summaryRpc;
   const shellApi = api.shellRpc ?? shellRpc;
   const viewApi = api.viewRpc ?? viewRpc;
+  useAppearanceSync();
   const dayBackground = useDayBackground();
   const dayClock = useDayClock(myDayApi);
   const timeZones = useTimeZones(shellApi, dayClock?.zoneId);

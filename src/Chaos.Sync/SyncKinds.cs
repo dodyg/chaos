@@ -24,7 +24,7 @@ public static class SyncKinds
 {
     public static readonly IReadOnlyList<SyncKindInfo> All =
     [
-        new("profile", 1, 10, false, ["create", "name", "zone", "locale", "dates", "planning", "reminders", "quiet", "deleted"]),
+        new("profile", 1, 10, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("zone", 1), new("locale", 1), new("dates", 1), new("planning", 1), new("reminders", 1), new("quiet", 1), new("appearance", 2), new("day_background", 2), new("deleted", 1) }),
         new("space", 1, 20, false, ["create", "name", "deleted"]),
         new("container", 1, 30, true, ["create", "name", "position", "deadline", "archived", "category", "deleted"]),
         new("task_template", 1, 35, true, ["create", "name", "payload", "deleted"]),

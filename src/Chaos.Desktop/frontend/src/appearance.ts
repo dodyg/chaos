@@ -212,7 +212,7 @@ export function loadActiveTheme(): Theme {
   try { const raw = localStorage.getItem(activeKey); return raw ? parseTheme(JSON.parse(raw)) : defaultTheme; }
   catch { return defaultTheme; }
 }
-export function saveActiveTheme(theme: Theme) { localStorage.setItem(activeKey, JSON.stringify(theme)); }
+export function saveActiveTheme(theme: Theme) { localStorage.setItem(activeKey, JSON.stringify(theme)); if (typeof window !== "undefined") window.dispatchEvent(new window.CustomEvent("chaos-appearance-local", { detail: { kind: "theme", value: theme } })); }
 export function loadThemes(): Theme[] {
   try {
     const raw = localStorage.getItem(themesKey); const values: unknown = raw ? JSON.parse(raw) : [];

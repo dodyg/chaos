@@ -47,6 +47,8 @@ public sealed class WebReadTests(PostgresServer postgres)
         account.InboxId = list;
 
         db.SyncEntities.AddRange(
+            Row("profile", profile, ("appearance", Fields(("AppearanceTheme", "{\"name\":\"Midnight\"}"))),
+                ("day_background", Fields(("DayBackground", "{\"kind\":\"scene\",\"value\":\"sunset\"}")))),
             Row("container", list, ("create", Fields(("SpaceId", space.ToString("D")))), ("name", Fields(("Name", "Inbox")))),
             Row("container", archivedList, ("create", Fields(("SpaceId", space.ToString("D")))),
                 ("name", Fields(("Name", "Archived"))), ("archived", Fields(("ArchivedAtUtc", now.ToString("o"))))),
@@ -82,6 +84,11 @@ public sealed class WebReadTests(PostgresServer postgres)
 
         using var noCookie = await anonymous.GetAsync("/v1/web/today");
         await Assert.That(noCookie.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        var appearance = (await owner.GetFromJsonAsync<WebAppearance>("/v1/web/appearance"))!;
+        await Assert.That(appearance.Theme).Contains("Midnight");
+        await Assert.That(appearance.Background).Contains("sunset");
+        var otherAppearance = (await other.GetFromJsonAsync<WebAppearance>("/v1/web/appearance"))!;
+        await Assert.That(otherAppearance.Theme).IsNull();
         var view = (await owner.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
         await Assert.That(string.Join(", ", view.Tasks.Select(task => task.Title))).IsEqualTo("Unscheduled, Planned today, Done");
         await Assert.That(view.Tasks[0].PlannedDate).IsNull();

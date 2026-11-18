@@ -70,6 +70,8 @@ public static class SyncCatalog
                 new("planning", ["PlanningTime", "SummaryTime", "MorningTime", "WeeklySummaryDay", "IncludeMeetingsInSummaries"]),
                 new("reminders", ["DefaultReminderTime"]),
                 new("quiet", ["QuietHoursEnabled", "QuietStart", "QuietEnd"]),
+                new("appearance", ["AppearanceTheme"]),
+                new("day_background", ["DayBackground"]),
                 new("deleted", ["DeletedAtUtc"]),
             ],
             LocalColumns: ["Version", "CaptureShortcut", "PadShortcut", "KeepRunningInTray"],

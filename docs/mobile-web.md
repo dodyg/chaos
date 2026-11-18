@@ -16,7 +16,9 @@ Use the existing Chaos.Server deployment. Persist its ASP.NET Core Data Protecti
 releases and share it across replicas so they can validate the same web session cookies. The web
 app refreshes the active view every ten seconds while visible. Desktop clients receive sync
 events through the existing service. The app keeps My Day, the list picker and the last opened
-list in the browser. Task notes are fetched while connected. Signing out clears the saved views.
+list in the browser. The active desktop appearance and My Day color or built-in scene sync to the
+web app and are cached for offline use. Custom desktop background images remain on that computer.
+Task notes are fetched while connected. Signing out clears the saved views.
 
 ## Goal
 

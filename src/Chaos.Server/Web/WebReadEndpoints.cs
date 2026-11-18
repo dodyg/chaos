@@ -7,11 +7,17 @@ internal static class WebReadEndpoints
     public static RouteGroupBuilder MapWebReads(this RouteGroupBuilder web)
     {
         web.MapGet("/today", Today);
+        web.MapGet("/appearance", Appearance);
         web.MapGet("/lists", Lists);
         web.MapGet("/lists/{id:guid}/tasks", ListTasks);
         web.MapGet("/tasks/{id:guid}", TaskDetail);
         return web;
     }
+
+    private static async Task<IResult> Appearance(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
+        await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
+            ? Results.Ok(await model.AppearanceAsync(account, ct))
+            : Results.Unauthorized();
 
     private static async Task<IResult> Today(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
         await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account

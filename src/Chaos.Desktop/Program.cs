@@ -210,7 +210,7 @@ internal static class Program
                 var committed = rpc.AddActivityEventsCommittedEvent();
                 activityPublisher.Attach(payload => committed.PublishAsync(payload).AsTask());
                 rpc.AddActivityRpcService(new ActivityRpcService(activityFeed));
-                rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync));
+                rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync, storage.Store));
                 rpc.AddUpdatesRpcService(new UpdatesRpcService(releaseFeed, new Chaos.Desktop.Platform.ShellBrowser(), AppVersion()));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks, githubEngine));
                 rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
@@ -313,6 +313,10 @@ internal static class Program
 [JsonSerializable(typeof(ProfileSettingsUpdateRequest))]
 [JsonSerializable(typeof(ZoneListRequest))]
 [JsonSerializable(typeof(ZoneListResponse))]
+[JsonSerializable(typeof(AppearanceReadRequest))]
+[JsonSerializable(typeof(AppearanceReadResponse))]
+[JsonSerializable(typeof(AppearanceWriteRequest))]
+[JsonSerializable(typeof(AppearanceWriteResponse))]
 [JsonSerializable(typeof(QuitRequest))]
 [JsonSerializable(typeof(QuitResponse))]
 [JsonSerializable(typeof(CreateTaskRequest))]

@@ -13,6 +13,7 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     public bool IsOnMyDay { get; init; }
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
+internal sealed record WebAppearance(string? Theme, string? Background);
 internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks);
 internal sealed record WebDayMember(string Key, string TaskKey, long Position, WebEntity? Entity)
 {
@@ -30,6 +31,16 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
     public Task<Account?> AccountAsync(Guid accountId, CancellationToken ct) =>
         db.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == accountId && a.DeletedAt == null, ct);
+
+    public async Task<WebAppearance> AppearanceAsync(Account account, CancellationToken ct)
+    {
+        if (account.ProfileId is not { } profile) return new(null, null);
+        var key = profile.ToString("D");
+        var row = await Rows(account.Id, "profile").SingleOrDefaultAsync(e => e.EntityKey == key, ct);
+        if (row is null) return new(null, null);
+        var entity = new WebEntity(row);
+        return new(entity.Text("appearance", "AppearanceTheme"), entity.Text("day_background", "DayBackground"));
+    }
 
     public async Task<WebToday> TodayAsync(Account account, CancellationToken ct)
     {

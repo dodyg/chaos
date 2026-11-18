@@ -219,6 +219,8 @@ public static class ActivityActions
         "reminders.update",
         "reminders.updateSettings",
         "shell.quit",
+        "shell.appearance",
+        "shell.saveAppearance",
         "shell.settings",
         "shell.status",
         "shell.take",

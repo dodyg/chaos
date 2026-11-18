@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { applyAccent } from "@/theme-accent";
+import { applyTheme, defaultTheme, parseTheme } from "../../Chaos.Desktop/frontend/src/appearance";
+import { dayBackgroundStyle } from "./appearance.js";
 import "./styles.css";
 
 const statuses = ["Not started", "In progress", "Waiting on someone", "Needs review", "Done", "Cancelled"];
@@ -57,6 +58,10 @@ function App() {
   const route = useRoute();
   const view = useMobileData(route.path);
   const pwa = usePwa();
+  useEffect(() => {
+    try { applyTheme(view.appearance?.theme ? parseTheme(JSON.parse(view.appearance.theme)) : defaultTheme); }
+    catch { applyTheme(defaultTheme); }
+  }, [view.appearance?.theme]);
   const [composer, setComposer] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null);
@@ -118,7 +123,7 @@ function App() {
         </div>
       </header>
 
-      <main id="content" className="content" tabIndex={-1}>
+      <main id="content" className={`content ${route.kind === "today" && view.appearance?.background ? "day-content" : ""}`} style={route.kind === "today" ? dayBackgroundStyle(view.appearance?.background) : undefined} tabIndex={-1}>
         {pwa.reloadForUpdate && <div className="notice update">
           <span>A new version of Chaos is ready.</span>
           <Button variant="link" className="text-button" onClick={pwa.reloadForUpdate} disabled={busy}>Reload for the new version</Button>
@@ -346,5 +351,5 @@ function Capture({ lists, listId, disabled, onCancel, onSubmit }) {
   );
 }
 
-applyAccent(document.documentElement);
+applyTheme(defaultTheme);
 createRoot(document.getElementById("root")).render(<App />);
