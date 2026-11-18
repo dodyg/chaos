@@ -23,7 +23,8 @@ var mailpit = builder.AddContainer("mailpit", "axllent/mailpit", "v1.34.0")
 
 var smtp = mailpit.GetEndpoint("smtp");
 
-const string ServerProject = "../Chaos.Server/Chaos.Server.csproj";
+// Absolute from this source file: Aspire 17 resolves relative paths, and even AppHostDirectory, against the current directory.
+var ServerProject = Path.GetFullPath(Path.Combine(SourceDirectory(), "..", "Chaos.Server", "Chaos.Server.csproj"));
 
 // No launch profile: the migrator has no HTTP endpoint and must not take the server's port.
 var migrate = builder.AddDotnetProject("chaos-migrate", ServerProject, options => options.ExcludeLaunchProfile = true)
@@ -43,3 +44,5 @@ builder.AddDotnetProject("chaos-server", ServerProject)
     .WithHttpHealthCheck("/health/ready");
 
 builder.Build().Run();
+
+static string SourceDirectory([System.Runtime.CompilerServices.CallerFilePath] string file = "") => Path.GetDirectoryName(file)!;
