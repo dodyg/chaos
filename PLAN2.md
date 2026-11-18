@@ -2454,8 +2454,11 @@ listener, PKCE, single-flight refresh, refresh token in `ISecretStore`), `chaos-
 `CHAOS_SERVICE_URL`, `AccountRpcService` and Settings → Account. Tests: Chaos.Server.Tests 59/59
 (Docker PostgreSQL), including the client against the in-process server with a fake browser; 11 new
 frontend tests. Not done: live check of provider sign-in and real SMTP (item 7), provider callback
-code is untested against a real provider, refresh tokens are not yet revoked server-side when a
-device is removed (the device check stops them at the next refresh).
+code is untested against a real provider. Removing a device does not delete its OpenIddict token
+rows (the table has no device column); this is deliberate: `Exchange` refuses the revoked device's
+refresh token and `ActiveDeviceFilter` refuses its access token, so it is already cut off server-side.
+The AppHost migrator now sets `ASPNETCORE_ENVIRONMENT=Development`. Only item 7 (live SMTP and
+Google sign-in, needs D3/D4) remains for the P12 exit.
 
 1. Project setup:
    - `src/Chaos.Server` (ASP.NET Core, `net11.0`) and `tests/Chaos.Server.Tests`, added to the

@@ -28,6 +28,9 @@ const string ServerProject = "../Chaos.Server/Chaos.Server.csproj";
 // No launch profile: the migrator has no HTTP endpoint and must not take the server's port.
 var migrate = builder.AddDotnetProject("chaos-migrate", ServerProject, options => options.ExcludeLaunchProfile = true)
     .WithArgs("migrate")
+    // Without the launch profile nothing sets the environment, and outside Development the auth setup
+    // insists on signing certificates, so the migrator would die before reaching the database.
+    .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
     .WithReference(database)
     .WaitFor(database);
 
