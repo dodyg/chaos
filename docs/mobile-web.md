@@ -91,8 +91,8 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 
 ### W3 — App shell and screens (3 days)
 
-- New `src/Chaos.Web/` (Vite and React, mobile first), built into `Chaos.Server/wwwroot/app`. Do not
-  fork the desktop frontend; copy only small presentational pieces.
+- `src/Chaos.Web/` (Vite and React, mobile first) builds into `Chaos.Server/wwwroot/app`. It shares
+  the desktop's shadcn/ui primitives and default palette and owns its screen layouts.
 - Screens: sign-in redirect, My Day, list picker, list view, task detail.
 - Manifest, icons, `display: standalone`, theme colour. Light and dark.
 - Phone-width checks in the browser preview at 375px.

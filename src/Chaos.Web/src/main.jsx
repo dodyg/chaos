@@ -5,6 +5,12 @@ import {
 } from "lucide-react";
 import { forgetOfflineSession, useMobileData, writeTask } from "./mobileData.js";
 import { usePwa } from "./usePwa.js";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { applyAccent } from "@/theme-accent";
 import "./styles.css";
 
 const statuses = ["Not started", "In progress", "Waiting on someone", "Needs review", "Done", "Cancelled"];
@@ -104,9 +110,9 @@ function App() {
         <div className="topbar-inner">
           <a className="brand" href="#my-day"><img src="/app/icons/icon-192.png" alt="" />Chaos</a>
           <div className="header-actions">
-            {pwa.offerInstall && <button className="icon-button" onClick={pwa.offerInstall} aria-label="Install Chaos" title="Install Chaos"><Download /></button>}
-            {hasNavigation && <button className="icon-button" onClick={view.refresh} aria-label="Refresh tasks" title="Refresh tasks" disabled={busy}><RefreshCw /></button>}
-            {view.session && <button className="icon-button" onClick={() => void save("/signout")} aria-label="Sign out" title="Sign out" disabled={!canWrite || busy}><LogOut /></button>}
+            {pwa.offerInstall && <Button variant="ghost" size="icon" className="icon-button" onClick={pwa.offerInstall} aria-label="Install Chaos" title="Install Chaos"><Download /></Button>}
+            {hasNavigation && <Button variant="ghost" size="icon" className="icon-button" onClick={view.refresh} aria-label="Refresh tasks" title="Refresh tasks" disabled={busy}><RefreshCw /></Button>}
+            {view.session && <Button variant="ghost" size="icon" className="icon-button" onClick={() => void save("/signout")} aria-label="Sign out" title="Sign out" disabled={!canWrite || busy}><LogOut /></Button>}
           </div>
         </div>
       </header>
@@ -114,7 +120,7 @@ function App() {
       <main id="content" className="content" tabIndex={-1}>
         {pwa.reloadForUpdate && <div className="notice update">
           <span>A new version of Chaos is ready.</span>
-          <button className="text-button" onClick={pwa.reloadForUpdate} disabled={busy}>Reload for the new version</button>
+          <Button variant="link" className="text-button" onClick={pwa.reloadForUpdate} disabled={busy}>Reload for the new version</Button>
         </div>}
         {view.mode === "offline" && <div className="notice offline" role="status">
           <WifiOff size={18} /><div><strong>Offline · Read only</strong>
@@ -126,7 +132,7 @@ function App() {
             <img src="/app/icons/icon-192.png" alt="" />
             <h1>Your tasks, on the go</h1>
             <p>Sign in with the account you use on Chaos desktop.</p>
-            <a className="primary-button" href="/signin?ReturnUrl=%2Fapp">Sign in <ChevronRight size={18} /></a>
+            <Button asChild className="mobile-action"><a href="/signin?ReturnUrl=%2Fapp">Sign in <ChevronRight size={18} /></a></Button>
           </section>
         ) : (
           <Screen route={route} view={view} canWrite={canWrite && !busy} act={act} />
@@ -140,9 +146,9 @@ function App() {
               <a href="#my-day" aria-current={route.tab === "today" ? "page" : undefined}><CalendarDays />My Day</a>
               <a href="#lists" aria-current={route.tab === "lists" ? "page" : undefined}><List />Lists</a>
             </nav>
-            <button className="primary-button add-button" disabled={!canAdd || busy} onClick={() => setComposer(true)}>
+            <Button className="mobile-action" disabled={!canAdd || busy} onClick={() => setComposer(true)}>
               <Plus size={21} />Add task
-            </button>
+            </Button>
           </div>
         </footer>
       )}
@@ -167,12 +173,12 @@ function Screen({ route, view, canWrite, act }) {
   if (mode === "loading") return <p className="placeholder" role="status">Loading tasks…</p>;
   if (mode === "error") return <div className="empty">
     <h1>Could not open this view</h1><p>{view.error}</p>
-    <button className="secondary-button" onClick={view.refresh}>Try again</button>
+    <Button variant="outline" className="mobile-action" onClick={view.refresh}>Try again</Button>
   </div>;
   if (!data) return <div className="empty">
     <h1>{route.kind === "today" ? "My Day" : route.kind === "task" ? "Task" : "Lists"}</h1>
     <p>This view has not been saved on this device. Reconnect to open it.</p>
-    <a href="#my-day" className="text-button">Back to My Day</a>
+    <Button asChild variant="link" className="text-button"><a href="#my-day">Back to My Day</a></Button>
   </div>;
   if (route.kind === "task") {
     return <TaskDetail task={data} list={lists.find(list => list.id === data.listId)}
@@ -190,7 +196,7 @@ function Screen({ route, view, canWrite, act }) {
         : <a className="back" href="#lists"><ChevronLeft size={18} />Lists</a>}
       <div className="screen-heading">
         <h1>{today ? "My Day" : data.list.name}</h1>
-        <span className="count">{open.length} open</span>
+        <Badge variant="secondary" className="count">{open.length} open</Badge>
       </div>
       {!tasks.length && (
         <div className="empty">
@@ -212,7 +218,7 @@ function Screen({ route, view, canWrite, act }) {
 function ListPicker({ lists }) {
   return (
     <>
-      <div className="screen-heading"><h1>Lists</h1><span className="count">{lists.length} {lists.length === 1 ? "list" : "lists"}</span></div>
+      <div className="screen-heading"><h1>Lists</h1><Badge variant="secondary" className="count">{lists.length} {lists.length === 1 ? "list" : "lists"}</Badge></div>
       {lists.length === 0 ? <div className="empty"><div className="empty-icon"><List /></div>
         <h2>No synced lists yet</h2><p>Connect Chaos on your desktop and sync your Inbox to get started.</p>
       </div> : <ul className="rows">
@@ -234,12 +240,12 @@ function TaskList({ tasks, route, canWrite, act }) {
   return <ul className="rows">
     {tasks.map(task => (
       <li className={`task-row ${task.isTerminal ? "terminal" : ""}`} key={task.id}>
-        <button className="task-check"
+        <Button variant="ghost" size="icon" className="task-check"
           disabled={!canWrite || task.isTerminal || task.isRecurring}
           aria-label={task.isTerminal ? statuses[task.status] : task.isRecurring ? "Complete on desktop" : `Complete ${task.title}`}
           title={task.isRecurring ? "Complete on desktop" : undefined}
           onClick={() => act(task, "complete")}><span>{task.status === 4 ? <Check size={15} /> : task.status === 5 ? <X size={14} /> : null}</span>
-        </button>
+        </Button>
         <a className="task-link" href={`#task/${task.id}?from=${encodeURIComponent(route.href)}`}>
           <span className="row-title">
             {task.title}
@@ -273,13 +279,13 @@ function TaskDetail({ task, list, back, canWrite, offline, act }) {
       </section>
       <div className="task-actions">
         {task.isRecurring ? <p className="inline-hint"><Repeat2 size={17} />{task.isTerminal ? "Reopen on desktop" : "Complete on desktop"}</p>
-          : <button className="primary-button" disabled={!canWrite} onClick={() => act(task, task.isTerminal ? "reopen" : "complete")}>
+          : <Button className="mobile-action" disabled={!canWrite} onClick={() => act(task, task.isTerminal ? "reopen" : "complete")}>
             {task.isTerminal ? <RefreshCw size={17} /> : <Check size={19} />}
             {task.isTerminal ? "Reopen task" : "Complete task"}
-          </button>}
-        {!task.isTerminal && <button className="secondary-button" disabled={!canWrite} onClick={() => act(task, task.isOnMyDay ? "remove-from-my-day" : "add-to-my-day")}>
+          </Button>}
+        {!task.isTerminal && <Button variant="outline" className="mobile-action" disabled={!canWrite} onClick={() => act(task, task.isOnMyDay ? "remove-from-my-day" : "add-to-my-day")}>
           <CalendarDays size={18} />{task.isOnMyDay ? "Remove from My Day" : "Add to My Day"}
-        </button>}
+        </Button>}
       </div>
     </>
   );
@@ -316,26 +322,27 @@ function Capture({ lists, listId, disabled, onCancel, onSubmit }) {
       <form onSubmit={submit}>
         <div className="composer-heading">
           <h2 id="capture-heading">Add task</h2>
-          <button type="button" className="icon-button" aria-label="Close" onClick={onCancel}><X /></button>
+          <Button type="button" variant="ghost" size="icon" className="icon-button" aria-label="Close" onClick={onCancel}><X /></Button>
         </div>
-        <label htmlFor="title">Title</label>
-        <input id="title" autoFocus required value={title} onChange={event => setTitle(event.target.value)} placeholder="What needs doing?" />
+        <Label htmlFor="title">Title</Label>
+        <Input id="title" autoFocus required value={title} onChange={event => setTitle(event.target.value)} placeholder="What needs doing?" />
         <div className="form-fields">
-          <div><label htmlFor="list">List</label>
-            <select id="list" value={list} onChange={event => setList(event.target.value)}>
-              <option value="" disabled>Choose a list</option>
-              {lists.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
+          <div><Label htmlFor="list">List</Label>
+            <NativeSelect id="list" value={list} onChange={event => setList(event.target.value)}>
+              <NativeSelectOption value="" disabled>Choose a list</NativeSelectOption>
+              {lists.map(item => <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>)}
+            </NativeSelect>
           </div>
-          <div><label htmlFor="planned">Planned date</label>
-            <input id="planned" type="date" min="0001-01-01" max="9999-12-31" value={planned} onChange={event => setPlanned(event.target.value)} />
+          <div><Label htmlFor="planned">Planned date</Label>
+            <Input id="planned" type="date" min="0001-01-01" max="9999-12-31" value={planned} onChange={event => setPlanned(event.target.value)} />
           </div>
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="primary-button" disabled={disabled || !title.trim() || !list}><Plus size={20} />Add task</button>
+        <Button className="mobile-action" disabled={disabled || !title.trim() || !list}><Plus size={20} />Add task</Button>
       </form>
     </dialog>
   );
 }
 
+applyAccent(document.documentElement);
 createRoot(document.getElementById("root")).render(<App />);
