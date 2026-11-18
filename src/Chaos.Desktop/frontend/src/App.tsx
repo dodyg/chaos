@@ -5,6 +5,7 @@ import React from "react";
 import { CommandPalette, type PaletteCommand, type PaletteTask } from "./CommandPalette";
 import { handleListKeys } from "./listKeyboard";
 import { TodayContext } from "./dates";
+import { SyncIndicator } from "./SyncStatus";
 import { taskRpc, recurrenceRpc, subtaskRpc, containerRpc, tagRpc, queryRpc, undoRpc, markdownRpc, diaryRpc, historyRpc, padRpc, pageRpc, captureRpc, myDayRpc, myWeekRpc, reminderRpc, waitingRpc, summaryRpc, shellRpc, viewRpc, dataRpc, calendarsRpc, type ViewDto, type ShellActivationDto, type CaptureDraftDto, type PadItemResponse, type PageSummaryResponse, type TaskResponse, type TaskOperationResponse, type ContainerResponse, type SectionResponse, type TagResponse, type UndoEntryResponse } from "#neoastra";
 import { type LinkCandidate } from "./MarkdownEditor";
 import { type MarkdownLinks } from "./markdown";
@@ -121,6 +122,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [sections, setSections] = React.useState<SectionResponse[]>([]);
   const [subtaskRevision, setSubtaskRevision] = React.useState(0);
   const [view, setView] = React.useState<View>(initialView);
+  const [settingsTab, setSettingsTab] = React.useState<string | undefined>(undefined);
   const [summaryOpenId, setSummaryOpenId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState<QueryState>({ view: "Today" });
   const [searchText, setSearchText] = React.useState("");
@@ -759,7 +761,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
     <div className="window-titlebar fixed inset-x-0 top-0 z-40 flex h-[40px] items-center bg-[#1c1917] px-4 text-sm text-white select-none" aria-hidden="true">Chaos</div>
     <a href="#main-content" className="sr-only rounded-md bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to content</a>
     <aside className="sticky top-[40px] flex h-[calc(100vh-40px)] flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground">
-      <h1 className="flex items-center gap-2 px-2 pb-3 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1>
+      <div className="flex items-center gap-2 px-2 pb-3"><h1 className="flex items-center gap-2 text-lg font-bold tracking-tight"><SyncLogo/>Chaos</h1><div className="ml-auto min-w-0"><SyncIndicator compact onOpen={() => { setEditing(null); setShowTagSettings(false); setSettingsTab("account"); setView("settings"); }}/></div></div>
       <form role="search" className="mb-2 flex items-center gap-1.5 rounded-md border border-input bg-background px-2 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30" onSubmit={search}>
         <Search className="size-4 shrink-0 text-muted-foreground"/>
         <label htmlFor="search" className="sr-only">Search tasks</label>
@@ -817,7 +819,8 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         <DeletedItems className="pt-2" noun="tags" items={deletedTags} name={tag => tag.name} busy={busy} onRestore={tag => void restoreTag(tag)}/>
       </SidebarSection>
       <DeletedItems className="pt-4" noun="lists" items={deletedContainers} name={item => item.name} busy={busy} onRestore={item => void runContainer(() => containerRpc.restore({ operationId: operationId(), containerId: item.id, expectedVersion: item.version, name: item.name }), "Could not restore list.")}/>
-      <nav aria-label="App" className="sticky -bottom-4 mt-auto -mx-3 -mb-4 flex items-stretch gap-0.5 border-t border-sidebar-border bg-sidebar px-2 py-1.5">
+      <div className="sticky -bottom-4 mt-auto -mx-3 -mb-4 bg-sidebar">
+      <nav aria-label="App" className="flex items-stretch gap-0.5 border-t border-sidebar-border bg-sidebar px-2 py-1.5">
         {([
           ["notifications", "Notifications", "Alerts", <Bell/>],
           ["templates", "Templates", "Templates", <LayoutTemplate/>],
@@ -826,13 +829,14 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
         ] as const).map(([target, name, short, icon]) => <button key={target} type="button" aria-label={name} title={name}
           className="flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-1 py-1 text-[0.65rem] text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-brand-soft aria-[current=page]:text-primary [&_svg]:size-4"
           aria-current={view === target ? "page" : undefined}
-          onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); setView(target); }}>{icon}<span className="truncate">{short}</span></button>)}
+          onClick={() => { if (target !== "notifications") setEditing(null); setShowTagSettings(false); if (target === "settings") setSettingsTab(undefined); setView(target); }}>{icon}<span className="truncate">{short}</span></button>)}
         <span aria-hidden="true" className="my-1 w-px bg-sidebar-border"/>
         {/* Quitting ends background reminders too, so it asks once before it acts. */}
         <button type="button" aria-label={confirmQuit ? "Confirm quit" : "Quit Chaos"} title={confirmQuit ? "Click again to quit Chaos" : "Quit Chaos"}
           className={cn("flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-1 py-1 text-[0.65rem] text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 [&_svg]:size-4", confirmQuit && "bg-destructive/10 text-destructive hover:text-destructive")}
           onClick={() => { if (confirmQuit) { setConfirmQuit(false); void shellApi.quit({}); } else setConfirmQuit(true); }}><LogOut/><span className="truncate">{confirmQuit ? "Sure?" : "Quit"}</span></button>
       </nav>
+      </div>
     </aside>
 
     <div className="min-w-0" style={view === "myday" && dayBackground.background.kind !== "default" ? {
@@ -859,7 +863,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
       : view === "myday" ? <MyDay clock={dayClock} revision={revision} selectedTaskId={editing?.id ?? null} busy={busy} api={myDayApi} queryApi={queryApi} waitingApi={waitingApi} onOpen={task => { setViewingTask(false); setEditing(task); }} onView={task => { setViewingTask(true); setEditing(task); }} onChanged={changed} onSetStatus={setTaskStatus} background={dayBackground.background} onBackgroundChange={dayBackground.save} focus={focus} onSetCategory={setTaskCategory} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "summaries" ? <Summaries api={summaryApi} revision={revision} today={dayClock?.today ?? ""} openId={summaryOpenId} onOpenTask={id => void openTaskById(id)} onChanged={changed} onOpenDailyPage={date => openPages({ kind: "daily", date })}/>
       : view === "data" ? <DataSettings containers={containers} onImported={() => { void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }} onReplaced={() => { setEditing(null); void refreshMeta().catch((e: unknown) => setError(String(e))); changed(); }}/>
-      : view === "settings" ? <Settings api={shellApi} onSaved={() => changed()} onCalendarsChanged={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
+      : view === "settings" ? <Settings api={shellApi} initialTab={settingsTab} onSaved={() => changed()} onCalendarsChanged={() => changed()} onGitHubSynced={() => { changed(); void refreshContainers().catch((e: unknown) => setError(String(e))); }} onNavigate={next => { setEditing(null); setView(next); }}/>
       : view === "help" ? <Help onNavigate={next => { setEditing(null); setShowTagSettings(false); if (next === "tasks") openContainer(""); else if (next === "pages") openPages(null); else setView(next); }}/>
       : view === "notifications" ? <NotificationCenter revision={revision} api={reminderApi} onOpen={id => void openTaskById(id)}/>
       : view === "viewedit" && viewDraft ? <ViewEditor key={viewDraft.view?.id ?? "new"} view={viewDraft.view} initialDefinitionJson={viewDraft.definitionJson} initialName={viewDraft.name} icons={viewIconNames} tags={tags} containers={containers.filter(c => !c.archived)} focus={focus} api={viewApi}

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The Chaos online service (PLAN2 §8). References Chaos.Sync only, never a client project. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>Chaos.Server</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The only projects allowed to use EF Core (Directory.Build.targets, PLAN2 §2.1). -->
+    <ChaosAllowEfCore>true</ChaosAllowEfCore>
+    <MobileWebProject>$(MSBuildProjectDirectory)/../Chaos.Web</MobileWebProject>
+    <DefaultItemExcludes>$(DefaultItemExcludes);wwwroot/app/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- Direct pin so the service, its tests and the design-time tool share one EF Core version. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="OpenIddict.AspNetCore" />
+    <PackageReference Include="OpenIddict.Client.WebIntegration" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" />
+    <!-- Design-time only: `dotnet ef migrations add`. Never flows to the published service. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chaos.Sync\Chaos.Sync.csproj" />
+    <ProjectReference Include="..\Chaos.ServiceDefaults\Chaos.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Chaos.Server.Tests" />
+  </ItemGroup>
+
+  <Target Name="RestoreMobileWeb"
+          Inputs="$(MobileWebProject)/package.json;$(MobileWebProject)/package-lock.json"
+          Outputs="$(MobileWebProject)/node_modules/.package-lock.json">
+    <Exec WorkingDirectory="$(MobileWebProject)" Command="npm ci --no-audit --no-fund" />
+  </Target>
+
+  <Target Name="BuildMobileWeb" BeforeTargets="AssignTargetPaths" DependsOnTargets="RestoreMobileWeb"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec WorkingDirectory="$(MobileWebProject)" Command="npm run build" />
+    <ItemGroup>
+      <Content Include="wwwroot/app/**/*" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>

@@ -19,6 +19,8 @@
     <Content Include="Icons\chaos.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Google OAuth client (PLAN2 10.3). Git-ignored; copy google-oauth.example.json to google-oauth.json and fill it in. -->
     <Content Include="google-oauth.json" Condition="Exists('google-oauth.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Online service address (PLAN2 8.4). Git-ignored; copy chaos-service.example.json to chaos-service.json, or set CHAOS_SERVICE_URL. -->
+    <Content Include="chaos-service.json" Condition="Exists('chaos-service.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

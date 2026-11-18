@@ -133,7 +133,14 @@ bind every package.
 - **Frontend.** React and strict TypeScript with Vite. shadcn/ui on Tailwind v4 (see
   `docs/decisions.md`, 2026-11-10). Exact npm versions are committed in `package-lock.json`.
 - **Client database.** SQLite through Microsoft.Data.Sqlite, with explicit numbered SQL
-  migrations and parameterized SQL. **No EF Core.**
+  migrations and parameterized SQL. **EF Core is banned on the client side**: no
+  `Microsoft.EntityFrameworkCore*` assembly may reach `Chaos.Domain`, `Chaos.Application`,
+  `Chaos.Infrastructure`, `Chaos.Sync`, `Chaos.Desktop`, `Chaos.Desktop.Windows` or their tests,
+  directly or transitively. The build enforces this (`Directory.Build.targets`,
+  `ChaosAllowEfCore`); see decisions 2026-11-18.
+- **Server database.** PostgreSQL through **EF Core** with the Npgsql provider, in
+  `Chaos.Server` only (section 8.1). Only `Chaos.Server` and `Chaos.Server.Tests` set
+  `ChaosAllowEfCore`.
 - **Package versions.** Central versions in `Directory.Packages.props`. Lock files are committed,
   and restores run in locked mode. No `VersionOverride`. No suppressed warnings. Warnings are
   errors.
@@ -396,16 +403,18 @@ src/
                               change-set records, the merge function, UUIDv5, protocol DTOs.
                               BCL only.
   Chaos.Server/               ASP.NET Core on net11.0: accounts, sign-in, sync API, blobs, malware
-                              scanning, ICS feed, account deletion. PostgreSQL through Npgsql.
-    Migrations/S001_*.sql     Server migrations, same rules as the client ones.
+                              scanning, ICS feed, account deletion. PostgreSQL through EF Core
+                              (Npgsql provider). The only project allowed to use EF Core.
+    Data/ChaosDbContext.cs    The server model, including the OpenIddict entities.
+    Data/Migrations/          EF Core migrations named S001_Accounts, S002_Sync, ...
+  Chaos.ServiceDefaults/      Aspire service defaults: telemetry, health checks, /health endpoints.
+  Chaos.AppHost/              Aspire AppHost for local development (decisions 2026-11-18).
 tests/
   Chaos.Sync.Tests/           TUnit: HLC, merge, UUIDv5 vectors, protocol serialization.
   Chaos.Server.Tests/         TUnit: server integration against real PostgreSQL, plus
                               two-client end-to-end sync tests.
 deploy/
-  docker-compose.dev.yml      PostgreSQL, MinIO (S3-compatible), ClamAV, Mailpit
-                              (development only).
-  Chaos.Server.Dockerfile
+  Chaos.Server.Dockerfile     (Development containers are declared in Chaos.AppHost, not compose.)
 ```
 
 Dependency rules for the new projects:
@@ -415,6 +424,8 @@ Dependency rules for the new projects:
 - `Chaos.Infrastructure` implements the client sync engine. It talks to the server over HTTP
   through the `IChaosServiceClient` port.
 - `Chaos.Server` references `Chaos.Sync` only. It never references client projects.
+- EF Core stays inside `Chaos.Server`. Entity classes and the `DbContext` are server types and
+  never move into `Chaos.Sync`, which stays BCL-only so the client can share it.
 
 ### 6.2 New client ports (in `Chaos.Application/Abstractions`)
 
@@ -899,13 +910,37 @@ There are three cases, all implemented in P14.
 ### 8.1 Technology
 
 - ASP.NET Core minimal APIs on .NET 11.
-- PostgreSQL through Npgsql, with explicit numbered SQL migrations in `src/Chaos.Server/Migrations`
-  and a small migration runner modelled on the client's (checksums, refuse edited migrations,
-  refuse newer schema). No EF Core, matching the client rule.
+- **PostgreSQL through EF Core** (decisions 2026-11-18). This is the one exception to the
+  "no EF Core" rule, which still binds every client project.
+  - One `ChaosDbContext` in `src/Chaos.Server/Data`, registered through Aspire's
+    `AddNpgsqlDbContext<ChaosDbContext>("chaos")` (connection string `ConnectionStrings:chaos`,
+    health check, telemetry). The server still runs without an AppHost.
+  - Model configuration is explicit, in `IEntityTypeConfiguration<T>` classes: table and column
+    names as in 8.2, keys, unique indexes, check constraints, `jsonb` columns and lower-case
+    email checks. Do not rely on conventions for anything that reaches the schema.
+  - **Migrations** are EF Core code migrations in `src/Chaos.Server/Data/Migrations`, named
+    after the S-numbers (`dotnet ef migrations add S001_Accounts`). Each one is reviewed as SQL
+    (`dotnet ef migrations script`) before commit. Applied migrations are never edited or
+    removed; a change is a new migration.
+  - `Chaos.Server migrate` applies them (`Database.MigrateAsync`). Web startup never migrates.
+    It refuses to start when migrations are pending, or when the database has a migration this
+    build does not know (a newer database).
+  - A guard test fails when the model has changes with no migration
+    (`Database.HasPendingModelChanges()`), so the snapshot and the model cannot drift.
+  - Queries are LINQ, or `FromSql`/`ExecuteSql` with interpolated parameters; never
+    string-concatenated SQL. Use `ExecuteUpdate`/`ExecuteDelete` for bulk changes (account
+    deletion, horizon pruning). Read paths use `AsNoTracking`.
+  - Lazy loading is off. No EF InMemory or SQLite provider anywhere, including tests.
+  - **Versions.** EF Core follows the newest *stable* Npgsql EF provider, not the newest EF Core.
+    As of 2026-11-18 that is Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 (EF Core 10.0.x), which
+    runs on net11.0. Move to EF Core 11 when the Npgsql 11 provider ships a stable release.
 - **OpenIddict** as the server's own OAuth 2.0 / OpenID Connect authorization server. Its client
-  web-integration providers handle Google, Microsoft, Apple and GitHub sign-in. Verify in P12
-  that the chosen OpenIddict version supports .NET 11. If it does not, record the blocker; do
-  not hand-roll token issuance.
+  web-integration providers handle Google, Microsoft, Apple and GitHub sign-in. Its stores are
+  **OpenIddict.EntityFrameworkCore** on `ChaosDbContext` (`options.UseOpenIddict()`), so its
+  tables are part of the EF Core migrations. Pin the newest OpenIddict whose EF Core dependency
+  agrees with the Npgsql provider: OpenIddict 7.9.0 needs EF Core 11, so it waits for Npgsql 11;
+  7.8.0 restores cleanly with Npgsql EF 10.0.3 on net11.0 (checked 2026-11-18). Do not hand-roll
+  token issuance or token stores.
 - Object storage behind an `IBlobStore` port, with a filesystem adapter for tests and
   development, and an S3-compatible adapter for production.
 - Malware scanning behind an `IMalwareScanner` port, with a ClamAV `clamd` adapter using its
@@ -914,12 +949,14 @@ There are three cases, all implemented in P14.
 
 ### 8.2 Server schema (migration S001 onwards)
 
+Each table is an EF Core entity configured explicitly to these names and types.
+
 | Table | Contents |
 | --- | --- |
 | `Accounts` | `Id uuid`, `CreatedAt`, `PrimaryEmail` (lower-cased, unique), `DisplayName`, `ProfileId`, `PersonalSpaceId`, `InboxId`, `NextSeq bigint`, `StorageBytes bigint`, `DeletedAt` |
 | `AccountLogins` | `AccountId`, `Provider` (email, google, microsoft, apple, github), `Subject`, `Email`, `LinkedAt`; unique `(Provider, Subject)` |
 | `Devices` | `Id uuid` (the client's device ID), `AccountId`, `Name`, `Platform`, `ClientVersion`, `ClientSchema`, `CreatedAt`, `LastSeenAt`, `RevokedAt` |
-| OpenIddict tables | Created from OpenIddict's documented schema for Npgsql. Refresh tokens rotate and are bound to the device. |
+| OpenIddict tables | OpenIddict's EF Core entities (applications, authorizations, scopes, tokens) on `ChaosDbContext`, in S001. Refresh tokens rotate and are bound to the device. |
 | `EmailCodes` | `Email`, `CodeHash` (PBKDF2), `ExpiresAt` (10 min), `Attempts` (max 5), `ConsumedAt` |
 | `SyncEntities` | `AccountId`, `Kind`, `EntityKey`, `Groups jsonb` (name → `{hlc, values}`), `PurgedAt`, `LastSeq`, `UpdatedAt`; PK `(AccountId, Kind, EntityKey)` |
 | `SyncChanges` | `AccountId`, `Seq bigint`, `ChangeId uuid`, `Kind`, `EntityKey`, `Op`, `Groups jsonb` (winning groups only), `OriginDevice`, `CreatedAt`; PK `(AccountId, Seq)`; unique `(AccountId, ChangeId)` |
@@ -930,7 +967,10 @@ There are three cases, all implemented in P14.
 
 ### 8.3 Push transaction (server)
 
-Each change runs in a short PostgreSQL transaction (or a few changes together):
+Each change runs in a short PostgreSQL transaction (or a few changes together). With EF Core,
+the transaction is `Database.BeginTransactionAsync` run inside the context's execution strategy
+(`CreateExecutionStrategy().ExecuteAsync`), so a retry replays the whole unit and never half of
+it. The row lock in step 1 is `FromSql` (`... FOR UPDATE`), not a tracked read.
 
 1. `SELECT ... FROM Accounts WHERE Id = @a FOR UPDATE`. This serializes sequence assignment per
    account.
@@ -1027,8 +1067,10 @@ Health endpoints:
 - `/health/live` — always OK while the process runs.
 - `/health/ready` — checks the database, blob store and scanner.
 
-There is a migration command (`Chaos.Server migrate`), and the app refuses to start against an
-unmigrated or newer database. The client's service URL comes from a build-time
+There is a migration command (`Chaos.Server migrate`, applying the EF Core migrations), and the
+app refuses to start against an unmigrated, partly migrated or newer database. The Aspire AppHost
+runs it as a one-shot `chaos-migrate` resource before the server; production runs it as a
+release step. The client's service URL comes from a build-time
 `chaos.service.json` (committed with the production URL once D3 is known), and the
 `--service-url` launch argument overrides it for development.
 
@@ -1041,6 +1083,8 @@ unmigrated or newer database. The client's service URL comes from a build-time
   skip them silently.
 - `eng/verify.ps1` gains `-NoServer`, which skips the server test project only, prints a warning,
   and records "server tests not run" in the output. Progress notes must say when it was used.
+- Each test gets its own database, built by applying the real migrations (never
+  `EnsureCreated`). There is no EF InMemory or SQLite provider in the server tests.
 
 ---
 
@@ -2364,16 +2408,70 @@ still fire without details, and the limits are stated in Settings.
 
 ### [ ] P12 — Online service foundation and accounts
 
-**Depends on:** P1 and P0 (Docker/PostgreSQL). **Server migration:** `S001_accounts.sql`.
+**Depends on:** P1 and P0 (Docker/PostgreSQL). **Server migration:** `S001_Accounts` (EF Core).
 **Read:** section 8.
+
+**Progress note 2026-11-18 (branch `feature/p12-online-service`).** Started, with Aspire from the
+start by owner direction (decisions 2026-11-18): `src/Chaos.AppHost` replaces the planned
+`deploy/docker-compose.dev.yml` and runs PostgreSQL 18.7, Mailpit, a one-shot `chaos-migrate` and
+`chaos-server` (port 5080). Done: item 1 (projects `Chaos.ServiceDefaults`, `Chaos.Server`,
+`Chaos.AppHost`, `tests/Chaos.Server.Tests`; `eng/verify.ps1` runs the server tests and has
+`-NoServer`; Npgsql and Testcontainers pinned), item 2 (server migration runner and S001 without the
+OpenIddict tables), and the health endpoints from item 4. Tests: Chaos.Server.Tests 11/11 passing
+against Testcontainers PostgreSQL. Live check: the AppHost brought up both containers, the migrator
+completed and `/health/ready` answered 200 (needs `ASPIRE_SUPPRESS_CLI_RUN_HOOK=true` on ARM64
+Windows). Not done: items 3, 5, 6 (auth, client, their tests) and the remaining item 4 endpoints.
+**Update 2026-11-18: the server moves to EF Core** (owner direction; decisions 2026-11-18). The
+hand-written `ServerMigrationRunner` and `Migrations/S001_accounts.sql` above are replaced by
+`ChaosDbContext` and an EF Core `S001_Accounts` migration that also holds the OpenIddict tables.
+Nothing has been deployed, so S001 is regenerated rather than followed by a new migration.
+
+**Progress note 2026-11-18 (EF Core conversion done).** `src/Chaos.Server/Data`: entities,
+`ChaosDbContext` (explicit `IEntityTypeConfiguration` mapping, OpenIddict EF Core stores),
+`ServerSchemaGate` (migrate command and startup gate), a design-time factory, and the EF Core
+migration `S001_Accounts` (its SQL reviewed: the five account tables with their checks and
+indexes, plus the four OpenIddict tables). Registered through Aspire's `AddNpgsqlDbContext`.
+The client EF Core ban (`CHAOS001` in `Directory.Build.targets`) is in place and was shown to fail
+a project that pulls in EF Core. Tests: Chaos.Server.Tests 12/12 against Testcontainers
+PostgreSQL, including the pending-model-changes guard (shown to fail when a property is added
+without a migration). Sync 28/28, Domain 273/273, Application 114/114, Infrastructure 685/687.
+The two failing GitHub tests also fail on `main` (stale since `fc753a0`). The Release solution
+build and the Desktop tests did not run because a running Chaos.Desktop locked its Release
+output; the Debug solution build passes. Live check: the AppHost's `chaos-migrate` applied
+`S001_Accounts` and `/health/ready` answered 200. Smallest next action: item 3, OpenIddict server
+registration (authorization code + PKCE for the desktop client, refresh rotation, 15-minute
+access tokens) and the email-code sign-in page.
+
+**Progress note 2026-11-18 (items 3, 4, 5 done).** Server: OpenIddict (code + PKCE required, refresh
+rotation with zero reuse leeway, 15-minute access tokens, `device_id` bound into tokens), a custom
+application manager for RFC 8252 loopback ports, server-rendered email-code sign-in (hashed codes,
+5 attempts, per-email and per-IP limits, antiforgery, no scripts), providers (Google, Microsoft,
+Apple, GitHub) enabled only when configured, linking only after an email code, and `/v1/devices`,
+`/v1/account`, `DELETE /v1/devices/{id}` with a revoked-device/deleted-account filter and a
+600/min device limit. OpenIddict's `OpenIddict` log category is forced to Warning because it logs
+token requests at Information. Client: `IChaosServiceClient` (`ChaosServiceClient`: loopback
+listener, PKCE, single-flight refresh, refresh token in `ISecretStore`), `chaos-service.json` /
+`CHAOS_SERVICE_URL`, `AccountRpcService` and Settings → Account. Tests: Chaos.Server.Tests 59/59
+(Docker PostgreSQL), including the client against the in-process server with a fake browser; 11 new
+frontend tests. Not done: live check of provider sign-in and real SMTP (item 7), provider callback
+code is untested against a real provider. Removing a device does not delete its OpenIddict token
+rows (the table has no device column); this is deliberate: `Exchange` refuses the revoked device's
+refresh token and `ActiveDeviceFilter` refuses its access token, so it is already cut off server-side.
+The AppHost migrator now sets `ASPNETCORE_ENVIRONMENT=Development`. Only item 7 (live SMTP and
+Google sign-in, needs D3/D4) remains for the P12 exit.
 
 1. Project setup:
    - `src/Chaos.Server` (ASP.NET Core, `net11.0`) and `tests/Chaos.Server.Tests`, added to the
      solution and to `eng/verify.ps1`, with the `-NoServer` switch (8.8).
-   - `deploy/docker-compose.dev.yml` with PostgreSQL, MinIO, ClamAV and Mailpit.
-   - Resolve and pin Npgsql, OpenIddict and Testcontainers.
-2. The server migration runner and S001 (Accounts, AccountLogins, Devices, EmailCodes,
-   AuditEvents, plus the OpenIddict tables).
+   - `src/Chaos.AppHost` (Aspire) with PostgreSQL and Mailpit, the one-shot migrator and the
+     server; MinIO and ClamAV are added in P16.
+   - Resolve and pin EF Core, the Npgsql EF provider, OpenIddict (with its EF Core stores),
+     Testcontainers and the `dotnet-ef` local tool.
+   - `Directory.Build.targets` fails the build of any project that resolves a
+     `Microsoft.EntityFrameworkCore*` assembly without `ChaosAllowEfCore`.
+2. `ChaosDbContext`, the `Chaos.Server migrate` command, the startup gate and the EF Core
+   migration `S001_Accounts` (Accounts, AccountLogins, Devices, EmailCodes, AuditEvents, plus the
+   OpenIddict tables).
 3. Authentication:
    - OpenIddict server with authorization code + PKCE for the public desktop client, refresh
      token rotation, and 15-minute access tokens.
@@ -2409,8 +2507,24 @@ only in the credential store, and server tests run against real PostgreSQL.
 
 ### [ ] P13 — Sync protocol end to end
 
-**Depends on:** P12. **Server migration:** `S002_sync.sql` (`SyncEntities`, `SyncChanges`).
+**Depends on:** P12. **Server migration:** `S002_Sync` (EF Core; `SyncEntities`, `SyncChanges`).
 **Read:** section 7 (again) and 8.3.
+
+**Progress note 2026-11-18 (items 1, 2, 4 done; item 3 partly).** Shared in `Chaos.Sync`: `SyncJson` (wire/storage
+shape), `SyncKinds` (the service's copy of the catalog's kinds and groups, with a client test that fails on drift),
+`SyncProtocol`. Server: `S002_Sync` (`SyncEntities`, `SyncChanges`, `Accounts.ChangesPrunedThroughSeq`),
+`SyncService` and `/v1/sync/push|pull|snapshot` as in 7.12/8.3 (row lock, replay by changeId, ownership, size and
+kind/group validation, `NOTIFY chaos_seq_<account>` plus an in-process broadcaster, forward-compatible group
+filtering, 90-day pruning job and `snapshotRequired`). Client: `SyncEngine` (push in batches of what was queued at
+cycle start, pull and apply in 200-change chunks, snapshot catch-up, backoff 2 s to 5 min with jitter, started in
+`Program.cs`, idle while `SyncState.Enabled = 0`), `IChaosServiceClient.CallAsync`. Tests: 13 two-client scenarios
+(all listed in item 4) and 7 protocol tests; Chaos.Server.Tests 79/79, Infrastructure sync tests 78/78. Decisions:
+a late edit to a purged entity is rejected `purged` on the wire but the client drops it quietly; a rejected change
+stays in the outbox, is skipped for the session and raises attention; the account-space check applies only once
+P14 binds the canonical IDs. Also fixed: concurrent migrators now serialize on a PostgreSQL advisory lock (EF's own
+lock let two run S002). Not done: the SSE endpoint and `LISTEN` side (P15), the "Changed on another device" notice in
+open editors (7.10), and showing the replaced value in the history viewer (it is labelled, and the earlier version
+opens in the existing viewer). The `sync.merged` history label is in `TaskJournal.tsx`.
 
 1. Server:
    - `POST /v1/sync/push`, `GET /v1/sync/pull`, `GET /v1/sync/snapshot`, exactly as 7.12, using
@@ -2485,9 +2599,21 @@ synced `Devices` table for display names). **Read:** section 7.13 and 8.6.
 of both, without duplicate tags or lists. Signing out and deleting the account behave as the
 dialogs promise.
 
-### [ ] P15 — Realtime, sync status and attention
+### [x] P15 — Realtime, sync status and attention
 
 **Depends on:** P14. **Migration:** none.
+
+**Progress note 2026-11-18 (items 1 to 4 done).** Server: `GET /v1/sync/events` (`SyncEvents.cs`) sends the current seq first,
+then `{"seq":N}` on each push (in-process broadcaster plus a `LISTEN` connection per stream) and a `: keep-alive` comment every
+25 s (`Sync:EventKeepAlive`). Client: `IChaosServiceClient.StreamLinesAsync`; `SyncEngine` holds the stream open while sync is on,
+turns events into a pull after 300 ms, reconnects with the sync backoff, and drops a stream silent for 90 s. Also fixed: a wake that
+arrived during a cycle was lost (the loop replaced its wake signal); it now stays pending. `SyncStatusReader` (Infrastructure)
+decides Synced / Syncing / Offline / Needs attention / Signed out / Update needed (Hidden for a computer that never used an
+account); `syncStatus.status|syncNow|dismiss` RPCs; sidebar-footer `SyncIndicator` and the Sync panel in Settings → Account
+(`SyncStatus.tsx`). The panel is polled every 4 s from local data. Tests: `SyncRealtimeTests` (SSE within 3 s with polling off,
+reconnect catch-up, keep-alive, NOTIFY from another instance, status transitions, fake-engine rule) and `syncStatus.test.tsx`.
+Not done: a live check over a real network. Known failures unrelated to P15: the 1,000-task 150 ms test and the `tagsAndViews`
+search test fail on this machine without these changes too.
 
 1. Server: the SSE endpoint, with PostgreSQL `LISTEN/NOTIFY` fan-out and keep-alives.
 2. Client: an SSE listener that reconnects with backoff and triggers a debounced pull.
@@ -2506,7 +2632,26 @@ always see whether everything is synced.
 
 ### [ ] P16 — Attachment sync, malware checks and offline lists
 
-**Depends on:** P15 and P9. **Server migration:** `S003_blobs.sql`. **Read:** section 9.2 and 8.5.
+**Depends on:** P15 and P9. **Server migration:** `S003_Blobs` (EF Core). **Client migration:** `034_attachment_sync.sql`
+(`AttachmentLocalState` gains `Remote`, `NextTryUtc`, `Failures`; new local table `OfflineContainers`). **Read:** section 9.2 and 8.5.
+
+**Progress note 2026-11-18 (items 1 to 3 done, except as listed).** Server (`Chaos.Server/Blobs`): ports `IBlobStore`, `IMalwareScanner`,
+`IKeyWrapper`; `BlobCrypto` (AES-256-GCM, 1 MiB chunks, random nonce, chunk index authenticated, so a swapped, truncated or tampered chunk
+fails); adapters `FileBlobStore`, `FileKeyWrapper` (master key file), `ClamAvScanner` (clamd INSTREAM), `EicarScanner` (development
+only; any other host must set `Clam:Host`, `Blob:Directory` and `KeyVault:MasterKeyPath`). Endpoints `HEAD|POST|PUT ?part=N|GET /v1/blobs/{sha}`
+and `POST .../complete`; a blocked blob keeps a `Blocked` row and no bytes, so every device can see the state; a scanner that is down never
+means clean (the parts stay, the device retries). Quota is checked at start and counted atomically at completion (`quota`, audited).
+`BlobSweepService` removes blobs no live attachment references for 7 days and unfinished uploads after a day. Account deletion removes
+the objects. `/health/ready` now checks the store and scanner. Client: `IBlobTransport` (implemented by `ChaosServiceClient`),
+`AttachmentTransfer` (upload queue one file at a time and resumable; automatic download up to 5 MiB; pinned lists, the pad and pages
+prefetch; on-open download shared between callers; back-off per hash), `AttachmentCommands.Availability` so opening a missing file fetches
+it, attachment DTO `sync`/`percent`/`note`, `attachment.retry|setOffline|offlineContainers`, the attention items `attachment.blocked` and
+`attachment.quota`, the `TransferNote` in the attachment panel and card, and the "Keep available offline" checkbox in list and project
+settings. Tests: `BlobTests` (16, server side) and `BlobSyncTests` (7, two real desktops).
+Not done: an S3-compatible `IBlobStore` and the MinIO and ClamAV containers in the AppHost (only the local-folder store exists); a vault
+`IKeyWrapper`; the live ClamAV integration test (the clamd client is written but untested against a real daemon); downloads restart
+instead of resuming from a byte offset; "Keep available offline" is offered for lists and projects but not shown in the sidebar; no live
+check over a real network.
 
 1. Server:
    - Blob endpoints: resumable upload, verify the hash, scan through `IMalwareScanner`, encrypt
@@ -2537,7 +2682,7 @@ opened. A file containing EICAR is blocked on both devices.
 
 ### [ ] P17 — Cross-device behaviour: reminders, GitHub runner, calendars, summaries
 
-**Depends on:** P15. **Migration:** `034_cross_device.sql` (`ReminderAcknowledgements`, synced;
+**Depends on:** P15. **Migration:** `035_cross_device.sql` (`ReminderAcknowledgements`, synced;
 `GitHubConnections.RunnerDeviceId`). **Read:** sections 7.5 and 7.11.
 
 1. **Reminder acknowledgements.** Every Done/Dismiss/Snooze action writes an acknowledgement row
@@ -2562,7 +2707,7 @@ exactly one device.
 
 ### [ ] P18 — Calendar subscription link
 
-**Depends on:** P15. **Server migration:** `S004_calendar_feed.sql`. **Read:** SPEC Calendar
+**Depends on:** P15. **Server migration:** `S004_CalendarFeed` (EF Core). **Read:** SPEC Calendar
 "Subscribe from elsewhere".
 
 1. Server: `GET /v1/calendar/{token}.ics` (no auth header; the token is the secret: 32 random
@@ -2678,9 +2823,17 @@ The Phase 1 commands stay. `eng/verify.ps1` gains `tests/Chaos.Sync.Tests` and
 `tests/Chaos.Server.Tests`, and the `-NoServer` switch. The development server runs with:
 
 ```powershell
-docker compose -f deploy/docker-compose.dev.yml up -d
-dotnet run --project src/Chaos.Server -- migrate
-dotnet run --project src/Chaos.Server
+# Aspire (decisions 2026-11-18): PostgreSQL, Mailpit, migrations and the server on :5080,
+# with the dashboard at http://localhost:15080. On ARM64 Windows set the variable below first.
+$env:ASPIRE_SUPPRESS_CLI_RUN_HOOK = "true"
+dotnet run --project src/Chaos.AppHost
+```
+
+A new server migration, reviewed as SQL before commit:
+
+```powershell
+dotnet tool run dotnet-ef migrations add S002_Sync --project src/Chaos.Server --output-dir Data/Migrations
+dotnet tool run dotnet-ef migrations script S001_Accounts S002_Sync --project src/Chaos.Server
 ```
 
 Two development clients against it:
@@ -2741,9 +2894,10 @@ If a number is already taken when you start, use the next free number and update
 | 032 | P10 | Pad item kind, drawings, region links |
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |
 | 033 | P14 | Account binding, devices display table |
-| 034 | P17 | Reminder acknowledgements, GitHub runner device |
-| 035 | P19 | Place reminders (only if D1) |
-| S001–S004 | P12, P13, P16, P18 | Server: accounts/auth, sync, blobs, calendar feed tokens |
+| 034 | P16 | Attachment transfer state (`Remote`, `NextTryUtc`, `Failures`), `OfflineContainers` (P16 took 034 because P17 had not landed) |
+| 035 | P17 | Reminder acknowledgements, GitHub runner device |
+| 036 | P19 | Place reminders (only if D1) |
+| S001–S004 | P12, P13, P16, P18 | Server EF Core migrations: accounts/auth with OpenIddict, sync, blobs, calendar feed tokens |
 
 ## Appendix B — Dependencies to resolve and pin
 
@@ -2758,12 +2912,12 @@ browser) compatibility and the license, pin it centrally, and record it in
 | An image library or the Windows imaging APIs | P9 | Dimensions and thumbnails |
 | `@fullcalendar/*` standard packages | P4 | Calendar grid (D8) |
 | `perfect-freehand` | P10 | Smooth pen strokes |
-| Npgsql | P12 | PostgreSQL |
-| OpenIddict (server, ASP.NET Core, client web providers) | P12 | OAuth/OIDC server and external sign-in |
+| Microsoft.EntityFrameworkCore (+ Design for migrations), Npgsql.EntityFrameworkCore.PostgreSQL, Aspire.Npgsql.EntityFrameworkCore.PostgreSQL, `dotnet-ef` tool | P12 | Server persistence only. The EF Core major follows the newest stable Npgsql provider |
+| OpenIddict (server, ASP.NET Core, EF Core stores, client web providers) | P12 | OAuth/OIDC server and external sign-in |
 | Testcontainers.PostgreSql | P12 | Server tests when `CHAOS_TEST_PG` is unset |
 | An S3-compatible client | P16 | Production blob storage adapter |
 
-Do **not** add EF Core, an AI vendor SDK (unless an adapter genuinely needs it and the decision is
+Do **not** add EF Core to any client project (it is allowed in `Chaos.Server` and its tests only), an AI vendor SDK (unless an adapter genuinely needs it and the decision is
 recorded), a second UI framework, or any CDN-loaded asset.
 
 ## Appendix C — Glossary

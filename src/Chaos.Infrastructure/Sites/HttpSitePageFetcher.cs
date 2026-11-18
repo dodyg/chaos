@@ -98,20 +98,26 @@ public sealed class HttpSitePageFetcher : ISitePageFetcher, IDisposable
             buffer.Write(chunk, 0, read);
         }
 
-        var encoding = Encoding.UTF8;
-        if (content.Headers.ContentType?.CharSet is { } charset)
+        var encoding = EncodingFor(content.Headers.ContentType?.CharSet);
+        return encoding.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+    }
+
+    /// <summary>The page's declared charset, or UTF-8 when none is declared or the name is unknown.</summary>
+    public static Encoding EncodingFor(string? charset)
+    {
+        if (string.IsNullOrWhiteSpace(charset))
         {
-            try
-            {
-                encoding = Encoding.GetEncoding(charset.Trim('"'));
-            }
-            catch (ArgumentException)
-            {
-                // Unknown charset name: UTF-8 is the best guess.
-            }
+            return Encoding.UTF8;
         }
 
-        return encoding.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+        try
+        {
+            return Encoding.GetEncoding(charset.Trim('"'));
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
+        }
     }
 
     public void Dispose()

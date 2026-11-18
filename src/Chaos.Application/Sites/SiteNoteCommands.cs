@@ -107,15 +107,18 @@ public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer s
                 {
                     await tags.LinkAsync(new($"{operationId}:tag:{index}", TagTargetKind.Pad, item.Id, null, paths[index]));
                 }
-                catch (AppException)
+                catch (AppException error)
                 {
-                    // A tag the model made up that is not a valid name must not lose the summary.
+                    // A tag the model made up that is not a valid name must not lose the summary; skip it.
+                    System.Diagnostics.Trace.TraceWarning("New site: skipped a tag Chaos could not add ({0})", error.Kind);
                 }
             }
         }
-        catch (Exception)
+        catch (Exception error)
         {
-            // The note keeps its address; a deleted note or a closing store ends the background work quietly.
+            // The note keeps its address; a deleted note or a closing store ends the background work.
+            // Reported by type only: the page address and text never reach the trace (PLAN2 §2.5).
+            System.Diagnostics.Trace.TraceWarning("New site: background reading stopped: {0}", error.GetType().Name);
         }
     }
 

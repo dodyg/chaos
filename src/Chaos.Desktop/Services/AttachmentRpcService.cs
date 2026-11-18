@@ -4,12 +4,14 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Activity;
 using Chaos.Application.Attachments;
 using Chaos.Application.Contracts;
+using Chaos.Infrastructure.Attachments;
 using NeoAstra.Rpc;
 
 namespace Chaos.Desktop.Services;
 
 public sealed record AttachmentDto(string Id, string OwnerKind, string OwnerId, string FileName, string MediaType, string ByteSize, string Sha256,
-    int? Width, int? Height, string Version, string CreatedAtUtc, string Bytes, string Preview, bool CanOpen);
+    int? Width, int? Height, string Version, string CreatedAtUtc, string Bytes, string Preview, bool CanOpen,
+    string Sync, int? Percent, string? Note);
 public sealed record AttachmentListRequest(string OwnerKind, string OwnerId);
 public sealed record AttachmentResolveRequest(IReadOnlyList<string> Ids);
 public sealed record AttachmentListResponse(bool Ok, IReadOnlyList<AttachmentDto> Attachments, TaskErrorResponse? Error);
@@ -30,6 +32,10 @@ public sealed record AttachmentPageImageRequest(string PageId, string Name);
 public sealed record AttachmentCropDto(int X, int Y, int Width, int Height);
 public sealed record AttachmentEditImageRequest(string OperationId, string AttachmentId, string ExpectedVersion, bool FlipHorizontal, bool FlipVertical,
     int RotateClockwise, AttachmentCropDto? Crop, int? MaxSide);
+public sealed record AttachmentRetryRequest(string AttachmentId);
+public sealed record AttachmentOfflineRequest(string ContainerId, bool Offline);
+public sealed record AttachmentOfflineListRequest();
+public sealed record AttachmentOfflineResponse(bool Ok, IReadOnlyList<string> ContainerIds, TaskErrorResponse? Error);
 public sealed record AttachmentThumbnailRequest(string AttachmentId);
 
 /// <summary>
@@ -40,7 +46,7 @@ public sealed record AttachmentThumbnailRequest(string AttachmentId);
 /// is not on the blocked list; "Show in folder" and "Save a copy" work for every file.
 /// </summary>
 [NeoRpcService("attachment", Version = 1)]
-public sealed class AttachmentRpcService(AttachmentCommands attachments, string openedDirectory, Func<string> exportDirectory, Func<string, bool>? shellOpen = null, Func<string, bool>? shellSelect = null)
+public sealed class AttachmentRpcService(AttachmentCommands attachments, string openedDirectory, Func<string> exportDirectory, Func<string, bool>? shellOpen = null, Func<string, bool>? shellSelect = null, AttachmentTransfer? transfer = null)
 {
     public static string DefaultOpenedDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Chaos", "opened");
@@ -51,6 +57,45 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
         using var rpcScope = ActivityScope.Rpc("attachment.list");
         try { return new(true, [.. (await attachments.ListAsync(Kind(request.OwnerKind), request.OwnerId, ct)).Select(Map)], null); }
         catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    /// <summary>"Retry" on a file that failed to upload or download (PLAN2 §9.2).</summary>
+    [NeoRpcMethod("retry")]
+    public async ValueTask<AttachmentSimpleResponse> RetryAsync(AttachmentRetryRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("attachment.retry");
+        try
+        {
+            var view = await attachments.GetAsync(request.AttachmentId, ct);
+            if (transfer is not null)
+            {
+                await transfer.RetryAsync(view.Attachment.Sha256, ct);
+            }
+
+            return new(true, null);
+        }
+        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
+    }
+
+    /// <summary>"Keep available offline" for a list or project on this computer; answers with every container kept offline.</summary>
+    [NeoRpcMethod("setOffline")]
+    public async ValueTask<AttachmentOfflineResponse> SetOfflineAsync(AttachmentOfflineRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("attachment.setOffline");
+        if (transfer is null)
+        {
+            return new(true, [], null);
+        }
+
+        await transfer.SetContainerOfflineAsync(request.ContainerId, request.Offline, ct);
+        return new(true, await transfer.OfflineContainersAsync(ct), null);
+    }
+
+    [NeoRpcMethod("offlineContainers")]
+    public async ValueTask<AttachmentOfflineResponse> OfflineContainersAsync(AttachmentOfflineListRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("attachment.offlineContainers");
+        return new(true, transfer is null ? [] : await transfer.OfflineContainersAsync(ct), null);
     }
 
     [NeoRpcMethod("resolve")]
@@ -305,7 +350,10 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
         StorageFormats.Instant(view.Attachment.CreatedAtUtc),
         view.Bytes.ToString().ToLowerInvariant(),
         view.Preview.ToString().ToLowerInvariant(),
-        view.CanOpen);
+        view.CanOpen,
+        (view.Transfer?.State ?? AttachmentSyncState.None).ToString().ToLowerInvariant(),
+        view.Transfer?.Percent,
+        view.Transfer?.Message);
 
     private static AttachmentOwnerKind Kind(string? token) => token?.Trim().ToLowerInvariant() switch
     {

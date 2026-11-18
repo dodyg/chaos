@@ -82,6 +82,9 @@ public static class StorageBootstrap
             // opens the database (PLAN §14), so startup always sees one consistent file.
             var recovery = DataProtection.DatabaseReplacement.RecoverInterrupted(options);
 
+            // A join of an account interrupted after its safety backup is undone the same way (PLAN2 P14 item 2).
+            recovery = Service.AccountJoinService.RecoverInterrupted(options) ?? recovery;
+
             var source = new SqliteConnectionSource(options.DatabasePath);
 
             await using (var probe = source.Open())

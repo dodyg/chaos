@@ -19,6 +19,9 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
     private static readonly Dictionary<string, SyncTable> TablesByKind =
         SyncCatalog.Tables.Where(table => table.Mode != SyncMode.LocalOnly).ToDictionary(table => table.Kind, StringComparer.Ordinal);
 
+    /// <summary>Raised when a flush wrote outbox rows (just before the transaction commits); the sync engine wakes on it and debounces.</summary>
+    public event Action? OutboxWritten;
+
     public void Flush(SqliteConnection connection)
     {
         var enabled = SyncSql.Scalar(connection, "SELECT Enabled FROM SyncState WHERE Id = 1;");
@@ -104,6 +107,10 @@ public sealed class SyncFlush(TimeProvider clock) : ISyncCapture
         state.ExecuteNonQuery();
 
         SyncSql.Execute(connection, "DELETE FROM SyncPending;");
+        if (entities.Count > 0)
+        {
+            OutboxWritten?.Invoke();
+        }
     }
 
     private static bool RowExists(SqliteConnection connection, SyncTable table, string key)

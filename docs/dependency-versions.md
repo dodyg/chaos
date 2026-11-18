@@ -151,3 +151,22 @@ that distinction. No credential retrieval was run during the offline test gate.
   not decoded: such files stay viewable as files but cannot be edited and have no thumbnail. The
   EXIF orientation is applied on decode, so edits and thumbnails are upright.
 - Thumbnails are cached as local files under `<data root>/thumbnails` (not synced, rebuilt on demand).
+
+## Online service (P12, 2026-11-18)
+
+Latest stable on NuGet when P12 started (queried 2026-11-18); all build on .NET 11 (Aspire 17.0.0 ships net10.0 and net11.0 assets). Licenses: MIT (Aspire, EF Core, Testcontainers), PostgreSQL License (Npgsql and its EF provider), Apache-2.0 (OpenTelemetry, OpenIddict).
+
+| Package | Version | Note |
+| --- | --- | --- |
+| Aspire.Hosting.AppHost, Aspire.Hosting.Dotnet, Aspire.Hosting.PostgreSQL | 17.0.0 | AppHost (development orchestration only). Published 2026-11-18. |
+| Aspire.Npgsql.EntityFrameworkCore.PostgreSQL | 13.6.5 | Server: `AddNpgsqlDbContext`, health check, telemetry. 17.0.0 is still a preview |
+| Npgsql.EntityFrameworkCore.PostgreSQL | 10.0.3 | Server EF Core provider; newest stable (11.0 is at rc.3) |
+| Microsoft.EntityFrameworkCore.Relational | 10.0.15 | Pinned directly on the server so the service, its tests and `dotnet-ef` share one EF Core version (without it the test project resolved 10.0.14 through Aspire and failed with MSB3277) |
+| Microsoft.EntityFrameworkCore.Design | 10.0.15 | Server, `PrivateAssets=all`: migrations only |
+| OpenIddict.EntityFrameworkCore | 7.8.0 | Server token stores. 7.9.0 needs EF Core 11 (decisions 2026-11-18) |
+| OpenTelemetry.Extensions.Hosting, .Exporter.OpenTelemetryProtocol, .Instrumentation.AspNetCore, .Instrumentation.Http, .Instrumentation.Runtime | 1.21.0 | `Chaos.ServiceDefaults` |
+| Microsoft.AspNetCore.Mvc.Testing | 11.0.0 | Server tests (`WebApplicationFactory`); brings no VSTest packages |
+| Testcontainers.PostgreSql | 4.17.0 | Server tests when `CHAOS_TEST_PG` is unset |
+
+Container images: `postgres:18.7` (AppHost and Testcontainers), `axllent/mailpit:v1.34.0` (AppHost).
+Local tool: `dotnet-ef` 10.0.15 in `.config/dotnet-tools.json`, matching EF Core. All EF Core and OpenIddict pins move to the 11 line together once the Npgsql 11 provider is stable. `Aspire.Npgsql` and plain `Npgsql` were dropped when the server moved to EF Core.

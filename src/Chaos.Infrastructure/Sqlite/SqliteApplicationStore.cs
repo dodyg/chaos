@@ -35,6 +35,9 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
     private TaskCompletionSource? _readsDrained;
     private volatile bool _closed;
 
+    /// <summary>The change-capture flush, when this store has one; the sync engine listens to it for local changes.</summary>
+    public SyncFlush? SyncFlush => _syncCapture as SyncFlush;
+
     /// <summary>The connection source this store opens; data protection opens its own connections from it.</summary>
     public SqliteConnectionSource Source => _source;
 
@@ -68,7 +71,15 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
 
             if (activitySeq is { } seq)
             {
-                try { ActivityNotifier?.HeadChanged(seq); } catch (Exception) { /* a notifier failure never fails a committed write */ }
+                try
+                {
+                    ActivityNotifier?.HeadChanged(seq);
+                }
+                catch (Exception notifierError)
+                {
+                    // A notifier failure never fails a committed write.
+                    System.Diagnostics.Trace.TraceWarning("Activity notifier failed after a commit: {0}", notifierError.GetType().Name);
+                }
             }
 
             return result;

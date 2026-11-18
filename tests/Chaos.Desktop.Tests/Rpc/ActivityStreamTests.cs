@@ -131,23 +131,54 @@ public sealed class ActivityStreamTests
     [Test]
     public async Task Head_notices_coalesce_into_one_pushed_event()
     {
-        using var publisher = new ActivityPublisher(TimeProvider.System);
+        var clock = new ManualTimerClock();
+        using var publisher = new ActivityPublisher(clock);
         var published = new List<string>();
-        publisher.Attach(payload => { lock (published) { published.Add(payload.Seq); } return Task.CompletedTask; });
+        publisher.Attach(payload => { published.Add(payload.Seq); return Task.CompletedTask; });
 
         publisher.HeadChanged(3);
         publisher.HeadChanged(4);
         publisher.JobsChanged();
         publisher.HeadChanged(5);
-        await Task.Delay(400);
 
-        string[] seen;
-        lock (published)
+        await Assert.That(clock.ArmedCount).IsEqualTo(1);
+        await Assert.That(published.Count).IsEqualTo(0);
+
+        clock.FireDue();
+
+        await Assert.That(published).IsEquivalentTo(["5"]);
+        await Assert.That(clock.ArmedCount).IsEqualTo(0);
+    }
+
+    /// <summary>A clock whose one-shot timers fire only when the test says so.</summary>
+    private sealed class ManualTimerClock : TimeProvider
+    {
+        private readonly List<ManualTimer> _timers = [];
+
+        public int ArmedCount => _timers.Count(timer => !timer.Disposed);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            seen = [.. published];
+            var timer = new ManualTimer(callback, state);
+            _timers.Add(timer);
+            return timer;
         }
 
-        await Assert.That(seen.Length).IsEqualTo(1);
-        await Assert.That(seen[0]).IsEqualTo("5");
+        public void FireDue()
+        {
+            foreach (var timer in _timers.Where(timer => !timer.Disposed).ToList())
+            {
+                timer.Fire();
+            }
+        }
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            public bool Disposed { get; private set; }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => throw new NotSupportedException();
+            public void Dispose() => Disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+            public void Fire() => callback(state);
+        }
     }
 }

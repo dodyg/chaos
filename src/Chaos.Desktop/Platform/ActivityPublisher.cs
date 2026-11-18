@@ -88,9 +88,10 @@ public sealed class ActivityPublisher(TimeProvider clock) : IActivityNotifier, I
         {
             _ = publish(payload).ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
         }
-        catch (Exception)
+        catch (Exception error)
         {
             // A window that cannot be reached misses a push; it reloads on focus.
+            System.Diagnostics.Trace.TraceWarning("Activity push failed: {0}", error.GetType().Name);
         }
     }
 

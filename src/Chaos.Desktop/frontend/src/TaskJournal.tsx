@@ -39,6 +39,7 @@ const eventNames: Record<string, string> = {
   "diary.restored": "Diary entry restored",
   "diary.changed": "Diary changed",
   "undo": "Undone",
+  "sync.merged": "Changed on another device",
 };
 
 const fieldNames: Record<string, string> = {
@@ -54,7 +55,7 @@ const restorable = ["Title", "Notes", "Priority", "Estimate", "Category", "Plann
 export function describeEvent(event: HistoryEntryResponse): string {
   const name = eventNames[event.eventKind] ?? label(event.eventKind);
   const fields = event.changedFields.filter(field => !["UpdatedAtUtc", "CompletedAtUtc", "CancelledAtUtc"].includes(field)).map(field => fieldNames[field] ?? field);
-  return event.eventKind === "task.updated" || event.eventKind === "undo" || event.eventKind === "task.tags-changed"
+  return event.eventKind === "task.updated" || event.eventKind === "undo" || event.eventKind === "task.tags-changed" || event.eventKind === "sync.merged"
     ? fields.length > 0 ? `${name}: ${[...new Set(fields)].join(", ")}` : name
     : name;
 }

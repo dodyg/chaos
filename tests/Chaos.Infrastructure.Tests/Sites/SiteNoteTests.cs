@@ -18,6 +18,17 @@ public sealed class SiteNoteTests
         public Guid NewId() => Guid.NewGuid();
     }
 
+    [Test]
+    [Arguments(null, "utf-8")]
+    [Arguments("", "utf-8")]
+    [Arguments("utf-8", "utf-8")]
+    [Arguments("\"utf-16\"", "utf-16")]
+    [Arguments("not-a-charset", "utf-8")]
+    public async Task EncodingFor_DeclaredCharset_UsesItOrFallsBackToUtf8(string? charset, string expected)
+    {
+        await Assert.That(HttpSitePageFetcher.EncodingFor(charset).WebName).IsEqualTo(expected);
+    }
+
     private sealed class FakeFetcher(FetchedPage? page = null, string? failure = null) : ISitePageFetcher
     {
         public Task<FetchedPage> FetchAsync(Uri address, CancellationToken ct) =>

@@ -1,9 +1,10 @@
 import { GitHubSettings } from "./GitHubSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
+import { AccountSettings } from "./AccountSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
-import { shellRpc, updatesRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto, type UpdateCheckResponse } from "#neoastra";
+import { shellRpc, updatesRpc, syncStatusRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto, type UpdateCheckResponse } from "#neoastra";
 import { Keyboard, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,7 +47,7 @@ function ShortcutState({ status }: { status: ShortcutStatusDto | undefined }) {
  * with whether Windows accepted them, keeping Chaos in the notification area, and Quit. Other
  * settings stay next to what they change and are linked from here.
  */
-export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; updatesApi?: UpdatesApi; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
+export function Settings({ api = shellRpc, updatesApi = updatesRpc, initialTab, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; updatesApi?: UpdatesApi; initialTab?: string; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
   const [saved, setSaved] = React.useState<ProfileSettingsResponse | null>(null);
   const [draft, setDraft] = React.useState<ProfileSettingsResponse | null>(null);
   const [zones, setZones] = React.useState<string[]>([]);
@@ -55,7 +56,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [tab, setTab] = React.useState("general");
+  const [tab, setTab] = React.useState(initialTab ?? "general");
   const [update, setUpdate] = React.useState<UpdateCheckResponse | null>(null);
   const [checking, setChecking] = React.useState(false);
 
@@ -111,7 +112,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
     {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
     <Tabs value={tab} onValueChange={setTab} className="gap-4">
       <div className="max-w-full overflow-x-auto"><TabsList aria-label="Settings categories" className="justify-start">
-        <TabsTrigger value="general">General</TabsTrigger><TabsTrigger value="appearance">Appearance</TabsTrigger><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="computer">This computer</TabsTrigger><TabsTrigger value="calendars">Calendars</TabsTrigger><TabsTrigger value="github">GitHub</TabsTrigger><TabsTrigger value="more">More settings</TabsTrigger>
+        <TabsTrigger value="general">General</TabsTrigger><TabsTrigger value="appearance">Appearance</TabsTrigger><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="computer">This computer</TabsTrigger><TabsTrigger value="account">Account</TabsTrigger><TabsTrigger value="calendars">Calendars</TabsTrigger><TabsTrigger value="github">GitHub</TabsTrigger><TabsTrigger value="more">More settings</TabsTrigger>
       </TabsList></div>
     {!draft ? <p className="text-sm text-muted-foreground">Loading settings…</p> : <form className="grid gap-5" onSubmit={save}>
       <TabsContent value="general"><Section title="You and your time" icon={<UserRound/>} description="The time zone decides when your day starts and when reminders arrive. Dates on tasks stay the dates you chose.">
@@ -162,7 +163,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
         </div>
       </Section></TabsContent>
 
-      {tab !== "appearance" && tab !== "more" && tab !== "github" && tab !== "calendars" && <div className="flex flex-wrap items-center gap-2">
+      {tab !== "appearance" && tab !== "more" && tab !== "github" && tab !== "calendars" && tab !== "account" && <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy || !dirty}>Save settings</Button>
         <Button type="button" variant="outline" disabled={busy || !dirty} onClick={() => { setDraft(saved); setFieldErrors({}); }}>Undo changes</Button>
       </div>}
@@ -170,6 +171,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
     <TabsContent value="calendars" className="grid gap-4"><CalendarSettings onChanged={onCalendarsChanged}/><GoogleCalendarSettings onChanged={onCalendarsChanged}/></TabsContent>
+    <TabsContent value="account"><AccountSettings syncApi={syncStatusRpc}/></TabsContent>
     <TabsContent value="github"><GitHubSettings onSynced={onGitHubSynced}/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">

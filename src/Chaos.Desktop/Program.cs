@@ -36,6 +36,12 @@ using NeoAstra.Rpc;
 
 internal static class Program
 {
+#if DEBUG
+    private const bool IsDevelopmentBuild = true;
+#else
+    private const bool IsDevelopmentBuild = false;
+#endif
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -136,6 +142,24 @@ internal static class Program
         using var feedClient = new CalendarFeedClient();
         // Google Calendar (PLAN2 P6): the OAuth client comes from google-oauth.json beside the exe (git-ignored); tokens go to the secret store only.
         using var googleClient = new GoogleCalendarClient(GoogleOAuthConfig.TryLoad(Path.Combine(AppContext.BaseDirectory, "google-oauth.json")), new Chaos.Desktop.Platform.ShellBrowser());
+        // Online service (PLAN2 P12): the address is typed in Settings → Account (or comes from CHAOS_SERVICE_URL or chaos-service.json beside the exe); without one Settings
+        // offers no sign-in. Plain http is accepted for loopback in development builds only. The refresh token goes to the secret store.
+        var serviceAddress = new Chaos.Infrastructure.Service.ServiceAddressStore(
+            Path.Combine(dataRoot, "service-address.json"), Path.Combine(AppContext.BaseDirectory, "chaos-service.json"), allowLoopbackHttp: IsDevelopmentBuild);
+        using var serviceClient = new Chaos.Infrastructure.Service.ChaosServiceClient(
+            serviceAddress.Resolve,
+            new Chaos.Desktop.Platform.ShellBrowser(), secrets, new Chaos.Infrastructure.Service.SqliteDeviceIdentity(storage.Store, AppVersion()));
+        // Sync (PLAN2 P13): the loop idles until SyncState.Enabled = 1 (turned on by joining an account, P14); it never touches the UI thread.
+        using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
+            new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
+        syncEngine.Start();
+        // Attachment bytes (PLAN2 P16): uploads follow the metadata, downloads follow the 5 MiB / pinned / on-open rules. A finished sync cycle wakes it.
+        using var attachmentTransfer = new Chaos.Infrastructure.Attachments.AttachmentTransfer(storage.Store, attachmentFiles, serviceClient, TimeProvider.System);
+        attachmentCommands.Availability = attachmentTransfer;
+        syncEngine.CycleFinished += _ => attachmentTransfer.Wake();
+        attachmentTransfer.Start();
+        var syncStatus = new Chaos.Infrastructure.Sync.SyncStatusReader(storage.Store, syncEngine);
+        var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, TimeProvider.System, syncEngine.Wake);
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
@@ -200,6 +224,8 @@ internal static class Program
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
                 rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
+                rpc.AddSyncStatusRpcService(new SyncStatusRpcService(syncStatus, syncEngine));
+                rpc.AddAccountRpcService(new AccountRpcService(serviceClient, serviceAddress, accountJoin));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -207,7 +233,7 @@ internal static class Program
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System))));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory));
+                rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory, transfer: attachmentTransfer));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
                 rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
                 rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -405,6 +431,26 @@ internal static class Program
 [JsonSerializable(typeof(CalendarUnscheduledRequest))]
 [JsonSerializable(typeof(CalendarSourceDto))]
 [JsonSerializable(typeof(GoogleAccountDto))]
+[JsonSerializable(typeof(AccountStatusRequest))]
+[JsonSerializable(typeof(SyncStatusRequest))]
+[JsonSerializable(typeof(SyncStatusResponse))]
+[JsonSerializable(typeof(SyncNowRequest))]
+[JsonSerializable(typeof(SyncDismissRequest))]
+[JsonSerializable(typeof(AccountStatusResponse))]
+[JsonSerializable(typeof(AccountRequest))]
+[JsonSerializable(typeof(AccountResponse))]
+[JsonSerializable(typeof(AccountDeviceRequest))]
+[JsonSerializable(typeof(ContentCountsDto))]
+[JsonSerializable(typeof(JoinPreviewRequest))]
+[JsonSerializable(typeof(JoinPreviewResponse))]
+[JsonSerializable(typeof(JoinRequest))]
+[JsonSerializable(typeof(JoinResponse))]
+[JsonSerializable(typeof(LeaveRequest))]
+[JsonSerializable(typeof(DeleteAccountRequest))]
+[JsonSerializable(typeof(DeviceIdentityResponse))]
+[JsonSerializable(typeof(ServiceAddressRequest))]
+[JsonSerializable(typeof(SetServiceAddressRequest))]
+[JsonSerializable(typeof(ServiceAddressResponse))]
 [JsonSerializable(typeof(GoogleStatusRequest))]
 [JsonSerializable(typeof(GoogleStatusResponse))]
 [JsonSerializable(typeof(GoogleConnectRequest))]
@@ -579,6 +625,10 @@ internal static class Program
 [JsonSerializable(typeof(AttachmentCropDto))]
 [JsonSerializable(typeof(AttachmentEditImageRequest))]
 [JsonSerializable(typeof(AttachmentThumbnailRequest))]
+[JsonSerializable(typeof(AttachmentRetryRequest))]
+[JsonSerializable(typeof(AttachmentOfflineRequest))]
+[JsonSerializable(typeof(AttachmentOfflineListRequest))]
+[JsonSerializable(typeof(AttachmentOfflineResponse))]
 [JsonSerializable(typeof(CaptureSpanDto))]
 [JsonSerializable(typeof(CapturePreviewRequest))]
 [JsonSerializable(typeof(CaptureTokenDto))]

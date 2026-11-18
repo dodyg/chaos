@@ -368,6 +368,39 @@ function googleHandlers(): Record<string, Handler> {
     },
   };
 }
+// Online account (PLAN2 P12): a fake signed-out/signed-in account with two devices; nothing leaves the page.
+let accountSignedIn = false;
+const accountDevices = [
+  { id: "d-this", name: "This computer", platform: "windows", clientVersion: "0.2.1", lastSeenUtc: new Date().toISOString(), current: true },
+  { id: "d-other", name: "Work laptop", platform: "windows", clientVersion: "0.2.1", lastSeenUtc: new Date(Date.now() - 3_600_000).toISOString(), current: false },
+];
+const accountInfo = () => ({ email: "you@example.com", displayName: null, storageBytes: 12_582_912, storageQuotaBytes: 5_368_709_120, devices: [...accountDevices] });
+function accountHandlers(): Record<string, Handler> {
+  const status = () => ok({ configured: true, signedIn: accountSignedIn, email: accountSignedIn ? "you@example.com" : null, serviceHost: "sync.example.com", error: null });
+  return {
+    "account.status": status,
+    "account.account": () => ok({ account: accountInfo(), error: null }),
+    "account.signIn": () => { accountSignedIn = true; return ok({ account: accountInfo(), error: null }); },
+    "account.cancelSignIn": status,
+    "account.signOut": () => { accountSignedIn = false; return status(); },
+    "account.revokeDevice": (r: { deviceId: string }) => {
+      const index = accountDevices.findIndex(d => d.id === r.deviceId);
+      const removed = index >= 0 ? accountDevices.splice(index, 1)[0] : null;
+      if (removed?.current) { accountSignedIn = false; return ok({ account: null, error: null }); }
+      return ok({ account: accountInfo(), error: null });
+    },
+  };
+}
+// Sync status (PLAN2 P15): the preview always shows a synced fake account so the sidebar indicator can be seen.
+function syncStatusHandlers(): Record<string, Handler> {
+  let lastSynced = new Date().toISOString();
+  const status = () => ok({ kind: "Synced", lastSyncedUtc: lastSynced, pending: 0, detail: null, attention: [] });
+  return {
+    "syncStatus.status": status,
+    "syncStatus.syncNow": () => { lastSynced = new Date().toISOString(); return status(); },
+    "syncStatus.dismiss": status,
+  };
+}
 function calendarHandlers(): Record<string, Handler> {
   type Filters = { category?: string | null; tagId?: string | null; containerId?: string | null; viewId?: string | null; showPlanned?: boolean; showDue?: boolean; showMeetings?: boolean; showCompleted?: boolean } | null;
   const matches = (t: TaskResponse, f: Filters) => (!f?.category || t.category === f.category) && (!f?.containerId || t.containerId === f.containerId) && (!f?.tagId || (taskTags.get(t.id)?.includes(f.tagId) ?? false));
@@ -748,6 +781,8 @@ const handlers: Record<string, Handler> = {
   ...calendarHandlers(),
   ...calendarsHandlers(),
   ...googleHandlers(),
+  ...accountHandlers(),
+  ...syncStatusHandlers(),
   ...viewHandlers(),
   ...pageHandlers(),
   ...attachmentHandlers(),

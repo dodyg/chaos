@@ -1,5 +1,5 @@
 import React from "react";
-import { dataRpc, type BackupDto, type BackupInspectResponse, type ContainerResponse, type CsvColumnDto, type DataCountsDto, type DataStatusResponse, type ImportPreviewResponse, type PurgeCountsDto } from "#neoastra";
+import { accountRpc, dataRpc, type BackupDto, type BackupInspectResponse, type ContainerResponse, type CsvColumnDto, type DataCountsDto, type DataStatusResponse, type ImportPreviewResponse, type PurgeCountsDto } from "#neoastra";
 import { Archive, Download, FolderOpen, HardDriveDownload, RotateCcw, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,6 +53,37 @@ function Section({ title, icon, children, description }: { title: string; icon: 
  * deleted items for good and deleting all local data. Every destructive step shows what it will
  * do first and asks for a separate confirmation.
  */
+/**
+ * "Reset device identity" (PLAN2 §7.1, P14 item 3). A data folder copied from another computer carries that computer's identity;
+ * resetting gives this one its own before it signs in. It is refused while signed in, because the account knows this computer by
+ * its current identity.
+ */
+export function DeviceIdentity({ api = accountRpc }: { api?: Pick<typeof accountRpc, "resetDeviceIdentity"> }) {
+  const [asking, setAsking] = React.useState(false);
+  const [message, setMessage] = React.useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  async function reset() {
+    setBusy(true); setMessage(null);
+    try {
+      const result = await api.resetDeviceIdentity({});
+      setMessage(result.ok ? { ok: true, text: "This computer has a new identity. You can sign in to an account now." } : { ok: false, text: result.error ?? "The identity was not reset." });
+      setAsking(false);
+    } catch (e) { setMessage({ ok: false, text: String(e) }); } finally { setBusy(false); }
+  }
+
+  return <Section title="Device identity" icon={<RotateCcw/>} description="Chaos knows this computer to an online account by a random identity kept in its data folder. If you copied this data folder from another computer, reset the identity here before you sign in, so the two are not mistaken for each other. Your data is not changed.">
+    {message && (message.ok ? <p role="status" className="text-sm">{message.text}</p> : <InlineError>{message.text}</InlineError>)}
+    {asking
+      ? <div role="group" aria-label="Confirm resetting the device identity" className="flex flex-wrap items-center gap-2 text-sm">
+        <span>Give this computer a new identity? Any sync set up here stops.</span>
+        <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => void reset()}>Reset identity</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setAsking(false)}>Cancel</Button>
+      </div>
+      : <div><Button type="button" variant="outline" disabled={busy} onClick={() => { setMessage(null); setAsking(true); }}>Reset device identity…</Button></div>}
+  </Section>;
+}
+
 export function DataSettings({ api = dataRpc, containers, onImported, onReplaced }: { api?: Api; containers: ContainerResponse[]; onImported: () => void; onReplaced: () => void }) {
   const [status, setStatus] = React.useState<DataStatusResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -321,6 +352,8 @@ export function DataSettings({ api = dataRpc, containers, onImported, onReplaced
             <Button type="button" variant="destructive" className="justify-self-start" disabled={busy} onClick={() => void purge()}><Trash2/>Remove {purgeCounts.total} permanently</Button>
           </div>}
     </Section>
+
+    <DeviceIdentity/>
 
     <Section title="Delete all local data" icon={<Trash2/>} description="Stops reminders and removes every task, list, note, plan and setting from this computer. Exports you saved elsewhere are not touched. Windows may keep past notifications in its own history until you clear them there.">
       <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={deleteBackups} onChange={event => setDeleteBackups(event.target.checked)}/>Also delete Chaos's backups</label>
