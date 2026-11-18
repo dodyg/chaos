@@ -70,3 +70,27 @@ public interface IChaosServiceClient
     /// <summary>A valid access token, refreshed when it is about to expire. One refresh at a time, however many callers.</summary>
     Task<string> GetAccessTokenAsync(CancellationToken ct);
 }
+
+/// <summary>Where the service address came from. A saved address wins over the environment, which wins over the file beside the exe.</summary>
+public enum ServiceAddressSource
+{
+    None = 0,
+    Setting = 1,
+    Environment = 2,
+    File = 3,
+}
+
+/// <summary>The address in use, if any, and where it came from. <c>Saved</c> is what the person typed, even while another source is overridden.</summary>
+public sealed record ServiceAddressInfo(string? Address, ServiceAddressSource Source, string? Saved);
+
+/// <summary>Changing the address could not be done; the message is for the person.</summary>
+public sealed record ServiceAddressResult(bool Ok, string? Error, ServiceAddressInfo Info);
+
+/// <summary>The service address the person can set in Settings → Account, so no file or environment variable is needed.</summary>
+public interface IServiceAddressSettings
+{
+    ServiceAddressInfo Get();
+
+    /// <summary>Saves the address; an empty one clears it. Rejects anything that is not a usable address.</summary>
+    ServiceAddressResult Set(string? address);
+}

@@ -26,7 +26,7 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
     private static readonly TimeSpan ExpirySkew = TimeSpan.FromSeconds(60);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    private readonly ChaosServiceOptions? _options;
+    private readonly Func<ChaosServiceOptions?> _options;
     private readonly ISystemBrowser _browser;
     private readonly ISecretStore _secrets;
     private readonly IDeviceIdentity _identity;
@@ -39,6 +39,12 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
     private DateTimeOffset _accessExpires;
 
     public ChaosServiceClient(ChaosServiceOptions? options, ISystemBrowser browser, ISecretStore secrets, IDeviceIdentity identity, TimeProvider? clock = null, HttpClient? http = null)
+        : this(() => options, browser, secrets, identity, clock, http)
+    {
+    }
+
+    /// <summary>The address is asked for on every call, so a change made in Settings takes effect without a restart.</summary>
+    public ChaosServiceClient(Func<ChaosServiceOptions?> options, ISystemBrowser browser, ISecretStore secrets, IDeviceIdentity identity, TimeProvider? clock = null, HttpClient? http = null)
     {
         _options = options;
         _browser = browser;
@@ -54,7 +60,7 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
     public TimeSpan CallTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
-    public bool IsConfigured => _options is not null;
+    public bool IsConfigured => _options() is not null;
 
     public void Dispose()
     {
@@ -67,13 +73,13 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
     public async Task<ServiceSession> GetSessionAsync(CancellationToken ct)
     {
-        if (_options is null)
+        if (_options() is not { } options)
         {
             return new ServiceSession(false, false, null, null);
         }
 
         var signedIn = await _secrets.GetAsync(RefreshKey, ct) is not null;
-        return new ServiceSession(true, signedIn, signedIn ? await _secrets.GetAsync(EmailKey, ct) : null, _options.BaseAddress.Authority);
+        return new ServiceSession(true, signedIn, signedIn ? await _secrets.GetAsync(EmailKey, ct) : null, options.BaseAddress.Authority);
     }
 
     // ---- Sign-in -------------------------------------------------------------------------------------
@@ -344,7 +350,7 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
     }
 
     private ChaosServiceOptions Require() =>
-        _options ?? throw new ChaosServiceException(ServiceFailure.NotConfigured, "The online service is not set up in this build of Chaos.");
+        _options() ?? throw new ChaosServiceException(ServiceFailure.NotConfigured, "The online service is not set up in this build of Chaos.");
 
     private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 

@@ -273,7 +273,7 @@ public sealed class ChaosServiceClientTests(PostgresServer postgres)
     [Test]
     public async Task NotConfigured_OffersNothing()
     {
-        using var client = new ChaosServiceClient(null, new FakeBrowser(_ => Task.CompletedTask), new MemorySecretStore(), new FixedDeviceIdentity());
+        using var client = new ChaosServiceClient((ChaosServiceOptions?)null, new FakeBrowser(_ => Task.CompletedTask), new MemorySecretStore(), new FixedDeviceIdentity());
 
         var session = await client.GetSessionAsync(CancellationToken.None);
         var error = await Assert.That(async () => await client.SignInAsync(CancellationToken.None)).Throws<ChaosServiceException>();

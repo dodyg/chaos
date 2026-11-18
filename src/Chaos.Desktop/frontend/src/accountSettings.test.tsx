@@ -35,14 +35,22 @@ const account = (): AccountInfoDto => ({
 const errorOf = (kind: string, message: string) => ({ kind, message });
 const signedOutStatus = { ok: true, configured: true, signedIn: false, email: null, serviceHost: null, error: null };
 
-function rig(options: { configured?: boolean; signedIn?: boolean; signIn?: () => unknown; account?: () => unknown; revoke?: (id: string) => unknown } = {}) {
+function rig(options: { configured?: boolean; signedIn?: boolean; signIn?: () => unknown; account?: () => unknown; revoke?: (id: string) => unknown; setAddress?: (address: string) => unknown } = {}) {
   const calls: { method: string; request: unknown }[] = [];
+  let configured = options.configured ?? true;
   const api = {
-    status: async () => ({ ok: true, configured: options.configured ?? true, signedIn: options.signedIn ?? false, email: options.signedIn ? "me@example.com" : null, serviceHost: "sync.example.com", error: null }),
+    status: async () => ({ ok: true, configured, signedIn: options.signedIn ?? false, email: options.signedIn ? "me@example.com" : null, serviceHost: "sync.example.com", error: null }),
     account: async () => options.account ? options.account() : { ok: true, account: account(), error: null },
     signIn: async (request: unknown) => { calls.push({ method: "signIn", request }); return options.signIn ? options.signIn() : { ok: true, account: account(), error: null }; },
     cancelSignIn: async (request: unknown) => { calls.push({ method: "cancelSignIn", request }); return signedOutStatus; },
     signOut: async (request: unknown) => { calls.push({ method: "signOut", request }); return signedOutStatus; },
+    address: async () => ({ ok: true, address: configured ? "https://sync.example.com/" : null, source: configured ? "Setting" : "None", saved: configured ? "https://sync.example.com/" : null, error: null }),
+    setAddress: async (request: { address: string }) => {
+      calls.push({ method: "setAddress", request });
+      const result = options.setAddress ? options.setAddress(request.address) : { ok: true, address: request.address, source: "Setting", saved: request.address, error: null };
+      if ((result as { ok: boolean }).ok) configured = request.address !== "";
+      return result;
+    },
     revokeDevice: async (request: { deviceId: string }) => { calls.push({ method: "revokeDevice", request }); return options.revoke ? options.revoke(request.deviceId) : { ok: true, account: { ...account(), devices: account().devices.filter(d => d.id !== request.deviceId) }, error: null }; },
   } as unknown as Api;
   return { api, calls };
@@ -59,8 +67,39 @@ test("signed out: offers the account with its reason and no device list", async 
 test("not configured: explains instead of offering sign-in", async () => {
   const { api } = rig({ configured: false });
   render(<AccountSettings api={api}/>);
-  await screen.findByText(/not set up in this build/);
+  await screen.findByText(/No online service is set up yet/);
   assert.equal(screen.queryByRole("button", { name: /Create an account or sign in/ }), null);
+  assert.ok(screen.getByLabelText("Service address"));
+});
+
+test("not configured: typing an address saves it and offers sign-in", async () => {
+  const { api, calls } = rig({ configured: false });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await user.type(await screen.findByLabelText("Service address"), "sync.example.com");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  assert.ok(await screen.findByRole("button", { name: /Create an account or sign in/ }));
+  assert.deepEqual(calls.find(c => c.method === "setAddress")?.request, { address: "sync.example.com" });
+});
+
+test("a refused address shows the reason and keeps the form", async () => {
+  const { api } = rig({ configured: false, setAddress: () => ({ ok: false, address: null, source: "None", saved: null, error: "Enter the service's web address." }) });
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await user.type(await screen.findByLabelText("Service address"), "nonsense");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  assert.ok(await screen.findByText(/Enter the service's web address/));
+  assert.ok(screen.getByLabelText("Service address"));
+});
+
+test("signed out with a service: the address can be changed or cleared", async () => {
+  const { api, calls } = rig();
+  const user = userEvent.setup();
+  render(<AccountSettings api={api}/>);
+  await screen.findByRole("button", { name: /Create an account or sign in/ });
+  await user.click(await screen.findByRole("button", { name: "Clear" }));
+  await screen.findByText(/No online service is set up yet/);
+  assert.deepEqual(calls.find(c => c.method === "setAddress")?.request, { address: "" });
 });
 
 test("signing in waits for the browser, then shows the account and its devices", async () => {

@@ -22,9 +22,15 @@ public sealed record AccountRequest();
 public sealed record AccountResponse(bool Ok, AccountInfoDto? Account, AccountErrorDto? Error);
 public sealed record AccountDeviceRequest(string DeviceId);
 
+public sealed record ServiceAddressRequest();
+public sealed record SetServiceAddressRequest(string Address);
+
+/// <summary>The address in use (<c>Source</c>: None, Setting, Environment or File) and what the person saved. <c>Error</c> is set when a change was refused.</summary>
+public sealed record ServiceAddressResponse(bool Ok, string? Address, string Source, string? Saved, string? Error);
+
 /// <summary>Settings → Account (PLAN2 P12 item 5). Failures are returned as data.</summary>
 [NeoRpcService("account", Version = 1)]
-public sealed class AccountRpcService(IChaosServiceClient service)
+public sealed class AccountRpcService(IChaosServiceClient service, IServiceAddressSettings address)
 {
     private readonly Lock _gate = new();
     private CancellationTokenSource? _signIn;
@@ -81,6 +87,29 @@ public sealed class AccountRpcService(IChaosServiceClient service)
             }
         }
     }
+
+    [NeoRpcMethod("address")]
+    public ValueTask<ServiceAddressResponse> AddressAsync(ServiceAddressRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("account.address");
+        return ValueTask.FromResult(Map(address.Get(), null));
+    }
+
+    /// <summary>Saves the service address (empty clears it). Refused while signed in: the sign-in belongs to the old service.</summary>
+    [NeoRpcMethod("setAddress")]
+    public async ValueTask<ServiceAddressResponse> SetAddressAsync(SetServiceAddressRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("account.setAddress");
+        if ((await service.GetSessionAsync(ct)).SignedIn)
+        {
+            return Map(address.Get(), "Sign out before changing the service address.");
+        }
+
+        var result = address.Set(request.Address);
+        return Map(result.Info, result.Error);
+    }
+
+    private static ServiceAddressResponse Map(ServiceAddressInfo info, string? error) => new(error is null, info.Address, info.Source.ToString(), info.Saved, error);
 
     [NeoRpcMethod("cancelSignIn")]
     public ValueTask<AccountStatusResponse> CancelSignInAsync(AccountStatusRequest request, CancellationToken ct)
