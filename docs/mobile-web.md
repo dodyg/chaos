@@ -14,8 +14,9 @@ browser menu. Open My Day or a list while connected to save it for offline viewi
 
 Use the existing Chaos.Server deployment. Persist its ASP.NET Core Data Protection key ring across
 releases and share it across replicas so they can validate the same web session cookies. The web
-app refreshes the active view every ten seconds while visible. Desktop clients receive sync
-events through the existing service. The app keeps My Day, the list picker and the last opened
+app listens for account sync events while open and refreshes the active view when changes arrive.
+It also refreshes every ten seconds while visible as a fallback, and on reconnect or return to the
+foreground. Desktop clients receive sync events through the existing service. The app keeps My Day, the list picker and the last opened
 list in the browser. The active desktop appearance and My Day color or built-in scene sync to the
 web app and are cached for offline use. Custom desktop background images remain on that computer.
 Task notes are fetched while connected. Signing out clears the saved views.
@@ -135,7 +136,6 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 - Edit title, notes and dates.
 - Diary and pages, read only.
 - Attachment viewing (blobs are already served over HTTPS).
-- Live updates via SSE while the app is open.
 - Offline edits: only then does a shared-merge approach (NetWasm or a TypeScript port) matter.
 
 ## Effort and order

@@ -43,6 +43,7 @@ internal static class WebSessionSetup
         var web = app.MapGroup(WebSession.ApiPath).RequireAuthorization(WebSession.Scheme)
             .RequireRateLimiting(ServiceEndpoints.RateLimitPolicy).AddEndpointFilter(WebSession.CheckExpectedDevice);
         web.MapGet("/session", WebSession.GetSession);
+        web.MapGet("/events", WebEvents.Stream);
         web.MapPost("/signout", WebSession.SignOut).AddEndpointFilter<WebAntiforgery>();
         return web;
     }

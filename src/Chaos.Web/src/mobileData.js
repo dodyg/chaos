@@ -184,6 +184,22 @@ export function useMobileData(path) {
   }, [state.mode, refresh]);
 
   useEffect(() => {
+    const deviceId = state.session?.deviceId;
+    if (state.mode !== "ready" || !connected || !deviceId || typeof EventSource !== "function") return;
+    const events = new EventSource(`${api}/events?device=${encodeURIComponent(deviceId)}`);
+    let timer;
+    events.onmessage = () => {
+      if (document.visibilityState !== "visible") return;
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 300);
+    };
+    return () => {
+      clearTimeout(timer);
+      events.close();
+    };
+  }, [state.mode, state.session?.deviceId, connected, refresh]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
     async function load() {
