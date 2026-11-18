@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { forgetOfflineSession, useMobileData, writeTask } from "./mobileData.js";
 import { usePwa } from "./usePwa.js";
+import { MarkdownNotes } from "./MarkdownNotes.jsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -275,7 +276,8 @@ function TaskDetail({ task, list, back, canWrite, offline, act }) {
       </dl>
       <section className="task-notes">
         <h2>Notes</h2>
-        <p>{offline ? "Notes are available online." : task.notes || "No notes."}</p>
+        {offline ? <p>Notes are available online.</p>
+          : task.notes?.trim() ? <MarkdownNotes>{task.notes}</MarkdownNotes> : <p>No notes.</p>}
       </section>
       <div className="task-actions">
         {task.isRecurring ? <p className="inline-hint"><Repeat2 size={17} />{task.isTerminal ? "Reopen on desktop" : "Complete on desktop"}</p>

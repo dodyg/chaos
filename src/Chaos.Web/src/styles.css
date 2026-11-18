@@ -117,7 +117,32 @@ h2 { font-weight: 700; font-size: 1.15rem; letter-spacing: -.02em; }
 .task-fields > div:nth-child(n+3) { border-top: 1px solid var(--border); }
 .task-fields dt { font-size: .8rem; font-weight: 600; color: var(--muted-foreground); }
 .task-fields dd { margin: 5px 0 0; overflow-wrap: anywhere; font-weight: 650; }
-.task-notes p { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); line-height: 1.55; margin-top: 8px; }
+.task-notes > p { color: var(--muted-foreground); margin-top: 8px; }
+.markdown-notes { color: var(--muted-foreground); line-height: 1.55; overflow-wrap: anywhere; margin-top: 8px; }
+.markdown-notes > * + *, .markdown-notes blockquote > * + * { margin-block-start: .75em; }
+.markdown-notes p { white-space: pre-line; }
+.markdown-notes :is(h3, h4, h5, h6, strong, a) { color: var(--foreground); }
+.markdown-notes :is(h5, h6) { font-weight: 650; }
+.markdown-notes h3 { font-size: 1.15em; font-weight: 700; }
+.markdown-notes h4 { font-weight: 700; }
+.markdown-notes a { text-decoration: underline; text-underline-offset: .15em; }
+.markdown-notes ul { list-style: disc; padding-inline-start: 1.35em; }
+.markdown-notes ol { list-style: decimal; padding-inline-start: 1.35em; }
+.markdown-notes .task-list-item { list-style: none; }
+.markdown-notes .task-list-item > input, .markdown-notes .task-list-item > p > input {
+  margin-inline: -1.35em .45em;
+  vertical-align: baseline;
+}
+.markdown-notes blockquote { border-inline-start: 3px solid var(--border); padding-inline-start: .75em; }
+.markdown-notes hr { border-color: var(--border); }
+.markdown-notes code, .markdown-notes pre { background: var(--muted); border-radius: var(--radius-sm, 6px); }
+.markdown-notes code { color: var(--foreground); padding: .1em .3em; }
+.markdown-notes pre { max-width: 100%; overflow-x: auto; padding: .75em; }
+.markdown-notes pre code { padding: 0; }
+.markdown-notes .note-image { font-style: italic; }
+.markdown-notes .note-table { max-width: 100%; overflow-x: auto; }
+.markdown-notes th, .markdown-notes td { border: 1px solid var(--border); padding: .35em .65em; }
+.markdown-notes th { background: var(--muted); color: var(--foreground); }
 .task-actions { display: flex; align-items: center; flex-wrap: wrap; margin-top: 24px; gap: 10px; }
 .inline-hint { display: flex; gap: 7px; align-items: center; color: var(--muted-foreground); font-size: .92rem; }
 
