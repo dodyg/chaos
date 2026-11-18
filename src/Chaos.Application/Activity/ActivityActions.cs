@@ -20,8 +20,16 @@ public static class ActivityActions
     public static readonly IReadOnlyList<string> Rpc =
     [
         "account.account",
+        "account.address",
         "account.cancelSignIn",
+        "account.deleteAccount",
+        "account.join",
+        "account.joinPreview",
+        "account.leave",
+        "account.reauthenticate",
+        "account.resetDeviceIdentity",
         "account.revokeDevice",
+        "account.setAddress",
         "account.signIn",
         "account.signOut",
         "account.status",
