@@ -2442,6 +2442,21 @@ output; the Debug solution build passes. Live check: the AppHost's `chaos-migrat
 registration (authorization code + PKCE for the desktop client, refresh rotation, 15-minute
 access tokens) and the email-code sign-in page.
 
+**Progress note 2026-11-18 (items 3, 4, 5 done).** Server: OpenIddict (code + PKCE required, refresh
+rotation with zero reuse leeway, 15-minute access tokens, `device_id` bound into tokens), a custom
+application manager for RFC 8252 loopback ports, server-rendered email-code sign-in (hashed codes,
+5 attempts, per-email and per-IP limits, antiforgery, no scripts), providers (Google, Microsoft,
+Apple, GitHub) enabled only when configured, linking only after an email code, and `/v1/devices`,
+`/v1/account`, `DELETE /v1/devices/{id}` with a revoked-device/deleted-account filter and a
+600/min device limit. OpenIddict's `OpenIddict` log category is forced to Warning because it logs
+token requests at Information. Client: `IChaosServiceClient` (`ChaosServiceClient`: loopback
+listener, PKCE, single-flight refresh, refresh token in `ISecretStore`), `chaos-service.json` /
+`CHAOS_SERVICE_URL`, `AccountRpcService` and Settings → Account. Tests: Chaos.Server.Tests 59/59
+(Docker PostgreSQL), including the client against the in-process server with a fake browser; 11 new
+frontend tests. Not done: live check of provider sign-in and real SMTP (item 7), provider callback
+code is untested against a real provider, refresh tokens are not yet revoked server-side when a
+device is removed (the device check stops them at the next refresh).
+
 1. Project setup:
    - `src/Chaos.Server` (ASP.NET Core, `net11.0`) and `tests/Chaos.Server.Tests`, added to the
      solution and to `eng/verify.ps1`, with the `-NoServer` switch (8.8).

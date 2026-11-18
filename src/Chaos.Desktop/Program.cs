@@ -36,6 +36,12 @@ using NeoAstra.Rpc;
 
 internal static class Program
 {
+#if DEBUG
+    private const bool IsDevelopmentBuild = true;
+#else
+    private const bool IsDevelopmentBuild = false;
+#endif
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -136,6 +142,11 @@ internal static class Program
         using var feedClient = new CalendarFeedClient();
         // Google Calendar (PLAN2 P6): the OAuth client comes from google-oauth.json beside the exe (git-ignored); tokens go to the secret store only.
         using var googleClient = new GoogleCalendarClient(GoogleOAuthConfig.TryLoad(Path.Combine(AppContext.BaseDirectory, "google-oauth.json")), new Chaos.Desktop.Platform.ShellBrowser());
+        // Online service (PLAN2 P12): the address comes from CHAOS_SERVICE_URL or chaos-service.json beside the exe; without one Settings
+        // offers no sign-in. Plain http is accepted for loopback in development builds only. The refresh token goes to the secret store.
+        using var serviceClient = new Chaos.Infrastructure.Service.ChaosServiceClient(
+            Chaos.Infrastructure.Service.ChaosServiceOptions.TryLoad(Path.Combine(AppContext.BaseDirectory, "chaos-service.json"), allowLoopbackHttp: IsDevelopmentBuild),
+            new Chaos.Desktop.Platform.ShellBrowser(), secrets, new Chaos.Infrastructure.Service.SqliteDeviceIdentity(storage.Store, AppVersion()));
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
@@ -200,6 +211,7 @@ internal static class Program
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
                 rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
+                rpc.AddAccountRpcService(new AccountRpcService(serviceClient));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
@@ -405,6 +417,11 @@ internal static class Program
 [JsonSerializable(typeof(CalendarUnscheduledRequest))]
 [JsonSerializable(typeof(CalendarSourceDto))]
 [JsonSerializable(typeof(GoogleAccountDto))]
+[JsonSerializable(typeof(AccountStatusRequest))]
+[JsonSerializable(typeof(AccountStatusResponse))]
+[JsonSerializable(typeof(AccountRequest))]
+[JsonSerializable(typeof(AccountResponse))]
+[JsonSerializable(typeof(AccountDeviceRequest))]
 [JsonSerializable(typeof(GoogleStatusRequest))]
 [JsonSerializable(typeof(GoogleStatusResponse))]
 [JsonSerializable(typeof(GoogleConnectRequest))]

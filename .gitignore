@@ -68,3 +68,4 @@ src/Chaos.Desktop/frontend/dist/
 
 # Google OAuth client (PLAN2 P6): never committed
 src/Chaos.Desktop/google-oauth.json
+src/Chaos.Desktop/chaos-service.json

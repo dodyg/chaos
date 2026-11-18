@@ -14,6 +14,8 @@
     <!-- Direct pin so the service, its tests and the design-time tool share one EF Core version. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="OpenIddict.AspNetCore" />
+    <PackageReference Include="OpenIddict.Client.WebIntegration" />
     <PackageReference Include="OpenIddict.EntityFrameworkCore" />
     <!-- Design-time only: `dotnet ef migrations add`. Never flows to the published service. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />

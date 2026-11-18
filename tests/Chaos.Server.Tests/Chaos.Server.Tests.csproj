@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Chaos.Server\Chaos.Server.csproj" />
+    <!-- The desktop service client is tested against the in-process server (PLAN2 P12 item 6). -->
+    <ProjectReference Include="..\..\src\Chaos.Infrastructure\Chaos.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

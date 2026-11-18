@@ -19,6 +19,12 @@ public static class ActivityActions
     /// <summary>One entry per [NeoRpcMethod]: <c>service.method</c>.</summary>
     public static readonly IReadOnlyList<string> Rpc =
     [
+        "account.account",
+        "account.cancelSignIn",
+        "account.revokeDevice",
+        "account.signIn",
+        "account.signOut",
+        "account.status",
         "board.get",
         "board.getView",
         "board.move",
