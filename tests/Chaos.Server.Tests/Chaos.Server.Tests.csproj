@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Server tests against a real PostgreSQL (PLAN2 §8.8): CHAOS_TEST_PG when set, otherwise a
+       Testcontainers PostgreSQL in Docker. Neither available is a failure, never a skip. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Chaos.Server.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- The only projects allowed to use EF Core (Directory.Build.targets, PLAN2 §2.1). -->
+    <ChaosAllowEfCore>true</ChaosAllowEfCore>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Chaos.Server\Chaos.Server.csproj" />
+  </ItemGroup>
+
+</Project>

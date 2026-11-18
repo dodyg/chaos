@@ -1,0 +1,18 @@
+<Project>
+
+  <!-- EF Core is allowed on the server only (PLAN2 §2.1, decisions 2026-11-18). Any project that
+       resolves a Microsoft.EntityFrameworkCore* assembly, directly or transitively, fails the build
+       unless it sets ChaosAllowEfCore=true. Only Chaos.Server and Chaos.Server.Tests set it. -->
+  <Target Name="ChaosBanEfCoreOnClient"
+          AfterTargets="ResolveAssemblyReferences"
+          Condition="'$(ChaosAllowEfCore)' != 'true'">
+    <ItemGroup>
+      <_ChaosEfCoreAssembly Include="@(ReferencePath);@(RuntimeCopyLocalItems)"
+                            Condition="$([System.String]::Copy('%(Filename)').StartsWith('Microsoft.EntityFrameworkCore'))" />
+    </ItemGroup>
+    <Error Code="CHAOS001"
+           Condition="'@(_ChaosEfCoreAssembly)' != ''"
+           Text="$(MSBuildProjectName) resolves EF Core (%(_ChaosEfCoreAssembly.Filename)). EF Core is banned outside the server (PLAN2 §2.1); the client uses Microsoft.Data.Sqlite with numbered SQL migrations." />
+  </Target>
+
+</Project>

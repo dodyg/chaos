@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Local development orchestration for the online service (PLAN2 P12, decisions 2026-11-18).
+       Running this project (dotnet run, project src/Chaos.AppHost) starts PostgreSQL and Mailpit in Docker, runs the
+       server migrations, then starts the server on http://127.0.0.1:5080 with the Aspire dashboard. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>Chaos.AppHost</RootNamespace>
+    <UserSecretsId>chaos-apphost-6f1d1e4e</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Dotnet" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+  </ItemGroup>
+
+</Project>

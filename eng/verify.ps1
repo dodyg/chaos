@@ -1,7 +1,11 @@
 # Repeatable verification for Chaos (PLAN §16).
-# Usage:  powershell -File eng/verify.ps1
+# Usage:  powershell -File eng/verify.ps1 [-NoServer]
+#   -NoServer skips tests/Chaos.Server.Tests only (PLAN2 §8.8). The server tests need PostgreSQL:
+#   CHAOS_TEST_PG, or Docker for Testcontainers. Progress notes must say when -NoServer was used.
 # Sandbox note: -m:1 is used everywhere; MSBuild cannot start worker nodes in restricted
 # environments, and it is harmless (single node) on normal machines.
+
+param([switch]$NoServer)
 
 $ErrorActionPreference = "Stop"
 $env:DOTNET_NOLOGO = "1"
@@ -19,21 +23,30 @@ dotnet build Chaos.slnx -c Release --no-restore -m:1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "== tests: solution (Microsoft.Testing.Platform) =="
-dotnet test --solution Chaos.slnx -c Release --no-build --output Minimal -- --minimum-expected-tests 12
-if ($LASTEXITCODE -eq 0) {
+$testProjects = @(
+    "tests/Chaos.Domain.Tests",
+    "tests/Chaos.Application.Tests",
+    "tests/Chaos.Infrastructure.Tests",
+    "tests/Chaos.Sync.Tests",
+    "tests/Chaos.Server.Tests",
+    "tests/Chaos.Desktop.Tests"
+)
+if ($NoServer) {
+    Write-Warning "server tests not run (-NoServer)"
+    $testProjects = $testProjects | Where-Object { $_ -ne "tests/Chaos.Server.Tests" }
+    $solutionExit = 1 # go straight to the per-project runs, which can leave a project out
+} else {
+    dotnet test --solution Chaos.slnx -c Release --no-build --output Minimal -- --minimum-expected-tests 12
+    $solutionExit = $LASTEXITCODE
+}
+if ($solutionExit -eq 0) {
     Write-Host "solution test run OK"
 } else {
     # Documented fallback (PLAN §16): direct TUnit executable runs. Each executable is an
     # MTP runner; a nonzero total is mandatory (a zero count fails the script).
     Write-Host "solution test run unavailable; falling back to direct TUnit executables"
     $fallbackFailed = $false
-    foreach ($project in @(
-        "tests/Chaos.Domain.Tests",
-        "tests/Chaos.Application.Tests",
-        "tests/Chaos.Infrastructure.Tests",
-        "tests/Chaos.Sync.Tests",
-        "tests/Chaos.Desktop.Tests"
-    )) {
+    foreach ($project in $testProjects) {
         $dll = Get-ChildItem "$project/bin/Release" -Recurse -Filter "*.Tests.dll" |
             Where-Object { $_.Name -notlike "TUnit*" -and $_.Name -notlike "Microsoft*" } |
             Select-Object -First 1
@@ -50,4 +63,4 @@ Write-Host "== slopwatch =="
 dotnet tool run slopwatch -- analyze -d . --fail-on warning
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "== verify OK =="
+if ($NoServer) { Write-Host "== verify OK (server tests not run) ==" } else { Write-Host "== verify OK ==" }

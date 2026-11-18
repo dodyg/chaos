@@ -7,7 +7,8 @@
   <ItemGroup>
     <!-- Desktop framework: NeoAstra 1.12.0 (plan §1). Keep template/tool versions aligned. -->
     <PackageVersion Include="NeoAstra" Version="1.12.0" />
-    <!-- Persistence: SQLite via Microsoft.Data.Sqlite 10.0.14 (plan §1). No EF Core. -->
+    <!-- Client persistence: SQLite via Microsoft.Data.Sqlite 10.0.14 (plan §1). EF Core is banned on the
+         client side and enforced in Directory.Build.targets (decisions 2026-11-18). -->
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <!-- Tests: TUnit 1.81.16, latest stable verified at kickoff 2026-11-09 (plan §1). -->
     <PackageVersion Include="TUnit" Version="1.81.16" />
@@ -17,6 +18,25 @@
     <PackageVersion Include="SkiaSharp" Version="4.156.1" />
     <!-- OS-protected secret store (DPAPI) for calendar feed addresses (PLAN2 P5). -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <!-- Online service (PLAN2 P12). Aspire orchestrates local development from the start
+         (decisions 2026-11-18). The server uses EF Core (PLAN2 §8.1); the client never does. -->
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="17.0.0" />
+    <PackageVersion Include="Aspire.Hosting.Dotnet" Version="17.0.0" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="17.0.0" />
+    <!-- Server persistence: EF Core follows the newest stable Npgsql EF provider (PLAN2 §8.1). OpenIddict
+         7.9.0 needs EF Core 11, so 7.8.0 is pinned until Npgsql 11 is stable (decisions 2026-11-18). -->
+    <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.6.5" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.8.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.21.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.21.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.21.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.21.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.21.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.17.0" />
   </ItemGroup>
 
 </Project>
