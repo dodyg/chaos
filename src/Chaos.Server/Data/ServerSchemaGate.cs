@@ -9,10 +9,31 @@ namespace Chaos.Server.Data;
 /// </summary>
 public static class ServerSchemaGate
 {
+    /// <summary>Held on one connection for the whole migration, so migrators starting together run one after another.</summary>
+    private const long MigrationLockKey = 0x43686F73_4D696772; // "ChosMigr"
+
     public static async Task<string?> MigrateAsync(ChaosDbContext db, CancellationToken ct)
     {
-        // EF Core takes a database-wide migration lock, so two migrators starting together are safe.
-        await db.Database.MigrateAsync(ct);
+        // EF Core's own migration lock did not stop two migrators applying the same second migration, so
+        // the whole run holds a session-level advisory lock; the loser then finds everything applied.
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_lock({MigrationLockKey})", ct);
+            try
+            {
+                await db.Database.MigrateAsync(ct);
+            }
+            finally
+            {
+                await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_unlock({MigrationLockKey})", CancellationToken.None);
+            }
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+
         return (await db.Database.GetAppliedMigrationsAsync(ct)).LastOrDefault();
     }
 

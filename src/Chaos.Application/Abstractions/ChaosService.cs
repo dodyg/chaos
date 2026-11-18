@@ -69,6 +69,19 @@ public interface IChaosServiceClient
 
     /// <summary>A valid access token, refreshed when it is about to expire. One refresh at a time, however many callers.</summary>
     Task<string> GetAccessTokenAsync(CancellationToken ct);
+
+    /// <summary>
+    /// One call to a <c>/v1</c> endpoint with the sync protocol headers (PLAN2 §7.12). Any answer, including a 4xx, comes back
+    /// as a <see cref="ServiceResponse"/>; only a lost sign-in, an unreachable service or a cancellation throw.
+    /// </summary>
+    /// <exception cref="ChaosServiceException">Not signed in, the service no longer accepts the sign-in, or it could not be reached.</exception>
+    Task<ServiceResponse> CallAsync(HttpMethod method, string path, string? json, CancellationToken ct);
+}
+
+/// <summary>An answer from the service: the status code and the body text. Never contains a token.</summary>
+public sealed record ServiceResponse(int Status, string Body)
+{
+    public bool Ok => Status is >= 200 and < 300;
 }
 
 /// <summary>Where the service address came from. A saved address wins over the environment, which wins over the file beside the exe.</summary>

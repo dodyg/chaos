@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Chaos.Server.Auth;
 using Chaos.Server.Data;
+using Chaos.Server.Sync;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -42,6 +43,7 @@ public static class ServiceEndpoints
         v1.MapPost("/devices", RegisterDevice);
         v1.MapGet("/account", GetAccount);
         v1.MapDelete("/devices/{id:guid}", RevokeDevice);
+        v1.MapSyncEndpoints();
     }
 
     private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>

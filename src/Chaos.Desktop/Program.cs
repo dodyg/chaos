@@ -149,6 +149,10 @@ internal static class Program
         using var serviceClient = new Chaos.Infrastructure.Service.ChaosServiceClient(
             serviceAddress.Resolve,
             new Chaos.Desktop.Platform.ShellBrowser(), secrets, new Chaos.Infrastructure.Service.SqliteDeviceIdentity(storage.Store, AppVersion()));
+        // Sync (PLAN2 P13): the loop idles until SyncState.Enabled = 1 (turned on by joining an account, P14); it never touches the UI thread.
+        using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
+            new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
+        syncEngine.Start();
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();

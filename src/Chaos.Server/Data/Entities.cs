@@ -22,6 +22,9 @@ public sealed class Account
     public long StorageBytes { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 
+    /// <summary>The highest sequence number whose change-log rows were pruned (PLAN2 §7.12 horizon); a cursor below it needs the snapshot.</summary>
+    public long ChangesPrunedThroughSeq { get; set; }
+
     public List<AccountLogin> Logins { get; } = [];
     public List<Device> Devices { get; } = [];
 }
@@ -102,4 +105,36 @@ public static class AuditKinds
     public const string Quota = "quota";
 
     public static readonly IReadOnlyList<string> All = [SignIn, DeviceAdded, DeviceRevoked, AccountDeleted, Quota];
+}
+
+/// <summary>
+/// One synced entity's current state (PLAN2 §8.2): its field groups with their clocks as JSON, merged by
+/// <c>Chaos.Sync.Merge</c>. A purged entity stays as a tombstone, so a late edit cannot bring it back.
+/// </summary>
+public sealed class SyncEntityRow
+{
+    public Guid AccountId { get; set; }
+    public required string Kind { get; set; }
+    public required string EntityKey { get; set; }
+
+    /// <summary>name → <c>{hlc, values}</c>, in the shape of <c>SyncJson</c>.</summary>
+    public required string Groups { get; set; }
+
+    public DateTimeOffset? PurgedAt { get; set; }
+    public long LastSeq { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>One entry of the account's change log (PLAN2 §8.2): only the groups that won on the service.</summary>
+public sealed class SyncChangeRow
+{
+    public Guid AccountId { get; set; }
+    public long Seq { get; set; }
+    public Guid ChangeId { get; set; }
+    public required string Kind { get; set; }
+    public required string EntityKey { get; set; }
+    public required string Op { get; set; }
+    public required string Groups { get; set; }
+    public Guid? OriginDevice { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }

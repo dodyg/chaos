@@ -257,7 +257,14 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
 
     // ---- HTTP ----------------------------------------------------------------------------------------
 
-    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    public async Task<ServiceResponse> CallAsync(HttpMethod method, string path, string? json, CancellationToken ct)
+    {
+        var device = await _identity.GetAsync(ct);
+        using var response = await SendAuthorizedAsync(method, path, null, ct, json, device);
+        return new ServiceResponse((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+    }
+
+    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? rawJson = null, DeviceIdentity? protocolFor = null)
     {
         var options = Require();
         for (var attempt = 0; ; attempt++)
@@ -268,6 +275,17 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
             if (body is not null)
             {
                 request.Content = JsonContent.Create(body, options: Json);
+            }
+            else if (rawJson is not null)
+            {
+                request.Content = new StringContent(rawJson, Encoding.UTF8, "application/json");
+            }
+
+            if (protocolFor is not null)
+            {
+                request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.ProtocolHeader, Chaos.Sync.SyncProtocol.Version.ToString(CultureInfo.InvariantCulture));
+                request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.SchemaHeader, protocolFor.ClientSchema.ToString(CultureInfo.InvariantCulture));
+                request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.DeviceHeader, protocolFor.Id.ToString("D"));
             }
 
             var response = await SendAsync(request, ct);

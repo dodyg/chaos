@@ -27,6 +27,11 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<long>("ChangesPrunedThroughSeq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -67,6 +72,8 @@ namespace Chaos.Server.Data.Migrations
 
                     b.ToTable("Accounts", null, t =>
                         {
+                            t.HasCheckConstraint("CK_Accounts_ChangesPrunedThroughSeq", "\"ChangesPrunedThroughSeq\" >= 0");
+
                             t.HasCheckConstraint("CK_Accounts_NextSeq", "\"NextSeq\" >= 1");
 
                             t.HasCheckConstraint("CK_Accounts_PrimaryEmail_Lower", "\"PrimaryEmail\" = lower(\"PrimaryEmail\")");
@@ -213,6 +220,88 @@ namespace Chaos.Server.Data.Migrations
                             t.HasCheckConstraint("CK_EmailCodes_Attempts", "\"Attempts\" BETWEEN 0 AND 5");
 
                             t.HasCheckConstraint("CK_EmailCodes_Email_Lower", "\"Email\" = lower(\"Email\")");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncChangeRow", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Seq")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("ChangeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EntityKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Groups")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Op")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("OriginDevice")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("AccountId", "Seq");
+
+                    b.HasIndex("AccountId", "ChangeId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_SyncChanges_ChangeId");
+
+                    b.HasIndex("AccountId", "CreatedAt")
+                        .HasDatabaseName("IX_SyncChanges_CreatedAt");
+
+                    b.ToTable("SyncChanges", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge')");
+
+                            t.HasCheckConstraint("CK_SyncChanges_Seq", "\"Seq\" >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncEntityRow", b =>
+                {
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Kind")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EntityKey")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Groups")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<long>("LastSeq")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("PurgedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AccountId", "Kind", "EntityKey");
+
+                    b.ToTable("SyncEntities", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SyncEntities_LastSeq", "\"LastSeq\" >= 0");
                         });
                 });
 
@@ -437,6 +526,24 @@ namespace Chaos.Server.Data.Migrations
                 {
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany("Devices")
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncChangeRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncEntityRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
                         .HasForeignKey("AccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

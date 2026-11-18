@@ -2,6 +2,7 @@ using Chaos.Server;
 using Chaos.Server.Api;
 using Chaos.Server.Auth;
 using Chaos.Server.Data;
+using Chaos.Server.Sync;
 using Chaos.ServiceDefaults;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
@@ -24,6 +25,7 @@ builder.AddNpgsqlDbContext<ChaosDbContext>(
 
 builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
 builder.Services.AddServiceRateLimits();
+builder.Services.AddSyncService(builder.Configuration);
 
 var app = builder.Build();
 

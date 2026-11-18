@@ -2510,6 +2510,22 @@ only in the credential store, and server tests run against real PostgreSQL.
 **Depends on:** P12. **Server migration:** `S002_Sync` (EF Core; `SyncEntities`, `SyncChanges`).
 **Read:** section 7 (again) and 8.3.
 
+**Progress note 2026-11-18 (items 1, 2, 4 done; item 3 partly).** Shared in `Chaos.Sync`: `SyncJson` (wire/storage
+shape), `SyncKinds` (the service's copy of the catalog's kinds and groups, with a client test that fails on drift),
+`SyncProtocol`. Server: `S002_Sync` (`SyncEntities`, `SyncChanges`, `Accounts.ChangesPrunedThroughSeq`),
+`SyncService` and `/v1/sync/push|pull|snapshot` as in 7.12/8.3 (row lock, replay by changeId, ownership, size and
+kind/group validation, `NOTIFY chaos_seq_<account>` plus an in-process broadcaster, forward-compatible group
+filtering, 90-day pruning job and `snapshotRequired`). Client: `SyncEngine` (push in batches of what was queued at
+cycle start, pull and apply in 200-change chunks, snapshot catch-up, backoff 2 s to 5 min with jitter, started in
+`Program.cs`, idle while `SyncState.Enabled = 0`), `IChaosServiceClient.CallAsync`. Tests: 13 two-client scenarios
+(all listed in item 4) and 7 protocol tests; Chaos.Server.Tests 79/79, Infrastructure sync tests 78/78. Decisions:
+a late edit to a purged entity is rejected `purged` on the wire but the client drops it quietly; a rejected change
+stays in the outbox, is skipped for the session and raises attention; the account-space check applies only once
+P14 binds the canonical IDs. Also fixed: concurrent migrators now serialize on a PostgreSQL advisory lock (EF's own
+lock let two run S002). Not done: the SSE endpoint and `LISTEN` side (P15), the "Changed on another device" notice in
+open editors (7.10), and showing the replaced value in the history viewer (it is labelled, and the earlier version
+opens in the existing viewer). The `sync.merged` history label is in `TaskJournal.tsx`.
+
 1. Server:
    - `POST /v1/sync/push`, `GET /v1/sync/pull`, `GET /v1/sync/snapshot`, exactly as 7.12, using
      `Chaos.Sync.Merge`.
