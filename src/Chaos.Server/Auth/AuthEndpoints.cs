@@ -2,6 +2,7 @@ using System.Net.Mail;
 using System.Security.Claims;
 using System.Text.Json;
 using Chaos.Server.Data;
+using Chaos.Server.Web;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
@@ -105,7 +106,7 @@ public static class AuthEndpoints
             return SignInPages.MessagePage("Account unavailable", "This account was deleted.", StatusCodes.Status403Forbidden);
         }
 
-        await SignInAsync(http, account);
+        await SignInAsync(http, account, ret);
         return ret is null ? SignInPages.MessagePage("You are signed in", "You can close this tab and return to Chaos.") : Results.Redirect(ret);
     }
 
@@ -153,7 +154,7 @@ public static class AuthEndpoints
         switch (login.Outcome)
         {
             case ExternalLoginOutcome.SignedIn:
-                await SignInAsync(http, login.Account!);
+                await SignInAsync(http, login.Account!, ret);
                 return ret is null ? SignInPages.MessagePage("You are signed in", "You can close this tab and return to Chaos.") : Results.Redirect(ret);
             case ExternalLoginOutcome.NeedsEmailConfirmation:
                 var address = AccountService.NormalizeEmail(email!);
@@ -274,17 +275,26 @@ public static class AuthEndpoints
 
     // ---- Helpers --------------------------------------------------------------------------------------
 
-    private static async Task SignInAsync(HttpContext http, Account account)
+    private static async Task SignInAsync(HttpContext http, Account account, string? returnUrl)
     {
+        if (returnUrl == WebSession.AppPath)
+        {
+            await http.RequestServices.GetRequiredService<WebSession>().SignInAsync(http, account.Id);
+            return;
+        }
+
         var identity = new ClaimsIdentity(SignInCookie.Scheme, Claims.Name, Claims.Role);
         identity.AddClaim(new Claim(Claims.Subject, account.Id.ToString("D")));
         identity.AddClaim(new Claim(Claims.Name, account.PrimaryEmail));
         await http.SignInAsync(SignInCookie.Scheme, new ClaimsPrincipal(identity));
     }
 
-    /// <summary>Only the authorize endpoint may be returned to: no open redirect.</summary>
+    /// <summary>Allow only the app or the desktop authorize endpoint.</summary>
     internal static string? SafeReturn(string? returnUrl) =>
-        returnUrl is not null && returnUrl.StartsWith(AuthorizePath + "?", StringComparison.Ordinal) && returnUrl.Length < 4096 ? returnUrl : null;
+        returnUrl == WebSession.AppPath ||
+        (returnUrl is not null && returnUrl.StartsWith(AuthorizePath + "?", StringComparison.Ordinal) && returnUrl.Length < 4096)
+            ? returnUrl
+            : null;
 
     private static bool TryParseEmail(string? value, out string address)
     {

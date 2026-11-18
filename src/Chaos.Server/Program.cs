@@ -4,6 +4,7 @@ using Chaos.Server.Auth;
 using Chaos.Server.Blobs;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
+using Chaos.Server.Web;
 using Chaos.ServiceDefaults;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
@@ -28,6 +29,7 @@ builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
 builder.Services.AddServiceRateLimits();
 builder.Services.AddSyncService(builder.Configuration);
 builder.Services.AddBlobService(builder.Configuration, builder.Environment);
+builder.Services.AddWebSessions(builder.Environment);
 
 var app = builder.Build();
 
@@ -80,6 +82,7 @@ app.UseAntiforgery();
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapServiceEndpoints();
+app.MapWebSessionEndpoints();
 
 await app.RunAsync();
 
