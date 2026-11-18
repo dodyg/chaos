@@ -10,12 +10,12 @@ under `wwwroot/app`. The published server serves those files directly.
 
 Join the account from Chaos desktop and let it sync the Inbox. On your phone, open `/app` on the
 same trusted HTTPS origin and sign in with the same account. Use **Add to Home Screen** from the
-browser menu. Open Today or a list while connected to save it for offline viewing.
+browser menu. Open My Day or a list while connected to save it for offline viewing.
 
 Use the existing Chaos.Server deployment. Persist its ASP.NET Core Data Protection key ring across
 releases and share it across replicas so they can validate the same web session cookies. The web
 app refreshes the active view every ten seconds while visible. Desktop clients receive sync
-events through the existing service. The app keeps Today, the list picker and the last opened
+events through the existing service. The app keeps My Day, the list picker and the last opened
 list in the browser. Task notes are fetched while connected. Signing out clears the saved views.
 
 ## Goal
@@ -42,7 +42,7 @@ connection.
 | --- | --- | --- |
 | D1 | Where does mobile web fit in PLAN2? | A follow-on work package after P16, recorded in `docs/decisions.md`. |
 | D2 | How does a phone reach the server? | The server's trusted HTTPS URL. Deployment can use a public host or private HTTPS through Tailscale. |
-| W1 | Which screens are in the first release? | Today, list picker, lists and task detail, with add, complete, reopen and plan-today. |
+| W1 | Which screens are in the first release? | My Day, list picker, lists and task detail, with task capture, complete, reopen and My Day membership. |
 
 ## Sync mapping
 
@@ -51,11 +51,12 @@ connection.
 - Complete and reopen write `status` and its terminal timestamps. Reopen resets the status to
   **Not started**. Complete leaves subtasks in their current state. Recurring task completion and
   reopening use the desktop recurrence controls.
-- Plan-today writes `planned` with the profile's local date and clears the planned time and zone.
-- Today reads open tasks planned for today, due today, or overdue. It uses the synced profile
-  time zone, with UTC as the fallback before a profile arrives. Eligible tasks on the desktop
-  My Day plan use their My Day position first. Other tasks use desktop Today ordering by priority,
-  list position, task position, and ID.
+- My Day shows open and finished tasks from the synced day plan in its saved order. It uses the
+  synced profile time zone, with UTC as the fallback before a profile arrives.
+- If the day plan has not been initialized, My Day shows open tasks assigned to the date in the
+  confirmed week. Editing membership or completing a task from that initial plan saves the plan.
+- Adding to or removing from My Day writes day-plan membership through sync. Planned and due dates
+  belong to the task and are independent of membership.
 
 ## Work packages, in priority order
 
@@ -81,7 +82,7 @@ connection.
 
 Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from the request:
 
-- `GET /today`: planned today or due today or overdue, not done, in the desktop's My Day order.
+- `GET /today`: today’s My Day tasks, in the desktop’s saved order.
 - `GET /lists` and `GET /lists/{id}/tasks`.
 - `GET /tasks/{id}`: title, notes, dates, status.
 - Build DTOs from `SyncEntities.Groups` (skip tombstones and purged rows). Keep this in one
@@ -92,7 +93,7 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 
 - New `src/Chaos.Web/` (Vite and React, mobile first), built into `Chaos.Server/wwwroot/app`. Do not
   fork the desktop frontend; copy only small presentational pieces.
-- Screens: sign-in redirect, Today, list picker, list view, task detail (read only).
+- Screens: sign-in redirect, My Day, list picker, list view, task detail.
 - Manifest, icons, `display: standalone`, theme colour. Light and dark.
 - Phone-width checks in the browser preview at 375px.
 
@@ -100,7 +101,7 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 
 - `POST /tasks` (title, optional list and planned date). Goes to the Inbox by default.
 - `POST /tasks/{id}/complete` and `/reopen`.
-- `POST /tasks/{id}/plan-today`.
+- `POST /tasks/{id}/add-to-my-day` and `/remove-from-my-day`.
 - Each builds a change, gives it the server's HLC and `OriginDevice` = the web device, and calls
   the push path. Return the new task state.
 - **Recurring tasks:** completing one creates the next occurrence on the desktop (client logic in
@@ -111,7 +112,7 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 
 ### W5 — Cache and install (1 day)
 
-- Service worker caches the app shell and the last Today and list responses. Offline shows the cached
+- Service worker caches the app shell and the last My Day and list responses. Offline shows the cached
   data with a "Last updated" line and disables writes.
 - Updates: new service worker waits, then shows "Reload for the new version".
 - iOS notes: realtime (SSE) only while the app is open; no push.

@@ -44,6 +44,6 @@ internal static class WebReadEndpoints
             return Results.Unauthorized();
         }
 
-        return await model.TaskStateAsync(account, id, ct) is { } state ? Results.Ok(state.Task) : Results.NotFound();
+        return await model.TaskDetailAsync(account, id, ct) is { } task ? Results.Ok(task) : Results.NotFound();
     }
 }

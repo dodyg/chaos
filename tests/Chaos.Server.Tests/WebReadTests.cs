@@ -35,8 +35,11 @@ public sealed class WebReadTests(PostgresServer postgres)
         var planned = Guid.NewGuid();
         var overdue = Guid.NewGuid();
         var recurring = Guid.NewGuid();
-        var series = Guid.NewGuid();
-        var occurrence = Guid.NewGuid();
+        var unscheduled = Guid.NewGuid();
+        var done = Guid.NewGuid();
+        var removed = Guid.NewGuid();
+        var archivedList = Guid.NewGuid();
+        var week = Guid.NewGuid();
         var tombstone = Guid.NewGuid();
         var purged = Guid.NewGuid();
         account.ProfileId = profile;
@@ -45,25 +48,32 @@ public sealed class WebReadTests(PostgresServer postgres)
 
         db.SyncEntities.AddRange(
             Row("container", list, ("create", Fields(("SpaceId", space.ToString("D")))), ("name", Fields(("Name", "Inbox")))),
+            Row("container", archivedList, ("create", Fields(("SpaceId", space.ToString("D")))),
+                ("name", Fields(("Name", "Archived"))), ("archived", Fields(("ArchivedAtUtc", now.ToString("o"))))),
             Row("container", Guid.NewGuid(), ("create", Fields(("SpaceId", space.ToString("D"))))),
             Row("day_plan", plan, ("create", Fields(("ProfileId", profile.ToString("D")), ("LocalDate", today.ToString("yyyy-MM-dd"))))),
-            Row("day_plan_item", Guid.NewGuid(),
-                ("create", Fields(("DayPlanId", plan.ToString("D")), ("TaskId", planned.ToString("D")))),
-                ("position", Fields(("Position", 0L)))),
+            Member(planned, 1024),
+            Member(unscheduled, 0),
+            Member(done, 2048),
+            Member(removed, 3072, now.ToString("o")),
+            Member(tombstone, 4096),
+            Member(purged, 5120),
+            Row("week_plan", week, ("create", Fields(("ProfileId", profile.ToString("D")), ("WeekStartDate", today.ToString("yyyy-MM-dd")))),
+                ("state", Fields(("State", 1L), ("ConfirmedRevision", 1L)))),
+            Row("week_assignment", Guid.NewGuid(), ("create", Fields(("WeekPlanId", week.ToString("D")), ("TaskId", removed.ToString("D")))),
+                ("placement", Fields(("LocalDate", today.ToString("yyyy-MM-dd")), ("Position", 0L)))),
             TaskRow(due, "Due today", ("due", Fields(("DueDate", today.ToString("yyyy-MM-dd")), ("DueTime", "15:30:00"), ("DueZoneId", "UTC"))),
                 ("priority", Fields(("Priority", 4L)))),
             TaskRow(planned, "Planned today", ("planned", Fields(("PlannedDate", today.ToString("yyyy-MM-dd"))))),
+            TaskRow(Guid.NewGuid(), "Planned today outside My Day", ("planned", Fields(("PlannedDate", today.ToString("yyyy-MM-dd"))))),
             TaskRow(overdue, "Overdue", ("due", Fields(("DueDate", today.AddDays(-1).ToString("yyyy-MM-dd"))))),
-            Row("recurrence_series", series, ("rule", Fields(("RuleJson", """{"payload":{"zoneId":"UTC","anchorTime":null}}""")))),
-            Row("recurrence_occurrence", occurrence,
-                ("create", Fields(("SeriesId", series.ToString("D")), ("EffectiveLocal", today.AddDays(-1).ToString("yyyy-MM-dd") + "T00:00:00"))),
-                ("task", Fields(("TaskId", recurring.ToString("D")))), ("state", Fields(("State", 0L)))),
             Row("task", recurring,
-                ("create", Fields(("SpaceId", space.ToString("D")), ("RecurrenceOccurrenceKey", occurrence.ToString("D")))),
-                ("place", Fields(("ContainerId", list.ToString("D")))), ("title", Fields(("Title", "Missed recurrence"))),
-                ("position", Fields(("Position", 1024L)))),
-            TaskRow(Guid.NewGuid(), "Done", ("status", Fields(("Status", 4L))), ("due", Fields(("DueDate", today.ToString("yyyy-MM-dd"))))),
-            TaskRow(Guid.NewGuid(), "Unscheduled"),
+                ("create", Fields(("SpaceId", space.ToString("D")), ("RecurrenceOccurrenceKey", "occurrence"))),
+                ("place", Fields(("ContainerId", list.ToString("D")))), ("title", Fields(("Title", "Recurring")))),
+            TaskRow(done, "Done", ("status", Fields(("Status", 4L)))),
+            TaskRow(removed, "Removed"),
+            Row("task", unscheduled, ("create", Fields(("SpaceId", space.ToString("D")))),
+                ("place", Fields(("ContainerId", archivedList.ToString("D")))), ("title", Fields(("Title", "Unscheduled")))),
             TaskRow(tombstone, "Deleted", ("deleted", Fields(("DeletedAtUtc", now.ToString("o"))))));
         var purgedRow = TaskRow(purged, "Purged");
         purgedRow.PurgedAt = now;
@@ -73,16 +83,18 @@ public sealed class WebReadTests(PostgresServer postgres)
         using var noCookie = await anonymous.GetAsync("/v1/web/today");
         await Assert.That(noCookie.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
         var view = (await owner.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
-        await Assert.That(view.Tasks.Select(task => task.Title).ToArray()).IsEquivalentTo(["Planned today", "Due today", "Overdue", "Missed recurrence"]);
-        await Assert.That(view.Tasks[0].Id).IsEqualTo(planned);
-        await Assert.That(view.Tasks[1].Id).IsEqualTo(due);
-        await Assert.That(view.Tasks[1].DueTime).IsEqualTo(new TimeOnly(15, 30));
-        await Assert.That(view.Tasks[3].IsRecurring).IsTrue();
-        await Assert.That(view.Tasks[0].Notes).IsNull();
+        await Assert.That(string.Join(", ", view.Tasks.Select(task => task.Title))).IsEqualTo("Unscheduled, Planned today, Done");
+        await Assert.That(view.Tasks[0].PlannedDate).IsNull();
+        await Assert.That(view.Tasks[2].IsTerminal).IsTrue();
+        await Assert.That(view.Tasks[1].Notes).IsNull();
         var lists = (await owner.GetFromJsonAsync<WebList[]>("/v1/web/lists"))!;
-        await Assert.That(lists.Single().Id).IsEqualTo(list);
+        await Assert.That(lists.First().Id).IsEqualTo(list);
         var detail = (await owner.GetFromJsonAsync<WebTask>($"/v1/web/tasks/{planned}"))!;
         await Assert.That(detail.Notes).IsEqualTo("Synced notes");
+        await Assert.That(detail.IsOnMyDay).IsTrue();
+        var dueDetail = (await owner.GetFromJsonAsync<WebTask>($"/v1/web/tasks/{due}"))!;
+        await Assert.That(dueDetail.DueTime).IsEqualTo(new TimeOnly(15, 30));
+        await Assert.That(dueDetail.IsOnMyDay).IsFalse();
         using var missing = await owner.GetAsync($"/v1/web/tasks/{tombstone}");
         await Assert.That(missing.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
         using var gone = await owner.GetAsync($"/v1/web/tasks/{purged}");
@@ -97,6 +109,27 @@ public sealed class WebReadTests(PostgresServer postgres)
         await Assert.That(foreignWrite.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
         using var recurringWrite = await WebFlow.PostAsync(owner, await WebFlow.SessionAsync(owner), $"/v1/web/tasks/{recurring}/complete");
         await Assert.That(recurringWrite.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+
+        // Before a day has been initialized, My Day uses the confirmed week's open assignments.
+        await db.SyncEntities.Where(row => row.AccountId == account.Id && row.Kind == "day_plan").ExecuteDeleteAsync();
+        var seeded = (await owner.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(seeded.Tasks.Single().Id).IsEqualTo(removed);
+        var session = await WebFlow.SessionAsync(owner);
+        using var finishSeed = await WebFlow.PostAsync(owner, session, $"/v1/web/tasks/{removed}/complete");
+        await Assert.That(finishSeed.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        var afterFinish = (await owner.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(afterFinish.Tasks.Single().IsTerminal).IsTrue();
+        using var reopenSeed = await WebFlow.PostAsync(owner, session, $"/v1/web/tasks/{removed}/reopen");
+        await Assert.That(reopenSeed.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using var removeSeed = await WebFlow.PostAsync(owner, session, $"/v1/web/tasks/{removed}/remove-from-my-day");
+        await Assert.That(removeSeed.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        var afterRemoval = (await owner.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(afterRemoval.Tasks.Count).IsEqualTo(0);
+
+        SyncEntityRow Member(Guid taskId, long position, string? removedAt = null) =>
+            Row("day_plan_item", Guid.NewGuid(),
+                ("create", Fields(("DayPlanId", plan.ToString("D")), ("TaskId", taskId.ToString("D")))),
+                ("position", Fields(("Position", position))), ("removed", Fields(("RemovedAtUtc", removedAt))));
 
         SyncEntityRow TaskRow(Guid id, string title, params (string Name, SyncGroupValues Values)[] extras) =>
             Row("task", id,

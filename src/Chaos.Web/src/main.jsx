@@ -26,11 +26,11 @@ function getRoute(hash) {
   if (kind === "list" && guid.test(id)) return { kind, id, path: `/lists/${id}/tasks`, href: `#list/${id}`, tab: "lists" };
   if (kind === "task" && guid.test(id)) {
     const from = new URLSearchParams(query).get("from");
-    const back = from === "#lists" || (from?.startsWith("#list/") && guid.test(from.slice(6))) ? from : "#today";
-    return { kind, id, path: `/tasks/${id}`, back, tab: back === "#today" ? "today" : "lists" };
+    const back = from === "#lists" || (from?.startsWith("#list/") && guid.test(from.slice(6))) ? from : "#my-day";
+    return { kind, id, path: `/tasks/${id}`, back, tab: back === "#my-day" ? "today" : "lists" };
   }
   if (kind === "lists") return { kind, path: "/lists", href: "#lists", tab: kind };
-  return { kind: "today", path: "/today", href: "#today", tab: "today" };
+  return { kind: "today", path: "/today", href: "#my-day", tab: "today" };
 }
 
 function useRoute() {
@@ -83,7 +83,12 @@ function App() {
   }
 
   function act(task, action) {
-    const message = { complete: "Task completed.", reopen: "Task reopened.", "plan-today": "Task planned for today." }[action];
+    const message = {
+      complete: "Task completed.",
+      reopen: "Task reopened.",
+      "add-to-my-day": "Task added to My Day.",
+      "remove-from-my-day": "Task removed from My Day.",
+    }[action];
     void save(`/tasks/${task.id}/${action}`, null, message);
   }
 
@@ -97,7 +102,7 @@ function App() {
       }}>Skip to content</a>
       <header className="topbar">
         <div className="topbar-inner">
-          <a className="brand" href="#today"><img src="/app/icons/icon-192.png" alt="" />Chaos</a>
+          <a className="brand" href="#my-day"><img src="/app/icons/icon-192.png" alt="" />Chaos</a>
           <div className="header-actions">
             {pwa.offerInstall && <button className="icon-button" onClick={pwa.offerInstall} aria-label="Install Chaos" title="Install Chaos"><Download /></button>}
             {hasNavigation && <button className="icon-button" onClick={view.refresh} aria-label="Refresh tasks" title="Refresh tasks" disabled={busy}><RefreshCw /></button>}
@@ -132,7 +137,7 @@ function App() {
         <footer className="dock">
           <div className="dock-inner">
             <nav aria-label="Main navigation">
-              <a href="#today" aria-current={route.tab === "today" ? "page" : undefined}><CalendarDays />Today</a>
+              <a href="#my-day" aria-current={route.tab === "today" ? "page" : undefined}><CalendarDays />My Day</a>
               <a href="#lists" aria-current={route.tab === "lists" ? "page" : undefined}><List />Lists</a>
             </nav>
             <button className="primary-button add-button" disabled={!canAdd || busy} onClick={() => setComposer(true)}>
@@ -165,9 +170,9 @@ function Screen({ route, view, canWrite, act }) {
     <button className="secondary-button" onClick={view.refresh}>Try again</button>
   </div>;
   if (!data) return <div className="empty">
-    <h1>{route.kind === "today" ? "Today" : route.kind === "task" ? "Task" : "Lists"}</h1>
+    <h1>{route.kind === "today" ? "My Day" : route.kind === "task" ? "Task" : "Lists"}</h1>
     <p>This view has not been saved on this device. Reconnect to open it.</p>
-    <a href="#today" className="text-button">Back to Today</a>
+    <a href="#my-day" className="text-button">Back to My Day</a>
   </div>;
   if (route.kind === "task") {
     return <TaskDetail task={data} list={lists.find(list => list.id === data.listId)}
@@ -184,20 +189,20 @@ function Screen({ route, view, canWrite, act }) {
       {today ? <p className="date-label"><CalendarDays size={17} />{readDate(data.date, dateFormat)}</p>
         : <a className="back" href="#lists"><ChevronLeft size={18} />Lists</a>}
       <div className="screen-heading">
-        <h1>{today ? "Today" : data.list.name}</h1>
+        <h1>{today ? "My Day" : data.list.name}</h1>
         <span className="count">{open.length} open</span>
       </div>
       {!tasks.length && (
         <div className="empty">
           <div className="empty-icon">{today ? <CalendarDays /> : <List />}</div>
-          <h2>{today ? "Nothing on the agenda" : "This list is empty"}</h2>
+          <h2>{today ? "My Day is empty" : "This list is empty"}</h2>
           <p>{!lists.length && mode !== "offline" ? "Connect Chaos on your desktop and sync your Inbox to get started."
-            : today ? "Tasks planned for today or due by today will appear here." : "Tasks you add to this list will appear here."}</p>
+            : today ? "Open a task from Lists to add it to My Day." : "Tasks you add to this list will appear here."}</p>
         </div>
       )}
       {open.length > 0 && <TaskList tasks={open} route={route} canWrite={canWrite} act={act} />}
       {closed.length > 0 && <section className="closed-tasks">
-        <h2>Closed <span>{closed.length}</span></h2>
+        <h2>{today ? "Finished" : "Closed"} <span>{closed.length}</span></h2>
         <TaskList tasks={closed} route={route} canWrite={canWrite} act={act} />
       </section>}
     </>
@@ -254,7 +259,7 @@ function TaskList({ tasks, route, canWrite, act }) {
 function TaskDetail({ task, list, back, canWrite, offline, act }) {
   return (
     <>
-      <a className="back" href={back}><ChevronLeft size={18} />{back === "#today" ? "Today" : list?.name ?? "Lists"}</a>
+      <a className="back" href={back}><ChevronLeft size={18} />{back === "#my-day" ? "My Day" : list?.name ?? "Lists"}</a>
       <div className="screen-heading task-heading"><h1>{task.title}</h1></div>
       <dl className="task-fields">
         <div><dt>Status</dt><dd>{statuses[task.status] ?? "Open"}</dd></div>
@@ -272,8 +277,8 @@ function TaskDetail({ task, list, back, canWrite, offline, act }) {
             {task.isTerminal ? <RefreshCw size={17} /> : <Check size={19} />}
             {task.isTerminal ? "Reopen task" : "Complete task"}
           </button>}
-        {!task.isTerminal && <button className="secondary-button" disabled={!canWrite} onClick={() => act(task, "plan-today")}>
-          <CalendarDays size={18} />Plan for today
+        {!task.isTerminal && <button className="secondary-button" disabled={!canWrite} onClick={() => act(task, task.isOnMyDay ? "remove-from-my-day" : "add-to-my-day")}>
+          <CalendarDays size={18} />{task.isOnMyDay ? "Remove from My Day" : "Add to My Day"}
         </button>}
       </div>
     </>

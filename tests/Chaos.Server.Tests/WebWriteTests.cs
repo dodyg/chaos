@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Chaos.Application.Planning;
 using Chaos.Domain.Tasks;
 using Chaos.Server.Data;
 using Chaos.Server.Tests.Sync;
@@ -25,7 +26,8 @@ public sealed class WebWriteTests(PostgresServer postgres)
         var session = await WebFlow.SessionAsync(browser);
         var today = (await browser.GetFromJsonAsync<WebToday>("/v1/web/today"))!.Date;
         var id = Guid.NewGuid();
-        var capture = new WebCaptureRequest("  Mobile task  ", null, null, id);
+        var plannedDate = today.AddDays(1);
+        var capture = new WebCaptureRequest("  Mobile task  ", null, plannedDate, id);
         using var withoutToken = await browser.PostAsJsonAsync("/v1/web/tasks", capture);
         await Assert.That(withoutToken.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
 
@@ -38,16 +40,26 @@ public sealed class WebWriteTests(PostgresServer postgres)
         using var replay = await WebFlow.PostAsync(browser, session, "/v1/web/tasks", capture);
         await Assert.That(replay.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-        using var planned = await WebFlow.PostAsync(browser, session, $"/v1/web/tasks/{id}/plan-today");
-        await Assert.That(planned.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        await Assert.That((await planned.Content.ReadFromJsonAsync<WebTask>())!.PlannedDate).IsEqualTo(today);
+        var addPath = $"/v1/web/tasks/{id}/add-to-my-day";
+        using var addedToDay = await WebFlow.PostAsync(browser, session, addPath);
+        await Assert.That(addedToDay.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await addedToDay.Content.ReadFromJsonAsync<WebTask>())!.PlannedDate).IsEqualTo(plannedDate);
+        using var addAgain = await WebFlow.PostAsync(browser, session, addPath);
+        await Assert.That(addAgain.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        var day = (await browser.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(day.Tasks.Single().Id).IsEqualTo(id);
         using var complete = await WebFlow.PostAsync(browser, session, $"/v1/web/tasks/{id}/complete");
         await Assert.That(complete.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await world.SettleAsync();
         var completed = (await desktop.Tasks.GetAsync(id.ToString("D")))!;
         await Assert.That(completed.Status).IsEqualTo(TaskItemStatus.Done);
         await Assert.That(completed.CompletedAtUtc).IsNotNull();
-        await Assert.That(completed.PlannedDate).IsEqualTo(today);
+        await Assert.That(completed.PlannedDate).IsEqualTo(plannedDate);
+        var finished = (await browser.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(finished.Tasks.Single().IsTerminal).IsTrue();
+        var desktopDay = new MyDayCommands(desktop.Store, desktop.Clock);
+        var daySummary = await desktopDay.OpenAsync(today);
+        await Assert.That(daySummary.FinishedCount).IsEqualTo(1);
 
         using var reopen = await WebFlow.PostAsync(browser, session, $"/v1/web/tasks/{id}/reopen");
         await Assert.That(reopen.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -56,11 +68,29 @@ public sealed class WebWriteTests(PostgresServer postgres)
         await Assert.That(reopened.Status).IsEqualTo(TaskItemStatus.NotStarted);
         await Assert.That(reopened.CompletedAtUtc).IsNull();
 
+        using var removed = await WebFlow.PostAsync(browser, session, $"/v1/web/tasks/{id}/remove-from-my-day");
+        await Assert.That(removed.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await world.SettleAsync();
+        var empty = (await browser.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(empty.Tasks.Count).IsEqualTo(0);
+        await Assert.That((await desktopDay.OpenAsync(today)).OpenCount).IsEqualTo(0);
+
+        using var restored = await WebFlow.PostAsync(browser, session, addPath);
+        await Assert.That(restored.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await world.SettleAsync();
+        await Assert.That((await desktopDay.OpenAsync(today)).OpenCount).IsEqualTo(1);
+        await Assert.That(await desktop.CountAsync("SELECT COUNT(*) FROM DayPlanItems;")).IsEqualTo(1L);
+
+        await desktopDay.RemoveAsync(new DayItemCommand(Guid.NewGuid().ToString("D"), today, id.ToString("D")));
+        await world.SettleAsync();
+        var afterDesktopRemoval = (await browser.GetFromJsonAsync<WebToday>("/v1/web/today"))!;
+        await Assert.That(afterDesktopRemoval.Tasks.Count).IsEqualTo(0);
+
         await using var db = ServerDatabase.Open(world.Server.ConnectionString);
         var changes = await db.SyncChanges.AsNoTracking().Where(change => change.EntityKey == id.ToString("D")).OrderBy(change => change.Seq).ToListAsync();
-        await Assert.That(changes.Count).IsEqualTo(4);
+        await Assert.That(changes.Count).IsEqualTo(3);
         await Assert.That(changes.All(change => change.OriginDevice == session.DeviceId)).IsTrue();
-        await Assert.That(SyncJson.ReadGroups(changes[1].Groups).Keys.Single()).IsEqualTo("planned");
+        await Assert.That(SyncJson.ReadGroups(changes[1].Groups).Keys.Single()).IsEqualTo("status");
         await Assert.That(SyncJson.ReadGroups(changes[2].Groups).Keys.Single()).IsEqualTo("status");
     }
 

@@ -15,6 +15,8 @@ internal enum WebTaskAction
     Complete,
     Reopen,
     PlanToday,
+    AddToMyDay,
+    RemoveFromMyDay,
 }
 
 internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncService sync, TimeProvider time)
@@ -88,7 +90,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             }
 
             var (task, entity) = state;
-            if (task.IsRecurring && action is not WebTaskAction.PlanToday)
+            if (task.IsRecurring && action is WebTaskAction.Complete or WebTaskAction.Reopen)
             {
                 return Refuse("recurring");
             }
@@ -106,6 +108,11 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
 
             var now = time.GetUtcNow();
             var clock = new HybridClock(caller.DeviceId, time);
+            if (action is WebTaskAction.AddToMyDay or WebTaskAction.RemoveFromMyDay)
+            {
+                return await ChangeMyDayAsync(account, id, action == WebTaskAction.AddToMyDay, clock, now, token);
+            }
+
             var last = entity.Groups.Values.MaxBy(group => group.Hlc)!.Hlc;
             var hlc = clock.Receive(last).Clock;
             if (hlc.WallMillis > Hlc.MaxWallMillis)
@@ -125,8 +132,124 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             }
 
             var status = action is WebTaskAction.Complete ? WebReadModel.Done : WebReadModel.NotStarted;
-            return Change(changeId, id, new Dictionary<string, SyncGroupState> { ["status"] = Status(hlc, status, now) });
+            var statusChange = Change(changeId, id, new Dictionary<string, SyncGroupState> { ["status"] = Status(hlc, status, now) });
+            if (action is WebTaskAction.Complete && account.ProfileId is { } profile)
+            {
+                var (today, _) = await read.LocalDayAsync(account, now, token);
+                if (await read.DayPlanAsync(account, today, token) is { Exists: false } plan
+                    && plan.Members.Any(item => item.TaskKey == id.ToString("D")))
+                {
+                    // Preserve the membership of a task completed from a confirmed week's initial day.
+                    var changes = InitializeMyDay(plan, profile, today, hlc, now);
+                    changes.AddRange(plan.Members.Select(item => MyDayItem(plan, item, 1, removed: false, hlc, now)));
+                    return await PrepareMyDayChangesAsync(account, [.. changes, .. statusChange.Changes], token);
+                }
+            }
+
+            return statusChange;
         }, ct);
+    }
+
+    private async Task<PreparedPush> ChangeMyDayAsync(Account account, Guid id, bool add, HybridClock clock, DateTimeOffset now, CancellationToken ct)
+    {
+        var (today, _) = await read.LocalDayAsync(account, now, ct);
+        if (account.ProfileId is not { } profile || await read.DayPlanAsync(account, today, ct) is not { } plan)
+        {
+            return Refuse("setup-required");
+        }
+
+        var key = id.ToString("D");
+        var member = plan.Members.FirstOrDefault(item => item.TaskKey == key && item.IsActive)
+            ?? plan.Members.FirstOrDefault(item => item.TaskKey == key);
+        if (add == (member?.IsActive == true))
+        {
+            return new PreparedPush([]);
+        }
+
+        var hlc = member?.Entity?.Groups.Values.MaxBy(group => group.Hlc) is { } last
+            ? clock.Receive(last.Hlc).Clock : clock.TickLocal();
+        if (hlc.WallMillis > Hlc.MaxWallMillis)
+        {
+            return Refuse("clock-limit");
+        }
+
+        List<IncomingChange> changes = plan.Exists ? [] : InitializeMyDay(plan, profile, today, hlc, now);
+        if (!plan.Exists)
+        {
+            foreach (var seeded in plan.Members.Where(item => item.TaskKey != key))
+            {
+                changes.Add(MyDayItem(plan, seeded, 1, removed: false, hlc, now));
+            }
+        }
+
+        if (add)
+        {
+            var lastPosition = plan.Members.Where(item => item.IsActive).Select(item => item.Position).DefaultIfEmpty(-1024).Max();
+            var position = lastPosition <= long.MaxValue - 1024 ? lastPosition + 1024 : lastPosition;
+            var itemKey = member?.Key ?? NameBasedId.Create(NameBasedId.Names.DayPlanItem(plan.Key, key)).ToString("D");
+            changes.Add(MyDayItem(plan, new WebDayMember(itemKey, key, position, member?.Entity), 0, removed: false, hlc, now));
+        }
+        else
+        {
+            foreach (var item in plan.Members.Where(item => item.TaskKey == key && item.IsActive))
+            {
+                var itemHlc = item.Entity?.Groups.Values.MaxBy(group => group.Hlc) is { } previous
+                    ? clock.Receive(previous.Hlc).Clock : hlc;
+                if (itemHlc.WallMillis > Hlc.MaxWallMillis)
+                {
+                    return Refuse("clock-limit");
+                }
+                changes.Add(MyDayItem(plan, item, 1, removed: true, itemHlc, now));
+            }
+        }
+
+        return await PrepareMyDayChangesAsync(account, changes, ct);
+    }
+
+    private static List<IncomingChange> InitializeMyDay(WebDayPlan plan, Guid profile, DateOnly today, Hlc hlc, DateTimeOffset now) =>
+    [
+        Upsert("day_plan", plan.Key, new()
+        {
+            ["create"] = Group(hlc, ("ProfileId", profile.ToString("D")),
+                ("LocalDate", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)), ("CreatedAtUtc", Instant(now))),
+            ["seed"] = Group(hlc, ("SeededWeekPlanId", plan.WeekKey), ("SeededWeekRevision", plan.WeekRevision)),
+            ["initialized"] = Group(hlc, ("InitializedAtUtc", Instant(now))),
+        }),
+    ];
+
+    private async Task<PreparedPush> PrepareMyDayChangesAsync(Account account, IReadOnlyList<IncomingChange> changes, CancellationToken ct)
+    {
+        var newKeys = changes.Select(change => change.Change!.EntityKey).ToArray();
+        if (await db.SyncEntities.AnyAsync(row => row.AccountId == account.Id && row.PurgedAt != null
+            && (row.Kind == "day_plan" || row.Kind == "day_plan_item") && newKeys.Contains(row.EntityKey), ct))
+        {
+            return Refuse(SyncRejection.Purged);
+        }
+
+        return new PreparedPush(changes);
+    }
+
+    private static IncomingChange MyDayItem(WebDayPlan plan, WebDayMember member, long origin, bool removed, Hlc hlc, DateTimeOffset now)
+    {
+        var groups = new Dictionary<string, SyncGroupState>
+        {
+            ["removed"] = Group(hlc, ("RemovedAtUtc", removed ? Instant(now) : null)),
+        };
+        if (!removed || member.Entity is null)
+        {
+            groups["create"] = Group(hlc, ("DayPlanId", plan.Key), ("TaskId", member.TaskKey), ("Kind", 0L),
+                ("Origin", origin), ("AddedAtUtc", Instant(now)),
+                ("CreatedAtUtc", member.Entity?.Text("create", "CreatedAtUtc") ?? Instant(now)));
+            groups["position"] = Group(hlc, ("Position", member.Position));
+        }
+
+        return Upsert("day_plan_item", member.Key, groups);
+    }
+
+    private static IncomingChange Upsert(string kind, string key, Dictionary<string, SyncGroupState> groups)
+    {
+        var id = Guid.NewGuid().ToString("D");
+        return new IncomingChange(id, SyncChange.Upsert(id, kind, key, groups), null);
     }
 
     private async Task<IResult> PushAsync(WebCaller caller, Guid taskId, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
@@ -192,6 +315,8 @@ internal static class WebWriteEndpoints
         MapAction(web, "complete", WebTaskAction.Complete);
         MapAction(web, "reopen", WebTaskAction.Reopen);
         MapAction(web, "plan-today", WebTaskAction.PlanToday);
+        MapAction(web, "add-to-my-day", WebTaskAction.AddToMyDay);
+        MapAction(web, "remove-from-my-day", WebTaskAction.RemoveFromMyDay);
     }
 
     private static void MapAction(RouteGroupBuilder web, string route, WebTaskAction action) =>

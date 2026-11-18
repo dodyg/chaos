@@ -73,7 +73,8 @@ function storeViews(deviceId, path, data, lists) {
   return cacheTransaction(previous => {
     if (previous.deviceId !== deviceId) return previous;
     const snapshot = { ...previous, lists: { data: lists, updatedAt } };
-    if (path === "/today") snapshot.today = { data, updatedAt };
+    delete snapshot.today;
+    if (path === "/today") snapshot.myDay = { data, updatedAt };
     if (path.startsWith("/lists/")) snapshot.lastList = { path, data, updatedAt };
     return snapshot;
   });
@@ -87,14 +88,14 @@ async function readOffline(path) {
     if (snapshot.deviceId) await forgetOfflineSession();
     return { data: null, lists: [] };
   }
-  const { today, lists, lastList } = snapshot;
+  const { myDay, lists, lastList } = snapshot;
   let record;
-  if (path === "/today") record = today;
+  if (path === "/today") record = myDay;
   else if (path === "/lists") record = lists;
   else if (path === lastList?.path) record = lastList;
   else if (path.startsWith("/tasks/")) {
     const id = path.slice("/tasks/".length);
-    const source = [today, lastList]
+    const source = [myDay, lastList]
       .filter(Boolean)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .find(entry => entry.data.tasks.some(task => task.id === id));

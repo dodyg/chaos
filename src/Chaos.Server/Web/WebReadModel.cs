@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Chaos.Server.Data;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -11,9 +10,16 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     DateOnly? DueDate, bool IsRecurring, long Priority, long Position, TimeOnly? PlannedTime, string? PlannedZoneId,
     TimeOnly? DueTime, string? DueZoneId)
 {
+    public bool IsOnMyDay { get; init; }
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
 internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks);
+internal sealed record WebDayMember(string Key, string TaskKey, long Position, WebEntity? Entity)
+{
+    public bool IsActive => Entity?.Text("removed", "RemovedAtUtc") is null;
+}
+
+internal sealed record WebDayPlan(string Key, bool Exists, string? WeekKey, long? WeekRevision, IReadOnlyList<WebDayMember> Members);
 
 /// <summary>Projects the desktop sync groups into the mobile web views.</summary>
 internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
@@ -27,37 +33,42 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
     public async Task<WebToday> TodayAsync(Account account, CancellationToken ct)
     {
-        var now = clock.GetUtcNow();
-        var (today, zone) = await LocalDayAsync(account, now, ct);
-        var day = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        // A timed due date in another zone can already be overdue on the next UTC calendar day.
-        var lastPossibleDueDay = DateOnly.FromDateTime(now.UtcDateTime).AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var lists = (await ListsAsync(account, ct)).Where(list => !list.IsArchived).ToDictionary(list => list.Id);
-        var plan = await DayPositionsAsync(account, day, ct);
-        var missedOccurrences = await MissedOccurrencesAsync(account, now, ct);
-        var missedKeys = missedOccurrences.Select(id => id.ToString("D")).ToArray();
+        var (today, _) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var plan = await DayPlanAsync(account, today, ct);
+        var members = plan?.Members.Where(item => item.IsActive).ToArray() ?? [];
+        if (members.Length == 0)
+        {
+            return new WebToday(today, []);
+        }
+
+        var lists = (await ListsAsync(account, ct)).Select(list => list.Id).ToHashSet();
+        var tasks = (await TasksByKeyAsync(account, members.Select(member => member.TaskKey).Distinct().ToArray(), ct))
+            .Where(task => lists.Contains(task.ListId)).ToDictionary(task => task.Id.ToString("D"));
+        return new WebToday(today, [.. members.OrderBy(item => item.Position).ThenBy(item => item.TaskKey, StringComparer.Ordinal)
+            .Select(item => item.TaskKey).Distinct().Where(tasks.ContainsKey).Select(key => tasks[key] with { IsOnMyDay = true })]);
+    }
+
+    public async Task<WebTask?> TaskDetailAsync(Account account, Guid taskId, CancellationToken ct)
+    {
+        if (await TaskStateAsync(account, taskId, ct) is not { } state)
+        {
+            return null;
+        }
+
+        var (today, _) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var plan = await DayPlanAsync(account, today, ct);
+        return state.Task with { IsOnMyDay = plan?.Members.Any(item => item.IsActive && item.TaskKey == taskId.ToString("D")) == true };
+    }
+
+    private async Task<IEnumerable<WebTask>> TasksByKeyAsync(Account account, string[] keys, CancellationToken ct)
+    {
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT "AccountId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "LastSeq", "UpdatedAt"
             FROM "SyncEntities"
             WHERE "AccountId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
-              AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-              AND COALESCE("Groups" -> 'status' -> 'values' ->> 'Status', '0') NOT IN ('4', '5')
-              AND ("Groups" -> 'planned' -> 'values' ->> 'PlannedDate' = {day}
-                OR "Groups" -> 'due' -> 'values' ->> 'DueDate' <= {lastPossibleDueDay}
-                OR "EntityKey" = ANY({missedKeys}))
+              AND "EntityKey" = ANY({keys})
             """).AsNoTracking().ToListAsync(ct);
-        var tasks = rows.Select(row => ReadTask(row.EntityKey, new WebEntity(row), account, includeNotes: false))
-            .OfType<WebTask>()
-            .Where(task => !task.IsTerminal && lists.ContainsKey(task.ListId) &&
-                (task.PlannedDate == today || task.DueDate == today || IsOverdue(task, today, zone, now)
-                    || (task.DueDate is null && missedOccurrences.Contains(task.Id))))
-            .OrderBy(task => !plan.ContainsKey(task.Id))
-            .ThenBy(task => plan.GetValueOrDefault(task.Id))
-            .ThenByDescending(task => task.Priority)
-            .ThenBy(task => lists[task.ListId].Position)
-            .ThenBy(task => task.Position)
-            .ThenBy(task => task.Id);
-        return new WebToday(today, [.. tasks]);
+        return rows.Select(row => ReadTask(row.EntityKey, new WebEntity(row), account, includeNotes: false)).OfType<WebTask>();
     }
 
     public async Task<IReadOnlyList<WebList>> ListsAsync(Account account, CancellationToken ct)
@@ -112,92 +123,84 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
         return (DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, zone).DateTime), zone);
     }
 
-    private async Task<Dictionary<Guid, long>> DayPositionsAsync(Account account, string day, CancellationToken ct)
+    public async Task<WebDayPlan?> DayPlanAsync(Account account, DateOnly date, CancellationToken ct)
     {
-        var profile = account.ProfileId?.ToString("D");
-        if (profile is null)
+        if (account.ProfileId is not { } profileId)
         {
-            return [];
+            return null;
+        }
+
+        var profile = profileId.ToString("D");
+        var day = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var plan = await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" = 'day_plan' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'ProfileId' = {profile}
+              AND "Groups" -> 'create' -> 'values' ->> 'LocalDate' = {day}
+            ORDER BY "EntityKey" LIMIT 1
+            """).AsNoTracking().FirstOrDefaultAsync(ct);
+
+        if (plan is null)
+        {
+            return await WeekSeedAsync(account, profile, date, day, ct);
         }
 
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
-            SELECT item.* FROM "SyncEntities" AS item
-            WHERE item."AccountId" = {account.Id} AND item."Kind" = 'day_plan_item' AND item."PurgedAt" IS NULL
-              AND item."Groups" -> 'removed' -> 'values' ->> 'RemovedAtUtc' IS NULL
-              AND item."Groups" -> 'create' -> 'values' ->> 'DayPlanId' = (
-                  SELECT plan."EntityKey" FROM "SyncEntities" AS plan
-                  WHERE plan."AccountId" = {account.Id} AND plan."Kind" = 'day_plan' AND plan."PurgedAt" IS NULL
-                    AND plan."Groups" -> 'create' -> 'values' ->> 'ProfileId' = {profile}
-                    AND plan."Groups" -> 'create' -> 'values' ->> 'LocalDate' = {day}
-                  ORDER BY plan."EntityKey" LIMIT 1)
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" = 'day_plan_item' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'DayPlanId' = {plan.EntityKey}
+            ORDER BY "EntityKey"
             """).AsNoTracking().ToListAsync(ct);
-        return rows.Select(row => new WebEntity(row))
-            .Select(item => (TaskId: item.Id("create", "TaskId"), Position: item.Number("position", "Position") ?? 0))
-            .Where(item => item.TaskId.HasValue)
-            .GroupBy(item => item.TaskId!.Value)
-            .ToDictionary(items => items.Key, items => items.Min(item => item.Position));
+
+        var members = new List<WebDayMember>();
+        foreach (var row in rows)
+        {
+            var entity = new WebEntity(row);
+            if (entity.Id("create", "TaskId") is { } taskId)
+            {
+                members.Add(new WebDayMember(row.EntityKey, taskId.ToString("D"), entity.Number("position", "Position") ?? 0, entity));
+            }
+        }
+
+        return new WebDayPlan(plan.EntityKey, true, null, null, members);
+    }
+
+    private async Task<WebDayPlan> WeekSeedAsync(Account account, string profile, DateOnly date, string day, CancellationToken ct)
+    {
+        var planKey = NameBasedId.Create(NameBasedId.Names.DayPlan(profile, date)).ToString("D");
+        var earliest = date.AddDays(-Math.Min(6, date.DayNumber)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var week = await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" = 'week_plan' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'ProfileId' = {profile}
+              AND "Groups" -> 'state' -> 'values' ->> 'State' = '1'
+              AND "Groups" -> 'create' -> 'values' ->> 'WeekStartDate' BETWEEN {earliest} AND {day}
+            ORDER BY "Groups" -> 'create' -> 'values' ->> 'WeekStartDate' DESC, "EntityKey" LIMIT 1
+            """).AsNoTracking().FirstOrDefaultAsync(ct);
+        var revision = week is null ? null : new WebEntity(week).Number("state", "ConfirmedRevision");
+        if (week is null || revision is not > 0)
+        {
+            return new WebDayPlan(planKey, false, null, null, []);
+        }
+
+        var assignments = await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" = 'week_assignment' AND "PurgedAt" IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'WeekPlanId' = {week.EntityKey}
+              AND "Groups" -> 'placement' -> 'values' ->> 'LocalDate' = {day}
+            ORDER BY "EntityKey"
+            """).AsNoTracking().ToListAsync(ct);
+        var taskKeys = assignments.Select(row => new WebEntity(row)).OrderBy(item => item.Number("placement", "Position") ?? 0)
+            .Select(item => item.Id("create", "TaskId")?.ToString("D")).OfType<string>().Distinct().ToArray();
+        var open = (await TasksByKeyAsync(account, taskKeys, ct))
+            .Where(task => !task.IsTerminal).Select(task => task.Id.ToString("D")).ToHashSet();
+        var members = taskKeys.Where(open.Contains).Select((key, index) =>
+            new WebDayMember(NameBasedId.Create(NameBasedId.Names.DayPlanItem(planKey, key)).ToString("D"), key, index * 1024L, null));
+        return new WebDayPlan(planKey, false, week.EntityKey, revision, [.. members]);
     }
 
     private IQueryable<SyncEntityRow> Rows(Guid accountId, string kind) =>
         db.SyncEntities.AsNoTracking().Where(e => e.AccountId == accountId && e.Kind == kind && e.PurgedAt == null);
-
-    private async Task<HashSet<Guid>> MissedOccurrencesAsync(Account account, DateTimeOffset now, CancellationToken ct)
-    {
-        var rows = await db.Database.SqlQuery<OccurrenceSchedule>($"""
-            SELECT occurrence."Groups" -> 'task' -> 'values' ->> 'TaskId' AS "TaskId",
-                   occurrence."Groups" -> 'create' -> 'values' ->> 'EffectiveLocal' AS "EffectiveLocal",
-                   series."Groups" -> 'rule' -> 'values' ->> 'RuleJson' AS "RuleJson"
-            FROM "SyncEntities" AS occurrence
-            JOIN "SyncEntities" AS series ON series."AccountId" = occurrence."AccountId"
-              AND series."Kind" = 'recurrence_series' AND series."PurgedAt" IS NULL
-              AND series."EntityKey" = occurrence."Groups" -> 'create' -> 'values' ->> 'SeriesId'
-            WHERE occurrence."AccountId" = {account.Id} AND occurrence."Kind" = 'recurrence_occurrence'
-              AND occurrence."PurgedAt" IS NULL AND occurrence."Groups" -> 'state' -> 'values' ->> 'State' = '0'
-              AND occurrence."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-              AND series."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-            """).ToListAsync(ct);
-        var tasks = new HashSet<Guid>();
-        foreach (var row in rows)
-        {
-            if (Guid.TryParse(row.TaskId, out var taskId) && IsMissedOccurrence(row, now))
-            {
-                tasks.Add(taskId);
-            }
-        }
-
-        return tasks;
-    }
-
-    private static bool IsMissedOccurrence(OccurrenceSchedule schedule, DateTimeOffset now)
-    {
-        if (schedule.RuleJson is null || !DateTime.TryParseExact(schedule.EffectiveLocal, "yyyy-MM-dd'T'HH:mm:ss",
-            CultureInfo.InvariantCulture, DateTimeStyles.None, out var effective))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var rule = JsonDocument.Parse(schedule.RuleJson);
-            if (rule.RootElement.ValueKind != JsonValueKind.Object ||
-                !rule.RootElement.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object ||
-                !payload.TryGetProperty("zoneId", out var zoneId) || zoneId.ValueKind != JsonValueKind.String ||
-                FindZone(zoneId.GetString()) is not { } zone)
-            {
-                return false;
-            }
-
-            var localNow = TimeZoneInfo.ConvertTime(now, zone).DateTime;
-            var isTimed = payload.TryGetProperty("anchorTime", out var anchor) && anchor.ValueKind == JsonValueKind.String;
-            return isTimed ? effective < localNow : effective.Date < localNow.Date;
-        }
-        catch (JsonException)
-        {
-            return false; // A partial or unreadable desktop rule cannot establish an overdue occurrence.
-        }
-    }
-
-    private sealed record OccurrenceSchedule(string? TaskId, string? EffectiveLocal, string? RuleJson);
 
     private static WebList? ReadList(SyncEntityRow row, Account account)
     {
@@ -222,22 +225,6 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
     private static bool InPersonalSpace(WebEntity entity, Account account) =>
         account.PersonalSpaceId is { } spaceId && entity.Id("create", "SpaceId") == spaceId;
-
-    private static bool IsOverdue(WebTask task, DateOnly today, TimeZoneInfo profileZone, DateTimeOffset now)
-    {
-        if (task.DueDate is not { } due)
-        {
-            return false;
-        }
-
-        if (task.DueTime is not { } time)
-        {
-            return due < today;
-        }
-
-        var zone = FindZone(task.DueZoneId) ?? profileZone;
-        return due.ToDateTime(time) < TimeZoneInfo.ConvertTime(now, zone).DateTime;
-    }
 
     private static TimeZoneInfo? FindZone(string? id) =>
         id is { Length: > 0 } && TimeZoneInfo.TryFindSystemTimeZoneById(id, out var zone) ? zone : null;
