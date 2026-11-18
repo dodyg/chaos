@@ -15,6 +15,8 @@ public sealed record PushRejection(string ChangeId, string Reason);
 
 public sealed record PushOutcome(IReadOnlyList<string> Accepted, IReadOnlyList<PushRejection> Rejected, string? ServerHlc, long LastSeq);
 
+internal sealed record PreparedPush(IReadOnlyList<IncomingChange> Changes, string? Refusal = null);
+
 /// <summary>One page of the change log, already rendered as the wire JSON.</summary>
 public sealed record PullPage(string Json);
 
@@ -57,8 +59,16 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
 
     public async Task<PushOutcome> PushAsync(Guid accountId, Guid deviceId, int clientSchema, IReadOnlyList<IncomingChange> incoming, CancellationToken ct)
     {
+        var result = await PushPreparedAsync(accountId, deviceId, clientSchema, (_, _) => Task.FromResult(new PreparedPush(incoming)), ct);
+        return result.Outcome ?? throw new InvalidOperationException("The account is gone.");
+    }
+
+    /// <summary>Prepares server-generated changes under the same account lock used to merge them.</summary>
+    internal async Task<(PushOutcome? Outcome, string? Refusal)> PushPreparedAsync(Guid accountId, Guid deviceId, int clientSchema,
+        Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
+    {
         var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var result = await strategy.ExecuteAsync<(PushOutcome? Outcome, string? Refusal)>(async () =>
         {
             // A retry replays the whole unit: nothing tracked by the failed attempt may survive it.
             db.ChangeTracker.Clear();
@@ -70,9 +80,16 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                 .FirstOrDefaultAsync(ct);
             if (account is null || account.DeletedAt is not null)
             {
-                throw new InvalidOperationException("The account is gone.");
+                return (null, "account-unavailable");
             }
 
+            var prepared = await prepare(account, ct);
+            if (prepared.Refusal is not null)
+            {
+                return (null, prepared.Refusal);
+            }
+
+            var incoming = prepared.Changes;
             var accepted = new List<string>();
             var rejected = new List<PushRejection>();
             Hlc? highest = null;
@@ -131,16 +148,16 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
 
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-            return new PushOutcome(accepted, rejected, highest?.Encode(), account.NextSeq - 1);
+            return (new PushOutcome(accepted, rejected, highest?.Encode(), account.NextSeq - 1), null);
         });
 
         // §8.3 step 7: after the commit, tell this process's listeners and any other instance.
-        if (outcome.Accepted.Count > 0)
+        if (result.Outcome is { Accepted.Count: > 0 } outcome)
         {
             await NotifyAsync(accountId, outcome.LastSeq, ct);
         }
 
-        return outcome;
+        return result;
     }
 
     private async Task NotifyAsync(Guid accountId, long seq, CancellationToken ct)

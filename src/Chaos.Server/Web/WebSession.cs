@@ -40,7 +40,8 @@ internal static class WebSessionSetup
 
     public static RouteGroupBuilder MapWebSessionEndpoints(this WebApplication app)
     {
-        var web = app.MapGroup(WebSession.ApiPath).RequireAuthorization(WebSession.Scheme).RequireRateLimiting(ServiceEndpoints.RateLimitPolicy);
+        var web = app.MapGroup(WebSession.ApiPath).RequireAuthorization(WebSession.Scheme)
+            .RequireRateLimiting(ServiceEndpoints.RateLimitPolicy).AddEndpointFilter(WebSession.CheckExpectedDevice);
         web.MapGet("/session", WebSession.GetSession);
         web.MapPost("/signout", WebSession.SignOut).AddEndpointFilter<WebAntiforgery>();
         return web;
@@ -53,6 +54,23 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
     public const string ApiPath = "/v1/web";
     public const string Scheme = "chaos-web";
     public const string Platform = "web";
+    public const int ClientSchema = 1;
+    public const string DeviceHeader = "Chaos-Web-Device";
+
+    // Browsers send the session they rendered so a cookie change in another tab cannot silently
+    // switch the account underneath a screen, pending write, or offline cache.
+    internal static ValueTask<object?> CheckExpectedDevice(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var http = context.HttpContext;
+        if (http.Request.Headers.TryGetValue(DeviceHeader, out var expected) &&
+            (!Guid.TryParse(expected.ToString(), out var id) || id != WebCaller.From(http.User).DeviceId))
+        {
+            return ValueTask.FromResult<object?>(Results.Problem("Your web session changed. Refresh and try again.",
+                statusCode: StatusCodes.Status409Conflict));
+        }
+
+        return next(context);
+    }
 
     public async Task SignInAsync(HttpContext http, Guid accountId)
     {
@@ -61,7 +79,7 @@ internal sealed class WebSession(ChaosDbContext db, TimeProvider clock) : Cookie
         db.Devices.Add(new Device
         {
             Id = deviceId, AccountId = accountId, Name = "Mobile web", Platform = Platform, ClientVersion = "1",
-            ClientSchema = 1, CreatedAt = now, LastSeenAt = now,
+            ClientSchema = ClientSchema, CreatedAt = now, LastSeenAt = now,
         });
         db.AuditEvents.Add(new AuditEvent { AccountId = accountId, DeviceId = deviceId, Kind = AuditKinds.DeviceAdded, At = now });
         await db.SaveChangesAsync(http.RequestAborted);

@@ -31,6 +31,7 @@ builder.Services.AddSyncService(builder.Configuration);
 builder.Services.AddBlobService(builder.Configuration, builder.Environment);
 builder.Services.AddWebSessions(builder.Environment);
 builder.Services.AddScoped<WebReadModel>();
+builder.Services.AddScoped<WebTaskWrites>();
 
 var app = builder.Build();
 
@@ -83,7 +84,7 @@ app.UseAntiforgery();
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapServiceEndpoints();
-app.MapWebSessionEndpoints().MapWebReads();
+app.MapWebSessionEndpoints().MapWebReads().MapWebWrites();
 
 await app.RunAsync();
 
