@@ -226,3 +226,11 @@ h2 { font-weight: 700; font-size: 1.15rem; letter-spacing: -.02em; }
 .day-content > * { position: relative; }
 .day-content { background-blend-mode: soft-light; }
 .day-content .screen-heading, .day-content .placeholder { background: color-mix(in srgb, var(--background) 90%, transparent); border-radius: 12px; padding: 12px; }
+
+.meetings { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 16px; margin-bottom: 20px; }
+.meetings h2 { font-size: 1rem; margin-bottom: 10px; }
+.meetings ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.meetings li { display: flex; align-items: center; gap: 10px; border-left: 4px solid var(--primary); border-radius: 6px; padding: 9px; background: var(--background); }
+.meeting-time { color: var(--muted-foreground); font-size: .8rem; flex: 0 0 90px; }
+.meeting-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.meetings a { color: var(--primary); }

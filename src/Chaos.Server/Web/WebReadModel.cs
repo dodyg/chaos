@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Chaos.Server.Data;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,8 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
 internal sealed record WebAppearance(string? Theme, string? Background);
-internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks);
+internal sealed record WebMeeting(string Id, string Title, bool AllDay, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Start, string End, string? VideoUrl, string? WebUrl, string? Color, bool Busy);
+internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks, IReadOnlyList<WebMeeting> Meetings);
 internal sealed record WebDayMember(string Key, string TaskKey, long Position, WebEntity? Entity)
 {
     public bool IsActive => Entity?.Text("removed", "RemovedAtUtc") is null;
@@ -44,19 +46,40 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
     public async Task<WebToday> TodayAsync(Account account, CancellationToken ct)
     {
-        var (today, _) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var (today, zone) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var meetings = await MeetingsAsync(account, today, zone, ct);
         var plan = await DayPlanAsync(account, today, ct);
         var members = plan?.Members.Where(item => item.IsActive).ToArray() ?? [];
         if (members.Length == 0)
         {
-            return new WebToday(today, []);
+            return new WebToday(today, [], meetings);
         }
 
         var lists = (await ListsAsync(account, ct)).Select(list => list.Id).ToHashSet();
         var tasks = (await TasksByKeyAsync(account, members.Select(member => member.TaskKey).Distinct().ToArray(), ct))
             .Where(task => lists.Contains(task.ListId)).ToDictionary(task => task.Id.ToString("D"));
         return new WebToday(today, [.. members.OrderBy(item => item.Position).ThenBy(item => item.TaskKey, StringComparer.Ordinal)
-            .Select(item => item.TaskKey).Distinct().Where(tasks.ContainsKey).Select(key => tasks[key] with { IsOnMyDay = true })]);
+            .Select(item => item.TaskKey).Distinct().Where(tasks.ContainsKey).Select(key => tasks[key] with { IsOnMyDay = true })], meetings);
+    }
+
+    private async Task<IReadOnlyList<WebMeeting>> MeetingsAsync(Account account, DateOnly today, TimeZoneInfo zone, CancellationToken ct)
+    {
+        var sources = (await Rows(account.Id, "calendar_source").ToListAsync(ct)).ToDictionary(row => row.EntityKey, row => new WebEntity(row));
+        var caches = await Rows(account.Id, "calendar_cache").ToListAsync(ct);
+        var start = TimeZoneInfo.ConvertTimeToUtc(today.ToDateTime(TimeOnly.MinValue), zone);
+        var end = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), zone);
+        var meetings = new List<WebMeeting>();
+        foreach (var row in caches)
+        {
+            if (!sources.TryGetValue(row.EntityKey, out var source) || source.IsDeleted || source.Number("enabled", "Enabled") != 1) continue;
+            var cache = JsonSerializer.Deserialize<CalendarCacheSnapshot>(row.Groups);
+            if (cache is null) continue;
+            meetings.AddRange(cache.Events.Where(e => e.AllDay ? e.StartDate <= today && e.EndDate > today : e.StartUtc < end && e.EndUtc > start)
+                .Select(e => new WebMeeting(row.EntityKey + ":" + e.ExternalId, e.Title, e.AllDay, e.StartUtc, e.EndUtc,
+                    TimeZoneInfo.ConvertTime(e.StartUtc, zone).ToString("HH:mm", CultureInfo.InvariantCulture),
+                    TimeZoneInfo.ConvertTime(e.EndUtc, zone).ToString("HH:mm", CultureInfo.InvariantCulture), e.VideoUrl, e.WebUrl, source.Text("look", "Color"), e.Busy && source.Number("busy", "CountsAsBusy") == 1)));
+        }
+        return [.. meetings.OrderByDescending(m => m.AllDay).ThenBy(m => m.StartUtc).ThenBy(m => m.Title)];
     }
 
     public async Task<WebTask?> TaskDetailAsync(Account account, Guid taskId, CancellationToken ct)

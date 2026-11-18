@@ -204,6 +204,17 @@ function Screen({ route, view, canWrite, act }) {
         <h1>{today ? "My Day" : data.list.name}</h1>
         <Badge variant="secondary" className="count">{open.length} open</Badge>
       </div>
+      {today && data.meetings?.length > 0 && <section className="meetings" aria-label="Meetings today">
+        <h2>Meetings today</h2>
+        <ol>{data.meetings.map(meeting => {
+          const url = [meeting.videoUrl, meeting.webUrl].find(value => value?.startsWith("https://"));
+          const time = meeting.allDay ? "All day" : `${meeting.start}–${meeting.end}`;
+          return <li key={meeting.id} style={{ borderLeftColor: meeting.color || undefined, opacity: meeting.busy ? 1 : .7 }}>
+            <span className="meeting-time">{time}</span><span className="meeting-title">{meeting.title}</span>
+            {url && <a href={url} target="_blank" rel="noopener noreferrer">{meeting.videoUrl === url ? "Join" : "Open"}</a>}
+          </li>;
+        })}</ol>
+      </section>}
       {!tasks.length && (
         <div className="empty">
           <div className="empty-icon">{today ? <CalendarDays /> : <List />}</div>

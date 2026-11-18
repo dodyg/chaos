@@ -63,6 +63,42 @@ public sealed class SyncProtocolTests(PostgresServer postgres)
     private static string Push(params string[] changes) => "{\"changes\":[" + string.Join(",", changes) + "]}";
 
     [Test]
+    public async Task Calendar_cache_is_account_scoped_replaced_and_not_pulled()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var alice = await SignInAsync(server, "calendar-owner@example.com");
+        var bob = await SignInAsync(server, "calendar-other@example.com");
+        var source = Guid.NewGuid().ToString("D");
+        var pushed = await SendAsync(server, alice, HttpMethod.Post, "/v1/sync/push",
+            Push(Change("calendar_source", source, "enabled", "Enabled", 1)));
+        await Assert.That(pushed.Status).IsEqualTo(HttpStatusCode.OK);
+        var now = server.Clock.GetUtcNow();
+        var item = new CalendarCacheEvent("event", now, now.AddHours(1), false, null, null, "Private meeting", null, null, null, true, now);
+        var snapshot = JsonSerializer.Serialize(new CalendarCacheSnapshot(source, now, [item]));
+        await Assert.That((await SendAsync(server, bob, HttpMethod.Post, "/v1/sync/calendar-cache", snapshot)).Status).IsEqualTo(HttpStatusCode.NotFound);
+        await Assert.That((await SendAsync(server, alice, HttpMethod.Post, "/v1/sync/calendar-cache", snapshot)).Status).IsEqualTo(HttpStatusCode.OK);
+        var stale = JsonSerializer.Serialize(new CalendarCacheSnapshot(source, now.AddMinutes(-1), []));
+        await Assert.That((await SendAsync(server, alice, HttpMethod.Post, "/v1/sync/calendar-cache", stale)).Status).IsEqualTo(HttpStatusCode.OK);
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            var cached = db.SyncEntities.Single(row => row.AccountId == alice.Account && row.Kind == "calendar_cache");
+            await Assert.That(cached.Groups).Contains("Private meeting");
+        }
+        var pull = await SendAsync(server, alice, HttpMethod.Get, "/v1/sync/pull?after=0");
+        await Assert.That(pull.Body.Contains("Private meeting", StringComparison.Ordinal)).IsFalse();
+        var empty = JsonSerializer.Serialize(new CalendarCacheSnapshot(source, now.AddSeconds(1), []));
+        await Assert.That((await SendAsync(server, alice, HttpMethod.Post, "/v1/sync/calendar-cache", empty)).Status).IsEqualTo(HttpStatusCode.OK);
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            var cached = db.SyncEntities.Single(row => row.AccountId == alice.Account && row.Kind == "calendar_cache");
+            await Assert.That(cached.Groups.Contains("Private meeting", StringComparison.Ordinal)).IsFalse();
+        }
+        await SendAsync(server, alice, HttpMethod.Post, "/v1/sync/push", Push(Change("calendar_source", source, "enabled", "Enabled", 0, wall: 1_800_000_000_001)));
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+            await Assert.That(db.SyncEntities.Any(row => row.AccountId == alice.Account && row.Kind == "calendar_cache")).IsFalse();
+    }
+
+    [Test]
     public async Task Sync_needs_a_token_and_the_three_protocol_headers()
     {
         await using var server = await TestServer.StartAsync(postgres);

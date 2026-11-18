@@ -31,6 +31,38 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task Calendar_cache_uploads_without_changing_another_desktop_cache()
+    {
+        await using var world = await SyncWorld.StartAsync(postgres);
+        var a = await world.AddDeviceAsync();
+        var b = await world.AddDeviceAsync();
+        var now = world.Server.Clock.GetUtcNow();
+        var sourceId = Guid.NewGuid().ToString("D");
+        await a.Store.ExecuteAsync(async (session, ct) =>
+        {
+            await session.Calendars.AddSourceAsync(new CalendarSourceRecord
+            {
+                Id = sourceId, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, Provider = CalendarProvider.Google,
+                ExternalId = "primary", Name = "Calendar", Color = "#123456", CountsAsBusy = true, Enabled = true, Position = 0,
+            }, ct);
+            await session.Calendars.ReplaceEventsAsync(sourceId,
+                [new CalendarEventRecord(sourceId, "event", now, now.AddHours(1), false, null, null,
+                    "Planning", "Room", "https://example.com", null, true, now)], ct);
+            await session.Calendars.SaveStateAsync(new CalendarSourceState(sourceId, now, now, null, null, null), ct);
+            return 0;
+        }, CancellationToken.None);
+        await world.SettleAsync();
+        await using (var db = ServerDatabase.Open(world.Server.ConnectionString))
+        {
+            var cache = db.SyncEntities.Single(row => row.Kind == "calendar_cache" && row.EntityKey == sourceId);
+            await Assert.That(cache.Groups).Contains("Planning");
+            await Assert.That(cache.Groups).Contains("Room");
+        }
+        await Assert.That(await b.CountAsync("SELECT count(*) FROM CalendarEvents;")).IsEqualTo(0L);
+        await Assert.That(await b.CountAsync("SELECT count(*) FROM CalendarSourceState;")).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task A_task_created_on_A_appears_on_B()
     {
         await using var world = await SyncWorld.StartAsync(postgres);
