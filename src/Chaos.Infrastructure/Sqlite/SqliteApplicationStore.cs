@@ -68,7 +68,15 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
 
             if (activitySeq is { } seq)
             {
-                try { ActivityNotifier?.HeadChanged(seq); } catch (Exception) { /* a notifier failure never fails a committed write */ }
+                try
+                {
+                    ActivityNotifier?.HeadChanged(seq);
+                }
+                catch (Exception notifierError)
+                {
+                    // A notifier failure never fails a committed write.
+                    System.Diagnostics.Trace.TraceWarning("Activity notifier failed after a commit: {0}", notifierError.GetType().Name);
+                }
             }
 
             return result;

@@ -72,7 +72,15 @@ public static class JobPass
         string? runId = null;
         if (runs is not null)
         {
-            try { runId = await runs.StartAsync(action, CancellationToken.None).ConfigureAwait(false); } catch (Exception) when (!ct.IsCancellationRequested) { }
+            try
+            {
+                runId = await runs.StartAsync(action, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception error) when (!ct.IsCancellationRequested)
+            {
+                // The pass still runs without a JobRuns row; it just is not listed as a run.
+                ReportBookkeepingFailure("start", action, error);
+            }
         }
 
         using var scope = ActivityScope.Open(source, action, jobRunId: runId);
@@ -84,7 +92,7 @@ public static class JobPass
         {
             if (runs is not null && runId is not null)
             {
-                try { await runs.FinishAsync(runId, JobOutcome.Failed, error.Message, CancellationToken.None).ConfigureAwait(false); } catch (Exception) { }
+                await TryFinishAsync(runs, runId, action, JobOutcome.Failed, error.Message).ConfigureAwait(false);
             }
 
             throw;
@@ -92,7 +100,24 @@ public static class JobPass
 
         if (runs is not null && runId is not null)
         {
-            try { await runs.FinishAsync(runId, JobOutcome.Ok, null, CancellationToken.None).ConfigureAwait(false); } catch (Exception) { }
+            await TryFinishAsync(runs, runId, action, JobOutcome.Ok, null).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Recording the end of a run never replaces the pass's own outcome or exception.</summary>
+    private static async Task TryFinishAsync(IJobRuns runs, string runId, string action, JobOutcome outcome, string? error)
+    {
+        try
+        {
+            await runs.FinishAsync(runId, outcome, error, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            ReportBookkeepingFailure("finish", action, failure);
+        }
+    }
+
+    // Job names are fixed identifiers; the exception type is reported, never its message (privacy, PLAN2 §2.5).
+    private static void ReportBookkeepingFailure(string step, string action, Exception error) =>
+        System.Diagnostics.Trace.TraceWarning("Chaos could not record the {0} of job {1}: {2}", step, action, error.GetType().Name);
 }

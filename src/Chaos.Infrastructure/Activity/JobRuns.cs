@@ -114,9 +114,10 @@ public sealed class JobRuns(SqliteApplicationStore store, TimeProvider clock) : 
 
             store.ActivityNotifier?.JobsChanged();
         }
-        catch (Exception)
+        catch (Exception error)
         {
             // A notifier failure never fails the pass.
+            System.Diagnostics.Trace.TraceWarning("Activity notifier failed after a job change: {0}", error.GetType().Name);
         }
     }
 

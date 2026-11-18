@@ -485,9 +485,10 @@ public sealed class AttachmentCommands
             {
                 return await File.ReadAllBytesAsync(cache, ct);
             }
-            catch (IOException)
+            catch (IOException error)
             {
-                // rebuilt below
+                // Treated as a cache miss: the thumbnail is rebuilt below and the cache file rewritten.
+                System.Diagnostics.Trace.TraceWarning("Chaos could not read a cached thumbnail: {0}", error.GetType().Name);
             }
         }
 
