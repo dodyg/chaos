@@ -207,6 +207,7 @@ public static class ActivityActions
         "shell.take",
         "shell.updateSettings",
         "shell.zones",
+        "site.add",
         "subtasks.add",
         "subtasks.delete",
         "subtasks.edit",
