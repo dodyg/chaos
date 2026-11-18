@@ -47,7 +47,9 @@ public sealed class ServiceAddressStoreTests : IDisposable
     public async Task Plain_http_is_refused_unless_loopback_in_a_development_build()
     {
         await Assert.That(Store().Set("http://sync.example.com").Ok).IsFalse();
-        await Assert.That(Store().Set("localhost:5080").Ok).IsFalse();
+        var refused = Store().Set("localhost:5080");
+        await Assert.That(refused.Ok).IsFalse();
+        await Assert.That(refused.Error!).Contains("development builds");
         await Assert.That(Store(allowLoopbackHttp: true).Set("localhost:5080").Ok).IsTrue();
         await Assert.That(Store(allowLoopbackHttp: true).Get().Address).IsEqualTo("http://localhost:5080/");
         await Assert.That(Store(allowLoopbackHttp: true).Set("http://sync.example.com").Ok).IsFalse();

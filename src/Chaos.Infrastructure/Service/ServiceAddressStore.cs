@@ -38,9 +38,12 @@ public sealed class ServiceAddressStore(string settingPath, string fallbackJsonP
             var options = ChaosServiceOptions.TryCreate(Normalize(typed), allowLoopbackHttp);
             if (options is null)
             {
+                var plainHttp = Normalize(typed).StartsWith("http://", StringComparison.OrdinalIgnoreCase);
                 return new(false, allowLoopbackHttp
                     ? "Enter the service's web address, such as https://sync.example.com. Plain http only works for localhost."
-                    : "Enter the service's web address, starting with https://, such as https://sync.example.com.", Get());
+                    : plainHttp
+                        ? "This version of Chaos only connects over https://. Plain http://localhost is available in development builds."
+                        : "Enter the service's web address, starting with https://, such as https://sync.example.com.", Get());
             }
 
             try
