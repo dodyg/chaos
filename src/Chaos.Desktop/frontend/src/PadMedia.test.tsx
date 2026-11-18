@@ -125,6 +125,17 @@ test("a photo note puts the picture at the top of a new note", async () => {
   cleanup();
 });
 
+test("a photo note can be made by pasting an image", async () => {
+  const f = fakes();
+  renderPad(f, []);
+  fireEvent.click(await screen.findByRole("button", { name: /New photo note/ }));
+  const box = await screen.findByLabelText("Paste an image here");
+  fireEvent.paste(box, { clipboardData: { files: [new File(["png"], "image.png", { type: "image/png" })], types: ["Files"] } });
+  await waitFor(() => assert.equal(f.saves.length, 1));
+  assert.deepEqual(f.uploads, [{ ownerId: "n1", fileName: "image.png" }]);
+  cleanup();
+});
+
 test("when the file cannot be stored the half-made note is deleted and the error is shown", async () => {
   const f = fakes({ failUpload: true });
   const errors: string[] = [];
