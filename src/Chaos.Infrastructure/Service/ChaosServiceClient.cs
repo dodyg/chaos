@@ -335,7 +335,38 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         return new ServiceResponse((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
     }
 
-    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? rawJson = null, DeviceIdentity? protocolFor = null)
+    public async IAsyncEnumerable<string> StreamLinesAsync(string path, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var device = await _identity.GetAsync(ct);
+        using var response = await SendAuthorizedAsync(HttpMethod.Get, path, null, ct, null, device, HttpCompletionOption.ResponseHeadersRead);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ChaosServiceException(ServiceFailure.Refused, $"The online service answered with an error ({(int)response.StatusCode}).");
+        }
+
+        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(ct), Encoding.UTF8);
+        while (true)
+        {
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync(ct);
+            }
+            catch (Exception error) when (error is IOException or HttpRequestException)
+            {
+                throw new ChaosServiceException(ServiceFailure.Offline, "The connection to the online service was lost.", error);
+            }
+
+            if (line is null)
+            {
+                yield break;
+            }
+
+            yield return line;
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendAuthorizedAsync(HttpMethod method, string path, object? body, CancellationToken ct, string? rawJson = null, DeviceIdentity? protocolFor = null, HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
     {
         var options = Require();
         for (var attempt = 0; ; attempt++)
@@ -359,7 +390,7 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
                 request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.DeviceHeader, protocolFor.Id.ToString("D"));
             }
 
-            var response = await SendAsync(request, ct);
+            var response = await SendAsync(request, ct, completion);
             if (response.StatusCode != HttpStatusCode.Unauthorized)
             {
                 return response;
@@ -388,13 +419,13 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IDisposable
         }
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct, HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(CallTimeout);
         try
         {
-            return await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
+            return await _http.SendAsync(request, completion, timeout.Token);
         }
         catch (HttpRequestException error)
         {

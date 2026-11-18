@@ -153,6 +153,7 @@ internal static class Program
         using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
             new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
         syncEngine.Start();
+        var syncStatus = new Chaos.Infrastructure.Sync.SyncStatusReader(storage.Store, syncEngine);
         var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, TimeProvider.System, syncEngine.Wake);
         var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
         var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
@@ -218,6 +219,7 @@ internal static class Program
                 rpc.AddCalendarRpcService(new CalendarRpcService(calendarQueries));
                 rpc.AddCalendarsRpcService(new CalendarsRpcService(calendarCommands, calendarRefresher));
                 rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(googleCommands, calendarRefresher));
+                rpc.AddSyncStatusRpcService(new SyncStatusRpcService(syncStatus, syncEngine));
                 rpc.AddAccountRpcService(new AccountRpcService(serviceClient, serviceAddress, accountJoin));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
                 rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
@@ -425,6 +427,10 @@ internal static class Program
 [JsonSerializable(typeof(CalendarSourceDto))]
 [JsonSerializable(typeof(GoogleAccountDto))]
 [JsonSerializable(typeof(AccountStatusRequest))]
+[JsonSerializable(typeof(SyncStatusRequest))]
+[JsonSerializable(typeof(SyncStatusResponse))]
+[JsonSerializable(typeof(SyncNowRequest))]
+[JsonSerializable(typeof(SyncDismissRequest))]
 [JsonSerializable(typeof(AccountStatusResponse))]
 [JsonSerializable(typeof(AccountRequest))]
 [JsonSerializable(typeof(AccountResponse))]

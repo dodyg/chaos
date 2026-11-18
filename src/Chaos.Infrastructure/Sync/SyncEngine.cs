@@ -28,9 +28,21 @@ public sealed class SyncEngineOptions
     /// <summary>A change parked this many pull cycles becomes an attention item (PLAN2 §7.8).</summary>
     public int ParkedAttentionCycles { get; init; } = 10;
 
+    /// <summary>A wake from the service's event stream pulls after this long, so a burst of pushes is one pull (PLAN2 7.12: 300 ms).</summary>
+    public TimeSpan PullDebounce { get; init; } = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>The service sends a keep-alive every 25 s; a stream silent for this long is dead and is reopened.</summary>
+    public TimeSpan EventSilenceLimit { get; init; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>While sync is off the event listener looks again this often to see whether it was turned on.</summary>
+    public TimeSpan EventIdleCheck { get; init; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Jitter for the backoff, a fraction between 0 and 1. Tests fix it.</summary>
     public Func<double> Jitter { get; init; } = Random.Shared.NextDouble;
 }
+
+/// <summary>What the engine is doing right now, for the status indicator (PLAN2 P15 item 3).</summary>
+public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool UpdateNeeded, bool Streaming, DateTimeOffset? LastSuccessAt = null);
 
 /// <summary>What one sync cycle did.</summary>
 public sealed record SyncCycleResult(bool Ran, long Pushed, long Pulled, bool SnapshotUsed, string? Problem);
@@ -61,6 +73,9 @@ public sealed class SyncEngine : IDisposable
     private Task? _loop;
     private TaskCompletionSource _wake = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _pushBlocked;
+    private bool _localWake;
+    private Task? _events;
+    private SyncRuntime _runtime = new(false, null, false, false);
 
     public SyncEngine(SqliteApplicationStore store, SyncApplier applier, IChaosServiceClient service, TimeProvider clock, SyncEngineOptions? options = null)
     {
@@ -91,7 +106,40 @@ public sealed class SyncEngine : IDisposable
 
             _stop = new CancellationTokenSource();
             _loop = Task.Run(() => RunAsync(_stop.Token));
+            _events = Task.Run(() => RunEventsAsync(_stop.Token));
         }
+    }
+
+    /// <summary>The engine's live state. Never touches the database or the network.</summary>
+    public SyncRuntime Runtime
+    {
+        get
+        {
+            lock (_wakeGate)
+            {
+                return _runtime;
+            }
+        }
+    }
+
+    /// <summary>Raised whenever <see cref="Runtime"/> changes.</summary>
+    public event Action<SyncRuntime>? RuntimeChanged;
+
+    private void SetRuntime(Func<SyncRuntime, SyncRuntime> change)
+    {
+        SyncRuntime next;
+        lock (_wakeGate)
+        {
+            next = change(_runtime);
+            if (next == _runtime)
+            {
+                return;
+            }
+
+            _runtime = next;
+        }
+
+        RuntimeChanged?.Invoke(next);
     }
 
     /// <summary>A local change happened (or the person asked to sync now): run a cycle after the debounce.</summary>
@@ -99,12 +147,19 @@ public sealed class SyncEngine : IDisposable
     {
         lock (_wakeGate)
         {
+            _localWake = true;
             _wake.TrySetResult();
         }
     }
 
-    /// <summary>The service says the sequence advanced (P15's event stream): pull soon.</summary>
-    public void RequestPull() => Wake();
+    /// <summary>The service says the sequence advanced (the event stream): pull after the short debounce.</summary>
+    public void RequestPull()
+    {
+        lock (_wakeGate)
+        {
+            _wake.TrySetResult();
+        }
+    }
 
     public void Dispose()
     {
@@ -123,6 +178,7 @@ public sealed class SyncEngine : IDisposable
         try
         {
             loop?.Wait(TimeSpan.FromSeconds(5));
+            _events?.Wait(TimeSpan.FromSeconds(5));
         }
         catch (AggregateException)
         {
@@ -181,10 +237,10 @@ public sealed class SyncEngine : IDisposable
 
     private async Task WaitForWakeAsync(TimeSpan wait, bool afterFailure, CancellationToken ct)
     {
+        // A wake that arrived while the last cycle was running is still pending here, so it is not lost.
         Task woken;
         lock (_wakeGate)
         {
-            _wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             woken = _wake.Task;
         }
 
@@ -193,11 +249,19 @@ public sealed class SyncEngine : IDisposable
         ct.ThrowIfCancellationRequested();
         if (first == woken)
         {
+            bool local;
+            lock (_wakeGate)
+            {
+                _wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                local = _localWake;
+                _localWake = false;
+            }
+
             // Debounce: more edits within the window ride along with this cycle. After an error the
             // wake means something changed (connectivity came back), so it goes at once.
             if (!afterFailure)
             {
-                await Task.Delay(_options.Debounce, _clock, ct);
+                await Task.Delay(local ? _options.Debounce : _options.PullDebounce, _clock, ct);
             }
         }
     }
@@ -216,6 +280,7 @@ public sealed class SyncEngine : IDisposable
 
             long pushed = 0, pulled = 0;
             var snapshot = false;
+            SetRuntime(r => r with { Syncing = true });
             try
             {
                 if (!_pushBlocked)
@@ -235,12 +300,15 @@ public sealed class SyncEngine : IDisposable
                 }
 
                 await RecordAsync(error: null, pushed > 0, pulled > 0 || snapshot, ct);
+                var finished = _clock.GetUtcNow();
+                SetRuntime(r => r with { Failure = null, LastSuccessAt = finished });
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, null));
             }
             catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
             {
                 // The device was removed or the account deleted: offline-only from here on, with all local data kept (PLAN2 §8.6, P14 item 3).
                 await _account.DisableAsync(ct);
+                SetRuntime(r => r with { Failure = null });
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, error.Message));
             }
             catch (ChaosServiceException error)
@@ -252,6 +320,7 @@ public sealed class SyncEngine : IDisposable
                     _ => error.Message,
                 };
                 await RecordAsync(problem, false, false, ct);
+                SetRuntime(r => r with { Failure = error.Kind });
 
                 // Signed out or refused is not something a retry fixes; only connectivity is.
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
@@ -259,7 +328,68 @@ public sealed class SyncEngine : IDisposable
         }
         finally
         {
+            SetRuntime(r => r with { Syncing = false, UpdateNeeded = _pushBlocked });
             _cycleGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Holds the service's event stream open while sync is on and turns each seq event into a pull (PLAN2 P15 item 2).
+    /// It reconnects with the same backoff as the sync loop; polling every 60 s still covers a stream that never connects.
+    /// </summary>
+    private async Task RunEventsAsync(CancellationToken ct)
+    {
+        var failures = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (!(await ReadStateAsync(ct)).Enabled)
+                {
+                    await Task.Delay(_options.EventIdleCheck, _clock, ct);
+                    continue;
+                }
+
+                using var silence = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                silence.CancelAfter(_options.EventSilenceLimit);
+                await foreach (var line in _service.StreamLinesAsync("v1/sync/events", silence.Token))
+                {
+                    silence.CancelAfter(_options.EventSilenceLimit);
+                    SetRuntime(r => r with { Streaming = true });
+                    if (line.StartsWith("data:", StringComparison.Ordinal))
+                    {
+                        failures = 0;
+                        RequestPull();
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                // Silent too long: reopen.
+            }
+            catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
+            {
+                await _account.DisableAsync(ct);
+            }
+            catch (ChaosServiceException)
+            {
+                // Offline, signed out or refused: back off and try again.
+            }
+
+            SetRuntime(r => r with { Streaming = false });
+            failures++;
+            try
+            {
+                await Task.Delay(Backoff(failures), _clock, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
         }
     }
 

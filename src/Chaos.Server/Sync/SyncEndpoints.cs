@@ -29,12 +29,13 @@ public static class SyncEndpoints
         sync.MapPost("/push", Push);
         sync.MapGet("/pull", Pull);
         sync.MapGet("/snapshot", Snapshot);
+        sync.MapGet("/events", SyncEvents.StreamAsync);
     }
 
-    private sealed record Caller(Guid AccountId, Guid DeviceId, int Schema);
+    internal sealed record Caller(Guid AccountId, Guid DeviceId, int Schema);
 
     /// <summary>Checks the three protocol headers (§7.12) and the token; a failure is the answer to send.</summary>
-    private static IResult? Identify(HttpContext http, ClaimsPrincipal user, out Caller caller)
+    internal static IResult? Identify(HttpContext http, ClaimsPrincipal user, out Caller caller)
     {
         caller = new Caller(Guid.Empty, Guid.Empty, 0);
         if (!Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) || !Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device))

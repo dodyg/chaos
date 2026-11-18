@@ -4,7 +4,7 @@ import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
 import { AccountSettings } from "./AccountSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
-import { shellRpc, updatesRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto, type UpdateCheckResponse } from "#neoastra";
+import { shellRpc, updatesRpc, syncStatusRpc, type ProfileSettingsResponse, type ShellStatusResponse, type ShortcutStatusDto, type UpdateCheckResponse } from "#neoastra";
 import { Keyboard, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ function ShortcutState({ status }: { status: ShortcutStatusDto | undefined }) {
  * with whether Windows accepted them, keeping Chaos in the notification area, and Quit. Other
  * settings stay next to what they change and are linked from here.
  */
-export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; updatesApi?: UpdatesApi; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
+export function Settings({ api = shellRpc, updatesApi = updatesRpc, initialTab, onSaved, onNavigate, onGitHubSynced, onCalendarsChanged }: { api?: Api; updatesApi?: UpdatesApi; initialTab?: string; onSaved: (zoneChanged: boolean) => void; onGitHubSynced?: () => void; onCalendarsChanged?: () => void; onNavigate: (view: SettingsLink) => void }) {
   const [saved, setSaved] = React.useState<ProfileSettingsResponse | null>(null);
   const [draft, setDraft] = React.useState<ProfileSettingsResponse | null>(null);
   const [zones, setZones] = React.useState<string[]>([]);
@@ -56,7 +56,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [notice, setNotice] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [tab, setTab] = React.useState("general");
+  const [tab, setTab] = React.useState(initialTab ?? "general");
   const [update, setUpdate] = React.useState<UpdateCheckResponse | null>(null);
   const [checking, setChecking] = React.useState(false);
 
@@ -171,7 +171,7 @@ export function Settings({ api = shellRpc, updatesApi = updatesRpc, onSaved, onN
 
     <TabsContent value="appearance"><AppearanceSettings/></TabsContent>
     <TabsContent value="calendars" className="grid gap-4"><CalendarSettings onChanged={onCalendarsChanged}/><GoogleCalendarSettings onChanged={onCalendarsChanged}/></TabsContent>
-    <TabsContent value="account"><AccountSettings/></TabsContent>
+    <TabsContent value="account"><AccountSettings syncApi={syncStatusRpc}/></TabsContent>
     <TabsContent value="github"><GitHubSettings onSynced={onGitHubSynced}/></TabsContent>
 
     <TabsContent value="more"><nav aria-label="More settings" className="flex flex-wrap gap-2 text-sm">

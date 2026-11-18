@@ -13,4 +13,7 @@ public sealed class SyncOptions
 
     /// <summary>How often the pruning job runs.</summary>
     public TimeSpan HorizonJobInterval { get; set; } = TimeSpan.FromHours(6);
+
+    /// <summary>How often an idle event stream sends a keep-alive comment (PLAN2 §7.12: 25 s).</summary>
+    public TimeSpan EventKeepAlive { get; set; } = TimeSpan.FromSeconds(25);
 }

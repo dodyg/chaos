@@ -4,6 +4,7 @@ import { CloudOff, LogIn, LogOut, MonitorSmartphone, Trash2, UserRound } from "l
 import { Button } from "@/components/ui/button";
 import { InlineError } from "@/components/common";
 import { Input } from "@/components/ui/input";
+import { SyncPanel, type SyncApi } from "./SyncStatus";
 
 type Api = Pick<typeof accountRpc, "status" | "account" | "signIn" | "cancelSignIn" | "leave" | "revokeDevice" | "address" | "setAddress" | "joinPreview" | "join" | "deleteAccount" | "reauthenticate">;
 
@@ -208,7 +209,7 @@ function ServiceAddress({ api, onChanged }: { api: Api; onChanged: () => void })
  * sync with your other devices. Sign-in happens in the person's own web browser and the host keeps the sign-in in protected
  * storage on this computer. A signed-in device lists the account's devices and can remove any of them.
  */
-export function AccountSettings({ api = accountRpc }: { api?: Api }) {
+export function AccountSettings({ api = accountRpc, syncApi }: { api?: Api; syncApi?: SyncApi }) {
   const [configured, setConfigured] = React.useState(true);
   const [signedIn, setSignedIn] = React.useState<boolean | null>(null);
   const [email, setEmail] = React.useState<string | null>(null);
@@ -295,6 +296,7 @@ export function AccountSettings({ api = accountRpc }: { api?: Api }) {
           <p className="text-sm">Signed in as <strong dir="auto">{account?.email ?? email ?? "your account"}</strong>{host && <span className="text-muted-foreground"> on {host}</span>}</p>
           <LeaveControl busy={busy} onLeave={keepData => void leave(keepData)}/>
         </div>
+        {syncApi && <SyncPanel api={syncApi}/>}
         {preview && <JoinPanel api={api} preview={preview} onDone={() => { setPreview(null); void loadAccount(); }}/>}
         {account && <>
           <p className="text-sm text-muted-foreground">Storage: {formatBytes(account.storageBytes)} of {formatBytes(account.storageQuotaBytes)} used.</p>

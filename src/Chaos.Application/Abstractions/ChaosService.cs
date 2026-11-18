@@ -108,6 +108,13 @@ public interface IChaosServiceClient
     /// </summary>
     /// <exception cref="ChaosServiceException">Not signed in, the service no longer accepts the sign-in, or it could not be reached.</exception>
     Task<ServiceResponse> CallAsync(HttpMethod method, string path, string? json, CancellationToken ct);
+
+    /// <summary>
+    /// Opens a long-lived GET (the sync event stream, PLAN2 P15) with the sync protocol headers and yields its text lines as they
+    /// arrive. Ends when the service closes the stream or <paramref name="ct"/> is cancelled; there is no call timeout.
+    /// </summary>
+    /// <exception cref="ChaosServiceException">As for <see cref="CallAsync"/>, or <see cref="ServiceFailure.Refused"/> when the service answers with an error.</exception>
+    IAsyncEnumerable<string> StreamLinesAsync(string path, CancellationToken ct);
 }
 
 /// <summary>An answer from the service: the status code and the body text. Never contains a token.</summary>

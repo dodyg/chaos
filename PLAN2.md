@@ -2603,6 +2603,18 @@ dialogs promise.
 
 **Depends on:** P14. **Migration:** none.
 
+**Progress note 2026-11-18 (items 1 to 4 done).** Server: `GET /v1/sync/events` (`SyncEvents.cs`) sends the current seq first,
+then `{"seq":N}` on each push (in-process broadcaster plus a `LISTEN` connection per stream) and a `: keep-alive` comment every
+25 s (`Sync:EventKeepAlive`). Client: `IChaosServiceClient.StreamLinesAsync`; `SyncEngine` holds the stream open while sync is on,
+turns events into a pull after 300 ms, reconnects with the sync backoff, and drops a stream silent for 90 s. Also fixed: a wake that
+arrived during a cycle was lost (the loop replaced its wake signal); it now stays pending. `SyncStatusReader` (Infrastructure)
+decides Synced / Syncing / Offline / Needs attention / Signed out / Update needed (Hidden for a computer that never used an
+account); `syncStatus.status|syncNow|dismiss` RPCs; sidebar-footer `SyncIndicator` and the Sync panel in Settings → Account
+(`SyncStatus.tsx`). The panel is polled every 4 s from local data. Tests: `SyncRealtimeTests` (SSE within 3 s with polling off,
+reconnect catch-up, keep-alive, NOTIFY from another instance, status transitions, fake-engine rule) and `syncStatus.test.tsx`.
+Not done: a live check over a real network. Known failures unrelated to P15: the 1,000-task 150 ms test and the `tagsAndViews`
+search test fail on this machine without these changes too.
+
 1. Server: the SSE endpoint, with PostgreSQL `LISTEN/NOTIFY` fan-out and keep-alives.
 2. Client: an SSE listener that reconnects with backoff and triggers a debounced pull.
 3. A status model: **Synced** (with the last time), **Syncing…**, **Offline — N changes waiting**,
