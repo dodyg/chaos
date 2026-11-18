@@ -303,10 +303,31 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
   }
 
   const photoInput = React.useRef<HTMLInputElement | null>(null);
+  const [photoOpen, setPhotoOpen] = React.useState(false);
   async function addPhoto(file: File | undefined) {
     if (!file) return;
-    try { onError(null); await createMediaNote(file, ""); }
+    try { onError(null); setPhotoOpen(false); await createMediaNote(file, ""); }
     catch (e) { onError(e instanceof Error ? e.message : "The photo could not be added."); }
+  }
+  /** Ctrl+V in the photo panel: take the first image on the clipboard. */
+  function pasteImage(event: React.ClipboardEvent) {
+    const file = Array.from(event.clipboardData.files).find(f => f.type.startsWith("image/"));
+    if (!file) return;
+    event.preventDefault();
+    void addPhoto(file);
+  }
+  /** The "Paste from clipboard" button, for when the keyboard shortcut is not at hand. */
+  async function pasteImageFromClipboard() {
+    try {
+      for (const clip of await navigator.clipboard.read()) {
+        const type = clip.types.find(t => t.startsWith("image/"));
+        if (!type) continue;
+        const blob = await clip.getType(type);
+        await addPhoto(new File([blob], `pasted-image.${type.split("/")[1] || "png"}`, { type }));
+        return;
+      }
+      onError("There is no image on the clipboard.");
+    } catch { onError("The clipboard could not be read. Click the box below and press Ctrl+V instead."); }
   }
 
   /** The first typed text stores the note; later text goes through that note's autosave. */
@@ -524,7 +545,7 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
           onRecorded={(file, startedAt) => createMediaNote(file, voiceTitle(startedAt))}
           onAttachFile={file => createMediaNote(file, voiceTitle(new Date()))}/>}
         {!archived && <>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => photoInput.current?.click()} title="Make a note from a picture"><Camera/>New photo note</Button>
+          <Button type="button" variant={photoOpen ? "secondary" : "outline"} disabled={busy} onClick={() => setPhotoOpen(value => !value)} title="Make a note from a picture: choose a file or paste one"><Camera/>New photo note</Button>
           <input ref={photoInput} type="file" accept="image/*" className="sr-only" tabIndex={-1} aria-label="Photo file" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; void addPhoto(file); }}/>
         </>}
         {!archived && <Button type="button" variant={siteUrl !== null ? "secondary" : "outline"} disabled={busy || reading} onClick={() => setSiteUrl(value => value === null ? "" : null)} title="Summarize a web page with the local model"><Globe/>New site</Button>}
@@ -547,6 +568,19 @@ export function ScratchPad({ api = padRpc, attachmentApi = attachmentRpc, record
         ? "Saving the address…"
         : "The address is saved at once. A small local model (Ollama) then summarizes the page in the background, says whether it is worth reading and tags the note. If the site refuses, the note keeps the address and says so."}</p>
     </form>}
+
+    {!archived && photoOpen && <div className="grid gap-2 rounded-xl border bg-card p-4" role="group" aria-label="New photo note">
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" disabled={busy} onClick={() => photoInput.current?.click()}><Camera/>Choose a file</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={() => void pasteImageFromClipboard()}><Copy/>Paste from clipboard</Button>
+        <Button type="button" variant="ghost" onClick={() => setPhotoOpen(false)}>Cancel</Button>
+      </div>
+      <div tabIndex={0} ref={el => el?.focus()} role="textbox" aria-label="Paste an image here" onPaste={pasteImage}
+        onKeyDown={event => { if (event.key === "Escape") setPhotoOpen(false); }}
+        className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/40">
+        Copy an image, click here and press Ctrl+V to paste it.
+      </div>
+    </div>}
 
     {showReview && (reviewChoice === null
       ? <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/50 px-4 py-3 text-sm">
