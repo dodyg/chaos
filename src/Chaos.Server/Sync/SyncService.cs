@@ -147,6 +147,15 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             }
 
             await db.SaveChangesAsync(ct);
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                DELETE FROM "SyncEntities" cache
+                WHERE cache."AccountId" = {accountId} AND cache."Kind" = 'calendar_cache'
+                  AND NOT EXISTS (SELECT 1 FROM "SyncEntities" source
+                    WHERE source."AccountId" = cache."AccountId" AND source."Kind" = 'calendar_source'
+                      AND source."EntityKey" = cache."EntityKey" AND source."PurgedAt" IS NULL
+                      AND source."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+                      AND source."Groups" -> 'enabled' -> 'values' ->> 'Enabled' = '1')
+                """, ct);
             await transaction.CommitAsync(ct);
             return (new PushOutcome(accepted, rejected, highest?.Encode(), account.NextSeq - 1), null);
         });

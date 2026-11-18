@@ -7,11 +7,20 @@ internal static class WebReadEndpoints
     public static RouteGroupBuilder MapWebReads(this RouteGroupBuilder web)
     {
         web.MapGet("/today", Today);
+        web.MapGet("/appearance", Appearance);
         web.MapGet("/lists", Lists);
+        web.MapGet("/pad", Pad);
+        web.MapGet("/pages", Pages);
+        web.MapGet("/search", Search);
         web.MapGet("/lists/{id:guid}/tasks", ListTasks);
         web.MapGet("/tasks/{id:guid}", TaskDetail);
         return web;
     }
+
+    private static async Task<IResult> Appearance(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
+        await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
+            ? Results.Ok(await model.AppearanceAsync(account, ct))
+            : Results.Unauthorized();
 
     private static async Task<IResult> Today(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
         await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
@@ -22,6 +31,23 @@ internal static class WebReadEndpoints
         await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
             ? Results.Ok(await model.ListsAsync(account, ct))
             : Results.Unauthorized();
+
+    private static async Task<IResult> Pad(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
+        await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
+            ? Results.Ok(await model.PadAsync(account, ct)) : Results.Unauthorized();
+
+    private static async Task<IResult> Pages(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
+        await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
+            ? Results.Ok(await model.PagesAsync(account, ct)) : Results.Unauthorized();
+
+    private static async Task<IResult> Search(string? q, ClaimsPrincipal user, WebReadModel model, CancellationToken ct)
+    {
+        var account = await model.AccountAsync(WebCaller.From(user).AccountId, ct);
+        if (account is null) return Results.Unauthorized();
+        var query = q?.Trim() ?? "";
+        if (query.Length > 200) return Results.BadRequest(new { Detail = "Search must be 200 characters or fewer." });
+        return Results.Ok(query.Length == 0 ? new WebSearchResult([], false) : await model.SearchAsync(account, query, ct));
+    }
 
     private static async Task<IResult> ListTasks(Guid id, ClaimsPrincipal user, WebReadModel model, CancellationToken ct)
     {

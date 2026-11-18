@@ -113,12 +113,17 @@ export function AppearanceSettings() {
   const [themes, setThemes] = React.useState(loadThemes);
   const [editing, setEditing] = React.useState<Scheme>(() => effectiveScheme(loadActiveTheme()));
   const [message, setMessage] = React.useState("");
+  React.useEffect(() => {
+    const changed = () => setTheme(loadActiveTheme());
+    window.addEventListener("chaos-appearance-remote", changed);
+    return () => window.removeEventListener("chaos-appearance-remote", changed);
+  }, []);
   const scheme = effectiveScheme(theme);
   /** `pick` is set when a whole theme is chosen, which also moves the colour editor to the mode it shows. */
   function update(next: Theme, pick = false) {
     setTheme(next); applyTheme(next);
     if (pick || next.mode !== theme.mode) setEditing(effectiveScheme(next));
-    try { saveActiveTheme(next); setMessage("Appearance saved on this computer."); }
+    try { saveActiveTheme(next); setMessage("Appearance saved."); }
     catch { setMessage("Appearance is applied, but could not be saved on this computer."); }
   }
   const set = <K extends keyof Theme>(key: K, value: Theme[K]) => update({ ...theme, [key]: value });

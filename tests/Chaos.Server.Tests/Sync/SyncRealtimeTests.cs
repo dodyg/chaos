@@ -215,6 +215,9 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         await Assert.That(Decide(true, 0, [], idle).Kind).IsEqualTo(SyncStatusKind.Synced);
         await Assert.That(Decide(true, 0, [], idle with { Syncing = true }).Kind).IsEqualTo(SyncStatusKind.Syncing);
         await Assert.That(Decide(true, 5, [], idle with { Failure = ServiceFailure.Offline }).Kind).IsEqualTo(SyncStatusKind.Offline);
+        var refused = Decide(true, 0, [], idle with { Failure = ServiceFailure.Refused, FailureDetail = "Server needs an update." });
+        await Assert.That(refused.Kind).IsEqualTo(SyncStatusKind.NeedsAttention);
+        await Assert.That(refused.Detail).IsEqualTo("Server needs an update.");
         await Assert.That(Decide(true, 0, attention, idle).Kind).IsEqualTo(SyncStatusKind.NeedsAttention);
         await Assert.That(Decide(true, 0, attention, idle with { Syncing = true }).Kind).IsEqualTo(SyncStatusKind.NeedsAttention);
         await Assert.That(Decide(true, 0, [], idle with { Failure = ServiceFailure.SignInAgain }).Kind).IsEqualTo(SyncStatusKind.SignedOut);

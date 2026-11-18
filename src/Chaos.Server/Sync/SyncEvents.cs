@@ -91,7 +91,7 @@ public static class SyncEvents
     /// Listens on the account's PostgreSQL channel for pushes made by other instances. Without a connection string
     /// there is nothing to listen on and the stream relies on this process's broadcaster alone.
     /// </summary>
-    private static async Task<IAsyncDisposable> ListenAsync(ChaosDbContext db, Guid accountId, ChannelWriter<long> into, CancellationToken ct)
+    internal static async Task<IAsyncDisposable> ListenAsync(ChaosDbContext db, Guid accountId, ChannelWriter<long> into, CancellationToken ct)
     {
         if (db.Database.GetConnectionString() is not { Length: > 0 } connectionString)
         {

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Chaos.Server.Data;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -13,7 +14,13 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     public bool IsOnMyDay { get; init; }
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
-internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks);
+internal sealed record WebNote(Guid Id, string Markdown, long Kind, long Position, bool IsArchived);
+internal sealed record WebPage(Guid Id, string Title, string Markdown, Guid? ParentId, DateOnly? DailyDate, long Position);
+internal sealed record WebSearchItem(string Kind, Guid Id, string Title, string? Snippet, string? Detail);
+internal sealed record WebSearchResult(IReadOnlyList<WebSearchItem> Items, bool Truncated);
+internal sealed record WebAppearance(string? Theme, string? Background);
+internal sealed record WebMeeting(string Id, string Title, bool AllDay, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Start, string End, string? VideoUrl, string? WebUrl, string? Color, bool Busy);
+internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks, IReadOnlyList<WebMeeting> Meetings);
 internal sealed record WebDayMember(string Key, string TaskKey, long Position, WebEntity? Entity)
 {
     public bool IsActive => Entity?.Text("removed", "RemovedAtUtc") is null;
@@ -31,21 +38,128 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
     public Task<Account?> AccountAsync(Guid accountId, CancellationToken ct) =>
         db.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == accountId && a.DeletedAt == null, ct);
 
+    public async Task<IReadOnlyList<WebNote>> PadAsync(Account account, CancellationToken ct)
+    {
+        var rows = await Rows(account.Id, "pad").ToListAsync(ct);
+        return rows.Select(row => (Row: row, Entity: new WebEntity(row)))
+            .Where(item => !item.Entity.IsDeleted && InPersonalSpace(item.Entity, account) && Guid.TryParse(item.Row.EntityKey, out _))
+            .Select(item => new WebNote(Guid.Parse(item.Row.EntityKey), item.Entity.Text("text", "RawMarkdown") ?? "",
+                item.Entity.Number("create", "Kind") ?? 0, item.Entity.Number("position", "Position") ?? 0,
+                item.Entity.Text("archived", "ArchivedAtUtc") is not null))
+            .OrderBy(note => note.IsArchived).ThenBy(note => note.Position).ThenBy(note => note.Id).ToList();
+    }
+
+    public async Task<IReadOnlyList<WebPage>> PagesAsync(Account account, CancellationToken ct)
+    {
+        var rows = await Rows(account.Id, "page").ToListAsync(ct);
+        return rows.Select(row => (Row: row, Entity: new WebEntity(row)))
+            .Where(item => !item.Entity.IsDeleted && InPersonalSpace(item.Entity, account) && Guid.TryParse(item.Row.EntityKey, out _))
+            .Select(item => new WebPage(Guid.Parse(item.Row.EntityKey), item.Entity.Text("title", "Title") ?? "Untitled",
+                item.Entity.Text("text", "RawMarkdown") ?? "", item.Entity.Id("tree", "ParentPageId"),
+                item.Entity.Date("create", "DailyDate"), item.Entity.Number("position", "Position") ?? 0))
+            .OrderBy(page => page.Position).ThenBy(page => page.Id).ToList();
+    }
+
+    public async Task<WebSearchResult> SearchAsync(Account account, string query, CancellationToken ct)
+    {
+        if (account.PersonalSpaceId is not { } space) return new([], false);
+        var spaceKey = space.ToString("D");
+        var rows = await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" IN ('task', 'pad', 'page') AND "PurgedAt" IS NULL
+              AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'SpaceId' = {spaceKey}
+              AND (strpos(lower(coalesce("Groups" -> 'title' -> 'values' ->> 'Title', '')), lower({query})) > 0
+                OR strpos(lower(coalesce("Groups" -> 'notes' -> 'values' ->> 'Notes', '')), lower({query})) > 0
+                OR strpos(lower(coalesce("Groups" -> 'text' -> 'values' ->> 'RawMarkdown', '')), lower({query})) > 0)
+            ORDER BY "Kind", "EntityKey"
+            """).AsNoTracking().ToListAsync(ct);
+        var lists = (await ListsAsync(account, ct)).ToDictionary(list => list.Id);
+        var results = new List<WebSearchItem>();
+        foreach (var row in rows)
+        {
+            var entity = new WebEntity(row);
+            if (entity.IsDeleted || !InPersonalSpace(entity, account) || !Guid.TryParse(row.EntityKey, out var id)) continue;
+            var text = entity.Text("text", "RawMarkdown") ?? "";
+            if (row.Kind == "task")
+            {
+                var task = ReadTask(row.EntityKey, entity, account, includeNotes: true);
+                if (task is null || !lists.TryGetValue(task.ListId, out var list)) continue;
+                results.Add(new("task", id, task.Title, SearchSnippet(task.Notes, query), list.Name));
+            }
+            else if (row.Kind == "page")
+            {
+                results.Add(new("page", id, entity.Text("title", "Title") ?? "Untitled", SearchSnippet(text, query),
+                    entity.Date("create", "DailyDate") is { } date ? $"Daily page · {date:yyyy-MM-dd}" : "Page"));
+            }
+            else if (row.Kind == "pad" && (entity.Number("create", "Kind") ?? 0) == 0)
+            {
+                var first = text.Split('\n').FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? "Empty note";
+                results.Add(new("pad", id, first.Length > 100 ? first[..100] : first, SearchSnippet(text, query),
+                    entity.Text("archived", "ArchivedAtUtc") is null ? "Personal pad" : "Archived note"));
+            }
+            if (results.Count > 100) return new(results.Take(100).ToList(), true);
+        }
+        return new(results, false);
+    }
+
+    private static string? SearchSnippet(string? text, string query)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var index = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var start = Math.Max(0, index - 45);
+        var length = Math.Min(text.Length - start, Math.Max(140, query.Length));
+        var excerpt = string.Join(" ", text.Substring(start, length).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return (start > 0 ? "…" : "") + excerpt + (start + length < text.Length ? "…" : "");
+    }
+
+    public async Task<WebAppearance> AppearanceAsync(Account account, CancellationToken ct)
+    {
+        if (account.ProfileId is not { } profile) return new(null, null);
+        var key = profile.ToString("D");
+        var row = await Rows(account.Id, "profile").SingleOrDefaultAsync(e => e.EntityKey == key, ct);
+        if (row is null) return new(null, null);
+        var entity = new WebEntity(row);
+        return new(entity.Text("appearance", "AppearanceTheme"), entity.Text("day_background", "DayBackground"));
+    }
+
     public async Task<WebToday> TodayAsync(Account account, CancellationToken ct)
     {
-        var (today, _) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var (today, zone) = await LocalDayAsync(account, clock.GetUtcNow(), ct);
+        var meetings = await MeetingsAsync(account, today, zone, ct);
         var plan = await DayPlanAsync(account, today, ct);
         var members = plan?.Members.Where(item => item.IsActive).ToArray() ?? [];
         if (members.Length == 0)
         {
-            return new WebToday(today, []);
+            return new WebToday(today, [], meetings);
         }
 
         var lists = (await ListsAsync(account, ct)).Select(list => list.Id).ToHashSet();
         var tasks = (await TasksByKeyAsync(account, members.Select(member => member.TaskKey).Distinct().ToArray(), ct))
             .Where(task => lists.Contains(task.ListId)).ToDictionary(task => task.Id.ToString("D"));
         return new WebToday(today, [.. members.OrderBy(item => item.Position).ThenBy(item => item.TaskKey, StringComparer.Ordinal)
-            .Select(item => item.TaskKey).Distinct().Where(tasks.ContainsKey).Select(key => tasks[key] with { IsOnMyDay = true })]);
+            .Select(item => item.TaskKey).Distinct().Where(tasks.ContainsKey).Select(key => tasks[key] with { IsOnMyDay = true })], meetings);
+    }
+
+    private async Task<IReadOnlyList<WebMeeting>> MeetingsAsync(Account account, DateOnly today, TimeZoneInfo zone, CancellationToken ct)
+    {
+        var sources = (await Rows(account.Id, "calendar_source").ToListAsync(ct)).ToDictionary(row => row.EntityKey, row => new WebEntity(row));
+        var caches = await Rows(account.Id, "calendar_cache").ToListAsync(ct);
+        var start = TimeZoneInfo.ConvertTimeToUtc(today.ToDateTime(TimeOnly.MinValue), zone);
+        var end = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), zone);
+        var meetings = new List<WebMeeting>();
+        foreach (var row in caches)
+        {
+            if (!sources.TryGetValue(row.EntityKey, out var source) || source.IsDeleted || source.Number("enabled", "Enabled") != 1) continue;
+            var cache = JsonSerializer.Deserialize<CalendarCacheSnapshot>(row.Groups);
+            if (cache is null) continue;
+            meetings.AddRange(cache.Events.Where(e => e.AllDay ? e.StartDate <= today && e.EndDate > today : e.StartUtc < end && e.EndUtc > start)
+                .Select(e => new WebMeeting(row.EntityKey + ":" + e.ExternalId, e.Title, e.AllDay, e.StartUtc, e.EndUtc,
+                    TimeZoneInfo.ConvertTime(e.StartUtc, zone).ToString("HH:mm", CultureInfo.InvariantCulture),
+                    TimeZoneInfo.ConvertTime(e.EndUtc, zone).ToString("HH:mm", CultureInfo.InvariantCulture), e.VideoUrl, e.WebUrl, source.Text("look", "Color"), e.Busy && source.Number("busy", "CountsAsBusy") == 1)));
+        }
+        return [.. meetings.OrderByDescending(m => m.AllDay).ThenBy(m => m.StartUtc).ThenBy(m => m.Title)];
     }
 
     public async Task<WebTask?> TaskDetailAsync(Account account, Guid taskId, CancellationToken ct)

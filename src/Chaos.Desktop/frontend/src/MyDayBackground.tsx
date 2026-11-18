@@ -51,11 +51,17 @@ export function loadDayBackground(): DayBackground {
 
 export function useDayBackground() {
   const [background, setBackground] = React.useState<DayBackground>(loadDayBackground);
+  React.useEffect(() => {
+    const changed = () => setBackground(loadDayBackground());
+    window.addEventListener("chaos-appearance-remote", changed);
+    return () => window.removeEventListener("chaos-appearance-remote", changed);
+  }, []);
   function save(next: DayBackground) {
     try {
       if (next.kind === "default") localStorage.removeItem(key);
       else localStorage.setItem(key, JSON.stringify(next));
       setBackground(next);
+      if (next.kind !== "image") window.dispatchEvent(new window.CustomEvent("chaos-appearance-local", { detail: { kind: "background", value: next } }));
       return true;
     } catch { return false; }
   }
@@ -83,7 +89,7 @@ export function DayBackgroundSettings({ background, onSave, onClose }: { backgro
     <div className="flex items-center gap-2 text-sm font-medium"><ImagePlus className="size-4"/>My Day background
       {onClose && <Button type="button" variant="ghost" size="icon-xs" className="ml-auto text-muted-foreground" aria-label="Close background settings" onClick={onClose}><X/></Button>}</div>
     <div className="grid gap-3 pt-3 text-sm">
-      <p className="text-muted-foreground">Choose a color, a scene, or an image from this computer. Your choice stays on this computer.</p>
+      <p className="text-muted-foreground">Choose a color, a scene, or an image from this computer. Colors and scenes sync across your devices; custom images stay on this computer.</p>
       <fieldset className="grid gap-2"><legend className="font-medium">Colors</legend>
         <div className="flex flex-wrap gap-2">{backgroundColors.map(color => <label key={color.value} className="relative cursor-pointer" title={color.name}>
           <input type="radio" name="day-background" className="peer sr-only" aria-label={color.name} checked={background.kind === "color" && background.value.toLowerCase() === color.value} onChange={() => { selection.current++; save({ kind: "color", value: color.value }); }}/>

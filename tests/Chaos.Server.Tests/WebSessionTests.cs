@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using Chaos.Server.Api;
+using Chaos.Server.Sync;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Chaos.Server.Tests;
 
@@ -9,6 +12,40 @@ namespace Chaos.Server.Tests;
 public sealed class WebSessionTests(PostgresServer postgres)
 {
     private const string Email = "web@example.com";
+
+    [Test]
+    public async Task Events_WebSession_StreamsAccountChangesAndStopsAfterRevocation()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        using var browser = server.NewBrowser();
+        using var anonymous = await browser.GetAsync($"/v1/web/events?device={Guid.NewGuid():D}");
+        await Assert.That(anonymous.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        using var signedIn = await WebFlow.SignInAsync(server, browser, Email);
+        var session = await WebFlow.SessionAsync(browser);
+        using var mismatch = await browser.GetAsync($"/v1/web/events?device={Guid.NewGuid():D}");
+        await Assert.That(mismatch.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var response = await browser.GetAsync($"/v1/web/events?device={session.DeviceId:D}", HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        await Assert.That(response.Content.Headers.ContentType?.MediaType).IsEqualTo("text/event-stream");
+        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(timeout.Token));
+        await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo("data: 0");
+        await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo(string.Empty);
+
+        await using var db = ServerDatabase.Open(server.ConnectionString);
+        var accountId = await db.Accounts.Where(a => a.PrimaryEmail == Email).Select(a => a.Id).SingleAsync(timeout.Token);
+        var broadcaster = server.Factory.Services.GetRequiredService<SyncBroadcaster>();
+        broadcaster.Publish(Guid.NewGuid(), 100);
+        broadcaster.Publish(accountId, 1);
+        await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo("data: 1");
+        await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo(string.Empty);
+
+        await db.Devices.Where(d => d.Id == session.DeviceId).ExecuteUpdateAsync(s => s.SetProperty(d => d.RevokedAt, DateTimeOffset.UtcNow), timeout.Token);
+        broadcaster.Publish(accountId, 2);
+        await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsNull();
+        using var revoked = await browser.GetAsync($"/v1/web/events?device={session.DeviceId:D}");
+        await Assert.That(revoked.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+    }
 
     [Test]
     public async Task SignIn_RegistersCookieDevice_AndDesktopCanRevokeIt()

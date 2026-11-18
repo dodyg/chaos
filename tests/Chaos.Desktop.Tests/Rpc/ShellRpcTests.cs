@@ -6,6 +6,7 @@ using Chaos.Desktop.Services;
 using Chaos.Desktop.Tests.Testing;
 using Chaos.Desktop.Windows.Notifications;
 using Chaos.Infrastructure.Bootstrap;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Desktop.Tests.Rpc;
 
@@ -72,6 +73,46 @@ public sealed class ShellRpcTests
         await Assert.That(again.PadShortcut).IsNull();
         await Assert.That(again.KeepRunningInTray).IsFalse();
         await Assert.That(again.DateFormat).IsEqualTo("MDY");
+    }
+
+    [Test]
+    public async Task Appearance_SeedsOnceAndRejectsImages()
+    {
+        var root = TestPaths.NewDataRoot();
+        var clock = new FixedTimeProvider(DateTimeOffset.UnixEpoch);
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.1.0", new SequentialIdGenerator(), clock, CancellationToken.None);
+        var rpc = new ShellRpcService(new ShellActivations((_, _) => throw new InvalidOperationException()), new RecordingShell(),
+            new ProfileSettingsCommands(storage.Store, new SequentialIdGenerator(), clock), "1", store: storage.Store);
+        await storage.Store.ExecuteAsync(async (session, ct) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "UPDATE SyncState SET Enabled = 1, BackfillPending = 1 WHERE Id = 1";
+            await command.ExecuteNonQueryAsync(ct);
+            return true;
+        });
+        await Assert.That((await rpc.AppearanceAsync(new(), CancellationToken.None)).Ready).IsFalse();
+        await Assert.That((await rpc.SaveAppearanceAsync(new("background", "{\"kind\":\"default\"}", true), CancellationToken.None)).Saved).IsFalse();
+        await storage.Store.ExecuteAsync(async (session, ct) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "UPDATE SyncState SET BackfillPending = 0 WHERE Id = 1";
+            await command.ExecuteNonQueryAsync(ct);
+            return true;
+        });
+        var background = "{\"kind\":\"scene\",\"value\":\"sunset\"}";
+        await Assert.That((await rpc.SaveAppearanceAsync(new("background", background, true), CancellationToken.None)).Saved).IsTrue();
+        await Assert.That((await rpc.SaveAppearanceAsync(new("background", "{\"kind\":\"default\"}", true), CancellationToken.None)).Saved).IsFalse();
+        await Assert.That((await rpc.SaveAppearanceAsync(new("background", "{\"kind\":\"image\",\"value\":\"data:image/png;base64,AA==\"}", false), CancellationToken.None)).Saved).IsFalse();
+        var saved = await rpc.AppearanceAsync(new(), CancellationToken.None);
+        await Assert.That(saved.Ready).IsTrue();
+        await Assert.That(saved.Background).IsEqualTo(background);
+        var outbox = await storage.Store.QueryAsync(async (session, ct) =>
+        {
+            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "SELECT PayloadJson FROM SyncOutbox WHERE Kind = 'profile' ORDER BY Seq DESC LIMIT 1";
+            return (string?)await command.ExecuteScalarAsync(ct);
+        });
+        await Assert.That(outbox!).Contains("day_background");
     }
 
     [Test]

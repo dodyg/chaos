@@ -3,6 +3,10 @@
  * A theme is plain JSON so it can be saved, exported and imported; every value is validated
  * before it reaches the page, and only hex colours and known keys are ever written into styles.
  */
+import { applyAccent, defaultAccent } from "./theme-accent";
+
+export { readableOn } from "./theme-accent";
+
 export type Mode = "system" | "light" | "dark";
 export type Scheme = "light" | "dark";
 export const colorKeys = ["background", "surface", "sidebar", "hover", "text", "mutedText", "border"] as const;
@@ -74,7 +78,7 @@ const colorVars: Record<ColorKey, string[]> = {
   border: ["--border", "--input", "--sidebar-border"],
 };
 
-export const defaultTheme: Theme = { name: "Default", font: "system", codeFont: "consolas", size: 16, accent: "#c45a20", mode: "system", density: "comfortable", radius: "medium", light: {}, dark: {} };
+export const defaultTheme: Theme = { name: "Default", font: "system", codeFont: "consolas", size: 16, accent: defaultAccent, mode: "system", density: "comfortable", radius: "medium", light: {}, dark: {} };
 
 const preset = (theme: Partial<Theme> & Pick<Theme, "name">): Theme => ({ ...defaultTheme, ...theme });
 /** Ready-made themes. Dark-only and light-only themes pin their mode. */
@@ -177,11 +181,6 @@ export function effectiveScheme(theme: Pick<Theme, "mode">): Scheme {
 }
 /** The colour a theme shows for a role in a scheme: its own override, else the built-in palette. */
 export function themeColor(theme: Theme, scheme: Scheme, key: ColorKey) { return theme[scheme][key] ?? basePalettes[scheme][key]; }
-export function readableOn(color: string) {
-  const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16) / 255).map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4);
-  return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2] > .179 ? "#000000" : "#ffffff";
-}
-
 let current: Theme | undefined;
 let listening = false;
 export function applyTheme(theme: Theme) {
@@ -196,10 +195,7 @@ export function applyTheme(theme: Theme) {
   root.style.fontSize = `${theme.size}px`;
   root.style.setProperty("--spacing", densities[theme.density].spacing);
   root.style.setProperty("--radius", radii[theme.radius].value);
-  for (const name of ["--primary", "--ring", "--sidebar-primary", "--sidebar-ring"]) root.style.setProperty(name, theme.accent);
-  const foreground = readableOn(theme.accent);
-  root.style.setProperty("--primary-foreground", foreground);
-  root.style.setProperty("--sidebar-primary-foreground", foreground);
+  applyAccent(root, theme.accent);
   const palette = theme[scheme];
   for (const key of colorKeys) for (const name of colorVars[key]) {
     const color = palette[key];
@@ -216,7 +212,7 @@ export function loadActiveTheme(): Theme {
   try { const raw = localStorage.getItem(activeKey); return raw ? parseTheme(JSON.parse(raw)) : defaultTheme; }
   catch { return defaultTheme; }
 }
-export function saveActiveTheme(theme: Theme) { localStorage.setItem(activeKey, JSON.stringify(theme)); }
+export function saveActiveTheme(theme: Theme) { localStorage.setItem(activeKey, JSON.stringify(theme)); if (typeof window !== "undefined") window.dispatchEvent(new window.CustomEvent("chaos-appearance-local", { detail: { kind: "theme", value: theme } })); }
 export function loadThemes(): Theme[] {
   try {
     const raw = localStorage.getItem(themesKey); const values: unknown = raw ? JSON.parse(raw) : [];

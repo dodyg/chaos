@@ -14,9 +14,12 @@ browser menu. Open My Day or a list while connected to save it for offline viewi
 
 Use the existing Chaos.Server deployment. Persist its ASP.NET Core Data Protection key ring across
 releases and share it across replicas so they can validate the same web session cookies. The web
-app refreshes the active view every ten seconds while visible. Desktop clients receive sync
-events through the existing service. The app keeps My Day, the list picker and the last opened
-list in the browser. Task notes are fetched while connected. Signing out clears the saved views.
+app listens for account sync events while open and refreshes the active view when changes arrive.
+It also refreshes every ten seconds while visible as a fallback, and on reconnect or return to the
+foreground. Desktop clients receive sync events through the existing service. The app keeps My Day, the list picker and the last opened
+list in the browser. The active desktop appearance and My Day color or built-in scene sync to the
+web app and are cached for offline use. Custom desktop background images remain on that computer.
+Task notes are fetched while connected. Signing out clears the saved views.
 
 ## Goal
 
@@ -91,8 +94,8 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 
 ### W3 — App shell and screens (3 days)
 
-- New `src/Chaos.Web/` (Vite and React, mobile first), built into `Chaos.Server/wwwroot/app`. Do not
-  fork the desktop frontend; copy only small presentational pieces.
+- `src/Chaos.Web/` (Vite and React, mobile first) builds into `Chaos.Server/wwwroot/app`. It shares
+  the desktop's shadcn/ui primitives and default palette and owns its screen layouts.
 - Screens: sign-in redirect, My Day, list picker, list view, task detail.
 - Manifest, icons, `display: standalone`, theme colour. Light and dark.
 - Phone-width checks in the browser preview at 375px.
@@ -133,7 +136,6 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 - Edit title, notes and dates.
 - Diary and pages, read only.
 - Attachment viewing (blobs are already served over HTTPS).
-- Live updates via SSE while the app is open.
 - Offline edits: only then does a shared-merge approach (NetWasm or a TypeScript port) matter.
 
 ## Effort and order

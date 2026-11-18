@@ -42,7 +42,7 @@ public sealed class SyncEngineOptions
 }
 
 /// <summary>What the engine is doing right now, for the status indicator (PLAN2 P15 item 3).</summary>
-public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool UpdateNeeded, bool Streaming, DateTimeOffset? LastSuccessAt = null);
+public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool UpdateNeeded, bool Streaming, DateTimeOffset? LastSuccessAt = null, string? FailureDetail = null);
 
 /// <summary>What one sync cycle did.</summary>
 public sealed record SyncCycleResult(bool Ran, long Pushed, long Pulled, bool SnapshotUsed, string? Problem);
@@ -299,9 +299,10 @@ public sealed class SyncEngine : IDisposable
                     pushed += await PushAsync(ct);
                 }
 
+                await UploadCalendarCachesAsync(ct);
                 await RecordAsync(error: null, pushed > 0, pulled > 0 || snapshot, ct);
                 var finished = _clock.GetUtcNow();
-                SetRuntime(r => r with { Failure = null, LastSuccessAt = finished });
+                SetRuntime(r => r with { Failure = null, FailureDetail = null, LastSuccessAt = finished });
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, null));
             }
             catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
@@ -320,7 +321,7 @@ public sealed class SyncEngine : IDisposable
                     _ => error.Message,
                 };
                 await RecordAsync(problem, false, false, ct);
-                SetRuntime(r => r with { Failure = error.Kind });
+                SetRuntime(r => r with { Failure = error.Kind, FailureDetail = problem });
 
                 // Signed out or refused is not something a retry fixes; only connectivity is.
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
@@ -430,6 +431,51 @@ public sealed class SyncEngine : IDisposable
             command.ExecuteNonQuery();
             return Task.FromResult(0);
         }, ct);
+
+    private async Task UploadCalendarCachesAsync(CancellationToken ct)
+    {
+        var caches = await _store.QueryAsync((session, _) =>
+        {
+            var connection = ((SqliteDataSession)session).Connection;
+            var result = new List<CalendarCacheSnapshot>();
+            using var sources = connection.CreateCommand();
+            sources.CommandText = "SELECT s.Id, st.LastSuccessUtc FROM CalendarSources s JOIN CalendarSourceState st ON st.SourceId = s.Id WHERE s.Enabled = 1 AND s.DeletedAtUtc IS NULL AND st.LastSuccessUtc IS NOT NULL";
+            using var sourceReader = sources.ExecuteReader();
+            while (sourceReader.Read())
+            {
+                var id = sourceReader.GetString(0);
+                var fetched = DateTimeOffset.Parse(sourceReader.GetString(1), CultureInfo.InvariantCulture);
+                var events = new List<CalendarCacheEvent>();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT ExternalId, StartUtc, EndUtc, AllDay, StartDate, EndDate, Title, Location, VideoUrl, WebUrl, Busy, FetchedUtc FROM CalendarEvents WHERE SourceId = $id";
+                command.Parameters.AddWithValue("$id", id);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    events.Add(new CalendarCacheEvent(reader.GetString(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                        DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture), reader.GetInt64(3) != 0,
+                        reader.IsDBNull(4) ? null : DateOnly.ParseExact(reader.GetString(4), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        reader.IsDBNull(5) ? null : DateOnly.ParseExact(reader.GetString(5), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                        reader.IsDBNull(9) ? null : reader.GetString(9), reader.GetInt64(10) != 0, DateTimeOffset.Parse(reader.GetString(11), CultureInfo.InvariantCulture)));
+                }
+                result.Add(new CalendarCacheSnapshot(id, fetched, events));
+            }
+            return Task.FromResult(result);
+        }, ct);
+        foreach (var cache in caches)
+        {
+            var json = JsonSerializer.Serialize(cache);
+            var response = await _service.CallAsync(HttpMethod.Post, "v1/sync/calendar-cache", json, ct);
+            if (!response.Ok)
+            {
+                var detail = response.Status == 404
+                    ? "The online service does not support calendar sync yet. Update or restart the server."
+                    : ProblemText(response);
+                throw new ChaosServiceException(ServiceFailure.Refused, detail);
+            }
+        }
+    }
 
     // ---- Push ----------------------------------------------------------------------------------------
 
