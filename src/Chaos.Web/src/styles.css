@@ -234,3 +234,51 @@ h2 { font-weight: 700; font-size: 1.15rem; letter-spacing: -.02em; }
 .meeting-time { color: var(--muted-foreground); font-size: .8rem; flex: 0 0 90px; }
 .meeting-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .meetings a { color: var(--primary); }
+
+.reading-meta { color: var(--muted-foreground); margin: 0 0 12px; }
+@media (max-width: 480px) {
+  .dock nav { gap: 0; }
+  .dock nav a { min-width: 48px; padding-inline: 4px; font-size: .68rem; }
+  .dock .mobile-action { padding-inline: 10px; }
+}
+
+.mermaid-diagram { overflow-x: auto; border-radius: var(--radius-sm, 6px); background: var(--muted); padding: .5rem; }
+.mermaid-diagram[hidden] { display: none; }
+.mermaid-block > p { color: var(--muted-foreground); font-size: .85rem; }
+.mermaid-diagram .pele {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--card);
+  --pele-surface-alt: var(--muted);
+  --pele-border: var(--border);
+  --pele-accent: var(--primary);
+  --pele-font: inherit;
+  /* Pele uses these internal variables in SVG presentation attributes. */
+  --_bg: var(--pele-bg);
+  --_fg: var(--pele-fg);
+  --_m: var(--pele-muted);
+  --_l: var(--pele-line);
+  --_s: var(--pele-surface);
+  --_a: var(--pele-surface-alt);
+  --_b: var(--pele-border);
+  --_c: var(--pele-accent);
+  --_r: var(--pele-radius, 4px);
+  --_fm: var(--pele-font-mono, monospace);
+  color: var(--_fg);
+}
+
+.page-content { position: relative; background-size: cover; background-position: center; min-height: 70vh; }
+.page-content::before { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--background) 84%, transparent); pointer-events: none; }
+.page-content > * { position: relative; }
+
+.page-section + .page-section { margin-top: 26px; }
+.page-section h2 { margin-bottom: 10px; }
+.page-section h2 span { color: var(--muted-foreground); padding-left: .4rem; font-size: .8rem; font-weight: 600; }
+.search-label { display: block; margin-bottom: 8px; color: var(--muted-foreground); font-size: .85rem; font-weight: 600; }
+.search-field { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--card); border-radius: 12px; padding: 0 14px; color: var(--muted-foreground); }
+.search-field:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+.search-field input { width: 100%; min-width: 0; height: 50px; color: var(--foreground); background: transparent; border: 0; outline: 0; }
+.search-status { margin: 16px 0; color: var(--muted-foreground); font-size: .9rem; }
+.search-results + .search-results { margin-top: 24px; }

@@ -243,3 +243,7 @@ export function useMobileData(path) {
 export async function writeTask(session, path, body) {
   return request(path, { session, method: "POST", body });
 }
+
+export async function searchContent(session, query, signal) {
+  return request(`/search?q=${encodeURIComponent(query)}`, { session, signal });
+}

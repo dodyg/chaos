@@ -14,6 +14,10 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     public bool IsOnMyDay { get; init; }
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
+internal sealed record WebNote(Guid Id, string Markdown, long Kind, long Position, bool IsArchived);
+internal sealed record WebPage(Guid Id, string Title, string Markdown, Guid? ParentId, DateOnly? DailyDate, long Position);
+internal sealed record WebSearchItem(string Kind, Guid Id, string Title, string? Snippet, string? Detail);
+internal sealed record WebSearchResult(IReadOnlyList<WebSearchItem> Items, bool Truncated);
 internal sealed record WebAppearance(string? Theme, string? Background);
 internal sealed record WebMeeting(string Id, string Title, bool AllDay, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Start, string End, string? VideoUrl, string? WebUrl, string? Color, bool Busy);
 internal sealed record WebToday(DateOnly Date, IReadOnlyList<WebTask> Tasks, IReadOnlyList<WebMeeting> Meetings);
@@ -33,6 +37,82 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
     public Task<Account?> AccountAsync(Guid accountId, CancellationToken ct) =>
         db.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == accountId && a.DeletedAt == null, ct);
+
+    public async Task<IReadOnlyList<WebNote>> PadAsync(Account account, CancellationToken ct)
+    {
+        var rows = await Rows(account.Id, "pad").ToListAsync(ct);
+        return rows.Select(row => (Row: row, Entity: new WebEntity(row)))
+            .Where(item => !item.Entity.IsDeleted && InPersonalSpace(item.Entity, account) && Guid.TryParse(item.Row.EntityKey, out _))
+            .Select(item => new WebNote(Guid.Parse(item.Row.EntityKey), item.Entity.Text("text", "RawMarkdown") ?? "",
+                item.Entity.Number("create", "Kind") ?? 0, item.Entity.Number("position", "Position") ?? 0,
+                item.Entity.Text("archived", "ArchivedAtUtc") is not null))
+            .OrderBy(note => note.IsArchived).ThenBy(note => note.Position).ThenBy(note => note.Id).ToList();
+    }
+
+    public async Task<IReadOnlyList<WebPage>> PagesAsync(Account account, CancellationToken ct)
+    {
+        var rows = await Rows(account.Id, "page").ToListAsync(ct);
+        return rows.Select(row => (Row: row, Entity: new WebEntity(row)))
+            .Where(item => !item.Entity.IsDeleted && InPersonalSpace(item.Entity, account) && Guid.TryParse(item.Row.EntityKey, out _))
+            .Select(item => new WebPage(Guid.Parse(item.Row.EntityKey), item.Entity.Text("title", "Title") ?? "Untitled",
+                item.Entity.Text("text", "RawMarkdown") ?? "", item.Entity.Id("tree", "ParentPageId"),
+                item.Entity.Date("create", "DailyDate"), item.Entity.Number("position", "Position") ?? 0))
+            .OrderBy(page => page.Position).ThenBy(page => page.Id).ToList();
+    }
+
+    public async Task<WebSearchResult> SearchAsync(Account account, string query, CancellationToken ct)
+    {
+        if (account.PersonalSpaceId is not { } space) return new([], false);
+        var spaceKey = space.ToString("D");
+        var rows = await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities"
+            WHERE "AccountId" = {account.Id} AND "Kind" IN ('task', 'pad', 'page') AND "PurgedAt" IS NULL
+              AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+              AND "Groups" -> 'create' -> 'values' ->> 'SpaceId' = {spaceKey}
+              AND (strpos(lower(coalesce("Groups" -> 'title' -> 'values' ->> 'Title', '')), lower({query})) > 0
+                OR strpos(lower(coalesce("Groups" -> 'notes' -> 'values' ->> 'Notes', '')), lower({query})) > 0
+                OR strpos(lower(coalesce("Groups" -> 'text' -> 'values' ->> 'RawMarkdown', '')), lower({query})) > 0)
+            ORDER BY "Kind", "EntityKey"
+            """).AsNoTracking().ToListAsync(ct);
+        var lists = (await ListsAsync(account, ct)).ToDictionary(list => list.Id);
+        var results = new List<WebSearchItem>();
+        foreach (var row in rows)
+        {
+            var entity = new WebEntity(row);
+            if (entity.IsDeleted || !InPersonalSpace(entity, account) || !Guid.TryParse(row.EntityKey, out var id)) continue;
+            var text = entity.Text("text", "RawMarkdown") ?? "";
+            if (row.Kind == "task")
+            {
+                var task = ReadTask(row.EntityKey, entity, account, includeNotes: true);
+                if (task is null || !lists.TryGetValue(task.ListId, out var list)) continue;
+                results.Add(new("task", id, task.Title, SearchSnippet(task.Notes, query), list.Name));
+            }
+            else if (row.Kind == "page")
+            {
+                results.Add(new("page", id, entity.Text("title", "Title") ?? "Untitled", SearchSnippet(text, query),
+                    entity.Date("create", "DailyDate") is { } date ? $"Daily page · {date:yyyy-MM-dd}" : "Page"));
+            }
+            else if (row.Kind == "pad" && (entity.Number("create", "Kind") ?? 0) == 0)
+            {
+                var first = text.Split('\n').FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? "Empty note";
+                results.Add(new("pad", id, first.Length > 100 ? first[..100] : first, SearchSnippet(text, query),
+                    entity.Text("archived", "ArchivedAtUtc") is null ? "Personal pad" : "Archived note"));
+            }
+            if (results.Count > 100) return new(results.Take(100).ToList(), true);
+        }
+        return new(results, false);
+    }
+
+    private static string? SearchSnippet(string? text, string query)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var index = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var start = Math.Max(0, index - 45);
+        var length = Math.Min(text.Length - start, Math.Max(140, query.Length));
+        var excerpt = string.Join(" ", text.Substring(start, length).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return (start > 0 ? "…" : "") + excerpt + (start + length < text.Length ? "…" : "");
+    }
 
     public async Task<WebAppearance> AppearanceAsync(Account account, CancellationToken ct)
     {

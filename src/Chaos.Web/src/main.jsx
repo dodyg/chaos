@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  CalendarDays, Check, ChevronLeft, ChevronRight, Download, Inbox, List, LogOut, Plus, RefreshCw, Repeat2, WifiOff, X,
+  BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, Download, Inbox, List, LogOut, Plus, RefreshCw, Repeat2, Search, StickyNote, WifiOff, X,
 } from "lucide-react";
 import { forgetOfflineSession, useMobileData, writeTask } from "./mobileData.js";
 import { usePwa } from "./usePwa.js";
 import { MarkdownNotes } from "./MarkdownNotes.jsx";
+import { SearchScreen } from "./SearchScreen.jsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { applyTheme, defaultTheme, parseTheme } from "../../Chaos.Desktop/frontend/src/appearance";
-import { dayBackgroundStyle } from "./appearance.js";
+import { dayBackgroundStyle, sceneBackgroundStyle } from "./appearance.js";
+import { pageContent } from "./pageContent.js";
 import "./styles.css";
 
 const statuses = ["Not started", "In progress", "Waiting on someone", "Needs review", "Done", "Cancelled"];
@@ -31,11 +33,16 @@ function getRoute(hash) {
   const [path, query] = hash.slice(1).split("?");
   const [kind, value] = path.split("/");
   const id = value?.toLowerCase();
+  if (kind === "search") return { kind, path: "/today", query: new URLSearchParams(query).get("q") ?? "", tab: "search" };
   if (kind === "list" && guid.test(id)) return { kind, id, path: `/lists/${id}/tasks`, href: `#list/${id}`, tab: "lists" };
   if (kind === "task" && guid.test(id)) {
     const from = new URLSearchParams(query).get("from");
-    const back = from === "#lists" || (from?.startsWith("#list/") && guid.test(from.slice(6))) ? from : "#my-day";
+    const back = from === "#lists" || from?.startsWith("#search?") || from === "#search" || (from?.startsWith("#list/") && guid.test(from.slice(6))) ? from : "#my-day";
     return { kind, id, path: `/tasks/${id}`, back, tab: back === "#my-day" ? "today" : "lists" };
+  }
+  if (kind === "pad" || kind === "pages") {
+    const from = new URLSearchParams(query).get("from");
+    return { kind, id: guid.test(id) ? id : null, path: `/${kind}`, tab: kind, back: from === "#search" || from?.startsWith("#search?") ? from : null };
   }
   if (kind === "lists") return { kind, path: "/lists", href: "#lists", tab: kind };
   return { kind: "today", path: "/today", href: "#my-day", tab: "today" };
@@ -106,6 +113,10 @@ function App() {
 
   const hasNavigation = view.mode !== "signed-out";
   const busyLabel = busy ? "Saving…" : feedback?.text;
+  const page = route.kind === "pages" && route.id && Array.isArray(view.data)
+    ? view.data.find(item => item.id === route.id) : null;
+  const pageBackground = page ? sceneBackgroundStyle(pageContent(page.markdown).background) : undefined;
+  const background = route.kind === "today" ? dayBackgroundStyle(view.appearance?.background) : pageBackground;
   return (
     <>
       <a className="skip" href="#content" onClick={event => {
@@ -117,13 +128,14 @@ function App() {
           <a className="brand" href="#my-day"><img src="/app/icons/icon-192.png" alt="" />Chaos</a>
           <div className="header-actions">
             {pwa.offerInstall && <Button variant="ghost" size="icon" className="icon-button" onClick={pwa.offerInstall} aria-label="Install Chaos" title="Install Chaos"><Download /></Button>}
-            {hasNavigation && <Button variant="ghost" size="icon" className="icon-button" onClick={view.refresh} aria-label="Refresh tasks" title="Refresh tasks" disabled={busy}><RefreshCw /></Button>}
+            {hasNavigation && <Button asChild variant="ghost" size="icon" className="icon-button"><a href="#search" aria-label="Search" title="Search"><Search /></a></Button>}
+            {hasNavigation && <Button variant="ghost" size="icon" className="icon-button" onClick={view.refresh} aria-label="Refresh" title="Refresh" disabled={busy}><RefreshCw /></Button>}
             {view.session && <Button variant="ghost" size="icon" className="icon-button" onClick={() => void save("/signout")} aria-label="Sign out" title="Sign out" disabled={!canWrite || busy}><LogOut /></Button>}
           </div>
         </div>
       </header>
 
-      <main id="content" className={`content ${route.kind === "today" && view.appearance?.background ? "day-content" : ""}`} style={route.kind === "today" ? dayBackgroundStyle(view.appearance?.background) : undefined} tabIndex={-1}>
+      <main id="content" className={`content ${background ? (page ? "page-content" : "day-content") : ""}`} style={background} tabIndex={-1}>
         {pwa.reloadForUpdate && <div className="notice update">
           <span>A new version of Chaos is ready.</span>
           <Button variant="link" className="text-button" onClick={pwa.reloadForUpdate} disabled={busy}>Reload for the new version</Button>
@@ -151,6 +163,8 @@ function App() {
             <nav aria-label="Main navigation">
               <a href="#my-day" aria-current={route.tab === "today" ? "page" : undefined}><CalendarDays />My Day</a>
               <a href="#lists" aria-current={route.tab === "lists" ? "page" : undefined}><List />Lists</a>
+              <a href="#pad" aria-current={route.tab === "pad" ? "page" : undefined}><StickyNote />Pad</a>
+              <a href="#pages" aria-current={route.tab === "pages" ? "page" : undefined}><BookOpen />Pages</a>
             </nav>
             <Button className="mobile-action" disabled={!canAdd || busy} onClick={() => setComposer(true)}>
               <Plus size={21} />Add task
@@ -176,13 +190,14 @@ function App() {
 
 function Screen({ route, view, canWrite, act }) {
   const { data, mode, lists } = view;
-  if (mode === "loading") return <p className="placeholder" role="status">Loading tasks…</p>;
+  if (route.kind === "search" && mode !== "loading" && mode !== "error") return <SearchScreen initialQuery={route.query} session={view.session} offline={mode === "offline" || !view.connected} />;
+  if (mode === "loading") return <p className="placeholder" role="status">Loading…</p>;
   if (mode === "error") return <div className="empty">
     <h1>Could not open this view</h1><p>{view.error}</p>
     <Button variant="outline" className="mobile-action" onClick={view.refresh}>Try again</Button>
   </div>;
   if (!data) return <div className="empty">
-    <h1>{route.kind === "today" ? "My Day" : route.kind === "task" ? "Task" : "Lists"}</h1>
+    <h1>{route.kind === "today" ? "My Day" : route.kind === "task" ? "Task" : route.kind === "pad" ? "Personal pad" : route.kind === "pages" ? "Pages" : "Lists"}</h1>
     <p>This view has not been saved on this device. Reconnect to open it.</p>
     <Button asChild variant="link" className="text-button"><a href="#my-day">Back to My Day</a></Button>
   </div>;
@@ -191,6 +206,7 @@ function Screen({ route, view, canWrite, act }) {
       back={route.back} canWrite={canWrite} offline={mode === "offline"} act={act} />;
   }
   if (route.kind === "lists") return <ListPicker lists={data} />;
+  if (route.kind === "pad" || route.kind === "pages") return <ReadingView route={route} items={data} />;
 
   const today = route.kind === "today";
   const tasks = data.tasks;
@@ -230,6 +246,47 @@ function Screen({ route, view, canWrite, act }) {
       </section>}
     </>
   );
+}
+
+function ReadingView({ route, items }) {
+  const isPad = route.kind === "pad";
+  const label = isPad ? "Personal pad" : "Pages";
+  const selected = items.find(item => item.id === route.id);
+  const markdown = selected ? (isPad ? selected.markdown : pageContent(selected.markdown).body) : "";
+  const title = item => isPad ? (item.kind === 1 ? "Drawing" : item.markdown.split("\n").find(line => line.trim())?.replace(/^\s*#+\s*/, "").slice(0, 100) || "Empty note") : (item.title || "Untitled");
+  if (route.id) return <>
+    <a className="back" href={route.back ?? `#${route.kind}`}><ChevronLeft size={18} />{route.back ? "Search" : label}</a>
+    {selected ? <>
+      <div className="screen-heading task-heading"><h1>{title(selected)}</h1></div>
+      {isPad && selected.isArchived && <p className="reading-meta">Archived</p>}
+      {isPad && selected.kind === 1 ? <p className="reading-meta">Open this drawing on desktop to view it.</p>
+        : markdown.trim() ? <MarkdownNotes>{markdown}</MarkdownNotes> : <p className="reading-meta">No content.</p>}
+    </> : <div className="empty"><h1>Item unavailable</h1><p>It may have been deleted or is no longer synced.</p></div>}
+  </>;
+  const byId = new Map(items.map(item => [item.id, item]));
+  const location = item => {
+    if (item.dailyDate) return `Daily page - ${readDate(item.dailyDate)}`;
+    const parents = [], seen = new Set([item.id]);
+    let parent = byId.get(item.parentId);
+    while (parent && !seen.has(parent.id)) { seen.add(parent.id); parents.unshift(parent.title || "Untitled"); parent = byId.get(parent.parentId); }
+    return parents.join(" / ");
+  };
+  const rows = entries => <ul className="rows">{entries.map(item => <li key={item.id}><a className="list-row" href={`#${route.kind}/${item.id}`}>
+    <span className="list-icon">{isPad ? <StickyNote /> : item.dailyDate ? <CalendarDays /> : <BookOpen />}</span>
+    <span className="row-title">{title(item)}{(isPad ? item.isArchived : location(item)) && <small>{isPad ? "Archived" : location(item)}</small>}</span>
+    <ChevronRight className="row-arrow" size={18} />
+  </a></li>)}</ul>;
+  const pages = isPad ? [] : items.filter(item => !item.dailyDate);
+  const dailyPages = isPad ? [] : items.filter(item => item.dailyDate).sort((a, b) => b.dailyDate.localeCompare(a.dailyDate) || a.id.localeCompare(b.id));
+  return <>
+    <div className="screen-heading"><h1>{label}</h1><Badge variant="secondary" className="count">{items.length}</Badge></div>
+    {!items.length ? <div className="empty"><div className="empty-icon">{isPad ? <StickyNote /> : <BookOpen />}</div>
+      <h2>No synced {isPad ? "notes" : "pages"} yet</h2><p>Notes and pages synced from your desktop will appear here.</p></div>
+      : isPad ? rows(items) : <>
+        {pages.length > 0 && <section className="page-section" aria-labelledby="pages-heading"><h2 id="pages-heading">Pages <span>{pages.length}</span></h2>{rows(pages)}</section>}
+        {dailyPages.length > 0 && <section className="page-section" aria-labelledby="daily-pages-heading"><h2 id="daily-pages-heading">Daily pages <span>{dailyPages.length}</span></h2>{rows(dailyPages)}</section>}
+      </>}
+  </>;
 }
 
 function ListPicker({ lists }) {
@@ -282,7 +339,7 @@ function TaskList({ tasks, route, canWrite, act }) {
 function TaskDetail({ task, list, back, canWrite, offline, act }) {
   return (
     <>
-      <a className="back" href={back}><ChevronLeft size={18} />{back === "#my-day" ? "My Day" : list?.name ?? "Lists"}</a>
+      <a className="back" href={back}><ChevronLeft size={18} />{back === "#my-day" ? "My Day" : back.startsWith("#search") ? "Search" : list?.name ?? "Lists"}</a>
       <div className="screen-heading task-heading"><h1>{task.title}</h1></div>
       <dl className="task-fields">
         <div><dt>Status</dt><dd>{statuses[task.status] ?? "Open"}</dd></div>

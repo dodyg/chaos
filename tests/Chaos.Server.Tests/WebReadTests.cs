@@ -44,6 +44,8 @@ public sealed class WebReadTests(PostgresServer postgres)
         var tombstone = Guid.NewGuid();
         var purged = Guid.NewGuid();
         var calendar = Guid.NewGuid();
+        var note = Guid.NewGuid();
+        var page = Guid.NewGuid();
         account.ProfileId = profile;
         account.PersonalSpaceId = space;
         account.InboxId = list;
@@ -79,6 +81,15 @@ public sealed class WebReadTests(PostgresServer postgres)
             Row("task", unscheduled, ("create", Fields(("SpaceId", space.ToString("D")))),
                 ("place", Fields(("ContainerId", archivedList.ToString("D")))), ("title", Fields(("Title", "Unscheduled")))),
             TaskRow(tombstone, "Deleted", ("deleted", Fields(("DeletedAtUtc", now.ToString("o"))))));
+        db.SyncEntities.AddRange(
+            Row("pad", note, ("create", Fields(("SpaceId", space.ToString("D")), ("Kind", 0L))),
+                ("text", Fields(("RawMarkdown", "**Private note**")))),
+            Row("pad", Guid.NewGuid(), ("create", Fields(("SpaceId", space.ToString("D")))),
+                ("deleted", Fields(("DeletedAtUtc", now.ToString("o"))))),
+            Row("page", page, ("create", Fields(("SpaceId", space.ToString("D")), ("DailyDate", "2026-11-18"))),
+                ("title", Fields(("Title", "Journal"))), ("text", Fields(("RawMarkdown", "# Hello")))),
+            Row("page", Guid.NewGuid(), ("create", Fields(("SpaceId", Guid.NewGuid().ToString("D")))),
+                ("title", Fields(("Title", "Other space")))));
         db.SyncEntities.Add(Row("calendar_source", calendar, ("enabled", Fields(("Enabled", 1L))),
             ("busy", Fields(("CountsAsBusy", 1L))), ("look", Fields(("Color", "#123456")))));
         db.SyncEntities.Add(new SyncEntityRow { AccountId = account.Id, Kind = "calendar_cache", EntityKey = calendar.ToString("D"),
@@ -92,6 +103,31 @@ public sealed class WebReadTests(PostgresServer postgres)
 
         using var noCookie = await anonymous.GetAsync("/v1/web/today");
         await Assert.That(noCookie.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        var notes = (await owner.GetFromJsonAsync<WebNote[]>("/v1/web/pad"))!;
+        await Assert.That(notes.Length).IsEqualTo(1);
+        await Assert.That(notes[0].Markdown).IsEqualTo("**Private note**");
+        var pages = (await owner.GetFromJsonAsync<WebPage[]>("/v1/web/pages"))!;
+        await Assert.That(pages.Length).IsEqualTo(1);
+        await Assert.That(pages[0].Markdown).IsEqualTo("# Hello");
+        await Assert.That(pages[0].DailyDate).IsEqualTo(new DateOnly(2026, 11, 18));
+        await Assert.That((await other.GetFromJsonAsync<WebNote[]>("/v1/web/pad"))!.Length).IsEqualTo(0);
+        await Assert.That((await other.GetFromJsonAsync<WebPage[]>("/v1/web/pages"))!.Length).IsEqualTo(0);
+        using var anonymousPad = await anonymous.GetAsync("/v1/web/pad");
+        await Assert.That(anonymousPad.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        var taskSearch = (await owner.GetFromJsonAsync<WebSearchResult>("/v1/web/search?q=sYnCeD%20NoTeS"))!;
+        await Assert.That(taskSearch.Items.Any(item => item.Kind == "task" && item.Id == planned)).IsTrue();
+        var noteSearch = (await owner.GetFromJsonAsync<WebSearchResult>("/v1/web/search?q=private"))!;
+        await Assert.That(noteSearch.Items.Single().Id).IsEqualTo(note);
+        var pageSearch = (await owner.GetFromJsonAsync<WebSearchResult>("/v1/web/search?q=hello"))!;
+        await Assert.That(pageSearch.Items.Single().Id).IsEqualTo(page);
+        var deletedSearch = (await owner.GetFromJsonAsync<WebSearchResult>("/v1/web/search?q=Deleted"))!;
+        await Assert.That(deletedSearch.Items.Count).IsEqualTo(0);
+        var foreignSearch = (await other.GetFromJsonAsync<WebSearchResult>($"/v1/web/search?q=private&accountId={account.Id}"))!;
+        await Assert.That(foreignSearch.Items.Count).IsEqualTo(0);
+        using var anonymousSearch = await anonymous.GetAsync("/v1/web/search?q=private");
+        await Assert.That(anonymousSearch.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        using var longSearch = await owner.GetAsync($"/v1/web/search?q={new string('x', 201)}");
+        await Assert.That(longSearch.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         var appearance = (await owner.GetFromJsonAsync<WebAppearance>("/v1/web/appearance"))!;
         await Assert.That(appearance.Theme).Contains("Midnight");
         await Assert.That(appearance.Background).Contains("sunset");
