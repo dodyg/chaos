@@ -7,9 +7,9 @@
   <ItemGroup>
     <!-- Desktop framework: NeoAstra 1.12.0 (plan §1). Keep template/tool versions aligned. -->
     <PackageVersion Include="NeoAstra" Version="1.12.0" />
-    <!-- Client persistence: SQLite via Microsoft.Data.Sqlite 10.0.14 (plan §1). EF Core is banned on the
+    <!-- Client persistence: SQLite via Microsoft.Data.Sqlite 11.0.0 (plan §1). EF Core is banned on the
          client side and enforced in Directory.Build.targets (decisions 2026-11-18). -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <!-- Tests: TUnit 1.81.16, latest stable verified at kickoff 2026-11-09 (plan §1). -->
     <PackageVersion Include="TUnit" Version="1.81.16" />
     <!-- Calendar feeds (PLAN2 P5): ICS parsing and recurrence expansion. -->
@@ -17,14 +17,13 @@
     <!-- Image editing and thumbnails (PLAN2 P9 follow-up): SkiaSharp, MIT. -->
     <PackageVersion Include="SkiaSharp" Version="4.156.1" />
     <!-- OS-protected secret store (DPAPI) for calendar feed addresses (PLAN2 P5). -->
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="11.0.0" />
     <!-- Online service (PLAN2 P12). Aspire orchestrates local development from the start
          (decisions 2026-11-18). The server uses EF Core (PLAN2 §8.1); the client never does. -->
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="17.0.0" />
     <PackageVersion Include="Aspire.Hosting.Dotnet" Version="17.0.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="17.0.0" />
-    <!-- Server persistence: EF Core follows the newest stable Npgsql EF provider (PLAN2 §8.1). OpenIddict
-         7.9.0 needs EF Core 11, so 7.8.0 is pinned until Npgsql 11 is stable (decisions 2026-11-18). -->
+    <!-- Server persistence: EF Core stays on 10 with the stable Npgsql EF provider 10. OpenIddict 7.9.0 needs stable EF Core 11, and Npgsql EF 11 is still RC (it pins EF Core to the same RC), so 7.8.0 stays pinned until Npgsql 11 is stable (decisions 2026-11-18). -->
     <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.6.5" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
