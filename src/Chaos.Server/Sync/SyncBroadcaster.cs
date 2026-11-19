@@ -5,14 +5,14 @@ namespace Chaos.Server.Sync;
 /// <summary>
 /// Tells an account's open event streams that its sequence advanced (PLAN2 §8.3 step 7). In-process
 /// subscribers hear it directly; other instances hear it through PostgreSQL <c>NOTIFY</c>
-/// (<see cref="Channel"/>), which the push transaction also sends. The event stream itself is P15.
+/// (<see cref="SyncNotificationListener"/>), which the push transaction also sends. The event stream itself is P15.
 /// </summary>
 public sealed class SyncBroadcaster
 {
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Action<long>>> _subscribers = new();
 
-    /// <summary>The PostgreSQL notification channel of one account.</summary>
-    public static string Channel(Guid accountId) => $"chaos_seq_{accountId:N}";
+    /// <summary>The accounts that have at least one open event stream in this process.</summary>
+    public IReadOnlyList<Guid> SubscribedAccounts() => [.. _subscribers.Keys];
 
     public IDisposable Subscribe(Guid accountId, Action<long> onSequence)
     {

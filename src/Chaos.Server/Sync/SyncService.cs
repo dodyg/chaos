@@ -172,8 +172,8 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
     private async Task NotifyAsync(Guid accountId, long seq, CancellationToken ct)
     {
         broadcaster.Publish(accountId, seq);
-        var channel = SyncBroadcaster.Channel(accountId);
-        var payload = seq.ToString(CultureInfo.InvariantCulture);
+        var channel = SyncNotificationListener.Channel;
+        var payload = SyncNotificationListener.Payload(accountId, seq);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {payload})", ct);
     }
 

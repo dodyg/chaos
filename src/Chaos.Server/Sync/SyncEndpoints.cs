@@ -17,11 +17,15 @@ public static class SyncEndpoints
 {
     public static IServiceCollection AddSyncService(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<SyncOptions>(configuration.GetSection(SyncOptions.Section));
+        services.AddOptions<SyncOptions>().Bind(configuration.GetSection(SyncOptions.Section))
+            .Validate(o => o.ChangeLogHorizon > TimeSpan.Zero && o.HorizonJobInterval > TimeSpan.Zero && o.EventKeepAlive > TimeSpan.Zero,
+                "Sync:ChangeLogHorizon, Sync:HorizonJobInterval and Sync:EventKeepAlive must be greater than zero.")
+            .ValidateOnStart();
         services.AddSingleton<SyncBroadcaster>();
         services.TryAddSingleton<SyncKindCatalog>();
         services.AddScoped<SyncService>();
         services.AddHostedService<SyncHorizonService>();
+        services.AddHostedService<SyncNotificationListener>();
         return services;
     }
 
