@@ -6,7 +6,9 @@
   "scripts": {
     "build": "vite build",
     "test": "tsx --test src/*.test.jsx src/*.test.js",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
@@ -25,6 +27,7 @@
     "eslint": "10.15.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "31.0.0",
+    "prettier": "3.10.1",
     "tailwindcss": "4.3.5",
     "tsx": "4.23.15",
     "vite": "8.3.8"

@@ -24,7 +24,7 @@ Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) repla
 
 Still open: narrower session
 interfaces, splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
-backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
+backend, and the server test gaps (they need PostgreSQL).
 
 ## 0. Build and test status
 
@@ -173,7 +173,8 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   `@vitejs/plugin-react` are set to `latest` in `frontend/package.json`, against `docs/dependency-versions.md`.
   `cn` is unused; remove it.
 - **No lint or format tooling.** The existing `eslint-disable` comments are not enforced by anything. Add ESLint
-  (with `react-hooks`) and Prettier, or Biome, to both apps.
+  (with `react-hooks`) and Prettier, or Biome, to both apps. (Done: Prettier 3.10.1 beside ESLint in both apps, `printWidth` 140,
+  `npm run format` / `format:check`, and `format:check` runs in CI.)
 
 ### Repository housekeeping
 - The untracked root `package.json`, `package-lock.json` and `node_modules` (just `tsrs ^0.25`, while the
