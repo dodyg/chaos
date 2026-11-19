@@ -13,7 +13,7 @@ namespace Chaos.Application.Tags;
 /// tagging with path creation. Every mutation carries an OperationId and replays like the
 /// task commands. Full per-task history and undo for tag changes arrive with package 4.
 /// </summary>
-public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
+public sealed partial class TagCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
     private const string Conflict = "This tag changed elsewhere while you were working. Refresh and try again.";
 
@@ -115,18 +115,6 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
             };
         }, ct);
     }
-
-    /// <summary>Counts what a merge would change, without changing anything (PLAN §6: preview affected counts).</summary>
-    public async Task<TagMergePreview> PreviewMergeAsync(string sourceTagId, string targetTagId, CancellationToken ct = default) =>
-        await store.QueryAsync(async (session, token) =>
-        {
-            var source = await RequireTagAsync(session, sourceTagId, token);
-            var target = await RequireTagAsync(session, targetTagId, token);
-            await RequireMergeableAsync(session, source, target, token);
-            var counter = new MergeCounter();
-            await MergeIntoAsync(session, source, target, counter, apply: false, ownerId: source.OwnerProfileId, now: default, token);
-            return counter.ToPreview();
-        }, ct);
 
     /// <summary>
     /// Reassigns every task and subtask link from source to target with deduplication, moves
@@ -354,75 +342,6 @@ public sealed class TagCommands(IApplicationStore store, IIdGenerator ids, TimeP
 
             return replayed ? result with { Replayed = true } : result;
         }, ct);
-    }
-
-    /// <summary>Active tags of the local profile with display paths, in tree order (parents before children).</summary>
-    public async Task<IReadOnlyList<TagWithPath>> ListAsync(CancellationToken ct = default) =>
-        await store.QueryAsync(async (session, token) =>
-        {
-            var profile = await RequireProfileAsync(session, token);
-            return TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, token));
-        }, ct);
-
-    public async Task<IReadOnlyList<TagRecord>> ListDeletedAsync(CancellationToken ct = default) =>
-        await store.QueryAsync(async (session, token) =>
-        {
-            var profile = await RequireProfileAsync(session, token);
-            return await session.Tags.ListDeletedByOwnerAsync(profile.Id, token);
-        }, ct);
-
-    public async Task<IReadOnlyList<string>> ListTargetTagsAsync(TagTargetKind kind, string targetId, CancellationToken ct = default)
-    {
-        RequireTargetKind(kind);
-        return await store.QueryAsync((session, token) => ListTargetTagIdsAsync(session, kind, targetId, token), ct);
-    }
-
-    /// <summary>
-    /// Existing tags that match what the person is typing (PLAN §6: suggest existing tags so
-    /// errand and errands do not both appear). Exact identity first, then prefix and near
-    /// matches; nothing is created or merged here.
-    /// </summary>
-    public async Task<IReadOnlyList<TagWithPath>> SuggestAsync(string? text, int limit = 8, CancellationToken ct = default)
-    {
-        var input = (text ?? string.Empty).Trim().TrimStart('#');
-        var lastSegment = input.Split('/')[^1].Trim();
-        if (lastSegment.Length == 0)
-        {
-            return [];
-        }
-
-        var key = TagName.Normalize(lastSegment);
-        var all = await ListAsync(ct);
-        return [.. all
-            .Where(row => TagName.IsNearMatch(key, row.Tag.NormalizedName))
-            .OrderBy(row => row.Tag.NormalizedName == key ? 0 : row.Tag.NormalizedName.StartsWith(key, StringComparison.Ordinal) ? 1 : 2)
-            .ThenBy(row => row.Path, StringComparer.Create(System.Globalization.CultureInfo.InvariantCulture, ignoreCase: true))
-            .ThenBy(row => row.Tag.Id, StringComparer.Ordinal)
-            .Take(Math.Clamp(limit, 1, 50))];
-    }
-
-    /// <summary>Orders a flat tag list depth-first with display paths; orphans (parent not active) are listed at the root.</summary>
-    public static IReadOnlyList<TagWithPath> TreeOrder(IReadOnlyList<TagRecord> tags)
-    {
-        var byParent = tags.ToLookup(tag => tag.ParentTagId is { } parent && tags.Any(row => row.Id == parent) ? parent : null);
-        var ordered = new List<TagWithPath>(tags.Count);
-        void Walk(string? parentId, string prefix, int depth)
-        {
-            if (depth > TagName.MaxDepth * 2)
-            {
-                return; // defensive bound; cycles are rejected on write
-            }
-
-            foreach (var tag in byParent[parentId].OrderBy(row => row.Position).ThenBy(row => row.NormalizedName, StringComparer.Ordinal).ThenBy(row => row.Id, StringComparer.Ordinal))
-            {
-                var path = prefix.Length == 0 ? tag.DisplayName : $"{prefix}/{tag.DisplayName}";
-                ordered.Add(new TagWithPath(tag, path));
-                Walk(tag.Id, path, depth + 1);
-            }
-        }
-
-        Walk(null, string.Empty, 0);
-        return ordered;
     }
 
     private async Task<TagMutationResult> MutateTagAsync<TCommand>(

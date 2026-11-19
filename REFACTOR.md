@@ -113,7 +113,7 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
 - **Large files:** `Planning/MyWeekCommands.cs` (1,399 lines, 68 members), `Pages/PageCommands.cs`,
   `Pad/PadCommands.cs` and `Tags/TagCommands.cs`. Split queries from commands, and move the request and result
   records into their own files. (Done: `MyWeekCommands` is split into contracts, commands and read model, and the page, pad and tag
-  records have their own files. `PageCommands`, `PadCommands` and `TagCommands` (680–830 lines each) still mix queries and commands.)
+  records have their own files. `PageCommands`, `PadCommands` and `TagCommands` each keep their read methods in a `*.Queries.cs` partial, leaving 560–650 lines of commands and helpers.)
 
 ### Desktop RPC services (`src/Chaos.Desktop/Services`)
 - There are 167 `catch (AppException)` blocks that each map the error by hand, and the `Version`/`Date` parsers
