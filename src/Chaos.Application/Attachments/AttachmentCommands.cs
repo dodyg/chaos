@@ -51,8 +51,9 @@ public sealed class AttachmentCommands
     public const long ThumbnailThresholdBytes = 2L * 1024 * 1024;
 
     public AttachmentCommands(IApplicationStore store, IAttachmentFileStore files, IIdGenerator ids, TimeProvider clock, IUploadStaging staging, AttachmentLimits? limits = null,
-        IImageProcessor? images = null, IThumbnailCache? thumbnails = null)
+        IImageProcessor? images = null, IThumbnailCache? thumbnails = null, IAttachmentAvailability? availability = null)
     {
+        Availability = availability;
         _images = images;
         _thumbnails = thumbnails;
         _store = store;
@@ -68,7 +69,7 @@ public sealed class AttachmentCommands
     public IAttachmentFileStore Files => _files;
 
     /// <summary>Set when sync can fetch bytes that are on the service but not here (PLAN2 §9.2); null means this device only has what it holds.</summary>
-    public IAttachmentAvailability? Availability { get; set; }
+    public IAttachmentAvailability? Availability { get; }
 
     /// <summary>
     /// Opens a file's bytes. When they are not here and the online service may have them, fetches them first: opening a large file
