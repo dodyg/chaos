@@ -23,7 +23,7 @@ The desktop composition root is now `src/Chaos.Desktop/DesktopComposition.cs` (s
 Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) replaces the 47 `(SqliteDataSession)` casts, and `AuthSetup` loads its key certificates once for both OpenIddict builders. Several small items below were already finished earlier and are stale (catalog dictionary lookup, `SyncEngine` gate, lazy session stores, cached undo wrappers, security-header extension, side effects out of `AttachmentCommands`).
 
 Still open: narrower session
-interfaces, `SELECT *` mappers, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
+interfaces, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
 from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
 backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
 
@@ -135,7 +135,7 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   - Split `Sync/SyncApplier.cs` (1,044 lines) into upsert/merge, unique-rule resolution, parking, and
     search/revision side effects.
 - **Small items:**
-  - 138 uses of `SELECT *` tie the mappers to column order.
+  - `SELECT *` (done): mappers that read by position use explicit column lists; the rest read by column name.
   - `SqliteDataSession` creates about 30 store objects for every read; create them lazily.
   - `SyncApplier.cs:224` searches the catalog with a linear `FirstOrDefault` for every change; use a dictionary.
   - `SyncEngine.Dispose` disposes `_cycleGate` while an outside `SyncNowAsync` may still be running.
