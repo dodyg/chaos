@@ -20,9 +20,15 @@ public static class BlobEndpoints
 
     public static IServiceCollection AddBlobService(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
-        services.Configure<BlobOptions>(configuration.GetSection(BlobOptions.Section));
+        services.AddOptions<BlobOptions>().Bind(configuration.GetSection(BlobOptions.Section))
+            .Validate(o => o.PartSize > 0 && o.MaxBlobBytes > 0, "Blob:PartSize and Blob:MaxBlobBytes must be greater than zero.")
+            .Validate(o => o.UnreferencedGrace >= TimeSpan.Zero && o.UploadExpiry > TimeSpan.Zero && o.JobInterval > TimeSpan.Zero,
+                "Blob:UnreferencedGrace must not be negative; Blob:UploadExpiry and Blob:JobInterval must be greater than zero.")
+            .ValidateOnStart();
         services.Configure<KeyVaultOptions>(configuration.GetSection(KeyVaultOptions.Section));
-        services.Configure<ClamOptions>(configuration.GetSection(ClamOptions.Section));
+        services.AddOptions<ClamOptions>().Bind(configuration.GetSection(ClamOptions.Section))
+            .Validate(o => o.Port is > 0 and <= 65535, "Clam:Port must be a valid port number.")
+            .ValidateOnStart();
 
         // Development fills in the folders and the scanner; any other host must say where its blobs, key and scanner are.
         services.TryAddSingleton<IBlobStore>(provider =>
