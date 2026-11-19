@@ -44,11 +44,8 @@ public sealed record GitHubSyncResponse(bool Ok, GitHubSyncDto? Sync, TaskErrorR
 public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplicationStore store, GitHubSyncEngine? sync = null, GitHubCliClient? attachments = null, GitHubSyncScheduler? scheduler = null)
 {
     [NeoRpcMethod("status")]
-    public async ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("github.status");
-        try
-        {
+    public ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct) =>
+        Rpc.Run<GitHubStatusResponse>("github.status", async () => {
             var status = await commands.StatusAsync(ct);
             var targets = await store.QueryAsync(async (s, token) =>
             {
@@ -61,16 +58,12 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             }, ct);
             return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags, c.RunnerDeviceName, status.IsRunner) : null,
                 status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString())).ToArray(), targets, null, SyncStatus(status.Connection));
-        }
-        catch (AppException e) { return new(false, null, [], [], TaskRpcService.ToErrorResponse(e)); }
-    }
+        },
+            error => new(false, null, [], [], error));
 
     [NeoRpcMethod("taskSync")]
-    public async ValueTask<GitHubTaskSyncResponse> TaskSyncAsync(GitHubTaskSyncRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("github.taskSync");
-        try
-        {
+    public ValueTask<GitHubTaskSyncResponse> TaskSyncAsync(GitHubTaskSyncRequest request, CancellationToken ct) =>
+        Rpc.Run<GitHubTaskSyncResponse>("github.taskSync", async () => {
             return await store.QueryAsync(async (s, token) =>
             {
                 var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
@@ -93,9 +86,8 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 return new(true, true, link.LocalDirty, state, null, assigned, c.PostDiaryByDefault, Number(link.Version), link.ConflictNoticeUtc is not null,
                     error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true, assignees);
             }, ct);
-        }
-        catch (AppException e) { return new(false, false, false, null, TaskRpcService.ToErrorResponse(e)); }
-    }
+        },
+            error => new(false, false, false, null, error));
 
     /// <summary>Issue assignees as last seen on GitHub, with a pending "Assign me" change already applied. Null when unknown.</summary>
     public static IReadOnlyList<string>? Assignees(GitHubIssueSnapshot? baseline, int? localIntent, string accountLogin)
@@ -139,11 +131,8 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     }
 
     [NeoRpcMethod("syncNow")]
-    public async ValueTask<GitHubSyncResponse> SyncNowAsync(GitHubSyncRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("github.syncNow");
-        try
-        {
+    public ValueTask<GitHubSyncResponse> SyncNowAsync(GitHubSyncRequest request, CancellationToken ct) =>
+        Rpc.Run<GitHubSyncResponse>("github.syncNow", async () => {
             ct.ThrowIfCancellationRequested();
             if (sync is null) throw new AppException(AppErrorKind.UnsupportedCapability, "GitHub sync is not configured in this host.");
             var current = await commands.StatusAsync(ct);
@@ -151,9 +140,8 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             if (!current.IsRunner) throw AppException.Validation("runner", "GitHub sync runs on another device. Select this device in GitHub settings first.");
             var activity = sync.RequestSync(string.IsNullOrWhiteSpace(request.RepositoryId) ? null : request.RepositoryId, connection.Id);
             return new(true, MapSync(activity), null);
-        }
-        catch (AppException e) { return new(false, null, TaskRpcService.ToErrorResponse(e)); }
-    }
+        },
+            error => new(false, null, error));
 
     private GitHubSyncDto? SyncStatus(GitHubConnectionRecord? connection)
     {

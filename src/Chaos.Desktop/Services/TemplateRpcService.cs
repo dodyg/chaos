@@ -22,74 +22,57 @@ public sealed record TemplateOperationResponse(bool Ok, TemplateResponse? Templa
 public sealed class TemplateRpcService(TemplateCommands commands)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<TemplateListResponse> ListAsync(TemplateListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.list");
-        try { return new(true, [.. (await commands.ListAsync(null, ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<TemplateListResponse> ListAsync(TemplateListRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.list", async () => new TemplateListResponse(true, [.. (await commands.ListAsync(null, ct)).Select(Map)], null),
+            error => new(false, [], error));
+
     [NeoRpcMethod("listDeleted")]
-    public async ValueTask<TemplateListResponse> ListDeletedAsync(TemplateListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.listDeleted");
-        try { return new(true, [.. (await commands.ListDeletedAsync(ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<TemplateListResponse> ListDeletedAsync(TemplateListRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.listDeleted", async () => new TemplateListResponse(true, [.. (await commands.ListDeletedAsync(ct)).Select(Map)], null),
+            error => new(false, [], error));
 
     [NeoRpcMethod("save")]
-    public async ValueTask<TemplateOperationResponse> SaveAsync(TemplateSaveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.save");
-        try
+    public ValueTask<TemplateOperationResponse> SaveAsync(TemplateSaveRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.save", async () =>
         {
             var payload = ToPayload(request.Payload);
             var result = request.TemplateId is null
                 ? await commands.CreateAsync(new(request.OperationId, request.Name, payload, null), ct)
-                : await commands.UpdateAsync(new(request.OperationId, request.TemplateId, Version(request.ExpectedVersion), request.Name, payload), ct);
-            return new(true, Map(result.Template), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+                : await commands.UpdateAsync(new(request.OperationId, request.TemplateId, RpcParse.Version(request.ExpectedVersion), request.Name, payload), ct);
+            return new TemplateOperationResponse(true, Map(result.Template), null);
+        }, error => new(false, null, error));
 
     [NeoRpcMethod("delete")]
-    public async ValueTask<TemplateOperationResponse> DeleteAsync(TemplateDeleteRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.delete");
-        try { return new(true, Map((await commands.DeleteAsync(new(request.OperationId, request.TemplateId, Version(request.ExpectedVersion)), ct)).Template), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<TemplateOperationResponse> DeleteAsync(TemplateDeleteRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.delete", async () => new TemplateOperationResponse(true, Map((await commands.DeleteAsync(new(request.OperationId, request.TemplateId, RpcParse.Version(request.ExpectedVersion)), ct)).Template), null),
+            error => new(false, null, error));
+
     [NeoRpcMethod("restore")]
-    public async ValueTask<TemplateOperationResponse> RestoreAsync(TemplateDeleteRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.restore");
-        try { return new(true, Map((await commands.RestoreAsync(new(request.OperationId, request.TemplateId, Version(request.ExpectedVersion)), ct)).Template), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<TemplateOperationResponse> RestoreAsync(TemplateDeleteRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.restore", async () => new TemplateOperationResponse(true, Map((await commands.RestoreAsync(new(request.OperationId, request.TemplateId, RpcParse.Version(request.ExpectedVersion)), ct)).Template), null),
+            error => new(false, null, error));
 
     [NeoRpcMethod("instantiate")]
-    public async ValueTask<TaskOperationResponse> InstantiateAsync(TemplateInstantiateRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("templates.instantiate");
-        try { var result = await commands.InstantiateAsync(new(request.OperationId, request.TemplateId, request.ContainerId), ct); return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null); }
-        catch (AppException error) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<TaskOperationResponse> InstantiateAsync(TemplateInstantiateRequest request, CancellationToken ct) =>
+        Rpc.Run("templates.instantiate", async () =>
+        {
+            var result = await commands.InstantiateAsync(new(request.OperationId, request.TemplateId, request.ContainerId), ct);
+            return new TaskOperationResponse(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null);
+        }, error => new(false, request.OperationId, null, error));
 
     private static TemplatePayload ToPayload(TemplatePayloadResponse value) => new()
     {
-        Title = value.Title, Notes = value.Notes, Priority = Parse<TaskPriority>(value.Priority, "priority"), EstimateMinutes = value.EstimateMinutes,
-        CapacityCategory = Parse<CapacityCategory>(value.Category, "category"), PlannedDayOffset = value.PlannedDayOffset,
-        PlannedTime = Time(value.PlannedTime, "plannedTime"), PlannedZoneId = value.PlannedZoneId,
-        DueDayOffset = value.DueDayOffset, DueTime = Time(value.DueTime, "dueTime"), DueZoneId = value.DueZoneId,
+        Title = value.Title, Notes = value.Notes, Priority = RpcParse.Enum<TaskPriority>(value.Priority, "priority"), EstimateMinutes = value.EstimateMinutes,
+        CapacityCategory = RpcParse.Enum<CapacityCategory>(value.Category, "category"), PlannedDayOffset = value.PlannedDayOffset,
+        PlannedTime = RpcParse.OptionalTime(value.PlannedTime, "plannedTime"), PlannedZoneId = value.PlannedZoneId,
+        DueDayOffset = value.DueDayOffset, DueTime = RpcParse.OptionalTime(value.DueTime, "dueTime"), DueZoneId = value.DueZoneId,
         Subtasks = [.. value.Subtasks.Select((part, index) => new TemplateSubtask { Title = part.Title, Notes = part.Notes, Position = (long)index * 1024 })],
         RecurrenceDefault = value.RecurrenceDefault is null ? null : RecurrenceRpcService.Parse(value.RecurrenceDefault),
-        ReminderOffsets = [.. (value.ReminderOffsets ?? []).Select(item => new TemplateReminderOffset(Parse<ReminderAnchor>(item.Anchor, "reminderOffsets.anchor"), item.OffsetMinutes, item.InsistentMinutes))],
+        ReminderOffsets = [.. (value.ReminderOffsets ?? []).Select(item => new TemplateReminderOffset(RpcParse.Enum<ReminderAnchor>(item.Anchor, "reminderOffsets.anchor"), item.OffsetMinutes, item.InsistentMinutes))],
     };
     private static TemplateResponse Map(TemplateRecord row)
     {
         var payload = StoredJsonFormats.ReadSnapshot<TemplatePayload>(row.PayloadJson) ?? throw new AppException(AppErrorKind.StorageUnavailable, "The template could not be read.");
         return new(row.Id, row.Name, row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture), new(payload.Title, payload.Notes, payload.Priority.ToString(), payload.EstimateMinutes, payload.CapacityCategory.ToString(), payload.PlannedDayOffset, payload.PlannedTime?.ToString("HH:mm:ss"), payload.PlannedZoneId, payload.DueDayOffset, payload.DueTime?.ToString("HH:mm:ss"), payload.DueZoneId, [.. payload.Subtasks.OrderBy(x => x.Position).Select(x => new TemplatePartResponse(x.Title, x.Notes))], payload.RecurrenceDefault is null ? null : RecurrenceRpcService.Map(payload.RecurrenceDefault), [.. payload.ReminderOffsets.Select(item => new TemplateReminderOffsetDto(item.Anchor.ToString(), item.OffsetMinutes, item.InsistentMinutes))]));
     }
-    private static long Version(string? value) => long.TryParse(value, out var result) && result > 0 ? result : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
-    private static TimeOnly? Time(string? value, string field) => string.IsNullOrEmpty(value) ? null : TimeOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, "Enter a valid time.");
-    private static T Parse<T>(string value, string field) where T : struct, Enum => Enum.TryParse<T>(value, out var result) && Enum.IsDefined(result) ? result : throw AppException.Validation(field, "Choose a valid value.");
 }

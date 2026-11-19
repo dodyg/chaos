@@ -28,32 +28,22 @@ public sealed record DayChangeResponse(bool Ok, DaySummaryResponse? Day, int Cha
 public sealed class MyDayRpcService(MyDayCommands days)
 {
     [NeoRpcMethod("clock")]
-    public async ValueTask<DayClockResult> ClockAsync(DayClockRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myDay.clock");
-        try { return new(true, Map(await days.ClockAsync(ct)), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<DayClockResult> ClockAsync(DayClockRequest request, CancellationToken ct) =>
+        Rpc.Run<DayClockResult>("myDay.clock", async () => { return new(true, Map(await days.ClockAsync(ct)), null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("open")]
-    public async ValueTask<DayOpenResponse> OpenAsync(DayOpenRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myDay.open");
-        try { return new(true, Map(await days.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<DayOpenResponse> OpenAsync(DayOpenRequest request, CancellationToken ct) =>
+        Rpc.Run<DayOpenResponse>("myDay.open", async () => { return new(true, Map(await days.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("suggestions")]
-    public async ValueTask<DaySuggestionsResponse> SuggestionsAsync(DaySuggestionsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myDay.suggestions");
-        try
-        {
+    public ValueTask<DaySuggestionsResponse> SuggestionsAsync(DaySuggestionsRequest request, CancellationToken ct) =>
+        Rpc.Run<DaySuggestionsResponse>("myDay.suggestions", async () => {
             var suggestions = await days.SuggestAsync(ct);
             return new(true, [.. suggestions.Select(item => new DaySuggestionResponse(TaskRpcService.ToResponse(item.Task), item.ContainerName, item.Reason.ToString()))], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     [NeoRpcMethod("add")]
     public ValueTask<DayChangeResponse> AddAsync(DayItemRequest request, CancellationToken ct)

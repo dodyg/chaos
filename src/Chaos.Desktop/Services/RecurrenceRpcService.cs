@@ -27,26 +27,19 @@ public sealed record UpcomingRecurrenceResponse(bool Ok, IReadOnlyList<UpcomingR
 public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskCommands tasks)
 {
     [NeoRpcMethod("upcoming")]
-    public async ValueTask<UpcomingRecurrenceResponse> UpcomingAsync(UpcomingRecurrenceRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.upcoming");
-        try { return new(true, [.. (await commands.UpcomingAsync(request.Days, request.Limit, ct)).Select(row => new UpcomingRecurrenceDto(row.SourceTaskId, row.Title, row.NominalLocal.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<UpcomingRecurrenceResponse> UpcomingAsync(UpcomingRecurrenceRequest request, CancellationToken ct) =>
+        Rpc.Run<UpcomingRecurrenceResponse>("recurrence.upcoming", async () => { return new(true, [.. (await commands.UpcomingAsync(request.Days, request.Limit, ct)).Select(row => new UpcomingRecurrenceDto(row.SourceTaskId, row.Title, row.NominalLocal.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)))], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("get")]
-    public async ValueTask<RecurrenceGetResponse> GetAsync(RecurrenceGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.get");
-        try
-        {
+    public ValueTask<RecurrenceGetResponse> GetAsync(RecurrenceGetRequest request, CancellationToken ct) =>
+        Rpc.Run<RecurrenceGetResponse>("recurrence.get", async () => {
             var detail = await commands.GetForTaskAsync(request.TaskId, ct);
             return detail is null ? new(true, null, false, [], null) : new(true, Map(detail.Rule), detail.Series.EndedAtUtc is not null,
                 [.. detail.Occurrences.Select(item => new RecurrenceOccurrenceDto(item.TaskId ?? "", item.NominalKey, item.EffectiveLocal,
                     item.State.ToString(), item.CompletedAtUtc is { } instant ? StorageFormats.Instant(instant) : null,
                     item.SeriesRevision.ToString(CultureInfo.InvariantCulture)))], null);
-        }
-        catch (AppException error) { return new(false, null, false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, false, [], error));
 
     [NeoRpcMethod("preview")]
     public ValueTask<RecurrencePreviewResponse> PreviewAsync(RecurrencePreviewRequest request, CancellationToken ct)
@@ -109,16 +102,12 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     }
 
     [NeoRpcMethod("endAndDelete")]
-    public async ValueTask<TaskOperationResponse> EndAndDeleteAsync(RecurrenceActionRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.endAndDelete");
-        try
-        {
+    public ValueTask<TaskOperationResponse> EndAndDeleteAsync(RecurrenceActionRequest request, CancellationToken ct) =>
+        Rpc.Run<TaskOperationResponse>("recurrence.endAndDelete", async () => {
             var result = await commands.EndAndDeleteAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct);
             return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null);
-        }
-        catch (AppException error) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, request.OperationId, null, error));
 
     [NeoRpcMethod("move")]
     public async ValueTask<TaskOperationResponse> MoveAsync(RecurrenceMoveRequest request, CancellationToken ct)

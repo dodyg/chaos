@@ -22,12 +22,9 @@ public sealed record SubtaskOperationResponse(bool Ok, SubtaskResponse? Subtask,
 public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtasks, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("listDeleted")]
-    public async ValueTask<SubtaskListResponse> ListDeletedAsync(SubtaskListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("subtasks.listDeleted");
-        try { return new(true, [.. (await subtasks.ListDeletedAsync(request.TaskId, ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<SubtaskListResponse> ListDeletedAsync(SubtaskListRequest request, CancellationToken ct) =>
+        Rpc.Run<SubtaskListResponse>("subtasks.listDeleted", async () => { return new(true, [.. (await subtasks.ListDeletedAsync(request.TaskId, ct)).Select(Map)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("restore")]
     public async ValueTask<SubtaskOperationResponse> RestoreAsync(SubtaskRestoreRequest request, CancellationToken ct)
     {
@@ -35,17 +32,13 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
         return await RunAsync(() => subtasks.RestoreAsync(new(request.OperationId, request.TaskId, request.SubtaskId, Version(request.ExpectedVersion)), ct));
     }
     [NeoRpcMethod("list")]
-    public async ValueTask<SubtaskListResponse> ListAsync(SubtaskListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("subtasks.list");
-        try
-        {
+    public ValueTask<SubtaskListResponse> ListAsync(SubtaskListRequest request, CancellationToken ct) =>
+        Rpc.Run<SubtaskListResponse>("subtasks.list", async () => {
             var detail = await tasks.GetDetailAsync(request.TaskId, ct);
             if (detail.Task is null) throw AppException.NotFound("That task no longer exists. Refresh and try again.");
             return new(true, [.. detail.Subtasks.Select(Map)], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     [NeoRpcMethod("add")]
     public async ValueTask<SubtaskOperationResponse> AddAsync(SubtaskAddRequest request, CancellationToken ct)
@@ -88,7 +81,7 @@ public sealed class SubtaskRpcService(TaskCommands tasks, SubtaskCommands subtas
         catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
     }
 
-    private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
+    private static long Version(string value) => RpcParse.Version(value, message: "Invalid version. Refresh and try again.");
     private static TaskItemStatus Status(string value) => Enum.TryParse<TaskItemStatus>(value, out var status) && Enum.IsDefined(status) ? status : throw AppException.Validation("status", "Choose a valid status.");
     internal static SubtaskResponse Map(SubtaskRecord row) => new(row.Id, row.TaskId, row.Title, row.Notes, row.Status.ToString(), row.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }

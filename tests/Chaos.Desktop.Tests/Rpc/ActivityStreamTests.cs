@@ -61,7 +61,7 @@ public sealed class ActivityStreamTests
             {
                 var end = index + 1 < starts.Count ? starts[index + 1].Index : text.Length;
                 var body = text[starts[index].Index..end];
-                if (!body.Contains("ActivityScope.Rpc(") && !body.Contains("ActivityScope.Open("))
+                if (!body.Contains("ActivityScope.Rpc(") && !body.Contains("ActivityScope.Open(") && !body.Contains("Rpc.Run<") && !body.Contains("Rpc.Run("))
                 {
                     offenders.Add($"{Path.GetFileName(file)}: {starts[index].Groups[1].Value}");
                 }

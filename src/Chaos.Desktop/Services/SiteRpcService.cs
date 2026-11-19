@@ -13,14 +13,10 @@ public sealed record SiteAddResponse(bool Ok, PadItemResponse? Item, TaskErrorRe
 public sealed class SiteRpcService(SiteNoteCommands sites)
 {
     [NeoRpcMethod("add")]
-    public async ValueTask<SiteAddResponse> AddAsync(SiteAddRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("site.add");
-        try
-        {
+    public ValueTask<SiteAddResponse> AddAsync(SiteAddRequest request, CancellationToken ct) =>
+        Rpc.Run<SiteAddResponse>("site.add", async () => {
             var result = await sites.AddAsync(new(request.OperationId, request.Url), ct);
             return new(true, PadRpcService.Map(new(result.Item, [], [])), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 }

@@ -56,11 +56,8 @@ public sealed record CalendarUnscheduledRequest(CalendarFiltersDto? Filters = nu
 public sealed class CalendarRpcService(CalendarQueries queries)
 {
     [NeoRpcMethod("range")]
-    public async ValueTask<CalendarRangeResponse> RangeAsync(CalendarRangeRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendar.range");
-        try
-        {
+    public ValueTask<CalendarRangeResponse> RangeAsync(CalendarRangeRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarRangeResponse>("calendar.range", async () => {
             var result = await queries.RangeAsync(Date(request.From, "from"), Date(request.To, "to"), ToFilters(request.Filters), ct);
             return new(true, StorageFormats.Date(result.From), StorageFormats.Date(result.To), StorageFormats.Date(result.Today), result.ZoneId,
                 [.. result.Entries.Select(Map)],
@@ -68,25 +65,20 @@ public sealed class CalendarRpcService(CalendarQueries queries)
                 [.. result.Days.Select(day => new CalendarDayDto(StorageFormats.Date(day.Date), day.Availability.TotalMinutes, day.Availability.WorkMinutes, day.BusyMinutes,
                     day.Load.PlannedMinutes, day.Load.WorkMinutes, day.Load.UnknownEstimates, day.Load.OpenCount, day.Load.OverTotal, day.Load.OverWork))],
                 result.Truncated, null);
-        }
-        catch (AppException error) { return new(false, request.From, request.To, request.From, "UTC", [], [], [], false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, request.From, request.To, request.From, "UTC", [], [], [], false, error));
 
     [NeoRpcMethod("unscheduled")]
-    public async ValueTask<TaskQueryResponse> UnscheduledAsync(CalendarUnscheduledRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendar.unscheduled");
-        try
-        {
+    public ValueTask<TaskQueryResponse> UnscheduledAsync(CalendarUnscheduledRequest request, CancellationToken ct) =>
+        Rpc.Run<TaskQueryResponse>("calendar.unscheduled", async () => {
             var page = await queries.UnscheduledAsync(ToFilters(request.Filters), request.Text, request.Cursor, request.Limit ?? CalendarQueries.MaxUnscheduledPage, ct);
             return new(true,
                 [.. page.Rows.Select(row => new QueryRowResponse(TaskRpcService.ToResponse(row.Task), row.ContainerName, row.ContainerArchived, row.TagIds,
                     [.. row.Matches.Select(match => match.ToString())], null, row.WaitingPerson, null,
                     row.LastActivityAtUtc is { } activity ? StorageFormats.Instant(activity) : null))],
                 TagRpcService.Count(page.TotalCount), page.NextCursor, null);
-        }
-        catch (AppException error) { return new(false, [], 0, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], 0, null, error));
 
     internal static CalendarMeetingDto Map(CalendarMeeting item) => new(
         item.Id, item.SourceId, item.EventId, item.SourceName, item.Title, StorageFormats.Date(item.Date), Time(item.Start), Time(item.End), item.AllDay, item.Color, item.Busy,

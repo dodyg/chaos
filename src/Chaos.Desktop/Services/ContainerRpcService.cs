@@ -31,19 +31,13 @@ public sealed record ContainerDeleteRequest(string OperationId, string Container
 public sealed class ContainerRpcService(ContainerCommands containers, TaskCommands tasks)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<ContainerListResponse> ListAsync(ContainerListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.list");
-        try { return new(true, [.. (await containers.ListPersonalAsync(ct)).Select(Map)], null); }
-        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<ContainerListResponse> ListAsync(ContainerListRequest request, CancellationToken ct) =>
+        Rpc.Run<ContainerListResponse>("containers.list", async () => { return new(true, [.. (await containers.ListPersonalAsync(ct)).Select(Map)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("listDeleted")]
-    public async ValueTask<ContainerListResponse> ListDeletedAsync(ContainerListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.listDeleted");
-        try { return new(true, [.. (await containers.ListDeletedPersonalAsync(ct)).Select(Map)], null); }
-        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<ContainerListResponse> ListDeletedAsync(ContainerListRequest request, CancellationToken ct) =>
+        Rpc.Run<ContainerListResponse>("containers.listDeleted", async () => { return new(true, [.. (await containers.ListDeletedPersonalAsync(ct)).Select(Map)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("delete")]
     public async ValueTask<ContainerOperationResponse> DeleteAsync(ContainerDeleteRequest request, CancellationToken ct)
     {
@@ -57,12 +51,9 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         return await RunAsync(() => containers.RestoreAsync(new RestoreContainerCommand(request.OperationId, request.ContainerId, Version(request.ExpectedVersion)), ct));
     }
     [NeoRpcMethod("tasks")]
-    public async ValueTask<ListTasksResponse> TasksAsync(ContainerTasksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.tasks");
-        try { return new(true, [.. (await tasks.ListAsync(request.ContainerId, ct)).Select(TaskRpcService.ToResponse)], null); }
-        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<ListTasksResponse> TasksAsync(ContainerTasksRequest request, CancellationToken ct) =>
+        Rpc.Run<ListTasksResponse>("containers.tasks", async () => { return new(true, [.. (await tasks.ListAsync(request.ContainerId, ct)).Select(TaskRpcService.ToResponse)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("create")]
     public async ValueTask<ContainerOperationResponse> CreateAsync(ContainerCreateRequest request, CancellationToken ct)
     {
@@ -106,33 +97,21 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         return await RunAsync(() => containers.SetDefaultCategoryAsync(new(request.OperationId, request.ContainerId, Version(request.ExpectedVersion), Category(request.DefaultCategory)), ct));
     }
     [NeoRpcMethod("progress")]
-    public async ValueTask<ProgressResponse> ProgressAsync(ContainerTasksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.progress");
-        try { var result = await containers.GetProjectProgressAsync(request.ContainerId, ct); return new(true, checked((int)result.DoneCount), checked((int)result.TotalCount), checked((int)result.DoneSubtaskCount), checked((int)result.TotalSubtaskCount), null); }
-        catch (AppException e) { return new(false, 0, 0, 0, 0, TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<ProgressResponse> ProgressAsync(ContainerTasksRequest request, CancellationToken ct) =>
+        Rpc.Run<ProgressResponse>("containers.progress", async () => { var result = await containers.GetProjectProgressAsync(request.ContainerId, ct); return new(true, checked((int)result.DoneCount), checked((int)result.TotalCount), checked((int)result.DoneSubtaskCount), checked((int)result.TotalSubtaskCount), null); },
+            error => new(false, 0, 0, 0, 0, error));
     [NeoRpcMethod("sections")]
-    public async ValueTask<SectionListResponse> SectionsAsync(ContainerTasksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.sections");
-        try { return new(true, [.. (await containers.ListSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
-        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<SectionListResponse> SectionsAsync(ContainerTasksRequest request, CancellationToken ct) =>
+        Rpc.Run<SectionListResponse>("containers.sections", async () => { return new(true, [.. (await containers.ListSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("deletedSections")]
-    public async ValueTask<SectionListResponse> DeletedSectionsAsync(ContainerTasksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.deletedSections");
-        try { return new(true, [.. (await containers.ListDeletedSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); }
-        catch (AppException e) { return new(false, [], TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<SectionListResponse> DeletedSectionsAsync(ContainerTasksRequest request, CancellationToken ct) =>
+        Rpc.Run<SectionListResponse>("containers.deletedSections", async () => { return new(true, [.. (await containers.ListDeletedSectionsAsync(request.ContainerId, ct)).Select(MapSection)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("createSection")]
-    public async ValueTask<SectionOperationResponse> CreateSectionAsync(SectionCreateRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.createSection");
-        try { return new(true, MapSection((await containers.CreateSectionAsync(new(request.OperationId, request.ContainerId, request.Title), ct)).Section), null); }
-        catch (AppException e) { return new(false, null, TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<SectionOperationResponse> CreateSectionAsync(SectionCreateRequest request, CancellationToken ct) =>
+        Rpc.Run<SectionOperationResponse>("containers.createSection", async () => { return new(true, MapSection((await containers.CreateSectionAsync(new(request.OperationId, request.ContainerId, request.Title), ct)).Section), null); },
+            error => new(false, null, error));
     [NeoRpcMethod("renameSection")]
     public async ValueTask<SectionOperationResponse> RenameSectionAsync(SectionChangeRequest request, CancellationToken ct)
     {
@@ -158,12 +137,9 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         return await RunSectionAsync(() => containers.RestoreAsync(new RestoreSectionCommand(request.OperationId, request.SectionId, Version(request.ExpectedVersion)), ct));
     }
     [NeoRpcMethod("moveTask")]
-    public async ValueTask<TaskOperationResponse> MoveTaskAsync(MoveTaskRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("containers.moveTask");
-        try { var result = await tasks.MoveAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.ContainerId, request.SectionId), ct); return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null); }
-        catch (AppException e) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(e)); }
-    }
+    public ValueTask<TaskOperationResponse> MoveTaskAsync(MoveTaskRequest request, CancellationToken ct) =>
+        Rpc.Run<TaskOperationResponse>("containers.moveTask", async () => { var result = await tasks.MoveAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), request.ContainerId, request.SectionId), ct); return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null); },
+            error => new(false, request.OperationId, null, error));
     private static async ValueTask<ContainerOperationResponse> RunAsync(Func<Task<ContainerMutationResult>> action)
     {
         try { return new(true, Map((await action()).Container), null); }
@@ -175,7 +151,7 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         catch (AppException e) { return new(false, null, TaskRpcService.ToErrorResponse(e)); }
     }
     private static DateOnly? Date(string? value) => string.IsNullOrEmpty(value) ? null : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result) ? result : throw AppException.Validation("deadlineDate", "Enter a valid date.");
-    private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
+    private static long Version(string value) => RpcParse.Version(value, message: "Invalid version. Refresh and try again.");
     private static ContainerKind Kind(string value) => Enum.TryParse<ContainerKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("kind", "Choose a list or project.");
     private static CapacityCategory? Category(string? value) => string.IsNullOrEmpty(value) ? null : Enum.TryParse<CapacityCategory>(value, out var category) && Enum.IsDefined(category) ? category : throw AppException.Validation("defaultCategory", "Choose Work or Personal.");
     private static ContainerContentsChoice Choice(string value) => Enum.TryParse<ContainerContentsChoice>(value, out var choice) && Enum.IsDefined(choice) ? choice : throw AppException.Validation("contentsChoice", "Choose what to do with the tasks.");

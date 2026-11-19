@@ -88,20 +88,14 @@ public sealed class PageRpcService(PageCommands pages)
     }
 
     [NeoRpcMethod("get")]
-    public async ValueTask<PageGetResponse> GetAsync(PageGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.get");
-        try { return new(true, Map(await pages.GetAsync(request.PageId, ct)), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<PageGetResponse> GetAsync(PageGetRequest request, CancellationToken ct) =>
+        Rpc.Run<PageGetResponse>("page.get", async () => { return new(true, Map(await pages.GetAsync(request.PageId, ct)), null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("getDaily")]
-    public async ValueTask<PageGetResponse> GetDailyAsync(PageGetDailyRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.getDaily");
-        try { return new(true, await pages.GetDailyAsync(Date(request.Date, "date"), ct) is { } view ? Map(view) : null, null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<PageGetResponse> GetDailyAsync(PageGetDailyRequest request, CancellationToken ct) =>
+        Rpc.Run<PageGetResponse>("page.getDaily", async () => { return new(true, await pages.GetDailyAsync(Date(request.Date, "date"), ct) is { } view ? Map(view) : null, null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("create")]
     public async ValueTask<PageOperationResponse> CreateAsync(PageCreateRequest request, CancellationToken ct)
@@ -118,19 +112,15 @@ public sealed class PageRpcService(PageCommands pages)
     }
 
     [NeoRpcMethod("save")]
-    public async ValueTask<PageSaveResponse> SaveAsync(PageSaveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.save");
-        try
-        {
+    public ValueTask<PageSaveResponse> SaveAsync(PageSaveRequest request, CancellationToken ct) =>
+        Rpc.Run<PageSaveResponse>("page.save", async () => {
             var revision = long.TryParse(request.ClientRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
                 ? parsed
                 : throw AppException.Validation("clientRevision", "Invalid editor revision.");
             var result = await pages.SaveAsync(new(request.PageId, revision, request.Title, request.Markdown), ct);
             return new(true, Map(result.Page, Chaos.Application.Pages.PageFrontMatter.Parse(result.Page.RawMarkdown).Icon, [], [], []), result.Applied, null);
-        }
-        catch (AppException error) { return new(false, null, false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, false, error));
 
     [NeoRpcMethod("move")]
     public async ValueTask<PageOperationResponse> MoveAsync(PageMoveRequest request, CancellationToken ct)
@@ -154,17 +144,13 @@ public sealed class PageRpcService(PageCommands pages)
     }
 
     [NeoRpcMethod("revisions")]
-    public async ValueTask<PageRevisionsResponse> RevisionsAsync(PageRevisionsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.revisions");
-        try
-        {
+    public ValueTask<PageRevisionsResponse> RevisionsAsync(PageRevisionsRequest request, CancellationToken ct) =>
+        Rpc.Run<PageRevisionsResponse>("page.revisions", async () => {
             return new(true, [.. (await pages.ListRevisionsAsync(request.PageId, ct)).Select(revision => new PageRevisionResponse(
                 revision.Number.ToString(CultureInfo.InvariantCulture), revision.Title, revision.RawMarkdown,
                 StorageFormats.Instant(revision.CreatedAtUtc), StorageFormats.Instant(revision.UpdatedAtUtc)))], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     [NeoRpcMethod("restoreVersion")]
     public async ValueTask<PageOperationResponse> RestoreVersionAsync(PageRestoreVersionRequest request, CancellationToken ct)
@@ -180,56 +166,39 @@ public sealed class PageRpcService(PageCommands pages)
     }
 
     [NeoRpcMethod("makeTask")]
-    public async ValueTask<PageMakeTaskResponse> MakeTaskAsync(PageMakeTaskRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.makeTask");
-        try
-        {
+    public ValueTask<PageMakeTaskResponse> MakeTaskAsync(PageMakeTaskRequest request, CancellationToken ct) =>
+        Rpc.Run<PageMakeTaskResponse>("page.makeTask", async () => {
             var revision = long.TryParse(request.SourceRevision, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : throw AppException.Validation("sourceRevision", "Invalid page revision. Select the text again.");
             var result = await pages.MakeTaskAsync(new(request.OperationId, request.PageId, revision, request.Start, request.End, request.Quote,
                 CaptureRpcService.ToDraft(request.Draft, "draft")), ct);
             return new(true, TaskRpcService.ToResponse(result.Task), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("locate")]
-    public async ValueTask<PageLocateResponse> LocateAsync(PageLocateRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.locate");
-        try
-        {
+    public ValueTask<PageLocateResponse> LocateAsync(PageLocateRequest request, CancellationToken ct) =>
+        Rpc.Run<PageLocateResponse>("page.locate", async () => {
             var anchor = await pages.LocateAsync(request.TaskId, ct);
             return new(true, anchor is null ? null : new PageAnchorResponse(anchor.PageId, anchor.State.ToString(), anchor.Start, anchor.End, anchor.Quote, anchor.Deleted), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("mentions")]
-    public async ValueTask<PageMentionsResponse> MentionsAsync(PageMentionsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.mentions");
-        try { return new(true, [.. (await pages.MentionsOfTaskAsync(request.TaskId, ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<PageMentionsResponse> MentionsAsync(PageMentionsRequest request, CancellationToken ct) =>
+        Rpc.Run<PageMentionsResponse>("page.mentions", async () => { return new(true, [.. (await pages.MentionsOfTaskAsync(request.TaskId, ct)).Select(Map)], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("resolveLinks")]
-    public async ValueTask<PageResolveResponse> ResolveLinksAsync(PageResolveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.resolveLinks");
-        try { return new(true, [.. (await pages.ResolveLinksAsync(request.PageIds, ct)).Select(target => Map(target, null))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<PageResolveResponse> ResolveLinksAsync(PageResolveRequest request, CancellationToken ct) =>
+        Rpc.Run<PageResolveResponse>("page.resolveLinks", async () => { return new(true, [.. (await pages.ResolveLinksAsync(request.PageIds, ct)).Select(target => Map(target, null))], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("resolveNames")]
-    public async ValueTask<PageResolveResponse> ResolveNamesAsync(PageResolveNamesRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("page.resolveNames");
-        try { return new(true, [.. (await pages.ResolveNamesAsync(request.Names, ct)).Select(found => Map(found.Target, found.Name))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<PageResolveResponse> ResolveNamesAsync(PageResolveNamesRequest request, CancellationToken ct) =>
+        Rpc.Run<PageResolveResponse>("page.resolveNames", async () => { return new(true, [.. (await pages.ResolveNamesAsync(request.Names, ct)).Select(found => Map(found.Target, found.Name))], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("append")]
     public async ValueTask<PageOperationResponse> AppendAsync(PageAppendRequest request, CancellationToken ct)

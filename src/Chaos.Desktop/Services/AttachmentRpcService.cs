@@ -52,20 +52,14 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Chaos", "opened");
 
     [NeoRpcMethod("list")]
-    public async ValueTask<AttachmentListResponse> ListAsync(AttachmentListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.list");
-        try { return new(true, [.. (await attachments.ListAsync(Kind(request.OwnerKind), request.OwnerId, ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<AttachmentListResponse> ListAsync(AttachmentListRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentListResponse>("attachment.list", async () => { return new(true, [.. (await attachments.ListAsync(Kind(request.OwnerKind), request.OwnerId, ct)).Select(Map)], null); },
+            error => new(false, [], error));
 
     /// <summary>"Retry" on a file that failed to upload or download (PLAN2 §9.2).</summary>
     [NeoRpcMethod("retry")]
-    public async ValueTask<AttachmentSimpleResponse> RetryAsync(AttachmentRetryRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.retry");
-        try
-        {
+    public ValueTask<AttachmentSimpleResponse> RetryAsync(AttachmentRetryRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentSimpleResponse>("attachment.retry", async () => {
             var view = await attachments.GetAsync(request.AttachmentId, ct);
             if (transfer is not null)
             {
@@ -73,9 +67,8 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
             }
 
             return new(true, null);
-        }
-        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, error));
 
     /// <summary>"Keep available offline" for a list or project on this computer; answers with every container kept offline.</summary>
     [NeoRpcMethod("setOffline")]
@@ -99,56 +92,38 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
     }
 
     [NeoRpcMethod("resolve")]
-    public async ValueTask<AttachmentListResponse> ResolveAsync(AttachmentResolveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.resolve");
-        try { return new(true, [.. (await attachments.ResolveAsync(request.Ids, ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<AttachmentListResponse> ResolveAsync(AttachmentResolveRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentListResponse>("attachment.resolve", async () => { return new(true, [.. (await attachments.ResolveAsync(request.Ids, ct)).Select(Map)], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("pageImage")]
-    public async ValueTask<AttachmentOperationResponse> PageImageAsync(AttachmentPageImageRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.pageImage");
-        try { return new(true, await attachments.FindPageImageAsync(request.PageId, request.Name, ct) is { } found ? Map(found) : null, null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<AttachmentOperationResponse> PageImageAsync(AttachmentPageImageRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentOperationResponse>("attachment.pageImage", async () => { return new(true, await attachments.FindPageImageAsync(request.PageId, request.Name, ct) is { } found ? Map(found) : null, null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("begin")]
-    public async ValueTask<AttachmentBeginResponse> BeginAsync(AttachmentBeginRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.begin");
-        try
-        {
+    public ValueTask<AttachmentBeginResponse> BeginAsync(AttachmentBeginRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentBeginResponse>("attachment.begin", async () => {
             var started = await attachments.BeginAsync(new BeginAttachmentUploadCommand(Kind(request.OwnerKind), request.OwnerId, request.FileName, Long(request.Size, "size")), ct);
             return new(true, started.UploadId, started.ChunkBytes, started.MaxFileBytes.ToString(CultureInfo.InvariantCulture), null);
-        }
-        catch (AppException error) { return new(false, "", 0, "0", TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, "", 0, "0", error));
 
     [NeoRpcMethod("chunk")]
-    public async ValueTask<AttachmentSimpleResponse> ChunkAsync(AttachmentChunkRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.chunk");
-        try
-        {
+    public ValueTask<AttachmentSimpleResponse> ChunkAsync(AttachmentChunkRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentSimpleResponse>("attachment.chunk", async () => {
             await attachments.ChunkAsync(request.UploadId, request.Index, Decode(request.Base64), ct);
             return new(true, null);
-        }
-        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, error));
 
     [NeoRpcMethod("commit")]
-    public async ValueTask<AttachmentOperationResponse> CommitAsync(AttachmentCommitRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.commit");
-        try
-        {
+    public ValueTask<AttachmentOperationResponse> CommitAsync(AttachmentCommitRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentOperationResponse>("attachment.commit", async () => {
             var result = await attachments.CommitAsync(new CommitAttachmentCommand(request.OperationId, request.UploadId), ct);
             return new(true, Map(await attachments.GetAsync(result.Attachment.Id, ct)), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("cancel")]
     public ValueTask<AttachmentSimpleResponse> CancelAsync(AttachmentCancelRequest request, CancellationToken ct)
@@ -191,37 +166,26 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
 
     /// <summary>A small JPEG (base64) of an image, for showing large images inline without reading the whole file.</summary>
     [NeoRpcMethod("thumbnail")]
-    public async ValueTask<AttachmentReadResponse> ThumbnailAsync(AttachmentThumbnailRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.thumbnail");
-        try
-        {
+    public ValueTask<AttachmentReadResponse> ThumbnailAsync(AttachmentThumbnailRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentReadResponse>("attachment.thumbnail", async () => {
             var bytes = await attachments.ThumbnailAsync(request.AttachmentId, ct);
             return new(true, Convert.ToBase64String(bytes), bytes.Length.ToString(CultureInfo.InvariantCulture), null);
-        }
-        catch (AppException error) { return new(false, "", "0", TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, "", "0", error));
 
     /// <summary>One slice of the bytes as base64; the renderer assembles them into a Blob and an object URL.</summary>
     [NeoRpcMethod("read")]
-    public async ValueTask<AttachmentReadResponse> ReadAsync(AttachmentReadRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.read");
-        try
-        {
+    public ValueTask<AttachmentReadResponse> ReadAsync(AttachmentReadRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentReadResponse>("attachment.read", async () => {
             var chunk = await attachments.ReadAsync(request.AttachmentId, Long(request.Offset, "offset"), request.Length, ct);
             return new(true, Convert.ToBase64String(chunk.Bytes), chunk.TotalSize.ToString(CultureInfo.InvariantCulture), null);
-        }
-        catch (AppException error) { return new(false, "", "0", TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, "", "0", error));
 
     /// <summary>Opens the file in its own app, after a click. Files that can run code are refused.</summary>
     [NeoRpcMethod("open")]
-    public async ValueTask<AttachmentActionResponse> OpenAsync(AttachmentActionRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.open");
-        try
-        {
+    public ValueTask<AttachmentActionResponse> OpenAsync(AttachmentActionRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentActionResponse>("attachment.open", async () => {
             var item = (await attachments.GetAsync(request.AttachmentId, ct)).Attachment;
             if (AttachmentSafety.IsBlocked(item.FileName))
             {
@@ -232,23 +196,18 @@ public sealed class AttachmentRpcService(AttachmentCommands attachments, string 
             return (shellOpen ?? OpenWithShell)(path)
                 ? new(true, null, null)
                 : new(false, null, TaskRpcService.ToErrorResponse(new AppException(AppErrorKind.UnsupportedCapability, "No app on this computer could open this file.")));
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("showInFolder")]
-    public async ValueTask<AttachmentActionResponse> ShowInFolderAsync(AttachmentActionRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("attachment.showInFolder");
-        try
-        {
+    public ValueTask<AttachmentActionResponse> ShowInFolderAsync(AttachmentActionRequest request, CancellationToken ct) =>
+        Rpc.Run<AttachmentActionResponse>("attachment.showInFolder", async () => {
             var path = await CopyToOpenedAsync((await attachments.GetAsync(request.AttachmentId, ct)).Attachment, ct);
             return (shellSelect ?? SelectWithExplorer)(path)
                 ? new(true, null, null)
                 : new(false, null, TaskRpcService.ToErrorResponse(new AppException(AppErrorKind.UnsupportedCapability, "The folder could not be opened.")));
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     /// <summary>Writes a copy to the export folder under a name that does not replace anything there.</summary>
     [NeoRpcMethod("saveCopy")]

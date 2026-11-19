@@ -46,40 +46,29 @@ public sealed record RebuildSearchResponse(bool Ok, int Documents, TaskErrorResp
 public sealed class QueryRpcService(TaskQueries queries)
 {
     [NeoRpcMethod("run")]
-    public async ValueTask<TaskQueryResponse> RunAsync(TaskQueryRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("queries.run");
-        try
-        {
+    public ValueTask<TaskQueryResponse> RunAsync(TaskQueryRequest request, CancellationToken ct) =>
+        Rpc.Run<TaskQueryResponse>("queries.run", async () => {
             var page = await queries.RunAsync(ToSpec(request), ct);
             return new(true, [.. page.Rows.Select(Map)], TagRpcService.Count(page.TotalCount), page.NextCursor, null);
-        }
-        catch (AppException error) { return new(false, [], 0, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], 0, null, error));
 
     [NeoRpcMethod("counts")]
-    public async ValueTask<ViewCountsResponse> CountsAsync(ViewCountsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("queries.counts");
-        try
-        {
+    public ValueTask<ViewCountsResponse> CountsAsync(ViewCountsRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewCountsResponse>("queries.counts", async () => {
             var counts = await queries.CountsAsync(Category(request.Category), ct);
             return new(true,
                 [.. counts.Views.Select(entry => new ViewCountResponse(entry.Key.ToString(), TagRpcService.Count(entry.Value)))],
                 [.. counts.Tags.Select(entry => new TagCountResponse(entry.Key, TagRpcService.Count(entry.Value)))],
                 [.. counts.Containers.Select(entry => new ContainerCountResponse(entry.Key, TagRpcService.Count(entry.Value)))],
                 null);
-        }
-        catch (AppException error) { return new(false, [], [], [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], [], [], error));
 
     [NeoRpcMethod("rebuildSearch")]
-    public async ValueTask<RebuildSearchResponse> RebuildSearchAsync(RebuildSearchRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("queries.rebuildSearch");
-        try { return new(true, TagRpcService.Count(await queries.RebuildSearchIndexAsync(ct)), null); }
-        catch (AppException error) { return new(false, 0, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<RebuildSearchResponse> RebuildSearchAsync(RebuildSearchRequest request, CancellationToken ct) =>
+        Rpc.Run<RebuildSearchResponse>("queries.rebuildSearch", async () => { return new(true, TagRpcService.Count(await queries.RebuildSearchIndexAsync(ct)), null); },
+            error => new(false, 0, error));
 
     internal static TaskQuerySpec ToSpec(TaskQueryRequest request) => new()
     {
@@ -127,6 +116,5 @@ public sealed class QueryRpcService(TaskQueries queries)
         : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) ? date
         : throw AppException.Validation(field, "Enter a valid date.");
 
-    private static T ParseEnum<T>(string value, string field) where T : struct, Enum =>
-        Enum.TryParse<T>(value, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw AppException.Validation(field, "Choose a valid value.");
+    private static T ParseEnum<T>(string value, string field) where T : struct, Enum => RpcParse.Enum<T>(value, field);
 }

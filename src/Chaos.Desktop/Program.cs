@@ -59,59 +59,52 @@ internal static class Program
         // Storage starts before the window: lock the data root, back up before upgrades,
         // migrate, seed (PLAN §5). This is the one synchronous storage boundary; every
         // request-time database call runs on NeoAstra's background RPC dispatch threads.
+        var clock = TimeProvider.System;
+        var ids = new GuidIdGenerator();
         using var storage = StorageBootstrap
-            .StartAsync(StorageOptions.FromDataRoot(dataRoot), AppVersion(), new GuidIdGenerator(), TimeProvider.System, CancellationToken.None)
+            .StartAsync(StorageOptions.FromDataRoot(dataRoot), AppVersion(), ids, clock, CancellationToken.None)
             .GetAwaiter().GetResult();
 
         // The activity log (PLAN2 §6.4): the store reports each commit that wrote activity, the publisher coalesces and pushes it to the window.
-        using var activityPublisher = new ActivityPublisher(TimeProvider.System);
+        using var activityPublisher = new ActivityPublisher(clock);
         storage.Store.ActivityNotifier = activityPublisher;
-        var activityFeed = new Chaos.Infrastructure.Activity.ActivityFeed(storage.Store, TimeProvider.System);
-        var jobRuns = new Chaos.Infrastructure.Activity.JobRuns(storage.Store, TimeProvider.System);
+        var activityFeed = new Chaos.Infrastructure.Activity.ActivityFeed(storage.Store, clock);
+        var jobRuns = new Chaos.Infrastructure.Activity.JobRuns(storage.Store, clock);
 
-        var tasks = new TaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        var boards = new BoardCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var boards = new BoardCommands(storage.Store, ids, clock);
         var boardQueries = new BoardQueries(storage.Store);
-        var taskQueries = new TaskQueries(storage.Store, TimeProvider.System);
-        var viewCommands = new SavedViewCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        var viewQueries = new SavedViewQueries(storage.Store, taskQueries, TimeProvider.System);
+        var taskQueries = new TaskQueries(storage.Store, clock);
+        var viewCommands = new SavedViewCommands(storage.Store, ids, clock);
+        var viewQueries = new SavedViewQueries(storage.Store, taskQueries, clock);
         var viewBoardQueries = new ViewBoardQueries(storage.Store, taskQueries);
-        var calendarQueries = new CalendarQueries(storage.Store, taskQueries, TimeProvider.System);
-        var viewAlerts = new ViewAlertService(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var calendarQueries = new CalendarQueries(storage.Store, taskQueries, clock);
+        var viewAlerts = new ViewAlertService(storage.Store, ids, clock);
         var history = new TaskHistoryCommands(storage.Store, tasks);
 
         // Reminders are delivered after commit on a background timer (PLAN §11). The installed
         // package hands them to Windows (scheduled, with buttons); an unpackaged run shows them
         // in the app. The engine is declared after storage, so it stops before storage closes.
-        var notifications = (INotificationAdapter?)WindowsToastAdapter.TryCreate(TimeProvider.System) ?? new InAppNotificationAdapter();
-        var reminders = new ReminderCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System, tasks, notifications);
+        var notifications = (INotificationAdapter?)WindowsToastAdapter.TryCreate(clock) ?? new InAppNotificationAdapter();
+        var reminders = new ReminderCommands(storage.Store, ids, clock, tasks, notifications);
         // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
-        var summaries = new SummaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
-        using var reminderEngine = new ReminderEngine(reminders, notifications, TimeProvider.System, summaries, viewAlerts, jobRuns);
+        var summaries = new SummaryCommands(storage.Store, ids, clock);
+        using var reminderEngine = new ReminderEngine(reminders, notifications, clock, summaries, viewAlerts, jobRuns);
         reminderEngine.Start();
 
         // Backups, restore, export, import and deletion (PLAN §14). Restore and reset pause the
         // reminder engine and take back OS notification schedules before files are replaced.
         // Attachment bytes live behind IAttachmentFileStore (PLAN2 §9.1); this is the one place the provider is chosen.
         var attachmentFiles = Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.Create(storage.Options);
-        var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, new GuidIdGenerator(), TimeProvider.System, storage.Options.UploadsDirectory,
+        var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, ids, clock, storage.Options.UploadsDirectory,
             images: new Chaos.Infrastructure.Attachments.SkiaImageProcessor(), thumbnailsDirectory: storage.Options.ThumbnailsDirectory);
         var protection = new DataProtectionService(storage.Store, storage.Options,
-            new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, TimeProvider.System, null,
-                attachmentFiles, Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.CreateBackupStore(storage.Options)), new GuidIdGenerator(), TimeProvider.System);
-        protection.Quiesce = (work, ct) => reminderEngine.RunPausedAsync(async () =>
-        {
-            foreach (var osId in await protection.ListScheduledOsNotificationIdsAsync(ct))
-            {
-                await notifications.CancelAsync(osId, ct);
-            }
-
-            await work();
-        }, ct);
-        using var backupScheduler = new BackupScheduler(protection, TimeProvider.System, jobRuns, activityFeed);
+            new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, clock, null,
+                attachmentFiles, Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.CreateBackupStore(storage.Options)), ids, clock);
+        using var backupScheduler = new BackupScheduler(protection, clock, jobRuns, activityFeed);
         backupScheduler.Start();
-        var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, TimeProvider.System, attachmentFiles),
-            new ImportCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new DataPurge(storage.Store, attachmentFiles), storage.RecoveryNotice,
+        var dataRpc = new DataRpcService(protection, new DataTransfer(storage.Store, storage.AppVersion, clock, attachmentFiles),
+            new ImportCommands(storage.Store, ids, clock), new DataPurge(storage.Store, attachmentFiles), storage.RecoveryNotice,
             async (osIds, ct) =>
             {
                 foreach (var osId in osIds)
@@ -122,21 +115,13 @@ internal static class Program
 
         // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
         using var githubApi = new GitHubCliClient();
-        using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System),
-            async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, TimeProvider.System);
-        using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System);
-        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, new GuidIdGenerator(), TimeProvider.System), TimeProvider.System, TimeSpan.FromSeconds(10), jobRuns);
-        var pauseReminders = protection.Quiesce;
-        protection.Quiesce = (work, ct) => githubEngine.RunPausedAsync(() => pauseReminders(work, ct), ct);
-        var github = new GitHubConnectionCommands(storage.Store, githubApi, new GuidIdGenerator(), TimeProvider.System);
-        using var githubScheduler = new GitHubSyncScheduler(githubEngine, github.ScheduleAsync, TimeProvider.System);
+        using var githubIssues = new GitHubIssueFetcher(storage.Store, githubApi, new GitHubInboundCommands(storage.Store, ids, clock),
+            async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, clock);
+        using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, ids, clock), clock);
+        using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, ids, clock), clock, TimeSpan.FromSeconds(10), jobRuns);
+        var github = new GitHubConnectionCommands(storage.Store, githubApi, ids, clock);
+        using var githubScheduler = new GitHubSyncScheduler(githubEngine, github.ScheduleAsync, clock);
         githubScheduler.Start();
-        var pauseGitHub = protection.Quiesce;
-        protection.Quiesce = async (work, ct) =>
-        {
-            try { await pauseGitHub(work, ct); }
-            finally { githubScheduler.Wake(); }
-        };
         // Calendar feeds (PLAN2 P5): addresses live in the protected secret store, never in the database.
         var secrets = new FileSecretStore(Path.Combine(dataRoot, "secrets"), new Chaos.Desktop.Windows.Security.DpapiSecretProtector());
         using var feedClient = new CalendarFeedClient();
@@ -151,25 +136,43 @@ internal static class Program
             new Chaos.Desktop.Platform.ShellBrowser(), secrets, new Chaos.Infrastructure.Service.SqliteDeviceIdentity(storage.Store, AppVersion()));
         // Sync (PLAN2 P13): the loop idles until SyncState.Enabled = 1 (turned on by joining an account, P14); it never touches the UI thread.
         using var syncEngine = new Chaos.Infrastructure.Sync.SyncEngine(storage.Store,
-            new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, TimeProvider.System, new GuidIdGenerator()), serviceClient, TimeProvider.System);
+            new Chaos.Infrastructure.Sync.SyncApplier(storage.Store, clock, ids), serviceClient, clock);
         syncEngine.Start();
         // Attachment bytes (PLAN2 P16): uploads follow the metadata, downloads follow the 5 MiB / pinned / on-open rules. A finished sync cycle wakes it.
-        using var attachmentTransfer = new Chaos.Infrastructure.Attachments.AttachmentTransfer(storage.Store, attachmentFiles, serviceClient, TimeProvider.System);
+        using var attachmentTransfer = new Chaos.Infrastructure.Attachments.AttachmentTransfer(storage.Store, attachmentFiles, serviceClient, clock);
         attachmentCommands.Availability = attachmentTransfer;
         syncEngine.CycleFinished += _ => attachmentTransfer.Wake();
         attachmentTransfer.Start();
         var syncStatus = new Chaos.Infrastructure.Sync.SyncStatusReader(storage.Store, syncEngine);
-        var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, TimeProvider.System, syncEngine.Wake);
-        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), TimeProvider.System, googleClient);
-        var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, TimeProvider.System);
+        var accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(storage.Store), protection, clock, syncEngine.Wake);
+        var calendarRefresher = new CalendarRefresher(storage.Store, secrets, feedClient, new IcsParser(), clock, googleClient);
+        var googleCommands = new GoogleCalendarCommands(storage.Store, secrets, googleClient, clock);
         googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
-        var calendarCommands = new CalendarCommands(storage.Store, secrets, new GuidIdGenerator(), TimeProvider.System, new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System));
-        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, TimeProvider.System, jobRuns);
+        var calendarCommands = new CalendarCommands(storage.Store, secrets, ids, clock, new CaptureCommands(storage.Store, ids, clock));
+        using var calendarScheduler = new CalendarRefreshScheduler(calendarRefresher, clock, jobRuns);
         calendarScheduler.Start();
-        var pauseForCalendars = protection.Quiesce;
-        protection.Quiesce = (work, ct) => calendarRefresher.RunPausedAsync(() => pauseForCalendars(work, ct), ct);
+        // Restore and reset replace database files, so every background worker stops first. Order matters, outermost first:
+        // calendars, the GitHub scheduler (wakes once the engine is back), the GitHub engine, then reminders, which also
+        // take back OS notification schedules just before the work runs.
+        protection.Quiesce = PausePipeline.Compose(
+            (inner, ct) => calendarRefresher.RunPausedAsync(inner, ct),
+            async (inner, ct) =>
+            {
+                try { await inner(); }
+                finally { githubScheduler.Wake(); }
+            },
+            (inner, ct) => githubEngine.RunPausedAsync(inner, ct),
+            (inner, ct) => reminderEngine.RunPausedAsync(async () =>
+            {
+                foreach (var osId in await protection.ListScheduledOsNotificationIdsAsync(ct))
+                {
+                    await notifications.CancelAsync(osId, ct);
+                }
+
+                await inner();
+            }, ct));
         var activations = new ShellActivations((command, ct) => reminders.ActAsync(command, ct));
-        var profileSettings = new ProfileSettingsCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System);
+        var profileSettings = new ProfileSettingsCommands(storage.Store, ids, clock);
         var initialSettings = profileSettings.GetAsync(CancellationToken.None).GetAwaiter().GetResult();
         var shell = new DesktopShell(activations, AppVersion(), Path.Combine(dataRoot, "desktop"));
         var router = LaunchRouter.Listen(instanceKey, launch =>
@@ -213,11 +216,11 @@ internal static class Program
                 rpc.AddShellRpcService(new ShellRpcService(activations, shell, profileSettings, AppVersion(), reminderEngine.ResyncAsync, storage.Store));
                 rpc.AddUpdatesRpcService(new UpdatesRpcService(releaseFeed, new Chaos.Desktop.Platform.ShellBrowser(), AppVersion()));
                 rpc.AddTaskRpcService(new TaskRpcService(tasks, githubEngine));
-                rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
-                rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
-                rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks));
-                rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
+                rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(storage.Store, ids, clock), tasks));
+                rpc.AddSubtaskRpcService(new SubtaskRpcService(tasks, new SubtaskCommands(storage.Store, ids, clock), githubEngine));
+                rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(storage.Store, ids, clock), tasks));
+                rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(storage.Store, ids, clock)));
+                rpc.AddTagRpcService(new TagRpcService(new TagCommands(storage.Store, ids, clock), githubEngine));
                 rpc.AddQueryRpcService(new QueryRpcService(taskQueries));
                 rpc.AddViewRpcService(new ViewRpcService(viewCommands, viewQueries, viewAlerts));
                 rpc.AddBoardRpcService(new BoardRpcService(boards, boardQueries, viewBoardQueries, githubEngine));
@@ -227,18 +230,18 @@ internal static class Program
                 rpc.AddSyncStatusRpcService(new SyncStatusRpcService(syncStatus, syncEngine));
                 rpc.AddAccountRpcService(new AccountRpcService(serviceClient, serviceAddress, accountJoin));
                 rpc.AddHistoryRpcService(new HistoryRpcService(history, githubEngine));
-                rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), githubEngine));
-                rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), tasks, sync: githubEngine));
-                rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System), new TagCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System))));
-                rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddDiaryRpcService(new DiaryRpcService(new DiaryCommands(storage.Store, ids, clock), githubEngine));
+                rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, ids, clock)));
+                rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, ids, clock), tasks, sync: githubEngine));
+                rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, ids, clock)));
+                rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, ids, clock), new TagCommands(storage.Store, ids, clock))));
+                rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, ids, clock)));
                 rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory, transfer: attachmentTransfer));
-                rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
-                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, TimeProvider.System)));
-                rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, ids, clock)));
+                rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(storage.Store, clock)));
+                rpc.AddMyWeekRpcService(new MyWeekRpcService(new MyWeekCommands(storage.Store, ids, clock)));
                 rpc.AddReminderRpcService(new ReminderRpcService(reminders, reminderEngine));
-                rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, new GuidIdGenerator(), TimeProvider.System)));
+                rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(storage.Store, ids, clock)));
                 rpc.AddSummaryRpcService(new SummaryRpcService(summaries));
                 rpc.AddDataRpcService(dataRpc);
                 rpc.AddGitHubRpcService(new GitHubRpcService(github, storage.Store, githubEngine, githubApi, githubScheduler));
