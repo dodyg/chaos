@@ -183,6 +183,9 @@ public sealed class RecordingDataSession : IDataSession
         Waiting = new RecordingWaitingStore(this, inner.Waiting);
     }
 
+    private IRecurrenceStore? _recurrence;
+    private IReminderRuleStore? _reminderRules;
+    private IAttachmentStore? _attachments;
     public IProfileStore Profiles => _inner.Profiles;
     public ISpaceStore Spaces => _inner.Spaces;
     public IContainerStore Containers { get; }
@@ -198,8 +201,8 @@ public sealed class RecordingDataSession : IDataSession
     public IChecklistConversionStore ChecklistConversions => _inner.ChecklistConversions;
     public IPadStore Pad { get; }
     public IPageStore Pages { get; }
-    public IRecurrenceStore Recurrence => new RecordingRecurrenceStore(this, _inner.Recurrence);
-    public IReminderRuleStore ReminderRules => new RecordingReminderRuleStore(this, _inner.ReminderRules);
+    public IRecurrenceStore Recurrence => _recurrence ??= new RecordingRecurrenceStore(this, _inner.Recurrence);
+    public IReminderRuleStore ReminderRules => _reminderRules ??= new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IWaitingStore Waiting { get; }
     public INotificationJobStore Notifications => _inner.Notifications;
     public IDayPlanStore DayPlans => _inner.DayPlans;
@@ -212,7 +215,7 @@ public sealed class RecordingDataSession : IDataSession
     public IBoardStore Boards => _inner.Boards;
     public ISavedViewStore SavedViews => _inner.SavedViews;
     public ICalendarStore Calendars => _inner.Calendars;
-    public IAttachmentStore Attachments => new RecordingAttachmentStore(this, _inner.Attachments);
+    public IAttachmentStore Attachments => _attachments ??= new RecordingAttachmentStore(this, _inner.Attachments);
     public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>

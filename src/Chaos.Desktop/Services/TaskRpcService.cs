@@ -59,19 +59,13 @@ public sealed record TaskGetResponse(bool Ok, TaskResponse? Task, TaskErrorRespo
 public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("listDeleted")]
-    public async ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("tasks.listDeleted");
-        try { return new(true, [.. (await commands.ListDeletedAsync(request.ContainerId, ct)).Select(ToResponse)], null); }
-        catch (AppException error) { return new(false, [], ToErrorResponse(error)); }
-    }
+    public ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct) =>
+        Rpc.Run<ListTasksResponse>("tasks.listDeleted", async () => { return new(true, [.. (await commands.ListDeletedAsync(request.ContainerId, ct)).Select(ToResponse)], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("listInbox")]
-    public async ValueTask<ListTasksResponse> ListInboxAsync(ListTasksRequest request, CancellationToken cancellationToken)
-    {
-        using var rpcScope = ActivityScope.Rpc("tasks.listInbox");
-        try { return new(true, [.. (await commands.ListInboxAsync(cancellationToken)).Select(ToResponse)], null); }
-        catch (AppException error) { return new(false, [], ToErrorResponse(error)); }
-    }
+    public ValueTask<ListTasksResponse> ListInboxAsync(ListTasksRequest request, CancellationToken cancellationToken) =>
+        Rpc.Run<ListTasksResponse>("tasks.listInbox", async () => { return new(true, [.. (await commands.ListInboxAsync(cancellationToken)).Select(ToResponse)], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("edit")]
     public async ValueTask<TaskOperationResponse> EditAsync(EditTaskRequest request, CancellationToken cancellationToken)
@@ -120,33 +114,23 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
         catch (AppException error) { return new(false, operationId, null, ToErrorResponse(error)); }
     }
 
-    private static long Version(string value) => long.TryParse(value, out var result) && result > 0 ? result : throw AppException.Validation("expectedVersion", "Invalid task version. Refresh and try again.");
-    private static DateOnly? Date(string? value, string field) => string.IsNullOrEmpty(value) ? null : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) ? date : throw AppException.Validation(field, "Enter a valid date.");
-    private static TimeOnly? Time(string? value, string field) => string.IsNullOrEmpty(value) ? null : TimeOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, "Enter a valid time.");
-    private static T ParseEnum<T>(string value, string field) where T : struct, Enum => Enum.TryParse<T>(value, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw AppException.Validation(field, "Choose a valid value.");
+    private static long Version(string value) => RpcParse.Version(value, message: "Invalid task version. Refresh and try again.");
+    private static DateOnly? Date(string? value, string field) => RpcParse.OptionalDate(value, field);
+    private static TimeOnly? Time(string? value, string field) => RpcParse.OptionalTime(value, field);
+    private static T ParseEnum<T>(string value, string field) where T : struct, Enum => RpcParse.Enum<T>(value, field);
     [NeoRpcMethod("create")]
-    public async ValueTask<TaskOperationResponse> CreateAsync(CreateTaskRequest request, CancellationToken cancellationToken)
-    {
-        using var rpcScope = ActivityScope.Rpc("tasks.create");
-        try
-        {
+    public ValueTask<TaskOperationResponse> CreateAsync(CreateTaskRequest request, CancellationToken cancellationToken) =>
+        Rpc.Run<TaskOperationResponse>("tasks.create", async () => {
             var result = await commands.CaptureAsync(
                 new CaptureTaskCommand(request.OperationId, request.ContainerId ?? string.Empty, request.Title, request.Notes),
                 cancellationToken);
             return new TaskOperationResponse(true, result.OperationId, ToResponse(result.Task), null);
-        }
-        catch (AppException error)
-        {
-            return new TaskOperationResponse(false, request.OperationId, null, ToErrorResponse(error));
-        }
-    }
+        },
+            error => new TaskOperationResponse(false, request.OperationId, null, error));
 
     [NeoRpcMethod("get")]
-    public async ValueTask<TaskGetResponse> GetAsync(GetTaskRequest request, CancellationToken cancellationToken)
-    {
-        using var rpcScope = ActivityScope.Rpc("tasks.get");
-        try
-        {
+    public ValueTask<TaskGetResponse> GetAsync(GetTaskRequest request, CancellationToken cancellationToken) =>
+        Rpc.Run<TaskGetResponse>("tasks.get", async () => {
             var task = await commands.GetAsync(request.TaskId, cancellationToken);
             return task is null
                 ? new TaskGetResponse(false, null, new TaskErrorResponse(
@@ -155,12 +139,8 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
                     [],
                     Guid.NewGuid().ToString("N")))
                 : new TaskGetResponse(true, ToResponse(task), null);
-        }
-        catch (AppException error)
-        {
-            return new TaskGetResponse(false, null, ToErrorResponse(error));
-        }
-    }
+        },
+            error => new TaskGetResponse(false, null, error));
 
     internal static TaskResponse ToResponse(TaskRecord task) => new(
         task.Id,

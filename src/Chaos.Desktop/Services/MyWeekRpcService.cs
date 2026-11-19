@@ -56,12 +56,9 @@ public sealed record WeekStartChangeResponse(bool Ok, string? FirstWeekday, IRea
 public sealed class MyWeekRpcService(MyWeekCommands weeks)
 {
     [NeoRpcMethod("open")]
-    public async ValueTask<WeekOpenResponse> OpenAsync(WeekOpenRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myWeek.open");
-        try { return new(true, Map(await weeks.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<WeekOpenResponse> OpenAsync(WeekOpenRequest request, CancellationToken ct) =>
+        Rpc.Run<WeekOpenResponse>("myWeek.open", async () => { return new(true, Map(await weeks.OpenAsync(OptionalDate(request.Date, "date"), ct)), null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("startDraft")]
     public ValueTask<WeekChangeResponse> StartDraftAsync(WeekStartDraftRequest request, CancellationToken ct)
@@ -114,30 +111,22 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
     }
 
     [NeoRpcMethod("previewWeekStart")]
-    public async ValueTask<WeekStartPreviewResponse> PreviewWeekStartAsync(WeekStartPreviewRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myWeek.previewWeekStart");
-        try
-        {
+    public ValueTask<WeekStartPreviewResponse> PreviewWeekStartAsync(WeekStartPreviewRequest request, CancellationToken ct) =>
+        Rpc.Run<WeekStartPreviewResponse>("myWeek.previewWeekStart", async () => {
             var preview = await weeks.PreviewWeekStartAsync(Enum<DayOfWeek>(request.FirstWeekday, "firstWeekday"), ct);
             return new(true, preview.Current.ToString(), preview.Proposed.ToString(),
                 [.. preview.Conflicts.Select(item => new WeekStartConflictDto(StorageFormats.Date(item.WeekStart), item.State.ToString(), item.HasDraft, item.AssignmentCount, item.GoalCount))],
                 StorageFormats.Date(preview.NewCurrentWeekStart), null);
-        }
-        catch (AppException error) { return new(false, null, null, [], null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, null, [], null, error));
 
     [NeoRpcMethod("changeWeekStart")]
-    public async ValueTask<WeekStartChangeResponse> ChangeWeekStartAsync(WeekStartChangeRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("myWeek.changeWeekStart");
-        try
-        {
+    public ValueTask<WeekStartChangeResponse> ChangeWeekStartAsync(WeekStartChangeRequest request, CancellationToken ct) =>
+        Rpc.Run<WeekStartChangeResponse>("myWeek.changeWeekStart", async () => {
             var result = await weeks.ChangeWeekStartAsync(new(request.OperationId, Enum<DayOfWeek>(request.FirstWeekday, "firstWeekday"), request.Remap), ct);
             return new(true, result.FirstWeekday.ToString(), [.. result.DraftWeekStarts.Select(StorageFormats.Date)], result.Replayed, null);
-        }
-        catch (AppException error) { return new(false, null, [], false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, [], false, error));
 
     private static async ValueTask<WeekChangeResponse> Change(Func<Task<WeekChangeResult>> run)
     {
@@ -224,8 +213,5 @@ public sealed class MyWeekRpcService(MyWeekCommands weeks)
     private static DateOnly Date(string? value, string field) =>
         OptionalDate(value, field) ?? throw AppException.Validation(field, "Choose a date.");
 
-    private static DateOnly? OptionalDate(string? value, string field) =>
-        string.IsNullOrWhiteSpace(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date
-        : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly? OptionalDate(string? value, string field) => RpcParse.OptionalDate(value, field);
 }

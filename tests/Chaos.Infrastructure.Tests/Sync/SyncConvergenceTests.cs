@@ -503,6 +503,22 @@ public sealed class SyncConvergenceTests
     }
 
     [Test]
+    public async Task A_malformed_change_in_a_chunk_is_skipped_with_an_attention_item_and_the_rest_still_applies()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "Arrives with garbage");
+        var fromA = await OutboxAsync(a);
+
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+        var outcome = await applier.ApplyAsync(["{ this is not a change", .. fromA], CancellationToken.None);
+
+        await Assert.That(outcome.ParkedChangeIds.Count).IsEqualTo(0);
+        await Assert.That(await TextAsync(b, $"SELECT Title FROM Tasks WHERE Id = '{task.Id}';")).IsEqualTo("Arrives with garbage");
+        await Assert.That(await CountAsync(b, "SELECT count(*) FROM SyncAttention WHERE Category = 'sync.unexpected' AND ResolvedAtUtc IS NULL;")).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task A_new_row_with_a_group_this_catalog_does_not_know_is_inserted_without_it()
     {
         using var a = await StartAsync();

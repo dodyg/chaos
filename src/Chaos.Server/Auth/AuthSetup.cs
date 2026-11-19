@@ -42,9 +42,15 @@ public static class AuthSetup
 {
     public static IServiceCollection AddChaosAuth(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
-        services.Configure<SignInOptions>(configuration.GetSection(SignInOptions.Section));
+        services.AddOptions<SignInOptions>().Bind(configuration.GetSection(SignInOptions.Section))
+            .Validate(o => o.CodeLifetime > TimeSpan.Zero && o.MaxCodesPerEmailPerHour > 0 && o.MaxAttemptsPerIpPerHour > 0 && o.Pbkdf2Iterations > 0,
+                "SignIn:CodeLifetime, MaxCodesPerEmailPerHour, MaxAttemptsPerIpPerHour and Pbkdf2Iterations must be greater than zero.")
+            .ValidateOnStart();
         services.Configure<SmtpOptions>(configuration.GetSection(SmtpOptions.Section));
-        services.Configure<LimitsOptions>(configuration.GetSection(LimitsOptions.Section));
+        services.AddOptions<LimitsOptions>().Bind(configuration.GetSection(LimitsOptions.Section))
+            .Validate(o => o.AccountQuotaBytes > 0 && o.RequestsPerMinutePerDevice > 0,
+                "Limits:AccountQuotaBytes and Limits:RequestsPerMinutePerDevice must be greater than zero.")
+            .ValidateOnStart();
         services.Configure<ProvidersOptions>(configuration.GetSection(ProvidersOptions.Section));
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<SignInThrottle>();
@@ -59,8 +65,8 @@ public static class AuthSetup
         });
 
         var keys = configuration.GetSection(KeyOptions.Section).Get<KeyOptions>() ?? new KeyOptions();
-        var providers = ExternalProviders.Enabled(configuration.GetSection(ProvidersOptions.Section).Get<ProvidersOptions>() ?? new ProvidersOptions());
         var providerSettings = configuration.GetSection(ProvidersOptions.Section).Get<ProvidersOptions>() ?? new ProvidersOptions();
+        var providers = ExternalProviders.Enabled(providerSettings);
 
         services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme)
             .AddCookie(SignInCookie.Scheme, options =>

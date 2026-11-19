@@ -66,32 +66,24 @@ public sealed record CaptureCreateResponse(bool Ok, IReadOnlyList<TaskResponse> 
 public sealed class CaptureRpcService(CaptureCommands capture)
 {
     [NeoRpcMethod("preview")]
-    public async ValueTask<CapturePreviewResponse> PreviewAsync(CapturePreviewRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("capture.preview");
-        try
-        {
+    public ValueTask<CapturePreviewResponse> PreviewAsync(CapturePreviewRequest request, CancellationToken ct) =>
+        Rpc.Run<CapturePreviewResponse>("capture.preview", async () => {
             var excluded = (request.Excluded ?? []).Take(200).Select(span => new CaptureSpan(span.Start, span.End)).ToList();
             var preview = await capture.PreviewAsync(request.Text ?? string.Empty, excluded, ct);
             return new(true, preview.IsBatch, [.. preview.Items.Select(Map)], [.. preview.Errors.Select(error => new CaptureBatchErrorDto(error.LineNumber, error.Message))],
                 StorageFormats.Instant(preview.CapturedAtUtc), null);
-        }
-        catch (AppException error) { return new(false, false, [], [], null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, false, [], [], null, error));
 
     [NeoRpcMethod("create")]
-    public async ValueTask<CaptureCreateResponse> CreateAsync(CaptureCreateRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("capture.create");
-        try
-        {
+    public ValueTask<CaptureCreateResponse> CreateAsync(CaptureCreateRequest request, CancellationToken ct) =>
+        Rpc.Run<CaptureCreateResponse>("capture.create", async () => {
             if (request.Drafts is null || request.Drafts.Count > 500) throw AppException.Validation("drafts", "Send between 1 and 500 tasks.");
             var drafts = request.Drafts.Select((draft, index) => ToDraft(draft, $"drafts[{index}]")).ToList();
             var result = await capture.CreateAsync(new(request.OperationId, drafts), ct);
             return new(true, [.. result.Tasks.Select(TaskRpcService.ToResponse)], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     internal static CaptureDraftDto MapDraft(QuickAddDraft draft, IReadOnlyList<CaptureSubtask> subtasks) => new(
         draft.Title,
@@ -153,8 +145,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
             parse.Draft.FirstOccurrence?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture));
     }
 
-    private static DateOnly? Date(string? value, string field) => string.IsNullOrEmpty(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly? Date(string? value, string field) => RpcParse.OptionalDate(value, field);
 
     private static TimeOnly? Time(string? value, string field) => string.IsNullOrEmpty(value) ? null
         : TimeOnly.TryParse(value, CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, "Enter a valid time.");

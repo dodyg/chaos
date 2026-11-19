@@ -1,6 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
-import { useActivity } from "./activity";
+import { useRpcQuery } from "./useRpcQuery";
 import { summaryRpc, type CarryOverCandidateDto, type SummaryDetailDto, type SummaryHeaderDto, type SummarySettingsResponse, type SummaryTaskDto } from "#neoastra";
 import { BookOpen, CalendarArrowUp, Check, NotebookPen, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,22 +45,17 @@ export function countsText(header: SummaryHeaderDto) {
  * time has come and outside quiet hours. Opening or dismissing it marks it seen.
  */
 export function SummaryPrompts({ api = summaryRpc, onOpen }: { api?: typeof summaryRpc; onOpen: (summaryId: string) => void }) {
-  const [prompts, setPrompts] = React.useState<SummaryHeaderDto[]>([]);
-  const load = React.useCallback(async () => {
-    try {
-      const result = await api.prompts({});
-      if (result.ok) setPrompts([...result.prompts]);
-    } catch { /* the next poll retries */ }
-  }, [api]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
-  // A summary generated on schedule is a new summary row; its prompt appears without polling.
-  useActivity(["summary"], () => void load());
+  // A summary generated on schedule is a new summary row; its prompt appears without polling. Errors keep the last list: the next change retries.
+  const { data } = useRpcQuery(async () => {
+    const result = await api.prompts({});
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not load summaries.");
+    return [...result.prompts];
+  }, [api], ["summary"]);
+  const [dismissed, setDismissed] = React.useState<ReadonlySet<string>>(new Set());
+  const prompts = (data ?? []).filter(item => !dismissed.has(item.id));
 
   async function dismiss(prompt: SummaryHeaderDto, open: boolean) {
-    setPrompts(current => current.filter(item => item.id !== prompt.id));
+    setDismissed(current => new Set(current).add(prompt.id));
     if (open) onOpen(prompt.id);
     try { await api.dismiss({ summaryId: prompt.id }); } catch { /* shown again on the next poll */ }
   }

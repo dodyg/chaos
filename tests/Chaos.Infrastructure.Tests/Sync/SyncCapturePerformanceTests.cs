@@ -17,6 +17,7 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// gate measures; a Debug build logs its numbers without asserting them, because Debug timings are
 /// not the product's.
 /// </summary>
+[NotInParallel]
 public sealed class SyncCapturePerformanceTests
 {
     private const int TaskCount = 10_000;

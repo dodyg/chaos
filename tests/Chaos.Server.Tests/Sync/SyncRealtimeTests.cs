@@ -148,8 +148,9 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         // What a second instance does after its commit: NOTIFY on the account's channel, with no in-process broadcast.
         await using var db = ServerDatabase.Open(world.Server.ConnectionString);
         var account = await db.Accounts.SingleAsync();
-        var channel = Chaos.Server.Sync.SyncBroadcaster.Channel(account.Id);
-        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {"987"})");
+        var channel = Chaos.Server.Sync.SyncNotificationListener.Channel;
+        var payload = Chaos.Server.Sync.SyncNotificationListener.Payload(account.Id, 987);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {payload})");
 
         var heard = await WaitAsync(() => Task.FromResult(Heard("987")), TimeSpan.FromSeconds(5));
         await stop.CancelAsync();

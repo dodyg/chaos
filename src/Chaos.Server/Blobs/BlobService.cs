@@ -39,7 +39,7 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 {
     private BlobOptions Options => blobOptions.Value;
 
-    public static string ObjectKey(Guid accountId, string sha256) => $"blobs/{accountId:N}/{sha256}";
+    public static string ObjectKey(Guid accountId, string sha256) => $"blobs/{accountId:N}/{sha256}/{Guid.NewGuid():N}";
 
     public static string PartKey(Guid accountId, string sha256, int index) => $"parts/{accountId:N}/{sha256}/{index}";
 
@@ -214,6 +214,8 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
         else
         {
             var dataKey = BlobCrypto.NewDataKey();
+            // Every completion encrypts with its own data key into its own object, so two completions of the same blob
+            // (a client retry) can never overwrite each other's bytes; the one whose row lands is the one that stays readable.
             var key = ObjectKey(accountId, sha256);
             var temp = Path.Combine(Path.GetTempPath(), "chaos-blob-" + Guid.NewGuid().ToString("N"));
             try
@@ -254,10 +256,11 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
         }
         catch (DbUpdateException)
         {
-            // A parallel completion stored it first. Take back what this one counted.
+            // A parallel completion stored it first. Take back what this one counted and drop its own object.
             db.ChangeTracker.Clear();
             if (row.State == BlobStates.Clean)
             {
+                await store.DeleteAsync(row.StorageKey, ct);
                 await db.Accounts.Where(a => a.Id == accountId).ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - upload.ByteSize), ct);
             }
 
@@ -311,15 +314,16 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
             .Select(b => new { b.AccountId, b.Sha256, b.StorageKey, b.ByteSize, b.State }).ToListAsync(ct);
         foreach (var blob in expired)
         {
-            if (blob.StorageKey.Length > 0)
-            {
-                await store.DeleteAsync(blob.StorageKey, ct);
-            }
-
+            // The row goes first: a failure in between leaves an orphaned object, which is harmless, not a row pointing at nothing.
             var removed = await db.Blobs.Where(b => b.AccountId == blob.AccountId && b.Sha256 == blob.Sha256).ExecuteDeleteAsync(ct);
             if (removed == 1 && blob.State == BlobStates.Clean)
             {
                 await db.Accounts.Where(a => a.Id == blob.AccountId).ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - blob.ByteSize), ct);
+            }
+
+            if (removed == 1 && blob.StorageKey.Length > 0)
+            {
+                await store.DeleteAsync(blob.StorageKey, ct);
             }
         }
 

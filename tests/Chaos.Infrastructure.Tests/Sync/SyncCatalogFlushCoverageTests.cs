@@ -221,7 +221,8 @@ public sealed class SyncCatalogFlushCoverageTests
     {
         var profile = new ProfileSettingsCommands(host.Store, host.Ids, host.Clock);
         var settings = await profile.GetAsync();
-        await profile.UpdateAsync(new UpdateProfileSettingsCommand(Op(), settings.Version, settings.DisplayName, settings.ZoneId,
+        // The name is a synced column; the shortcut alone is device-local and would flush nothing.
+        await profile.UpdateAsync(new UpdateProfileSettingsCommand(Op(), settings.Version, settings.DisplayName + " (flush)", settings.ZoneId,
             settings.DateFormat, "Ctrl+Shift+K", null, settings.KeepRunningInTray));
         expected["profile"] = (await TextsAsync(host, "SELECT Id FROM Profiles;"))[0];
 

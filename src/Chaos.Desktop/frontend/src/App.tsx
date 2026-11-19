@@ -60,6 +60,16 @@ function isTextEditing(target: EventTarget | null) {
   return !!element && (element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
 }
 
+/** Puts a transient value back to its empty state after <paramref name="ms"/>; a new value restarts the wait. */
+function useAutoClear<T>(value: T, set: (empty: T) => void, ms: number, empty: T = null as T) {
+  React.useEffect(() => {
+    if (!value) return;
+    const timer = window.setTimeout(() => set(empty), ms);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+}
+
 /** The main window. A fresh launch opens My Day (PLAN §13); tests may start elsewhere. */
 export function App({ api = { taskRpc, containerRpc }, templates, initialView = "myday" }: { api?: Api; templates?: React.ReactNode; initialView?: View }) {
   const { taskRpc, containerRpc } = api;
@@ -93,11 +103,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [padFocus, setPadFocus] = React.useState<PadFocus | null>(null);
   const [padMatches, setPadMatches] = React.useState<PadItemResponse[]>([]);
   const [lastUndo, setLastUndo] = React.useState<UndoEntryResponse | null>(null);
-  React.useEffect(() => {
-    if (!lastUndo) return;
-    const timer = window.setTimeout(() => setLastUndo(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [lastUndo]);
+  useAutoClear(lastUndo, setLastUndo, 5000);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [tasks, setTasks] = React.useState<TaskResponse[]>([]);
   const [editing, setEditing] = React.useState<TaskResponse | null>(null);
@@ -108,11 +114,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [deleted, setDeleted] = React.useState<TaskResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [warning, setWarning] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  useAutoClear(notice, setNotice, 5000);
   const [busy, setBusy] = React.useState(false);
   const [containers, setContainers] = React.useState<ContainerResponse[]>([]);
   const [deletedContainers, setDeletedContainers] = React.useState<ContainerResponse[]>([]);
@@ -142,11 +144,7 @@ export function App({ api = { taskRpc, containerRpc }, templates, initialView = 
   const [exported, setExported] = React.useState<string | null>(null);
   const [confirmQuit, setConfirmQuit] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
-  React.useEffect(() => {
-    if (!confirmQuit) return;
-    const timer = window.setTimeout(() => setConfirmQuit(false), 4000);
-    return () => window.clearTimeout(timer);
-  }, [confirmQuit]);
+  useAutoClear(confirmQuit, setConfirmQuit, 4000, false);
   const [revision, setRevision] = React.useState(0);
   const [showTagSettings, setShowTagSettings] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);

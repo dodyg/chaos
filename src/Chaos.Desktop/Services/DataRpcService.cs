@@ -95,11 +95,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Chaos exports");
 
     [NeoRpcMethod("status")]
-    public async ValueTask<DataStatusResponse> StatusAsync(DataStatusRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.status");
-        try
-        {
+    public ValueTask<DataStatusResponse> StatusAsync(DataStatusRequest request, CancellationToken ct) =>
+        Rpc.Run<DataStatusResponse>("data.status", async () => {
             var backups = protection.Backups.List();
             var batches = await imports.ListBatchesAsync(10, ct);
             var latest = backups.FirstOrDefault(entry => entry.Manifest is not null);
@@ -111,45 +108,27 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
                 [.. backups.Select(Map)],
                 [.. batches.Select(batch => new ImportBatchDto(batch.Id, batch.SourceKind.ToString(), batch.SourceName, Instant(batch.ImportedAtUtc), batch.CreatedCount, batch.SkippedCount, batch.BackupFileName))],
                 BackupManager.DailyToKeep, BackupManager.WeeklyToKeep, null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, null, null, null, null, null, null, [], [], 0, 0, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, null, null, null, null, null, null, [], [], 0, 0, error));
 
     [NeoRpcMethod("backupNow")]
-    public async ValueTask<BackupNowResponse> BackupNowAsync(BackupNowRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.backupNow");
-        try
-        {
+    public ValueTask<BackupNowResponse> BackupNowAsync(BackupNowRequest request, CancellationToken ct) =>
+        Rpc.Run<BackupNowResponse>("data.backupNow", async () => {
             var manifest = await protection.BackupNowAsync(BackupReason.Manual, ct);
             return new(true, Map(new BackupEntry(manifest.FileName, manifest, BackupValidationStatus.Valid, null, manifest.SizeBytes, manifest.CreatedAtUtc)), null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("inspectBackup")]
-    public async ValueTask<BackupInspectResponse> InspectBackupAsync(BackupInspectRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.inspectBackup");
-        try
-        {
+    public ValueTask<BackupInspectResponse> InspectBackupAsync(BackupInspectRequest request, CancellationToken ct) =>
+        Rpc.Run<BackupInspectResponse>("data.inspectBackup", async () => {
             var inspection = protection.Backups.Inspect(request.FileName);
             var checksum = inspection.CanRestore ? BackupManager.ComputeChecksum(protection.Backups.ResolveBackupPath(request.FileName)) : null;
             var current = await CurrentCountsAsync(ct);
             return new(true, inspection.CanRestore, inspection.Problem, checksum, inspection.Manifest is { } m ? Instant(m.CreatedAtUtc) : null,
                 inspection.Manifest?.Reason.ToString(), Int(inspection.SchemaVersion), Map(inspection.Counts), current, null);
-        }
-        catch (AppException error)
-        {
-            return new(false, false, null, null, null, null, 0, null, null, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, false, null, null, null, null, 0, null, null, error));
 
     [NeoRpcMethod("restoreBackup")]
     public async ValueTask<RestoreResponse> RestoreBackupAsync(BackupRestoreRequest request, CancellationToken ct)
@@ -170,11 +149,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     }
 
     [NeoRpcMethod("export")]
-    public async ValueTask<ExportResponse> ExportAsync(ExportRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.export");
-        try
-        {
+    public ValueTask<ExportResponse> ExportAsync(ExportRequest request, CancellationToken ct) =>
+        Rpc.Run<ExportResponse>("data.export", async () => {
             var format = request.Format.ToLowerInvariant() switch
             {
                 "json" => ExportFormat.Json,
@@ -185,12 +161,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
             var outcome = await transfer.ExportAsync(format, directory, ct);
             _lastExportDirectory = directory;
             return new(true, outcome.Path, outcome.FileName, outcome.Bytes, null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, null, 0, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, null, 0, error));
 
     /// <summary>Opens only the backups folder or the folder of the last export, never an arbitrary path.</summary>
     [NeoRpcMethod("openFolder")]
@@ -217,11 +189,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     }
 
     [NeoRpcMethod("importPreview")]
-    public async ValueTask<ImportPreviewResponse> ImportPreviewAsync(ImportPreviewRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.importPreview");
-        try
-        {
+    public ValueTask<ImportPreviewResponse> ImportPreviewAsync(ImportPreviewRequest request, CancellationToken ct) =>
+        Rpc.Run<ImportPreviewResponse>("data.importPreview", async () => {
             var (kind, restore) = ParseFormat(request.Format);
             var content = Decode(request.ContentBase64);
             var source = DataTransfer.Read(kind, request.FileName, content, Mapping(request.Mapping));
@@ -244,12 +213,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
                 [.. preview.Items.Select(item => new ImportItemDto(item.Line, item.Title, item.ListName, item.Status.ToString(), item.Subtasks, item.Outcome.ToString(), item.Detail))],
                 [.. preview.Errors.Select(Map)], [.. preview.Warnings.Select(Map)],
                 source.Csv?.Headers ?? [], mapping, CsvImport.Fields, archive, null, null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, false, 0, 0, 0, 0, 0, [], [], [], [], [], [], [], null, null, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, false, 0, 0, 0, 0, 0, [], [], [], [], [], [], [], null, null, error));
 
     [NeoRpcMethod("importCommit")]
     public async ValueTask<ImportCommitResponse> ImportCommitAsync(ImportCommitRequest request, CancellationToken ct)
@@ -295,25 +260,15 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
     }
 
     [NeoRpcMethod("purgePreview")]
-    public async ValueTask<PurgeResponse> PurgePreviewAsync(PurgeRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.purgePreview");
-        try
-        {
+    public ValueTask<PurgeResponse> PurgePreviewAsync(PurgeRequest request, CancellationToken ct) =>
+        Rpc.Run<PurgeResponse>("data.purgePreview", async () => {
             return new(true, Map(await purge.PreviewAsync(Blank(request.TaskId), ct)), null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("purge")]
-    public async ValueTask<PurgeResponse> PurgeAsync(PurgeRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("data.purge");
-        try
-        {
+    public ValueTask<PurgeResponse> PurgeAsync(PurgeRequest request, CancellationToken ct) =>
+        Rpc.Run<PurgeResponse>("data.purge", async () => {
             var outcome = await protection.GuardAsync(() => purge.PurgeAsync(Blank(request.TaskId), ct), ct);
             if (cancelOsNotifications is not null && outcome.OsNotificationIds.Count > 0)
             {
@@ -321,12 +276,8 @@ public sealed class DataRpcService(DataProtectionService protection, DataTransfe
             }
 
             return new(true, Map(outcome.Removed), null);
-        }
-        catch (AppException error)
-        {
-            return new(false, null, TaskRpcService.ToErrorResponse(error));
-        }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("reset")]
     public async ValueTask<ResetResponse> ResetAsync(ResetRequest request, CancellationToken ct)

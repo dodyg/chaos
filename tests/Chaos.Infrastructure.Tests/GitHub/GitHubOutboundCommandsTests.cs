@@ -1,3 +1,4 @@
+using Chaos.Domain.Validation;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.GitHub;
@@ -658,7 +659,7 @@ public sealed class GitHubOutboundCommandsTests
         var other = original with { Id = 2, NodeId = "I2", Number = 2, HtmlUrl = "https://github.com/person/repo/issues/2" };
         api.PutIssue("person/repo", other);
         await inbound.ApplyAsync(repo.Id, repo.Version, [other]);
-        api.PutIssue("person/repo", original with { Title = new string('x', 257), UpdatedAt = DataHost.Start.AddMinutes(1) });
+        api.PutIssue("person/repo", original with { Title = new string('x', TaskTitle.MaxUnicodeScalarValues + 1), UpdatedAt = DataHost.Start.AddMinutes(1) });
         api.PutIssue("person/repo", other with { Title = "Valid remote change", UpdatedAt = DataHost.Start.AddMinutes(1) });
         using var fetcher = new GitHubIssueFetcher(host.Store, api, inbound, _ => Task.FromResult("backup.db"), host.Clock);
         await fetcher.PullAsync(repo.Id);

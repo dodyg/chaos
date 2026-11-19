@@ -41,3 +41,12 @@ test("invalid Mermaid displays its source safely", async () => {
     assert.equal(view.container.querySelector('script'), null);
   } finally { await view.close(); }
 });
+
+test("only http, https, mailto and same-note links are clickable, as in the desktop app", async () => {
+  const view = await show("[web](https://example.com) [mail](mailto:a@example.com) [call](tel:123) [js](javascript:alert(1)) [local](#top)\n\n# top");
+  try {
+    const hrefs = [...view.container.querySelectorAll("a")].map(link => link.getAttribute("href"));
+    assert.deepEqual(hrefs, ["https://example.com", "mailto:a@example.com", "#top"]);
+    assert.match(view.container.textContent, /call/);
+  } finally { await view.close(); }
+});

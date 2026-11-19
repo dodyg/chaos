@@ -35,8 +35,6 @@ public sealed record DeleteAccountRequest(string Confirmation);
 public static class ServiceEndpoints
 {
     public const string RateLimitPolicy = "device";
-    private const int MaxNameLength = 100;
-    private const int MaxShortLength = 40;
 
     public static IServiceCollection AddServiceRateLimits(this IServiceCollection services)
     {
@@ -65,75 +63,29 @@ public static class ServiceEndpoints
         v1.MapBlobEndpoints();
     }
 
-    private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>
-        Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) && Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device)
-            ? (account, device)
-            : null;
-
-    private static async Task<IResult> RegisterDevice(ClaimsPrincipal user, RegisterDeviceRequest request, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
+    private static async Task<IResult> RegisterDevice(ClaimsPrincipal user, RegisterDeviceRequest request, DeviceRegistration devices, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
 
-        // A token is for one device; it cannot register another.
-        if (request.DeviceId != caller.DeviceId)
+        var result = await devices.RegisterAsync(caller.AccountId, caller.DeviceId, request, ct);
+        return result.Outcome switch
         {
-            return Results.Problem("The device ID does not match the one this sign-in was made for.", statusCode: StatusCodes.Status403Forbidden);
-        }
-
-        var name = request.Name?.Trim() ?? string.Empty;
-        var platform = request.Platform?.Trim() ?? string.Empty;
-        var version = request.ClientVersion?.Trim() ?? string.Empty;
-        if (name.Length is 0 or > MaxNameLength || platform.Length is 0 or > MaxShortLength || version.Length is 0 or > MaxShortLength || request.ClientSchema < 0)
-        {
-            return Results.Problem("The device name, platform and version are required and must be short.", statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        var now = clock.GetUtcNow();
-        var device = await db.Devices.FirstOrDefaultAsync(d => d.Id == request.DeviceId, ct);
-        var created = device is null;
-        if (device is null)
-        {
-            device = new Device { Id = request.DeviceId, AccountId = caller.AccountId, Name = name, Platform = platform, ClientVersion = version, ClientSchema = request.ClientSchema, CreatedAt = now, LastSeenAt = now };
-            db.Devices.Add(device);
-            db.AuditEvents.Add(new AuditEvent { AccountId = caller.AccountId, Kind = AuditKinds.DeviceAdded, At = now, DeviceId = device.Id });
-        }
-        else if (device.AccountId != caller.AccountId)
-        {
-            return Results.Problem("This device is registered to another account.", statusCode: StatusCodes.Status409Conflict);
-        }
-        else if (device.RevokedAt is not null)
-        {
-            return Results.Problem("This device was removed from the account.", statusCode: StatusCodes.Status403Forbidden);
-        }
-        else
-        {
-            device.Name = name;
-            device.Platform = platform;
-            device.ClientVersion = version;
-            device.ClientSchema = request.ClientSchema;
-            device.LastSeenAt = now;
-        }
-
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException) when (created)
-        {
-            // Two first calls from one device raced; the other one registered it.
-            return Results.Problem("The device is already being registered. Try again.", statusCode: StatusCodes.Status409Conflict);
-        }
-
-        var dto = new DeviceDto(device.Id, device.Name, device.Platform, device.ClientVersion, device.CreatedAt, device.LastSeenAt, true);
-        return created ? Results.Created($"/v1/devices/{device.Id}", dto) : Results.Ok(dto);
+            DeviceRegistrationOutcome.Registered => Results.Created($"/v1/devices/{result.Device!.Id}", result.Device),
+            DeviceRegistrationOutcome.Updated => Results.Ok(result.Device),
+            DeviceRegistrationOutcome.WrongDevice => ApiErrors.Problem("device-mismatch", "The device ID does not match the one this sign-in was made for.", StatusCodes.Status403Forbidden),
+            DeviceRegistrationOutcome.Invalid => ApiErrors.Problem("invalid-device", "The device name, platform and version are required and must be short.", StatusCodes.Status400BadRequest),
+            DeviceRegistrationOutcome.OtherAccount => ApiErrors.Problem("device-registered-elsewhere", "This device is registered to another account.", StatusCodes.Status409Conflict),
+            DeviceRegistrationOutcome.Removed => ApiErrors.Problem("device-removed", "This device was removed from the account.", StatusCodes.Status403Forbidden),
+            _ => ApiErrors.Problem("device-busy", "The device is already being registered. Try again.", StatusCodes.Status409Conflict),
+        };
     }
 
     private static async Task<IResult> GetAccount(ClaimsPrincipal user, ChaosDbContext db, IOptions<LimitsOptions> limits, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -181,7 +133,7 @@ public static class ServiceEndpoints
     /// </summary>
     private static async Task<IResult> BindAccount(ClaimsPrincipal user, BindAccountRequest request, ChaosDbContext db, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -189,7 +141,7 @@ public static class ServiceEndpoints
         if (request.ProfileId == Guid.Empty || request.PersonalSpaceId == Guid.Empty || request.InboxId == Guid.Empty
             || new[] { request.ProfileId, request.PersonalSpaceId, request.InboxId }.Distinct().Count() != 3)
         {
-            return Results.Problem("The profile, Personal space and Inbox IDs are required and must differ.", statusCode: StatusCodes.Status400BadRequest);
+            return ApiErrors.Problem("invalid-ids", "The profile, Personal space and Inbox IDs are required and must differ.", StatusCodes.Status400BadRequest);
         }
 
         // One conditional UPDATE decides who binds, so two devices racing cannot both win.
@@ -206,9 +158,9 @@ public static class ServiceEndpoints
     /// Deletes the account and everything the service holds for it (PLAN2 §8.6). It needs a sign-in made in the last ten minutes
     /// and the typed phrase. Other devices learn the next time they call (401 <c>account-deleted</c>) and keep their local data.
     /// </summary>
-    private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, ChaosDbContext db, BlobService blobs, TimeProvider clock, CancellationToken ct)
+    private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, AccountDeletion deletion, TimeProvider clock, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -217,47 +169,20 @@ public static class ServiceEndpoints
         if (!long.TryParse(user.FindFirst(DesktopClient.AuthTimeClaim)?.Value, out var signedAtSeconds)
             || now - DateTimeOffset.FromUnixTimeSeconds(signedAtSeconds) > FreshSignInWindow)
         {
-            return Results.Problem(detail: "Sign in again to confirm deleting your account.", statusCode: StatusCodes.Status403Forbidden,
-                extensions: new Dictionary<string, object?> { ["code"] = "fresh-sign-in-required" });
+            return ApiErrors.Problem("fresh-sign-in-required", "Sign in again to confirm deleting your account.", StatusCodes.Status403Forbidden);
         }
 
         if (!string.Equals(request.Confirmation?.Trim(), DeleteConfirmation, StringComparison.Ordinal))
         {
-            return Results.Problem(detail: $"Type {DeleteConfirmation} to confirm.", statusCode: StatusCodes.Status400BadRequest,
-                extensions: new Dictionary<string, object?> { ["code"] = "confirmation-required" });
+            return ApiErrors.Problem("confirmation-required", $"Type {DeleteConfirmation} to confirm.", StatusCodes.Status400BadRequest);
         }
 
-        var email = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.PrimaryEmail).FirstOrDefaultAsync(ct);
-        if (email is null)
-        {
-            return Results.Unauthorized();
-        }
-
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
-        {
-            await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            var subject = caller.AccountId.ToString("D");
-            // Tokens first: they point at authorizations. The OpenIddict tables have no account column, only the subject.
-            await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreToken>().Where(t => t.Subject == subject).ExecuteDeleteAsync(ct);
-            await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization>().Where(a => a.Subject == subject).ExecuteDeleteAsync(ct);
-            await db.SyncChanges.Where(c => c.AccountId == caller.AccountId).ExecuteDeleteAsync(ct);
-            await db.SyncEntities.Where(e => e.AccountId == caller.AccountId).ExecuteDeleteAsync(ct);
-            await db.EmailCodes.Where(c => c.Email == email).ExecuteDeleteAsync(ct);
-            // Devices and logins go with the account row (cascade).
-            await db.Accounts.Where(a => a.Id == caller.AccountId).ExecuteDeleteAsync(ct);
-            db.AuditEvents.Add(new AuditEvent { AccountId = caller.AccountId, Kind = AuditKinds.AccountDeleted, At = now, DeviceId = caller.DeviceId });
-            await db.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
-        });
-        // The rows are gone with the account (cascade); now the encrypted objects and any unfinished upload parts (PLAN2 §8.6).
-        await blobs.DeleteAccountObjectsAsync(caller.AccountId, ct);
-        return Results.NoContent();
+        return await deletion.DeleteAsync(caller.AccountId, caller.DeviceId, ct) ? Results.NoContent() : Results.Unauthorized();
     }
 
     private static async Task<IResult> RevokeDevice(ClaimsPrincipal user, Guid id, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -288,7 +213,7 @@ public sealed class ActiveDeviceFilter(ChaosDbContext db, TimeProvider clock) : 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var user = context.HttpContext.User;
-        if (!Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var accountId) || !Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var deviceId))
+        if (CallerIdentity.TryGet(user) is not (Guid accountId, Guid deviceId))
         {
             return Results.Unauthorized();
         }
@@ -311,5 +236,5 @@ public sealed class ActiveDeviceFilter(ChaosDbContext db, TimeProvider clock) : 
 
     /// <summary>A 401 that says why, so the desktop can tell "sign in again" from "this device is out of the account".</summary>
     private static IResult Refuse(string code, string detail) =>
-        Results.Problem(detail: detail, statusCode: StatusCodes.Status401Unauthorized, extensions: new Dictionary<string, object?> { ["code"] = code });
+        ApiErrors.Problem(code, detail, StatusCodes.Status401Unauthorized);
 }

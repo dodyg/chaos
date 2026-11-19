@@ -26,6 +26,9 @@ public sealed record PullPage(string Json);
 /// the account row, and logs only the groups that won; pull and snapshot read them back. Every query is
 /// filtered by the account taken from the token. Nothing here logs content.
 /// </summary>
+/// <summary>The account was deleted (or never existed) while a push for it was in flight.</summary>
+public sealed class AccountUnavailableException() : InvalidOperationException("The account is gone.");
+
 public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<SyncOptions> options, SyncBroadcaster broadcaster, SyncKindCatalog kinds)
 {
     /// <summary>Reads a push body into changes; one unreadable change is rejected on its own, a body that is not a push is an error.</summary>
@@ -60,7 +63,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
     public async Task<PushOutcome> PushAsync(Guid accountId, Guid deviceId, int clientSchema, IReadOnlyList<IncomingChange> incoming, CancellationToken ct)
     {
         var result = await PushPreparedAsync(accountId, deviceId, clientSchema, (_, _) => Task.FromResult(new PreparedPush(incoming)), ct);
-        return result.Outcome ?? throw new InvalidOperationException("The account is gone.");
+        return result.Outcome ?? throw new AccountUnavailableException();
     }
 
     /// <summary>Prepares server-generated changes under the same account lock used to merge them.</summary>
@@ -163,7 +166,8 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
         // §8.3 step 7: after the commit, tell this process's listeners and any other instance.
         if (result.Outcome is { Accepted.Count: > 0 } outcome)
         {
-            await NotifyAsync(accountId, outcome.LastSeq, ct);
+            // The push is committed: a cancelled request must not turn it into an error.
+            await NotifyAsync(accountId, outcome.LastSeq, CancellationToken.None);
         }
 
         return result;
@@ -172,8 +176,8 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
     private async Task NotifyAsync(Guid accountId, long seq, CancellationToken ct)
     {
         broadcaster.Publish(accountId, seq);
-        var channel = SyncBroadcaster.Channel(accountId);
-        var payload = seq.ToString(CultureInfo.InvariantCulture);
+        var channel = SyncNotificationListener.Channel;
+        var payload = SyncNotificationListener.Payload(accountId, seq);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {payload})", ct);
     }
 

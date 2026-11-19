@@ -93,28 +93,20 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
     }
 
     [NeoRpcMethod("previewMerge")]
-    public async ValueTask<TagMergePreviewResponse> PreviewMergeAsync(TagMergePreviewRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("tags.previewMerge");
-        try
-        {
+    public ValueTask<TagMergePreviewResponse> PreviewMergeAsync(TagMergePreviewRequest request, CancellationToken ct) =>
+        Rpc.Run<TagMergePreviewResponse>("tags.previewMerge", async () => {
             var preview = await tags.PreviewMergeAsync(request.SourceId, request.TargetId, ct);
             return new(true, Count(preview.TaskLinksMoved), Count(preview.TaskLinksAlreadyPresent), Count(preview.SubtaskLinksMoved), Count(preview.SubtaskLinksAlreadyPresent), Count(preview.ChildTagsMoved), Count(preview.ChildTagsMerged), Count(preview.PadLinksMoved), Count(preview.PadLinksAlreadyPresent), null);
-        }
-        catch (AppException error) { return new(false, 0, 0, 0, 0, 0, 0, 0, 0, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, 0, 0, 0, 0, 0, 0, 0, 0, error));
 
     [NeoRpcMethod("merge")]
-    public async ValueTask<TagOperationResponse> MergeAsync(TagMergeRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("tags.merge");
-        try
-        {
+    public ValueTask<TagOperationResponse> MergeAsync(TagMergeRequest request, CancellationToken ct) =>
+        Rpc.Run<TagOperationResponse>("tags.merge", async () => {
             var result = await tags.MergeAsync(new(request.OperationId, request.SourceId, Version(request.SourceVersion), request.TargetId, Version(request.TargetVersion)), ct);
             return new(true, Map(new TagWithPath(result.Target, result.Target.DisplayName)), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("targetTags")]
     public async ValueTask<TagIdsResponse> TargetTagsAsync(TagTargetRequest request, CancellationToken ct)
@@ -172,7 +164,7 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
-    private static long Version(string value) => long.TryParse(value, out var version) && version > 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
+    private static long Version(string value) => RpcParse.Version(value, message: "Invalid version. Refresh and try again.");
 
     private static TagTargetKind Kind(string value) => Enum.TryParse<TagTargetKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("targetKind", "Tags can be added to tasks, subtasks and pad notes.");
 }

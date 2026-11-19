@@ -75,20 +75,14 @@ public sealed record ViewFromSearchResponse(bool Ok, string? DefinitionJson, Tas
 public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries queries, ViewAlertService alerts)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<ViewListResponse> ListAsync(ViewListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.list");
-        try { return new(true, [.. (await commands.ListAsync(request.IncludeDeleted, ct)).Select(Map)], SavedViewCommands.Icons, null); }
-        catch (AppException error) { return new(false, [], SavedViewCommands.Icons, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<ViewListResponse> ListAsync(ViewListRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewListResponse>("views.list", async () => { return new(true, [.. (await commands.ListAsync(request.IncludeDeleted, ct)).Select(Map)], SavedViewCommands.Icons, null); },
+            error => new(false, [], SavedViewCommands.Icons, error));
 
     [NeoRpcMethod("get")]
-    public async ValueTask<ViewResponse> GetAsync(ViewGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.get");
-        try { return new(true, Map(await commands.GetAsync(request.ViewId, ct)), null); }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<ViewResponse> GetAsync(ViewGetRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewResponse>("views.get", async () => { return new(true, Map(await commands.GetAsync(request.ViewId, ct)), null); },
+            error => new(false, null, error));
 
     [NeoRpcMethod("save")]
     public async ValueTask<ViewResponse> SaveAsync(ViewSaveRequest request, CancellationToken ct)
@@ -128,59 +122,41 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     }
 
     [NeoRpcMethod("reorder")]
-    public async ValueTask<ViewListResponse> ReorderAsync(ViewReorderRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.reorder");
-        try { return new(true, [.. (await commands.ReorderAsync(request.OperationId, request.ViewIds, ct)).Select(Map)], SavedViewCommands.Icons, null); }
-        catch (AppException error) { return new(false, [], SavedViewCommands.Icons, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<ViewListResponse> ReorderAsync(ViewReorderRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewListResponse>("views.reorder", async () => { return new(true, [.. (await commands.ReorderAsync(request.OperationId, request.ViewIds, ct)).Select(Map)], SavedViewCommands.Icons, null); },
+            error => new(false, [], SavedViewCommands.Icons, error));
 
     [NeoRpcMethod("run")]
-    public async ValueTask<ViewRunResponse> RunAsync(ViewRunRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.run");
-        try
-        {
+    public ValueTask<ViewRunResponse> RunAsync(ViewRunRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewRunResponse>("views.run", async () => {
             var result = await queries.RunAsync(request.ViewId, Category(request.Category), Math.Clamp(request.Limit ?? 100, 1, 100), request.Cursor, ct);
             return Map(result.Page, result.Layout.ToJson());
-        }
-        catch (AppException error) { return new(false, [], 0, null, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], 0, null, null, error));
 
     /// <summary>Rows and the exact count for an unsaved definition: the editor's live preview.</summary>
     [NeoRpcMethod("preview")]
-    public async ValueTask<ViewRunResponse> PreviewAsync(ViewPreviewRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.preview");
-        try
-        {
+    public ValueTask<ViewRunResponse> PreviewAsync(ViewPreviewRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewRunResponse>("views.preview", async () => {
             var page = await queries.RunDraftAsync(request.DefinitionJson, request.LayoutJson, Category(request.Category), Math.Clamp(request.Limit ?? 5, 1, 50), ct);
             return Map(page, request.LayoutJson);
-        }
-        catch (AppException error) { return new(false, [], 0, null, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], 0, null, null, error));
 
     [NeoRpcMethod("counts")]
-    public async ValueTask<SavedViewCountsResponse> CountsAsync(SavedViewCountsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.counts");
-        try { return new(true, [.. (await queries.CountsAsync(Category(request.Category), ct)).Select(entry => new ViewCountEntry(entry.Key, TagRpcService.Count(entry.Value)))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<SavedViewCountsResponse> CountsAsync(SavedViewCountsRequest request, CancellationToken ct) =>
+        Rpc.Run<SavedViewCountsResponse>("views.counts", async () => { return new(true, [.. (await queries.CountsAsync(Category(request.Category), ct)).Select(entry => new ViewCountEntry(entry.Key, TagRpcService.Count(entry.Value)))], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("contextDefaults")]
-    public async ValueTask<ViewContextResponse> ContextDefaultsAsync(ViewContextRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.contextDefaults");
-        try
-        {
+    public ValueTask<ViewContextResponse> ContextDefaultsAsync(ViewContextRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewContextResponse>("views.contextDefaults", async () => {
             var defaults = await commands.ContextDefaultsAsync(request.ViewId, ct);
             return new(true, defaults.ContainerId, defaults.Status?.ToString(), defaults.Priority?.ToString(), defaults.Category?.ToString(),
                 defaults.TagIds, defaults.PlannedDate is { } planned ? StorageFormats.Date(planned) : null,
                 defaults.DueDate is { } due ? StorageFormats.Date(due) : null, null);
-        }
-        catch (AppException error) { return new(false, null, null, null, null, [], null, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, null, null, null, [], null, null, error));
 
     /// <summary>Writes the view as a CSV into the exports folder; "Show in folder" opens it through <c>data.openFolder</c>.</summary>
     [NeoRpcMethod("export")]
@@ -202,34 +178,24 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
 
     /// <summary>The subscribed GitHub repositories, for the GitHub condition group (empty when GitHub is not connected).</summary>
     [NeoRpcMethod("githubOptions")]
-    public async ValueTask<ViewGitHubOptionsResponse> GitHubOptionsAsync(ViewGitHubOptionsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.githubOptions");
-        try { return new(true, [.. (await queries.GitHubRepositoriesAsync(ct)).Select(item => new ViewGitHubRepositoryDto(item.Id, item.FullName))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<ViewGitHubOptionsResponse> GitHubOptionsAsync(ViewGitHubOptionsRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewGitHubOptionsResponse>("views.githubOptions", async () => { return new(true, [.. (await queries.GitHubRepositoriesAsync(ct)).Select(item => new ViewGitHubRepositoryDto(item.Id, item.FullName))], null); },
+            error => new(false, [], error));
 
     /// <summary>Delivered alerts waiting to be dismissed (new tasks that matched an alerting view).</summary>
     [NeoRpcMethod("alerts")]
-    public async ValueTask<ViewAlertsResponse> AlertsAsync(ViewAlertsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.alerts");
-        try
-        {
+    public ValueTask<ViewAlertsResponse> AlertsAsync(ViewAlertsRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewAlertsResponse>("views.alerts", async () => {
             var items = await alerts.ListAsync(20, ct);
             return new(true, [.. items.Select(item => new ViewAlertDto(item.Alert.Id, item.Alert.ViewId, item.ViewName, item.ViewAvailable, item.Alert.TaskCount, item.Alert.FirstTaskTitle,
                 StorageFormats.Instant(item.Alert.DeliveredAtUtc ?? item.Alert.CreatedAtUtc)))], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     [NeoRpcMethod("acknowledgeAlert")]
-    public async ValueTask<ViewAlertAckResponse> AcknowledgeAlertAsync(ViewAlertAckRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("views.acknowledgeAlert");
-        try { await alerts.AcknowledgeAsync(request.AlertId, ct); return new(true, null); }
-        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<ViewAlertAckResponse> AcknowledgeAlertAsync(ViewAlertAckRequest request, CancellationToken ct) =>
+        Rpc.Run<ViewAlertAckResponse>("views.acknowledgeAlert", async () => { await alerts.AcknowledgeAsync(request.AlertId, ct); return new(true, null); },
+            error => new(false, error));
 
     [NeoRpcMethod("fromSearch")]
     public ValueTask<ViewFromSearchResponse> FromSearchAsync(ViewFromSearchRequest request, CancellationToken ct)

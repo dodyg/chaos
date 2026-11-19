@@ -77,20 +77,16 @@ public sealed class WaitingRpcService(WaitingCommands waiting)
 
     /// <summary>Follow-ups due by the end of a local date (today when null): My Day's follow-up items.</summary>
     [NeoRpcMethod("due")]
-    public async ValueTask<FollowUpDueResponse> DueAsync(FollowUpDueRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("waiting.due");
-        try
-        {
+    public ValueTask<FollowUpDueResponse> DueAsync(FollowUpDueRequest request, CancellationToken ct) =>
+        Rpc.Run<FollowUpDueResponse>("waiting.due", async () => {
             DateOnly? date = string.IsNullOrWhiteSpace(request.Date) ? null
                 : DateOnly.TryParseExact(request.Date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed) ? parsed
                 : throw AppException.Validation("date", "Enter a valid date.");
             var items = await waiting.DueAsync(date, ct);
             return new(true, [.. items.Select(item => new FollowUpItemResponse(TaskRpcService.ToResponse(item.Task), item.ContainerName, item.Person,
                 StorageFormats.Instant(item.DueAtUtc), item.Overdue, item.FollowUp.Kind.ToString()))], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     private static (WaitingView View, bool Replayed) Unpack(WaitingMutationResult result) => (result.View, result.Replayed);
 

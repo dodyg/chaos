@@ -25,7 +25,6 @@ internal static class WebEvents
     {
         var queue = Channel.CreateUnbounded<long>(new UnboundedChannelOptions { SingleReader = true });
         using var subscription = broadcaster.Subscribe(caller.AccountId, seq => queue.Writer.TryWrite(seq));
-        await using var listener = await SyncEvents.ListenAsync(db, caller.AccountId, queue.Writer, ct);
         var current = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.NextSeq - 1).FirstOrDefaultAsync(ct);
         yield return new SseItem<string>(current.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var sent = current;

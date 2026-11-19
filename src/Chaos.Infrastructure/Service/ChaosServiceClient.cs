@@ -332,7 +332,14 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
     {
         var device = await _identity.GetAsync(ct);
         using var response = await SendAuthorizedAsync(method, path, null, ct, json, device);
-        return new ServiceResponse((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        try
+        {
+            return new ServiceResponse((int)response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        }
+        catch (Exception error) when (error is IOException or HttpRequestException)
+        {
+            throw new ChaosServiceException(ServiceFailure.Offline, "The connection to the online service was lost.", error);
+        }
     }
 
     public async IAsyncEnumerable<string> StreamLinesAsync(string path, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)

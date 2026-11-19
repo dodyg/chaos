@@ -28,14 +28,45 @@ builder.AddNpgsqlDbContext<ChaosDbContext>(
     configureDbContextOptions: options => options.UseOpenIddict());
 
 builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
-builder.Services.AddServiceRateLimits();
+builder.Services.AddServiceRateLimits().AddAccountServices();
 builder.Services.AddSyncService(builder.Configuration);
 builder.Services.AddBlobService(builder.Configuration, builder.Environment);
 builder.Services.AddWebSessions(builder.Environment);
 builder.Services.AddScoped<WebReadModel>();
 builder.Services.AddScoped<WebTaskWrites>();
 
+builder.Services.AddProblemDetails();
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    foreach (var proxy in builder.Configuration.GetSection("Proxy:KnownProxies").Get<string[]>() ?? [])
+    {
+        options.KnownProxies.Add(System.Net.IPAddress.Parse(proxy));
+    }
+
+    foreach (var network in builder.Configuration.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [])
+    {
+        var parts = network.Split('/');
+        options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse(parts[0]), int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)));
+    }
+});
+
 var app = builder.Build();
+
+// Sign-in throttling and device rate limits key on the client address, so behind a proxy every user would share one bucket
+// unless the proxy is trusted. Outside development the host must say which proxies it trusts, or that it has none.
+if (!app.Environment.IsDevelopment())
+{
+    var proxies = app.Configuration.GetSection("Proxy:KnownProxies").Get<string[]>() ?? [];
+    var networks = app.Configuration.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [];
+    if (proxies.Length == 0 && networks.Length == 0 && !app.Configuration.GetValue<bool>("Proxy:Direct"))
+    {
+        throw new InvalidOperationException("Set Proxy:KnownProxies or Proxy:KnownNetworks to the reverse proxies in front of this server, or Proxy:Direct=true when clients connect to it directly.");
+    }
+}
+
+app.UseExceptionHandler();
+app.UseForwardedHeaders();
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
@@ -59,37 +90,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-// Sign-in pages and API responses are never cached or framed. The app shell loads same-origin assets.
-app.Use(async (http, next) =>
-{
-    var path = http.Request.Path;
-    var isApp = path.StartsWithSegments(WebSession.AppPath);
-    var isBundledAsset = path.StartsWithSegments("/app/assets");
-    if (HttpMethods.IsPost(http.Request.Method) && path.StartsWithSegments(WebSession.ApiPath) &&
-        http.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } size)
-    {
-        size.MaxRequestBodySize = 8192;
-    }
-
-    http.Response.OnStarting(() =>
-    {
-        var headers = http.Response.Headers;
-        headers["X-Content-Type-Options"] = "nosniff";
-        headers["Referrer-Policy"] = "no-referrer";
-        headers["Content-Security-Policy"] = isApp
-            ? "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-            : "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'";
-        if (!path.StartsWithSegments("/health"))
-        {
-            headers.CacheControl = isBundledAsset && http.Response.StatusCode == StatusCodes.Status200OK
-                ? "public, max-age=31536000, immutable"
-                : "no-store";
-        }
-
-        return Task.CompletedTask;
-    });
-    await next();
-});
+app.UseSecurityHeaders();
 
 app.UseWhen(http => http.Request.Path.StartsWithSegments(WebSession.AppPath), mobile =>
 {

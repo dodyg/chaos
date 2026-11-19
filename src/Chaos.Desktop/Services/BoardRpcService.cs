@@ -67,38 +67,27 @@ public sealed record BoardMoveResponse(bool Ok, TaskResponse? Task, TaskErrorRes
 public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries, Chaos.Application.Views.ViewBoardQueries viewQueries, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
 {
     [NeoRpcMethod("get")]
-    public async ValueTask<BoardGetResponse> GetAsync(BoardGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("board.get");
-        try
-        {
+    public ValueTask<BoardGetResponse> GetAsync(BoardGetRequest request, CancellationToken ct) =>
+        Rpc.Run<BoardGetResponse>("board.get", async () => {
             var board = await queries.GetAsync(request.ContainerId, Category(request.Category), request.ShowCancelled, ct);
             return new(true, Map(board.Settings), [.. board.Columns.Select(Map)], [.. board.Lanes.Select(Map)],
                 [.. board.Cards.Select(Map)], board.TotalCount, board.Truncated, null);
-        }
-        catch (AppException error) { return new(false, Map(BoardCommands.Defaults(BoardTargetKind.Container, request.ContainerId)), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, Map(BoardCommands.Defaults(BoardTargetKind.Container, request.ContainerId)), [], [], [], 0, false, error));
 
     /// <summary>The board layout of a custom view: its rows as cards (settings target kind View).</summary>
     [NeoRpcMethod("getView")]
-    public async ValueTask<BoardGetResponse> GetViewAsync(BoardViewGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("board.getView");
-        try
-        {
+    public ValueTask<BoardGetResponse> GetViewAsync(BoardViewGetRequest request, CancellationToken ct) =>
+        Rpc.Run<BoardGetResponse>("board.getView", async () => {
             var board = await viewQueries.GetAsync(request.ViewId, Category(request.Category), request.ShowCancelled, ct);
             return new(true, Map(board.Settings), [.. board.Columns.Select(Map)], [.. board.Lanes.Select(Map)],
                 [.. board.Cards.Select(Map)], board.TotalCount, board.Truncated, null);
-        }
-        catch (AppException error) { return new(false, Map(BoardCommands.Defaults(BoardTargetKind.View, request.ViewId)), [], [], [], 0, false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, Map(BoardCommands.Defaults(BoardTargetKind.View, request.ViewId)), [], [], [], 0, false, error));
 
     [NeoRpcMethod("updateSettings")]
-    public async ValueTask<BoardSettingsResponse> UpdateSettingsAsync(BoardUpdateSettingsRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("board.updateSettings");
-        try
-        {
+    public ValueTask<BoardSettingsResponse> UpdateSettingsAsync(BoardUpdateSettingsRequest request, CancellationToken ct) =>
+        Rpc.Run<BoardSettingsResponse>("board.updateSettings", async () => {
             var result = await commands.UpdateSettingsAsync(new(
                 request.OperationId,
                 ParseEnum<BoardTargetKind>(request.TargetKind, "targetKind"),
@@ -111,16 +100,12 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
                 request.WipLimitsJson,
                 request.HiddenColumnsJson), ct);
             return new(true, Map(result.Settings), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     [NeoRpcMethod("move")]
-    public async ValueTask<BoardMoveResponse> MoveAsync(BoardMoveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("board.move");
-        try
-        {
+    public ValueTask<BoardMoveResponse> MoveAsync(BoardMoveRequest request, CancellationToken ct) =>
+        Rpc.Run<BoardMoveResponse>("board.move", async () => {
             var result = await commands.MoveAsync(new(
                 request.OperationId,
                 request.TaskId,
@@ -133,9 +118,8 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
                 request.SubtaskChoice is null ? null : ParseEnum<OpenSubtaskChoice>(request.SubtaskChoice, "subtaskChoice")), ct);
             sync?.RequestTaskSync(result.Task.Id);
             return new(true, TaskRpcService.ToResponse(result.Task), null);
-        }
-        catch (AppException error) { return new(false, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, error));
 
     internal static BoardSettingsDto Map(BoardSettingsRecord settings) => new(
         settings.GroupBy.ToString(),
@@ -159,6 +143,5 @@ public sealed class BoardRpcService(BoardCommands commands, BoardQueries queries
 
     private static long Version(string value) => long.TryParse(value, out var version) && version >= 0 ? version : throw AppException.Validation("expectedVersion", "Invalid version. Refresh and try again.");
 
-    private static T ParseEnum<T>(string value, string field) where T : struct, Enum =>
-        Enum.TryParse<T>(value, out var parsed) && Enum.IsDefined(parsed) ? parsed : throw AppException.Validation(field, "Choose a valid value.");
+    private static T ParseEnum<T>(string value, string field) where T : struct, Enum => RpcParse.Enum<T>(value, field);
 }

@@ -185,8 +185,8 @@ public sealed class SyncEngine : IDisposable
             // The loop ends by cancellation.
         }
 
+        // _cycleGate is not disposed: a SyncNowAsync from outside may still be waiting on it, and a SemaphoreSlim holds no handle to free.
         _stop?.Dispose();
-        _cycleGate.Dispose();
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -202,6 +202,11 @@ public sealed class SyncEngine : IDisposable
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // Nothing may end this loop: report the problem and back off like any other failed cycle.
+                result = ReportUnexpected(error);
             }
 
             TimeSpan wait;
@@ -326,6 +331,11 @@ public sealed class SyncEngine : IDisposable
                 // Signed out or refused is not something a retry fixes; only connectivity is.
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
             }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // A malformed response or a local failure is a problem to show and retry, not a reason to stop syncing.
+                return ReportUnexpected(error, pushed, pulled, snapshot);
+            }
         }
         finally
         {
@@ -380,6 +390,11 @@ public sealed class SyncEngine : IDisposable
             {
                 // Offline, signed out or refused: back off and try again.
             }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The stream must keep reconnecting whatever went wrong with it.
+                System.Diagnostics.Trace.TraceWarning("Sync event stream failed: {0}", error.GetType().Name);
+            }
 
             SetRuntime(r => r with { Streaming = false });
             failures++;
@@ -392,6 +407,14 @@ public sealed class SyncEngine : IDisposable
                 return;
             }
         }
+    }
+
+    private SyncCycleResult ReportUnexpected(Exception error, long pushed = 0, long pulled = 0, bool snapshot = false)
+    {
+        System.Diagnostics.Trace.TraceWarning("Sync cycle failed unexpectedly: {0}", error);
+        var problem = "Sync hit an unexpected problem and will try again.";
+        SetRuntime(r => r with { Failure = ServiceFailure.Other, FailureDetail = problem });
+        return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
     }
 
     private SyncCycleResult Finish(SyncCycleResult result)
@@ -434,35 +457,7 @@ public sealed class SyncEngine : IDisposable
 
     private async Task UploadCalendarCachesAsync(CancellationToken ct)
     {
-        var caches = await _store.QueryAsync((session, _) =>
-        {
-            var connection = ((SqliteDataSession)session).Connection;
-            var result = new List<CalendarCacheSnapshot>();
-            using var sources = connection.CreateCommand();
-            sources.CommandText = "SELECT s.Id, st.LastSuccessUtc FROM CalendarSources s JOIN CalendarSourceState st ON st.SourceId = s.Id WHERE s.Enabled = 1 AND s.DeletedAtUtc IS NULL AND st.LastSuccessUtc IS NOT NULL";
-            using var sourceReader = sources.ExecuteReader();
-            while (sourceReader.Read())
-            {
-                var id = sourceReader.GetString(0);
-                var fetched = DateTimeOffset.Parse(sourceReader.GetString(1), CultureInfo.InvariantCulture);
-                var events = new List<CalendarCacheEvent>();
-                using var command = connection.CreateCommand();
-                command.CommandText = "SELECT ExternalId, StartUtc, EndUtc, AllDay, StartDate, EndDate, Title, Location, VideoUrl, WebUrl, Busy, FetchedUtc FROM CalendarEvents WHERE SourceId = $id";
-                command.Parameters.AddWithValue("$id", id);
-                using var reader = command.ExecuteReader();
-                while (reader.Read())
-                {
-                    events.Add(new CalendarCacheEvent(reader.GetString(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
-                        DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture), reader.GetInt64(3) != 0,
-                        reader.IsDBNull(4) ? null : DateOnly.ParseExact(reader.GetString(4), "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        reader.IsDBNull(5) ? null : DateOnly.ParseExact(reader.GetString(5), "yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetString(9), reader.GetInt64(10) != 0, DateTimeOffset.Parse(reader.GetString(11), CultureInfo.InvariantCulture)));
-                }
-                result.Add(new CalendarCacheSnapshot(id, fetched, events));
-            }
-            return Task.FromResult(result);
-        }, ct);
+        var caches = await _store.QueryAsync((session, _) => Task.FromResult(((SqliteCalendarStore)session.Calendars).ReadCacheSnapshots()), ct);
         foreach (var cache in caches)
         {
             var json = JsonSerializer.Serialize(cache);

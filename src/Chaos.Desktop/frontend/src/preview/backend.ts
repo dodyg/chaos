@@ -805,17 +805,14 @@ const handlers: Record<string, Handler> = {
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
 
-/** Answers for reads the preview does not model: every list empty, every single item absent. */
-const emptyRead = {
-  ok: true, error: null, items: [], entries: [], tasks: [], rows: [], rules: [], prompts: [], targets: [], tagIds: [], templates: [], suggestions: [], subtasks: [], sections: [],
-  containers: [], tags: [], views: [], activations: [], zones: [], occurrences: [], backups: [], imports: [], repositories: [], revisions: [], totalCount: 0, nextCursor: null,
-  task: null, rule: null, anchor: null, settings: null, connection: null, sync: null, capabilities: null, version: null,
-};
+/** The commands this backend answers, so a test can check each is a real one. */
+export const modelledCommands = (): string[] => Object.keys(handlers);
 
 export async function handle(command: string, request: unknown): Promise<unknown> {
   await new Promise(resolve => setTimeout(resolve, 40)); // a little latency, like the real host
   const handler = handlers[command];
-  if (!handler) { console.info(`[preview] ${command} is not modelled; answering with an empty read.`); return structuredClone(emptyRead); }
+  // Guessing a response shape hid gaps: a command the preview does not model fails where it is called, so it gets a handler instead.
+  if (!handler) { console.error(`[preview] ${command} is not modelled; add a handler in src/preview/backend.ts.`); return fail(`The preview does not model ${command}.`); }
   const result = structuredClone(handler(request));
   recordActivity(command);
   return result;

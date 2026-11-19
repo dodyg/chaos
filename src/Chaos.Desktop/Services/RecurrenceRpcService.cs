@@ -27,26 +27,19 @@ public sealed record UpcomingRecurrenceResponse(bool Ok, IReadOnlyList<UpcomingR
 public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskCommands tasks)
 {
     [NeoRpcMethod("upcoming")]
-    public async ValueTask<UpcomingRecurrenceResponse> UpcomingAsync(UpcomingRecurrenceRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.upcoming");
-        try { return new(true, [.. (await commands.UpcomingAsync(request.Days, request.Limit, ct)).Select(row => new UpcomingRecurrenceDto(row.SourceTaskId, row.Title, row.NominalLocal.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)))], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<UpcomingRecurrenceResponse> UpcomingAsync(UpcomingRecurrenceRequest request, CancellationToken ct) =>
+        Rpc.Run<UpcomingRecurrenceResponse>("recurrence.upcoming", async () => { return new(true, [.. (await commands.UpcomingAsync(request.Days, request.Limit, ct)).Select(row => new UpcomingRecurrenceDto(row.SourceTaskId, row.Title, row.NominalLocal.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)))], null); },
+            error => new(false, [], error));
     [NeoRpcMethod("get")]
-    public async ValueTask<RecurrenceGetResponse> GetAsync(RecurrenceGetRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.get");
-        try
-        {
+    public ValueTask<RecurrenceGetResponse> GetAsync(RecurrenceGetRequest request, CancellationToken ct) =>
+        Rpc.Run<RecurrenceGetResponse>("recurrence.get", async () => {
             var detail = await commands.GetForTaskAsync(request.TaskId, ct);
             return detail is null ? new(true, null, false, [], null) : new(true, Map(detail.Rule), detail.Series.EndedAtUtc is not null,
                 [.. detail.Occurrences.Select(item => new RecurrenceOccurrenceDto(item.TaskId ?? "", item.NominalKey, item.EffectiveLocal,
                     item.State.ToString(), item.CompletedAtUtc is { } instant ? StorageFormats.Instant(instant) : null,
                     item.SeriesRevision.ToString(CultureInfo.InvariantCulture)))], null);
-        }
-        catch (AppException error) { return new(false, null, false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, false, [], error));
 
     [NeoRpcMethod("preview")]
     public ValueTask<RecurrencePreviewResponse> PreviewAsync(RecurrencePreviewRequest request, CancellationToken ct)
@@ -109,16 +102,12 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     }
 
     [NeoRpcMethod("endAndDelete")]
-    public async ValueTask<TaskOperationResponse> EndAndDeleteAsync(RecurrenceActionRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("recurrence.endAndDelete");
-        try
-        {
+    public ValueTask<TaskOperationResponse> EndAndDeleteAsync(RecurrenceActionRequest request, CancellationToken ct) =>
+        Rpc.Run<TaskOperationResponse>("recurrence.endAndDelete", async () => {
             var result = await commands.EndAndDeleteAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion)), ct);
             return new(true, request.OperationId, TaskRpcService.ToResponse(result.Task), null);
-        }
-        catch (AppException error) { return new(false, request.OperationId, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, request.OperationId, null, error));
 
     [NeoRpcMethod("move")]
     public async ValueTask<TaskOperationResponse> MoveAsync(RecurrenceMoveRequest request, CancellationToken ct)
@@ -159,9 +148,8 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
         rule.MonthOfYear, rule.EndKind.ToString(), rule.Count, rule.UntilDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
     private static T EnumValue<T>(string raw) where T : struct, Enum => Enum.TryParse<T>(raw, out var value) && Enum.IsDefined(value)
         ? value : throw AppException.Validation("rule", "Choose a valid recurrence option.");
-    private static long Version(string raw) => long.TryParse(raw, out var value) && value > 0 ? value : throw AppException.Validation("expectedVersion", "Refresh and try again.");
-    private static DateOnly Date(string raw, string field) => DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
-        ? value : throw AppException.Validation(field, "Enter a valid date.");
+    private static long Version(string raw) => RpcParse.Version(raw, message: "Refresh and try again.");
+    private static DateOnly Date(string raw, string field) => RpcParse.Date(raw, field);
     private static TimeOnly? Time(string? raw) => string.IsNullOrWhiteSpace(raw) ? null : TimeOnly.TryParse(raw, CultureInfo.InvariantCulture, out var value)
         ? value : throw AppException.Validation("time", "Enter a valid time.");
 }

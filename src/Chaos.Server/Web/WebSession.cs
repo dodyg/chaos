@@ -12,9 +12,10 @@ namespace Chaos.Server.Web;
 
 internal readonly record struct WebCaller(Guid AccountId, Guid DeviceId)
 {
-    public static WebCaller From(ClaimsPrincipal principal) => new(
-        Guid.Parse(principal.FindFirstValue(Claims.Subject)!),
-        Guid.Parse(principal.FindFirstValue(DesktopClient.DeviceIdClaim)!));
+    public static WebCaller From(ClaimsPrincipal principal) =>
+        Api.CallerIdentity.TryGet(principal) is (Guid account, Guid device)
+            ? new(account, device)
+            : throw new InvalidOperationException("The token has no account or device.");
 }
 
 internal static class WebSessionSetup

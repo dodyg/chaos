@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using Chaos.Server.Auth;
+using Chaos.Server.Api;
 using Chaos.Server.Data;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -20,9 +21,15 @@ public static class BlobEndpoints
 
     public static IServiceCollection AddBlobService(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
-        services.Configure<BlobOptions>(configuration.GetSection(BlobOptions.Section));
+        services.AddOptions<BlobOptions>().Bind(configuration.GetSection(BlobOptions.Section))
+            .Validate(o => o.PartSize > 0 && o.MaxBlobBytes > 0, "Blob:PartSize and Blob:MaxBlobBytes must be greater than zero.")
+            .Validate(o => o.UnreferencedGrace >= TimeSpan.Zero && o.UploadExpiry > TimeSpan.Zero && o.JobInterval > TimeSpan.Zero,
+                "Blob:UnreferencedGrace must not be negative; Blob:UploadExpiry and Blob:JobInterval must be greater than zero.")
+            .ValidateOnStart();
         services.Configure<KeyVaultOptions>(configuration.GetSection(KeyVaultOptions.Section));
-        services.Configure<ClamOptions>(configuration.GetSection(ClamOptions.Section));
+        services.AddOptions<ClamOptions>().Bind(configuration.GetSection(ClamOptions.Section))
+            .Validate(o => o.Port is > 0 and <= 65535, "Clam:Port must be a valid port number.")
+            .ValidateOnStart();
 
         // Development fills in the folders and the scanner; any other host must say where its blobs, key and scanner are.
         services.TryAddSingleton<IBlobStore>(provider =>
@@ -71,30 +78,22 @@ public static class BlobEndpoints
         blobs.MapGet("/{sha256}", Download);
     }
 
-    private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>
-        Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) && Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device)
-            ? (account, device)
-            : null;
-
-    private static IResult Problem(string code, string detail, int status) =>
-        Results.Problem(detail: detail, statusCode: status, extensions: new Dictionary<string, object?> { ["code"] = code });
-
     private static IResult Failure(BlobFailure failure) => failure switch
     {
-        BlobFailure.InvalidHash => Problem("invalid-hash", "A blob is addressed by the lowercase hex SHA-256 of its bytes.", StatusCodes.Status400BadRequest),
-        BlobFailure.TooLarge => Problem("too-large", "That file is larger than the service accepts.", StatusCodes.Status413PayloadTooLarge),
-        BlobFailure.Quota => Problem("quota", "The account has no room for that file.", StatusCodes.Status413PayloadTooLarge),
-        BlobFailure.NoUpload => Problem("no-upload", "No upload was started for that file.", StatusCodes.Status404NotFound),
-        BlobFailure.BadPart => Problem("bad-part", "That part is not the size or position the upload expects.", StatusCodes.Status400BadRequest),
-        BlobFailure.Incomplete => Problem("incomplete", "Some parts have not arrived.", StatusCodes.Status409Conflict),
-        BlobFailure.HashMismatch => Problem("hash-mismatch", "The bytes do not match their SHA-256. Upload the file again.", StatusCodes.Status422UnprocessableEntity),
-        BlobFailure.ScannerUnavailable => Problem("scanner-unavailable", "The malware check is not available right now. Try again later.", StatusCodes.Status503ServiceUnavailable),
-        _ => Problem("error", "The request failed.", StatusCodes.Status500InternalServerError),
+        BlobFailure.InvalidHash => ApiErrors.Problem("invalid-hash", "A blob is addressed by the lowercase hex SHA-256 of its bytes.", StatusCodes.Status400BadRequest),
+        BlobFailure.TooLarge => ApiErrors.Problem("too-large", "That file is larger than the service accepts.", StatusCodes.Status413PayloadTooLarge),
+        BlobFailure.Quota => ApiErrors.Problem("quota", "The account has no room for that file.", StatusCodes.Status413PayloadTooLarge),
+        BlobFailure.NoUpload => ApiErrors.Problem("no-upload", "No upload was started for that file.", StatusCodes.Status404NotFound),
+        BlobFailure.BadPart => ApiErrors.Problem("bad-part", "That part is not the size or position the upload expects.", StatusCodes.Status400BadRequest),
+        BlobFailure.Incomplete => ApiErrors.Problem("incomplete", "Some parts have not arrived.", StatusCodes.Status409Conflict),
+        BlobFailure.HashMismatch => ApiErrors.Problem("hash-mismatch", "The bytes do not match their SHA-256. Upload the file again.", StatusCodes.Status422UnprocessableEntity),
+        BlobFailure.ScannerUnavailable => ApiErrors.Problem("scanner-unavailable", "The malware check is not available right now. Try again later.", StatusCodes.Status503ServiceUnavailable),
+        _ => ApiErrors.Problem("error", "The request failed.", StatusCodes.Status500InternalServerError),
     };
 
     private static async Task<IResult> Head(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -116,7 +115,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Start(string sha256, StartUploadRequest request, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -129,7 +128,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> PutPart(string sha256, int part, HttpContext http, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -140,7 +139,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Complete(string sha256, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -153,7 +152,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Download(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -172,7 +171,7 @@ public static class BlobEndpoints
         {
             // Never served. The state header lets the client show why.
             http.Response.Headers[StateHeader] = blob.State;
-            return Problem("blocked", "This file was blocked by the malware check.", StatusCodes.Status409Conflict);
+            return ApiErrors.Problem("blocked", "This file was blocked by the malware check.", StatusCodes.Status409Conflict);
         }
 
         var range = ParseRange(http.Request.Headers.Range.ToString(), blob.ByteSize);

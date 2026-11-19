@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "../../Chaos.Desktop/frontend/src/markdownCore";
 
 const remarkPlugins = [remarkGfm];
 function MermaidDiagram({ source }) {
@@ -15,18 +16,11 @@ function MermaidDiagram({ source }) {
       if (disposed) return;
       diagram = mount(element, source, {
         images: false,
-        onRender: () => {
-          for (const item of element.querySelectorAll("[style]")) {
-            // CSP blocks style attributes and cssText, but allows individual CSSOM properties.
-            const declarations = [...item.style].map(name => [name, item.style.getPropertyValue(name), item.style.getPropertyPriority(name)]);
-            for (const [name, value, priority] of declarations) item.style.setProperty(name, value, priority);
-          }
-          setError(null);
-        },
-        onError: failure => setError(failure instanceof Error ? failure.message : "Could not draw this diagram."),
+        onRender: () => { reapplyInlineStyles(element); setError(null); },
+        onError: failure => setError(diagramFailureMessage(failure)),
       });
     }).catch(failure => {
-      if (!disposed) setError(failure instanceof Error ? failure.message : "Could not draw this diagram.");
+      if (!disposed) setError(diagramFailureMessage(failure));
     });
     return () => { disposed = true; diagram?.destroy(); };
   }, [source]);
@@ -46,7 +40,8 @@ const components = {
   },
   h1: "h3", h2: "h4", h3: "h5", h4: "h6", h5: "h6",
   a({ node, href, children, ...props }) {
-    if (!href) return children;
+    // Only http, https and mailto links are clickable, as in the desktop app; same-note anchors still work.
+    if (!href || (!href.startsWith("#") && !isSafeExternalUrl(href))) return children;
     return <a {...props} href={href} onClick={event => {
       if (!href.startsWith("#")) return;
       const target = document.getElementById(href.slice(1));

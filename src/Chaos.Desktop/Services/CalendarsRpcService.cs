@@ -45,65 +45,46 @@ public sealed record CalendarTaskLinksResponse(bool Ok, IReadOnlyList<CalendarTa
 public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefresher refresher)
 {
     [NeoRpcMethod("list")]
-    public async ValueTask<CalendarsListResponse> ListAsync(CalendarsListRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.list");
-        try { return new(true, [.. (await commands.ListAsync(ct)).Select(Map)], null); }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+    public ValueTask<CalendarsListResponse> ListAsync(CalendarsListRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarsListResponse>("calendars.list", async () => { return new(true, [.. (await commands.ListAsync(ct)).Select(Map)], null); },
+            error => new(false, [], error));
 
     [NeoRpcMethod("addFeed")]
-    public async ValueTask<CalendarSourceResponse> AddFeedAsync(CalendarAddFeedRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.addFeed");
-        try
-        {
+    public ValueTask<CalendarSourceResponse> AddFeedAsync(CalendarAddFeedRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarSourceResponse>("calendars.addFeed", async () => {
             var added = await commands.AddFeedAsync(new AddFeedCommand(request.Address, request.Name, request.Color, request.CountsAsBusy, request.OwnerEmail), ct);
             var outcome = (await refresher.RefreshAsync(added.Source.Id, ct)).FirstOrDefault();
             var current = (await commands.ListAsync(ct)).FirstOrDefault(item => item.Source.Id == added.Source.Id) ?? added;
             return new(true, Map(current), outcome is { Ok: false } ? outcome.Error : null, null);
-        }
-        catch (AppException error) { return new(false, null, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, null, error));
 
     [NeoRpcMethod("update")]
-    public async ValueTask<CalendarSourceResponse> UpdateAsync(CalendarUpdateRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.update");
-        try
-        {
+    public ValueTask<CalendarSourceResponse> UpdateAsync(CalendarUpdateRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarSourceResponse>("calendars.update", async () => {
             var saved = await commands.UpdateAsync(new UpdateSourceCommand(request.SourceId, long.TryParse(request.ExpectedVersion, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var version) ? version : throw AppException.Validation("expectedVersion", "Refresh and try again."), request.Name, request.Color,
                 request.CountsAsBusy, request.Enabled, request.OwnerEmail), ct);
             return new(true, Map(saved), null, null);
-        }
-        catch (AppException error) { return new(false, null, null, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, null, error));
 
     [NeoRpcMethod("remove")]
-    public async ValueTask<CalendarOperationResponse> RemoveAsync(CalendarRemoveRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.remove");
-        try
-        {
+    public ValueTask<CalendarOperationResponse> RemoveAsync(CalendarRemoveRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarOperationResponse>("calendars.remove", async () => {
             await commands.RemoveAsync(request.SourceId, ct);
             return new(true, null);
-        }
-        catch (AppException error) { return new(false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, error));
 
     [NeoRpcMethod("refresh")]
-    public async ValueTask<CalendarRefreshResponse> RefreshAsync(CalendarRefreshRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.refresh");
-        try
-        {
+    public ValueTask<CalendarRefreshResponse> RefreshAsync(CalendarRefreshRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarRefreshResponse>("calendars.refresh", async () => {
             var results = await refresher.RefreshAsync(string.IsNullOrWhiteSpace(request.SourceId) ? null : request.SourceId, ct, request.OnlyDue);
             return new(true,
                 [.. results.Select(item => new CalendarRefreshResultDto(item.SourceId, item.Ok, item.Changed, item.EventCount, item.Error))],
                 [.. (await commands.ListAsync(ct)).Select(Map)], null);
-        }
-        catch (AppException error) { return new(false, [], [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], [], error));
 
     [NeoRpcMethod("activity")]
     public ValueTask<CalendarActivityResponse> ActivityAsync(CalendarActivityRequest request, CancellationToken ct)
@@ -114,29 +95,21 @@ public sealed class CalendarsRpcService(CalendarCommands commands, CalendarRefre
     }
 
     [NeoRpcMethod("makeTask")]
-    public async ValueTask<CalendarMakeTaskResponse> MakeTaskAsync(CalendarMakeTaskRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.makeTask");
-        try
-        {
+    public ValueTask<CalendarMakeTaskResponse> MakeTaskAsync(CalendarMakeTaskRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarMakeTaskResponse>("calendars.makeTask", async () => {
             var result = await commands.MakeTaskAsync(new MakeTaskFromEventCommand(request.OperationId, request.SourceId, request.EventId,
                 string.IsNullOrWhiteSpace(request.ContainerId) ? null : request.ContainerId), ct);
             return new(true, TaskRpcService.ToResponse(result.Task), result.Replayed, null);
-        }
-        catch (AppException error) { return new(false, null, false, TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, null, false, error));
 
     [NeoRpcMethod("taskLinks")]
-    public async ValueTask<CalendarTaskLinksResponse> TaskLinksAsync(CalendarTaskLinksRequest request, CancellationToken ct)
-    {
-        using var rpcScope = ActivityScope.Rpc("calendars.taskLinks");
-        try
-        {
+    public ValueTask<CalendarTaskLinksResponse> TaskLinksAsync(CalendarTaskLinksRequest request, CancellationToken ct) =>
+        Rpc.Run<CalendarTaskLinksResponse>("calendars.taskLinks", async () => {
             var links = await commands.LinksAsync([.. (request.TaskIds ?? []).Take(200)], ct);
             return new(true, [.. links.Values.Select(link => new CalendarTaskLinkDto(link.TaskId, link.EventTitle, StorageFormats.Instant(link.EventStartUtc), link.EventWebUrl))], null);
-        }
-        catch (AppException error) { return new(false, [], TaskRpcService.ToErrorResponse(error)); }
-    }
+        },
+            error => new(false, [], error));
 
     internal static CalendarSourceDto Map(CalendarSourceView view) => new(
         view.Source.Id, view.Source.Provider.ToString(), view.Source.Name, view.Source.Color, view.Source.CountsAsBusy, view.Source.Enabled,

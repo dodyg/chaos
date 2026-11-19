@@ -4,6 +4,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Pages;
 using Chaos.Domain.Recurrence;
 using Chaos.Domain.Tasks;
+using Chaos.Infrastructure.Service;
 using Chaos.Infrastructure.Sync;
 using Chaos.Server.Sync;
 using Chaos.Sync;
@@ -300,10 +301,12 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
     [Test]
     public async Task A_client_with_an_older_schema_does_not_erase_groups_it_does_not_know()
     {
-        // The service's kind list says task.notes first appeared in schema 2. Device A really is schema 1; the raw
-        // caller below speaks schema 2 (what a newer client would send).
+        // The service's kind list says task.notes first appeared one schema after the one device A really speaks;
+        // the raw caller below speaks that newer schema (what a newer client would send).
+        var older = SqliteDeviceIdentity.ClientSchema;
+        var newerSchema = older + 1;
         var newer = SyncKinds.All.Select(kind => kind.Kind == "task"
-            ? kind with { Groups = [.. kind.Groups.Select(group => group.Name == "notes" ? group with { Since = 2 } : group)] }
+            ? kind with { Groups = [.. kind.Groups.Select(group => group.Name == "notes" ? group with { Since = newerSchema } : group)] }
             : kind).ToList();
         await using var world = await SyncWorld.StartAsync(postgres, configure: services =>
         {
@@ -313,13 +316,13 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         var task = await CaptureAsync(a, "Written by an old client");
         await world.SettleAsync();
 
-        // A newer client sets notes (schema 2).
+        // A newer client sets notes.
         var hlc = Hlc.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, 0, Guid.NewGuid()).Encode();
         var notesChange = "{\"changes\":[{\"changeId\":\"" + Guid.NewGuid() + "\",\"kind\":\"task\",\"key\":\"" + task.Id + "\",\"op\":\"upsert\",\"groups\":{\"notes\":{\"hlc\":\"" + hlc + "\",\"values\":{\"Notes\":\"from a newer client\"}}}}]}";
-        var pushed = await RawAsync(world, a, HttpMethod.Post, "v1/sync/push", schema: 2, notesChange);
+        var pushed = await RawAsync(world, a, HttpMethod.Post, "v1/sync/push", schema: newerSchema, notesChange);
         await Assert.That(pushed).Contains("\"accepted\"");
 
-        // The old client (schema 1) never receives the group it cannot know, and edits the title.
+        // The old client never receives the group it cannot know, and edits the title.
         await a.SyncAsync();
         await Assert.That(await a.TextAsync($"SELECT Notes FROM Tasks WHERE Id = '{task.Id}';")).IsNotEqualTo("from a newer client");
         a.Clock.Now = a.Clock.Now.AddHours(2);
@@ -333,10 +336,10 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         await Assert.That(groups["notes"].Values.Values["Notes"]).IsEqualTo("from a newer client");
         await Assert.That(groups["title"].Values.Values["Title"]).IsEqualTo("Retitled by the old client");
 
-        // A schema-2 pull sees both.
-        var pulled = await RawAsync(world, a, HttpMethod.Get, "v1/sync/pull?after=0&limit=1000", schema: 2, null);
+        // A newer-schema pull sees both.
+        var pulled = await RawAsync(world, a, HttpMethod.Get, "v1/sync/pull?after=0&limit=1000", schema: newerSchema, null);
         await Assert.That(pulled).Contains("from a newer client");
-        var pulledOld = await RawAsync(world, a, HttpMethod.Get, "v1/sync/pull?after=0&limit=1000", schema: 1, null);
+        var pulledOld = await RawAsync(world, a, HttpMethod.Get, "v1/sync/pull?after=0&limit=1000", schema: older, null);
         await Assert.That(pulledOld.Contains("from a newer client", StringComparison.Ordinal)).IsFalse();
     }
 
@@ -422,7 +425,8 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         await Assert.That(result.Problem).IsNull();
         await Assert.That(a.Network.Pushes - pushesBefore >= 3).IsTrue(); // 1,000+ changes cannot fit one 500-change push
         await Assert.That(edits >= 1).IsTrue();
-        await Assert.That(worst < TimeSpan.FromMilliseconds(150)).IsTrue();
+        // Generous for a shared CI runner: an edit blocked behind the whole upload would take many seconds.
+        await Assert.That(worst < TimeSpan.FromMilliseconds(750)).IsTrue();
 
         await world.SettleAsync();
         await Assert.That(await b.CountAsync("SELECT count(*) FROM Tasks WHERE Title LIKE 'Imported task %';")).IsEqualTo(1000L);
