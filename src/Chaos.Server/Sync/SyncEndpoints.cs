@@ -148,7 +148,16 @@ public static class SyncEndpoints
             return Problem("too-many", $"A push may carry at most {SyncProtocol.MaxPushChanges} changes.", StatusCodes.Status413PayloadTooLarge);
         }
 
-        var outcome = await sync.PushAsync(caller.AccountId, caller.DeviceId, caller.Schema, changes, ct);
+        PushOutcome outcome;
+        try
+        {
+            outcome = await sync.PushAsync(caller.AccountId, caller.DeviceId, caller.Schema, changes, ct);
+        }
+        catch (AccountUnavailableException)
+        {
+            return Problem(DesktopClient.AccountDeletedCode, "This account was deleted.", StatusCodes.Status401Unauthorized);
+        }
+
         return Results.Ok(new
         {
             accepted = outcome.Accepted,

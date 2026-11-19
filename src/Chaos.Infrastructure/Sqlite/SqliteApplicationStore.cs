@@ -149,7 +149,16 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
             finally
             {
                 SqliteConnection.ClearAllPools();
-                _writer = _source.Open();
+                try
+                {
+                    _writer = _source.Open();
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    // The writer stays disposed: remember why, so every later write says so instead of hitting a disposed object.
+                    _reopenFailure = error;
+                    throw new AppException(AppErrorKind.StorageUnavailable, "Chaos could not reopen its database. Restart Chaos and try again.");
+                }
             }
         }
         finally
@@ -199,8 +208,15 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
         }
     }
 
+    private Exception? _reopenFailure;
+
     private void ThrowIfClosed()
     {
+        if (_reopenFailure is not null)
+        {
+            throw new AppException(AppErrorKind.StorageUnavailable, "Chaos could not reopen its database. Restart Chaos and try again.");
+        }
+
         if (_closed)
         {
             throw new AppException(AppErrorKind.StorageUnavailable, "Chaos is closing, so this change was not saved. Reopen Chaos and try again.");
@@ -221,7 +237,12 @@ public sealed class SqliteApplicationStore(SqliteConnectionSource source, ISyncC
         try
         {
             _closed = true;
-            _writer.Dispose();
+
+            // A write that outlived the drain still uses the writer; leave it to the process exit rather than dispose it underneath.
+            if (drained)
+            {
+                _writer.Dispose();
+            }
         }
         finally
         {

@@ -22,7 +22,9 @@ public sealed class AccountService(ChaosDbContext db, TimeProvider clock)
     public static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
 
     /// <summary>A sign-in proved by an email code. Null when the account was deleted.</summary>
-    public async Task<Account?> SignInWithEmailAsync(string email, CancellationToken ct)
+    public Task<Account?> SignInWithEmailAsync(string email, CancellationToken ct) => SignInWithEmailAsync(email, retry: true, ct);
+
+    private async Task<Account?> SignInWithEmailAsync(string email, bool retry, CancellationToken ct)
     {
         email = NormalizeEmail(email);
         var account = await db.Accounts.Include(a => a.Logins).FirstOrDefaultAsync(a => a.PrimaryEmail == email, ct);
@@ -47,12 +49,12 @@ public sealed class AccountService(ChaosDbContext db, TimeProvider clock)
         {
             // Two first sign-ins may have raced; if the other one made the account, use it.
             db.ChangeTracker.Clear();
-            if (!await db.Accounts.AsNoTracking().AnyAsync(a => a.PrimaryEmail == email, CancellationToken.None))
+            if (!retry || !await db.Accounts.AsNoTracking().AnyAsync(a => a.PrimaryEmail == email, CancellationToken.None))
             {
                 throw;
             }
 
-            return await SignInWithEmailAsync(email, ct);
+            return await SignInWithEmailAsync(email, retry: false, ct);
         }
 
         return account;

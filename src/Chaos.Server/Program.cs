@@ -35,7 +35,38 @@ builder.Services.AddWebSessions(builder.Environment);
 builder.Services.AddScoped<WebReadModel>();
 builder.Services.AddScoped<WebTaskWrites>();
 
+builder.Services.AddProblemDetails();
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    foreach (var proxy in builder.Configuration.GetSection("Proxy:KnownProxies").Get<string[]>() ?? [])
+    {
+        options.KnownProxies.Add(System.Net.IPAddress.Parse(proxy));
+    }
+
+    foreach (var network in builder.Configuration.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [])
+    {
+        var parts = network.Split('/');
+        options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse(parts[0]), int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)));
+    }
+});
+
 var app = builder.Build();
+
+// Sign-in throttling and device rate limits key on the client address, so behind a proxy every user would share one bucket
+// unless the proxy is trusted. Outside development the host must say which proxies it trusts, or that it has none.
+if (!app.Environment.IsDevelopment())
+{
+    var proxies = app.Configuration.GetSection("Proxy:KnownProxies").Get<string[]>() ?? [];
+    var networks = app.Configuration.GetSection("Proxy:KnownNetworks").Get<string[]>() ?? [];
+    if (proxies.Length == 0 && networks.Length == 0 && !app.Configuration.GetValue<bool>("Proxy:Direct"))
+    {
+        throw new InvalidOperationException("Set Proxy:KnownProxies or Proxy:KnownNetworks to the reverse proxies in front of this server, or Proxy:Direct=true when clients connect to it directly.");
+    }
+}
+
+app.UseExceptionHandler();
+app.UseForwardedHeaders();
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
