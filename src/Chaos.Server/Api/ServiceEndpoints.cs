@@ -75,7 +75,7 @@ public static class ServiceEndpoints
         // A token is for one device; it cannot register another.
         if (request.DeviceId != caller.DeviceId)
         {
-            return Results.Problem("The device ID does not match the one this sign-in was made for.", statusCode: StatusCodes.Status403Forbidden);
+            return ApiErrors.Problem("device-mismatch", "The device ID does not match the one this sign-in was made for.", StatusCodes.Status403Forbidden);
         }
 
         var name = request.Name?.Trim() ?? string.Empty;
@@ -83,7 +83,7 @@ public static class ServiceEndpoints
         var version = request.ClientVersion?.Trim() ?? string.Empty;
         if (name.Length is 0 or > MaxNameLength || platform.Length is 0 or > MaxShortLength || version.Length is 0 or > MaxShortLength || request.ClientSchema < 0)
         {
-            return Results.Problem("The device name, platform and version are required and must be short.", statusCode: StatusCodes.Status400BadRequest);
+            return ApiErrors.Problem("invalid-device", "The device name, platform and version are required and must be short.", StatusCodes.Status400BadRequest);
         }
 
         var now = clock.GetUtcNow();
@@ -97,11 +97,11 @@ public static class ServiceEndpoints
         }
         else if (device.AccountId != caller.AccountId)
         {
-            return Results.Problem("This device is registered to another account.", statusCode: StatusCodes.Status409Conflict);
+            return ApiErrors.Problem("device-registered-elsewhere", "This device is registered to another account.", StatusCodes.Status409Conflict);
         }
         else if (device.RevokedAt is not null)
         {
-            return Results.Problem("This device was removed from the account.", statusCode: StatusCodes.Status403Forbidden);
+            return ApiErrors.Problem("device-removed", "This device was removed from the account.", StatusCodes.Status403Forbidden);
         }
         else
         {
@@ -119,7 +119,7 @@ public static class ServiceEndpoints
         catch (DbUpdateException) when (created)
         {
             // Two first calls from one device raced; the other one registered it.
-            return Results.Problem("The device is already being registered. Try again.", statusCode: StatusCodes.Status409Conflict);
+            return ApiErrors.Problem("device-busy", "The device is already being registered. Try again.", StatusCodes.Status409Conflict);
         }
 
         var dto = new DeviceDto(device.Id, device.Name, device.Platform, device.ClientVersion, device.CreatedAt, device.LastSeenAt, true);
@@ -184,7 +184,7 @@ public static class ServiceEndpoints
         if (request.ProfileId == Guid.Empty || request.PersonalSpaceId == Guid.Empty || request.InboxId == Guid.Empty
             || new[] { request.ProfileId, request.PersonalSpaceId, request.InboxId }.Distinct().Count() != 3)
         {
-            return Results.Problem("The profile, Personal space and Inbox IDs are required and must differ.", statusCode: StatusCodes.Status400BadRequest);
+            return ApiErrors.Problem("invalid-ids", "The profile, Personal space and Inbox IDs are required and must differ.", StatusCodes.Status400BadRequest);
         }
 
         // One conditional UPDATE decides who binds, so two devices racing cannot both win.
@@ -212,14 +212,12 @@ public static class ServiceEndpoints
         if (!long.TryParse(user.FindFirst(DesktopClient.AuthTimeClaim)?.Value, out var signedAtSeconds)
             || now - DateTimeOffset.FromUnixTimeSeconds(signedAtSeconds) > FreshSignInWindow)
         {
-            return Results.Problem(detail: "Sign in again to confirm deleting your account.", statusCode: StatusCodes.Status403Forbidden,
-                extensions: new Dictionary<string, object?> { ["code"] = "fresh-sign-in-required" });
+            return ApiErrors.Problem("fresh-sign-in-required", "Sign in again to confirm deleting your account.", StatusCodes.Status403Forbidden);
         }
 
         if (!string.Equals(request.Confirmation?.Trim(), DeleteConfirmation, StringComparison.Ordinal))
         {
-            return Results.Problem(detail: $"Type {DeleteConfirmation} to confirm.", statusCode: StatusCodes.Status400BadRequest,
-                extensions: new Dictionary<string, object?> { ["code"] = "confirmation-required" });
+            return ApiErrors.Problem("confirmation-required", $"Type {DeleteConfirmation} to confirm.", StatusCodes.Status400BadRequest);
         }
 
         var email = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.PrimaryEmail).FirstOrDefaultAsync(ct);
@@ -306,5 +304,5 @@ public sealed class ActiveDeviceFilter(ChaosDbContext db, TimeProvider clock) : 
 
     /// <summary>A 401 that says why, so the desktop can tell "sign in again" from "this device is out of the account".</summary>
     private static IResult Refuse(string code, string detail) =>
-        Results.Problem(detail: detail, statusCode: StatusCodes.Status401Unauthorized, extensions: new Dictionary<string, object?> { ["code"] = code });
+        ApiErrors.Problem(code, detail, StatusCodes.Status401Unauthorized);
 }

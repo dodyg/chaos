@@ -78,20 +78,17 @@ public static class BlobEndpoints
         blobs.MapGet("/{sha256}", Download);
     }
 
-    private static IResult Problem(string code, string detail, int status) =>
-        Results.Problem(detail: detail, statusCode: status, extensions: new Dictionary<string, object?> { ["code"] = code });
-
     private static IResult Failure(BlobFailure failure) => failure switch
     {
-        BlobFailure.InvalidHash => Problem("invalid-hash", "A blob is addressed by the lowercase hex SHA-256 of its bytes.", StatusCodes.Status400BadRequest),
-        BlobFailure.TooLarge => Problem("too-large", "That file is larger than the service accepts.", StatusCodes.Status413PayloadTooLarge),
-        BlobFailure.Quota => Problem("quota", "The account has no room for that file.", StatusCodes.Status413PayloadTooLarge),
-        BlobFailure.NoUpload => Problem("no-upload", "No upload was started for that file.", StatusCodes.Status404NotFound),
-        BlobFailure.BadPart => Problem("bad-part", "That part is not the size or position the upload expects.", StatusCodes.Status400BadRequest),
-        BlobFailure.Incomplete => Problem("incomplete", "Some parts have not arrived.", StatusCodes.Status409Conflict),
-        BlobFailure.HashMismatch => Problem("hash-mismatch", "The bytes do not match their SHA-256. Upload the file again.", StatusCodes.Status422UnprocessableEntity),
-        BlobFailure.ScannerUnavailable => Problem("scanner-unavailable", "The malware check is not available right now. Try again later.", StatusCodes.Status503ServiceUnavailable),
-        _ => Problem("error", "The request failed.", StatusCodes.Status500InternalServerError),
+        BlobFailure.InvalidHash => ApiErrors.Problem("invalid-hash", "A blob is addressed by the lowercase hex SHA-256 of its bytes.", StatusCodes.Status400BadRequest),
+        BlobFailure.TooLarge => ApiErrors.Problem("too-large", "That file is larger than the service accepts.", StatusCodes.Status413PayloadTooLarge),
+        BlobFailure.Quota => ApiErrors.Problem("quota", "The account has no room for that file.", StatusCodes.Status413PayloadTooLarge),
+        BlobFailure.NoUpload => ApiErrors.Problem("no-upload", "No upload was started for that file.", StatusCodes.Status404NotFound),
+        BlobFailure.BadPart => ApiErrors.Problem("bad-part", "That part is not the size or position the upload expects.", StatusCodes.Status400BadRequest),
+        BlobFailure.Incomplete => ApiErrors.Problem("incomplete", "Some parts have not arrived.", StatusCodes.Status409Conflict),
+        BlobFailure.HashMismatch => ApiErrors.Problem("hash-mismatch", "The bytes do not match their SHA-256. Upload the file again.", StatusCodes.Status422UnprocessableEntity),
+        BlobFailure.ScannerUnavailable => ApiErrors.Problem("scanner-unavailable", "The malware check is not available right now. Try again later.", StatusCodes.Status503ServiceUnavailable),
+        _ => ApiErrors.Problem("error", "The request failed.", StatusCodes.Status500InternalServerError),
     };
 
     private static async Task<IResult> Head(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
@@ -174,7 +171,7 @@ public static class BlobEndpoints
         {
             // Never served. The state header lets the client show why.
             http.Response.Headers[StateHeader] = blob.State;
-            return Problem("blocked", "This file was blocked by the malware check.", StatusCodes.Status409Conflict);
+            return ApiErrors.Problem("blocked", "This file was blocked by the malware check.", StatusCodes.Status409Conflict);
         }
 
         var range = ParseRange(http.Request.Headers.Range.ToString(), blob.ByteSize);
