@@ -23,7 +23,7 @@ The desktop composition root is now `src/Chaos.Desktop/DesktopComposition.cs` (s
 Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) replaces the 47 `(SqliteDataSession)` casts, and `AuthSetup` loads its key certificates once for both OpenIddict builders. Several small items below were already finished earlier and are stale (catalog dictionary lookup, `SyncEngine` gate, lazy session stores, cached undo wrappers, security-header extension, side effects out of `AttachmentCommands`).
 
 Still open: narrower session
-interfaces, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
+interfaces, splitting the command classes themselves (queries
 from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
 backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
 
@@ -129,7 +129,8 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   `SyncPurgeSql`, `SyncRepointSql`, `PartialIndexPredicate` (`SyncApplier.cs:808`, which repeats the
   migrations' WHERE clauses by hand), the kind switches at `SyncApplier.cs:862/922/937`, and
   `MaxKnownSchemaVersion`. Generate `SyncKinds` from one source, and read the partial-index predicates from
-  `sqlite_master`.
+  `sqlite_master`. (Done: predicates are read from `sqlite_master`; `SyncKinds` stays a copy for the service, which references no client
+  project, and `SyncKinds_MatchTheClientCatalog` fails when it drifts.)
 - **Large files:**
   - Split `Sqlite/SqliteStores.cs` (1,131 lines, 10 stores) into one file per store (done).
   - Split `Sync/SyncApplier.cs` (1,044 lines) into upsert/merge, unique-rule resolution, parking, and
