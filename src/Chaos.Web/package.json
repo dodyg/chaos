@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "tsx --test src/*.test.jsx",
+    "test": "tsx --test src/*.test.jsx src/*.test.js",
     "lint": "eslint ."
   },
   "dependencies": {

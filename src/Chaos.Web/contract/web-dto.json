@@ -1,0 +1,95 @@
+{
+  "WebAppearance": {
+    "background": "string?",
+    "theme": "string?"
+  },
+  "WebCaptureRequest": {
+    "listId": "guid?",
+    "plannedDate": "date?",
+    "requestId": "guid?",
+    "title": "string?"
+  },
+  "WebDayMember": {
+    "entity": "WebEntity?",
+    "isActive": "boolean",
+    "key": "string",
+    "position": "number",
+    "taskKey": "string"
+  },
+  "WebDayPlan": {
+    "exists": "boolean",
+    "key": "string",
+    "members": "list<WebDayMember>",
+    "weekKey": "string?",
+    "weekRevision": "number?"
+  },
+  "WebList": {
+    "id": "guid",
+    "isArchived": "boolean",
+    "isInbox": "boolean",
+    "name": "string",
+    "position": "number"
+  },
+  "WebMeeting": {
+    "allDay": "boolean",
+    "busy": "boolean",
+    "color": "string?",
+    "end": "string",
+    "endUtc": "datetime",
+    "id": "string",
+    "start": "string",
+    "startUtc": "datetime",
+    "title": "string",
+    "videoUrl": "string?",
+    "webUrl": "string?"
+  },
+  "WebNote": {
+    "id": "guid",
+    "isArchived": "boolean",
+    "kind": "number",
+    "markdown": "string",
+    "position": "number"
+  },
+  "WebPage": {
+    "dailyDate": "date?",
+    "id": "guid",
+    "markdown": "string",
+    "parentId": "guid?",
+    "position": "number",
+    "title": "string"
+  },
+  "WebSearchItem": {
+    "detail": "string?",
+    "id": "guid",
+    "kind": "string",
+    "snippet": "string?",
+    "title": "string"
+  },
+  "WebSearchResult": {
+    "items": "list<WebSearchItem>",
+    "truncated": "boolean"
+  },
+  "WebTask": {
+    "dueDate": "date?",
+    "dueTime": "time?",
+    "dueZoneId": "string?",
+    "id": "guid",
+    "isOnMyDay": "boolean",
+    "isRecurring": "boolean",
+    "isTerminal": "boolean",
+    "listId": "guid",
+    "notes": "string?",
+    "plannedDate": "date?",
+    "plannedTime": "time?",
+    "plannedZoneId": "string?",
+    "position": "number",
+    "priority": "number",
+    "status": "number",
+    "title": "string"
+  },
+  "WebToday": {
+    "date": "date",
+    "meetings": "list<WebMeeting>",
+    "tasks": "list<WebTask>"
+  }
+}

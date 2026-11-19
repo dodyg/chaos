@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { assertServerShape } from "./contractSupport.js";
 
 
 globalThis.BroadcastChannel = undefined;
@@ -20,10 +21,12 @@ async function render(props) {
 }
 
 test("groups results and links back to the search", async () => {
-  const search = async () => ({ truncated: false, items: [
-    { kind: "task", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", title: "Task", detail: "Inbox" },
+  const result = { truncated: false, items: [
+    { kind: "task", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", title: "Task", detail: "Inbox", snippet: null },
     { kind: "page", id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", title: "Page", detail: "Page", snippet: "match" },
-  ] });
+  ] };
+  assertServerShape("WebSearchResult", result);
+  const search = async () => result;
   const view = await render({ initialQuery: "hello & world", session: { deviceId: "device" }, offline: false, search });
   try {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
