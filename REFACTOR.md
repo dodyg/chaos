@@ -18,7 +18,9 @@ constants and parameters in `AttachmentTransfer`, a loud preview backend, and th
 `MyWeekCommands.cs`, and the records of `PageCommands`/`PadCommands`/`TagCommands`. New tests cover a malformed pull change,
 attachment download faults and cancellation, and the sync loop surviving unexpected exceptions.
 
-Still open: the DI composition root (two setter-wired dependencies remain, `Availability` and `ActivityNotifier`), narrower session
+The desktop composition root is now `src/Chaos.Desktop/DesktopComposition.cs` (shared clock and ID generator, one owned-disposable stack, workers started last, one ordered pause pipeline, `Availability` passed through the constructor; `ActivityNotifier` is still set once there because storage is built first). `Program.cs` only handles the single-instance guard, the shell and the window; the JSON context moved to `AppJsonContext.cs`.
+
+Still open: narrower session
 interfaces, `SELECT *` mappers, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
 from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, the shared markdown package, a typed preview
 backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
