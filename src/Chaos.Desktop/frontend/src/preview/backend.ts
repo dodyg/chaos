@@ -805,6 +805,9 @@ const handlers: Record<string, Handler> = {
   "waiting.get": () => ({ ok: true, error: null, task: null, person: null, startedAtUtc: null, followUp: null, followUpDueAtUtc: null, followUpSnoozedUntilUtc: null, followUpSuspension: "None", lastActivityAtUtc: null, replayed: false }),
 };
 
+/** The commands this backend answers, so a test can check each is a real one. */
+export const modelledCommands = (): string[] => Object.keys(handlers);
+
 export async function handle(command: string, request: unknown): Promise<unknown> {
   await new Promise(resolve => setTimeout(resolve, 40)); // a little latency, like the real host
   const handler = handlers[command];
