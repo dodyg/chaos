@@ -8,6 +8,21 @@ reviewed in depth; bugs 1–5 were checked against the code.
 nothing runs CI on pushes or pull requests. Several background loops can stop for good on an unexpected
 exception, and the server has a blob race that can leave a blob unreadable.
 
+## Status (2026-11-19)
+
+Done on `feature/p12-online-service`: build break, failing GitHub tests, CI (including lint), bugs 1–18, server options validation,
+the shared LISTEN connection, `Rpc.Run`/`RpcParse`, the explicit pause pipeline, the undo-coverage guard, pinned frontend
+dependencies, ESLint (both apps), `useRpcQuery` and `useAutoClear`, the server's `CallerIdentity`, `ApiErrors`, `CalendarCacheService`,
+`DeviceRegistration` and `AccountDeletion`, `IDeviceInfo`, `IUploadStaging`/`IThumbnailCache`, lazy session stores, SQL built from
+constants and parameters in `AttachmentTransfer`, a loud preview backend, and these file splits: `SqliteStores.cs`, `SyncApplier.cs`,
+`MyWeekCommands.cs`, and the records of `PageCommands`/`PadCommands`/`TagCommands`. New tests cover a malformed pull change,
+attachment download faults and cancellation, and the sync loop surviving unexpected exceptions.
+
+Still open: the DI composition root (two setter-wired dependencies remain, `Availability` and `ActivityNotifier`), narrower session
+interfaces, `SELECT *` mappers, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
+from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, the shared markdown package, a typed preview
+backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
+
 ## 0. Build and test status
 
 | Test project | Result |
@@ -112,7 +127,7 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   `MaxKnownSchemaVersion`. Generate `SyncKinds` from one source, and read the partial-index predicates from
   `sqlite_master`.
 - **Large files:**
-  - Split `Sqlite/SqliteStores.cs` (1,131 lines, 10 stores) into one file per store.
+  - Split `Sqlite/SqliteStores.cs` (1,131 lines, 10 stores) into one file per store (done).
   - Split `Sync/SyncApplier.cs` (1,044 lines) into upsert/merge, unique-rule resolution, parking, and
     search/revision side effects.
 - **Small items:**

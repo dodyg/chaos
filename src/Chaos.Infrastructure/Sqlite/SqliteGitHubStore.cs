@@ -611,7 +611,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
 
     public async Task<GitHubSyncCheckpointRecord?> GetCheckpointAsync(string repositoryId, string kind, CancellationToken ct)
     {
-        var rows = await QueryAsync("SELECT * FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id AND Kind=$kind;",
+        var rows = await QueryAsync("SELECT RepositorySubscriptionId,Kind,RepositoryVersion,PayloadJson,UpdatedAtUtc FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId=$id AND Kind=$kind;",
             r => new GitHubSyncCheckpointRecord(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetString(3), StorageFormats.ParseInstant(r.GetString(4))!.Value), ct, ("$id", repositoryId), ("$kind", kind));
         return rows.SingleOrDefault();
     }
