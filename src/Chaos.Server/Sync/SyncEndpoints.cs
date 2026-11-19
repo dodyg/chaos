@@ -45,7 +45,7 @@ public static class SyncEndpoints
     internal static IResult? Identify(HttpContext http, ClaimsPrincipal user, out Caller caller)
     {
         caller = new Caller(Guid.Empty, Guid.Empty, 0);
-        if (!Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) || !Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device))
+        if (CallerIdentity.TryGet(user) is not (Guid account, Guid device))
         {
             return Results.Unauthorized();
         }

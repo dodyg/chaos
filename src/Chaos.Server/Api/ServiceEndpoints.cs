@@ -65,14 +65,9 @@ public static class ServiceEndpoints
         v1.MapBlobEndpoints();
     }
 
-    private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>
-        Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) && Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device)
-            ? (account, device)
-            : null;
-
     private static async Task<IResult> RegisterDevice(ClaimsPrincipal user, RegisterDeviceRequest request, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -133,7 +128,7 @@ public static class ServiceEndpoints
 
     private static async Task<IResult> GetAccount(ClaimsPrincipal user, ChaosDbContext db, IOptions<LimitsOptions> limits, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -181,7 +176,7 @@ public static class ServiceEndpoints
     /// </summary>
     private static async Task<IResult> BindAccount(ClaimsPrincipal user, BindAccountRequest request, ChaosDbContext db, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -208,7 +203,7 @@ public static class ServiceEndpoints
     /// </summary>
     private static async Task<IResult> DeleteAccount(ClaimsPrincipal user, [Microsoft.AspNetCore.Mvc.FromBody] DeleteAccountRequest request, ChaosDbContext db, BlobService blobs, TimeProvider clock, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -257,7 +252,7 @@ public static class ServiceEndpoints
 
     private static async Task<IResult> RevokeDevice(ClaimsPrincipal user, Guid id, ChaosDbContext db, TimeProvider clock, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -288,7 +283,7 @@ public sealed class ActiveDeviceFilter(ChaosDbContext db, TimeProvider clock) : 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var user = context.HttpContext.User;
-        if (!Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var accountId) || !Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var deviceId))
+        if (CallerIdentity.TryGet(user) is not (Guid accountId, Guid deviceId))
         {
             return Results.Unauthorized();
         }

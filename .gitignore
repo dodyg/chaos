@@ -70,3 +70,8 @@ src/Chaos.Server/wwwroot/app/
 # Google OAuth client (PLAN2 P6): never committed
 src/Chaos.Desktop/google-oauth.json
 src/Chaos.Desktop/chaos-service.json
+
+# Local tooling output
+.artifacts/
+src/Chaos.Desktop/.agents/
+src/Chaos.Desktop/skills-lock.json

@@ -65,8 +65,8 @@ public static class AuthSetup
         });
 
         var keys = configuration.GetSection(KeyOptions.Section).Get<KeyOptions>() ?? new KeyOptions();
-        var providers = ExternalProviders.Enabled(configuration.GetSection(ProvidersOptions.Section).Get<ProvidersOptions>() ?? new ProvidersOptions());
         var providerSettings = configuration.GetSection(ProvidersOptions.Section).Get<ProvidersOptions>() ?? new ProvidersOptions();
+        var providers = ExternalProviders.Enabled(providerSettings);
 
         services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme)
             .AddCookie(SignInCookie.Scheme, options =>

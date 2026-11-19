@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using Chaos.Server.Auth;
+using Chaos.Server.Api;
 using Chaos.Server.Data;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -77,11 +78,6 @@ public static class BlobEndpoints
         blobs.MapGet("/{sha256}", Download);
     }
 
-    private static (Guid AccountId, Guid DeviceId)? Caller(ClaimsPrincipal user) =>
-        Guid.TryParse(user.FindFirst(Claims.Subject)?.Value, out var account) && Guid.TryParse(user.FindFirst(DesktopClient.DeviceIdClaim)?.Value, out var device)
-            ? (account, device)
-            : null;
-
     private static IResult Problem(string code, string detail, int status) =>
         Results.Problem(detail: detail, statusCode: status, extensions: new Dictionary<string, object?> { ["code"] = code });
 
@@ -100,7 +96,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Head(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -122,7 +118,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Start(string sha256, StartUploadRequest request, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -135,7 +131,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> PutPart(string sha256, int part, HttpContext http, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -146,7 +142,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Complete(string sha256, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
@@ -159,7 +155,7 @@ public static class BlobEndpoints
 
     private static async Task<IResult> Download(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
-        if (Caller(user) is not { } caller)
+        if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }

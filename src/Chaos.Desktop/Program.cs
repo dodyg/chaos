@@ -234,7 +234,8 @@ internal static class Program
                 rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(storage.Store, ids, clock)));
                 rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(storage.Store, ids, clock), tasks, sync: githubEngine));
                 rpc.AddPadRpcService(new PadRpcService(new PadCommands(storage.Store, ids, clock)));
-                rpc.AddSiteRpcService(new SiteRpcService(new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, ids, clock), new TagCommands(storage.Store, ids, clock))));
+                using var siteNotes = new SiteNoteCommands(siteFetcher, siteSummarizer, new PadCommands(storage.Store, ids, clock), new TagCommands(storage.Store, ids, clock));
+                rpc.AddSiteRpcService(new SiteRpcService(siteNotes));
                 rpc.AddPageRpcService(new PageRpcService(new PageCommands(storage.Store, ids, clock)));
                 rpc.AddAttachmentRpcService(new AttachmentRpcService(attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => dataRpc.ExportDirectory, transfer: attachmentTransfer));
                 rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(storage.Store, ids, clock)));

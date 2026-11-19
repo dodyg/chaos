@@ -185,8 +185,8 @@ public sealed class SyncEngine : IDisposable
             // The loop ends by cancellation.
         }
 
+        // _cycleGate is not disposed: a SyncNowAsync from outside may still be waiting on it, and a SemaphoreSlim holds no handle to free.
         _stop?.Dispose();
-        _cycleGate.Dispose();
     }
 
     private async Task RunAsync(CancellationToken ct)

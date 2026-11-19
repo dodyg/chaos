@@ -16,8 +16,11 @@ public sealed record SiteNoteResult(PadItemRecord Item, Task Completed);
 /// "New site" on the pad: stores the address at once, then in the background fetches the page, has the local model summarize it and judge whether it
 /// is worth reading, then stores the result as a pad note tagged with its topics and the verdict.
 /// </summary>
-public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer summarizer, PadCommands pad, TagCommands tags)
+public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer summarizer, PadCommands pad, TagCommands tags) : IDisposable
 {
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _running = new();
+
     public const int MaxTopicTags = 3;
 
     /// <summary>Tag path for the verdict, e.g. reading/worth-it.</summary>
@@ -72,8 +75,31 @@ public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer s
         var placeholder = $"{address.AbsoluteUri}\n\n_{PendingMarker}…_\n";
         var created = await pad.CreateAsync(new(command.OperationId, placeholder), ct);
         var item = created.Item;
-        var work = created.Replayed ? Task.CompletedTask : Task.Run(() => FillAsync(item, address, command.OperationId));
+        var work = created.Replayed ? Task.CompletedTask : Track(Task.Run(() => FillAsync(item, address, command.OperationId)));
         return new(item, work);
+    }
+
+    private Task Track(Task work)
+    {
+        _running.TryAdd(work, 0);
+        _ = work.ContinueWith(done => _running.TryRemove(done, out _), TaskScheduler.Default);
+        return work;
+    }
+
+    /// <summary>Stops the background reading and waits a moment for it to finish, so shutdown does not abandon it mid-write.</summary>
+    public void Dispose()
+    {
+        _shutdown.Cancel();
+        try
+        {
+            Task.WaitAll([.. _running.Keys], TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // FillAsync reports its own failures.
+        }
+
+        _shutdown.Dispose();
     }
 
     private async Task FillAsync(PadItemRecord item, Uri address, string operationId)
@@ -85,8 +111,8 @@ public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer s
             FetchedPage? page = null;
             try
             {
-                page = await fetcher.FetchAsync(address, CancellationToken.None);
-                var analysis = await summarizer.AnalyzeAsync(page, CancellationToken.None);
+                page = await fetcher.FetchAsync(address, _shutdown.Token);
+                var analysis = await summarizer.AnalyzeAsync(page, _shutdown.Token);
                 markdown = Markdown(page, analysis);
                 paths = [VerdictTag(analysis.Verdict), .. CleanTags(analysis.Tags)];
             }

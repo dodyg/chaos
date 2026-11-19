@@ -34,6 +34,8 @@ public sealed record SyncApplyOutcome(
 /// </summary>
 public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock, IIdGenerator ids)
 {
+    private static readonly Dictionary<string, SyncTable> TablesByKind = SyncCatalog.Tables.ToDictionary(table => table.Kind);
+
     private const string ChangeSavepoint = "sync_change";
 
     public async Task<SyncApplyOutcome> ApplyAsync(IReadOnlyList<string> changePayloads, CancellationToken ct = default, long? throughSequence = null)
@@ -264,7 +266,7 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
 
     private async Task<StepResult> ApplyOneAsync(SqliteConnection connection, SyncSchema schema, SyncChange change, ParkSlip park, CancellationToken ct)
     {
-        var table = SyncCatalog.Tables.FirstOrDefault(candidate => candidate.Kind == change.Kind);
+        var table = TablesByKind.GetValueOrDefault(change.Kind);
         if (table is null || table.Mode == SyncMode.LocalOnly)
         {
             Attention(connection, "sync.unexpected", change.Kind, change.EntityKey,
