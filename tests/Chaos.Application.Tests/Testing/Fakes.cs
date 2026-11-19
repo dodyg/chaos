@@ -185,6 +185,27 @@ public sealed class FakeWaitingStore(List<WaitingDetailRecord> waiting, List<Fol
 /// <summary>In-memory notification jobs; delivery and OS reconciliation are tested against SQLite.</summary>
 public sealed class FakeNotificationJobStore(List<NotificationJobRecord> rows) : INotificationJobStore
 {
+    private readonly List<ReminderAcknowledgement> acknowledgements = [];
+    private readonly Dictionary<string, string> appliedAcknowledgements = [];
+
+    public Task<ReminderAcknowledgement?> GetAcknowledgementAsync(NotificationSourceKind kind, string sourceId, DateTimeOffset target, CancellationToken ct) =>
+        Task.FromResult(acknowledgements.FirstOrDefault(row => row.SourceKind == kind && row.SourceId == sourceId && row.TargetAtUtc == target));
+    public Task SaveAcknowledgementAsync(ReminderAcknowledgement acknowledgement, CancellationToken ct)
+    {
+        acknowledgements.RemoveAll(row => row.Id == acknowledgement.Id);
+        acknowledgements.Add(acknowledgement);
+        return Task.CompletedTask;
+    }
+    public Task<string?> GetAppliedAcknowledgementAsync(string id, CancellationToken ct) =>
+        Task.FromResult(appliedAcknowledgements.TryGetValue(id, out var revision) ? revision : null);
+    public Task MarkAcknowledgementAppliedAsync(string id, string revision, CancellationToken ct)
+    {
+        appliedAcknowledgements[id] = revision;
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyList<NotificationJobRecord>> ListActiveDeliveredByTaskAsync(string taskId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.TaskId == taskId && row.State == NotificationJobState.Delivered)]);
+
     public Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(row => row.Id == id));
     public Task<NotificationJobRecord?> FindLatestAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct) =>
         Task.FromResult(rows.Where(row => row.SourceKind == kind && row.SourceId == sourceId).OrderByDescending(row => row.Generation).ThenByDescending(row => row.Sequence).FirstOrDefault());
