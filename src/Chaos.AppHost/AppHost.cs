@@ -6,8 +6,7 @@
 //      └── chaos-server    starts after the migrator completes; https://localhost:5081 (and http://127.0.0.1:5080)
 //   mailpit                SMTP sink for sign-in codes; web UI on its http endpoint
 //   less3                  S3-compatible object store for encrypted attachment blobs (Blob__S3__*)
-//
-// ClamAV joins with attachment sync (P16); until then development uses the built-in EICAR scanner.
+//   clamav                 clamd on tcp 3310 scans uploaded blobs (Clam__Host, Clam__Port); signatures take a minute or two on first start
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -23,6 +22,12 @@ var mailpit = builder.AddContainer("mailpit", "axllent/mailpit", "v1.34.0")
     .WithEndpoint(targetPort: 1025, name: "smtp", scheme: "tcp");
 
 var smtp = mailpit.GetEndpoint("smtp");
+
+var clamav = builder.AddContainer("clamav", "clamav/clamav", "1.5.5-debian")
+    .WithEndpoint(targetPort: 3310, name: "clamd", scheme: "tcp")
+    .WithVolume("chaos-dev-clamav", "/var/lib/clamav");
+
+var clamd = clamav.GetEndpoint("clamd");
 
 // Less3 (github.com/jchristn/less3) is the S3-compatible store for encrypted attachment blobs. On first start it seeds the
 // `default` bucket and the `default`/`default` access key pair, which are development-only values. Signature checks are off in
@@ -52,6 +57,8 @@ builder.AddDotnetProject("chaos-server", ServerProject, options => options.Launc
     .WithEnvironment("Smtp__Host", smtp.Property(EndpointProperty.Host))
     .WithEnvironment("Smtp__Port", smtp.Property(EndpointProperty.Port))
     .WaitFor(less3)
+    .WithEnvironment("Clam__Host", clamd.Property(EndpointProperty.Host))
+    .WithEnvironment("Clam__Port", clamd.Property(EndpointProperty.Port))
     .WithEnvironment("Blob__S3__ServiceUrl", less3.GetEndpoint("http"))
     .WithEnvironment("Blob__S3__Bucket", "default")
     .WithEnvironment("Blob__S3__AccessKey", "default")

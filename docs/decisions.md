@@ -1075,5 +1075,9 @@ plan provides one, and each blocking package stays unticked until the owner conf
   `src/Chaos.AppHost/less3/system.json` (SQLite, signature checks off, volume `chaos-dev-less3`), waits for it, and passes the
   server its endpoint and the seeded `default` bucket and `default`/`default` keys. Development values only. Verified against a live
   Less3 container (put, ranged read, delete, prefix delete).
+- **ClamAV runs in the AppHost as `clamav/clamav:1.5.5-debian`.** Only the `-debian` tags are multi-arch; the plain `1.5`
+  and `1.4` tags have no arm64 image. The server gets `Clam__Host` and `Clam__Port`; until clamd has loaded its signatures
+  `/health/ready` reports unhealthy and uploads are retried by the device (a scanner that is down is never "clean"). The clamd
+  client is checked against a real daemon by `ClamAvLiveTests`, opt-in through `CHAOS_TEST_CLAM=host:port`.
 
 [Mobile web plan and deployment notes](mobile-web.md)
