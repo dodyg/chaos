@@ -24,6 +24,7 @@ public static class SyncEndpoints
         services.AddSingleton<SyncBroadcaster>();
         services.TryAddSingleton<SyncKindCatalog>();
         services.AddScoped<SyncService>();
+        services.AddScoped<CalendarCacheService>();
         services.AddHostedService<SyncHorizonService>();
         services.AddHostedService<SyncNotificationListener>();
         return services;
@@ -70,43 +71,17 @@ public static class SyncEndpoints
     }
 
     private static async Task<IResult> UploadCalendarCache(HttpContext http, ClaimsPrincipal user, CalendarCacheSnapshot cache,
-        ChaosDbContext db, TimeProvider clock, CancellationToken ct)
+        CalendarCacheService service, CancellationToken ct)
     {
         if (Identify(http, user, out var caller) is { } refusal) return refusal;
-        if (!Guid.TryParse(cache.SourceId, out _) || cache.Events is null || cache.Events.Count > 10000
-            || cache.FetchedAt > clock.GetUtcNow().AddMinutes(10)
-            || cache.Events.Any(e => e is null || string.IsNullOrEmpty(e.ExternalId) || e.ExternalId.Length > 2048
-                || e.Title is null || e.Title.Length > 4096 || e.Location?.Length > 4096 || e.VideoUrl?.Length > 4096 || e.WebUrl?.Length > 4096
-                || e.EndUtc < e.StartUtc || (e.AllDay && (e.StartDate is null || e.EndDate is null || e.EndDate <= e.StartDate))))
-            return ApiErrors.Problem("invalid-calendar-cache", "The calendar cache is not valid.", StatusCodes.Status400BadRequest);
-
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync<IResult>(async () =>
+        return await service.StoreAsync(caller.AccountId, cache, ct) switch
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            var account = await db.Accounts.FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {caller.AccountId} FOR UPDATE""").SingleOrDefaultAsync(ct);
-            if (account is null || account.DeletedAt is not null) return Results.Unauthorized();
-            var source = await db.SyncEntities.AsNoTracking().SingleOrDefaultAsync(e => e.AccountId == caller.AccountId
-                && e.Kind == "calendar_source" && e.EntityKey == cache.SourceId && e.PurgedAt == null, ct);
-            if (source is null) return Results.NotFound();
-            var groups = SyncJson.ReadGroups(source.Groups);
-            if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null
-                || groups.GetValueOrDefault("enabled")?.Values.Values.GetValueOrDefault("Enabled") is not long enabled || enabled != 1)
-                return Results.NotFound();
-            var json = JsonSerializer.Serialize(cache);
-            if (Encoding.UTF8.GetByteCount(json) > SyncProtocol.MaxPushBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
-            var now = clock.GetUtcNow();
-            await db.Database.ExecuteSqlInterpolatedAsync($"""
-                INSERT INTO "SyncEntities" ("AccountId", "Kind", "EntityKey", "Groups", "LastSeq", "UpdatedAt")
-                VALUES ({caller.AccountId}, 'calendar_cache', {cache.SourceId}, CAST({json} AS jsonb), 0, {now})
-                ON CONFLICT ("AccountId", "Kind", "EntityKey") DO UPDATE
-                SET "Groups" = EXCLUDED."Groups", "UpdatedAt" = EXCLUDED."UpdatedAt"
-                WHERE ("SyncEntities"."Groups" ->> 'FetchedAt')::timestamptz <= (EXCLUDED."Groups" ->> 'FetchedAt')::timestamptz
-                """, ct);
-            await transaction.CommitAsync(ct);
-            return Results.Ok();
-        });
+            CalendarCacheOutcome.Stored => Results.Ok(),
+            CalendarCacheOutcome.Invalid => ApiErrors.Problem("invalid-calendar-cache", "The calendar cache is not valid.", StatusCodes.Status400BadRequest),
+            CalendarCacheOutcome.AccountGone => Results.Unauthorized(),
+            CalendarCacheOutcome.SourceGone => Results.NotFound(),
+            _ => Results.StatusCode(StatusCodes.Status413PayloadTooLarge),
+        };
     }
 
     private static async Task<IResult> Push(HttpContext http, ClaimsPrincipal user, SyncService sync, CancellationToken ct)
