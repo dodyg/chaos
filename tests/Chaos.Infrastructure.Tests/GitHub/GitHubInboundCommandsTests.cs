@@ -1,3 +1,4 @@
+using Chaos.Domain.Validation;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.GitHub;
@@ -23,7 +24,7 @@ public sealed class GitHubInboundCommandsTests
         var commands = new TaskCommands(host.Store, host.Ids, host.Clock);
         UpdateTaskDetailsCommand Edit(string title, DateOnly? due) => new(DataHost.Op(), task.Id, task.Version, title, task.Notes,
             task.PlannedDate, task.PlannedTime, task.PlannedZoneId, due, task.DueTime, task.DueZoneId, task.Priority, task.EstimateMinutes, task.CapacityCategory);
-        await Assert.That(async () => await commands.UpdateDetailsAsync(Edit(new string('x', 257), task.DueDate))).Throws<AppException>();
+        await Assert.That(async () => await commands.UpdateDetailsAsync(Edit(new string('x', TaskTitle.MaxUnicodeScalarValues + 1), task.DueDate))).Throws<AppException>();
         await Assert.That(async () => await commands.UpdateDetailsAsync(Edit(task.Title, task.DueDate!.Value.AddDays(1)))).Throws<AppException>();
         var saved = await commands.UpdateDetailsAsync(Edit(new string('x', 256), task.DueDate));
         await Assert.That(saved.Task.Title.Length).IsEqualTo(256);
@@ -230,7 +231,7 @@ public sealed class GitHubInboundCommandsTests
     {
         using var host = await DataHost.StartAsync(); var (repo, connection, inbound) = await Setup(host);
         await Assert.That(async () => await inbound.ApplyAsync(repo.Id, repo.Version + 1, [Issue()])).Throws<AppException>();
-        await Assert.That(async () => await inbound.ApplyAsync(repo.Id, repo.Version, [Issue(), Issue(2, title: new string('x', 257))])).Throws<AppException>();
+        await Assert.That(async () => await inbound.ApplyAsync(repo.Id, repo.Version, [Issue(), Issue(2, title: new string('x', TaskTitle.MaxUnicodeScalarValues + 1))])).Throws<AppException>();
         await Assert.That(await host.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct))).IsNull();
     }
 
