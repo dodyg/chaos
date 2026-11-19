@@ -77,8 +77,9 @@ public sealed class BlobSyncTests(PostgresServer postgres)
             {
                 System.IO.Directory.Delete(Directory, recursive: true);
             }
-            catch (IOException)
+            catch (IOException error)
             {
+                System.Diagnostics.Trace.TraceWarning("Could not remove temporary blob sync test directory: {0}", error.GetType().Name);
             }
         }
     }

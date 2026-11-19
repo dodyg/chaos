@@ -167,13 +167,15 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
             shortCall.CancelAfter(TimeSpan.FromSeconds(5));
             await PostFormAsync("connect/revocation", [("client_id", ClientId), ("token", refreshToken), ("token_type_hint", "refresh_token")], shortCall.Token);
         }
-        catch (ChaosServiceException)
+        catch (ChaosServiceException error)
         {
             // Offline or unreachable: the token is removed from this computer either way.
+            System.Diagnostics.Trace.TraceInformation("Could not revoke the signed-out device token ({0}).", error.Kind);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Took too long: same.
+            System.Diagnostics.Trace.TraceInformation("Device token revocation timed out; local sign-out will continue.");
         }
     }
 

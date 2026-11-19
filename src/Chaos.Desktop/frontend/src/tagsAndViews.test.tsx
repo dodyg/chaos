@@ -117,7 +117,8 @@ test("search runs the typed words and pages with the server cursor", async () =>
     } },
   })}/>, { container: dom.window.document.body });
 
-  await user.type(await screen.findByRole("searchbox", { name: "Search tasks" }), "landlord{Enter}");
+  const search = within(screen.getByRole("search"));
+  await user.type(await search.findByRole("searchbox", { name: "Search tasks" }), "landlord{Enter}");
   const results = await screen.findByRole("list", { name: "Results" });
   assert.ok(within(results).getByText("Matched in a subtask"));
   assert.deepEqual({ view: requests.at(-1)!.view, text: requests.at(-1)!.text }, { view: "Search", text: "landlord" });

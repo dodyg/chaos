@@ -311,6 +311,7 @@ public sealed class BlobSweepService(IServiceScopeFactory scopes, IOptions<BlobO
         catch (OperationCanceledException)
         {
             // Shutting down.
+            log.LogDebug("Blob sweep service stopped.");
         }
     }
 }

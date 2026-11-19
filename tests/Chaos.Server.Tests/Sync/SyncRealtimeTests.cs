@@ -14,20 +14,116 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
     private static async Task<string> CaptureAsync(SyncDevice device, string title) =>
         (await device.Tasks.CaptureAsync(new(Op(), string.Empty, title, null))).Task.Id;
 
-    private static async Task<bool> WaitAsync(Func<Task<bool>> condition, TimeSpan limit)
+    private static async Task<bool> WaitForRuntimeAsync(SyncEngine[] engines, Func<bool> condition, TimeSpan limit)
     {
-        var watch = Stopwatch.StartNew();
-        while (watch.Elapsed < limit)
+        var gate = new object();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<SyncRuntime> handler = _ =>
         {
-            if (await condition())
+            lock (gate)
             {
-                return true;
+                changed.TrySetResult();
             }
+        };
 
-            await Task.Delay(25);
+        foreach (var engine in engines)
+        {
+            engine.RuntimeChanged += handler;
         }
 
-        return await condition();
+        using var timeout = new CancellationTokenSource(limit);
+        try
+        {
+            while (!condition())
+            {
+                var next = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                lock (gate)
+                {
+                    changed = next;
+                }
+
+                if (condition())
+                {
+                    return true;
+                }
+
+                await next.Task.WaitAsync(timeout.Token);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return condition();
+        }
+        finally
+        {
+            foreach (var engine in engines)
+            {
+                engine.RuntimeChanged -= handler;
+            }
+        }
+    }
+
+    private static async Task<bool> WaitForCycleAsync(SyncEngine engine, Func<Task<bool>> condition, TimeSpan limit)
+    {
+        var gate = new object();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<SyncCycleResult> handler = _ =>
+        {
+            lock (gate)
+            {
+                changed.TrySetResult();
+            }
+        };
+        engine.CycleFinished += handler;
+        using var timeout = new CancellationTokenSource(limit);
+        try
+        {
+            while (!await condition())
+            {
+                var next = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                lock (gate)
+                {
+                    changed = next;
+                }
+
+                if (await condition())
+                {
+                    return true;
+                }
+
+                await next.Task.WaitAsync(timeout.Token);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return await condition();
+        }
+        finally
+        {
+            engine.CycleFinished -= handler;
+        }
+    }
+
+    private static async Task<bool> WaitForSignalAsync(Func<bool> condition, SemaphoreSlim signal, TimeSpan limit)
+    {
+        using var timeout = new CancellationTokenSource(limit);
+        try
+        {
+            while (!condition())
+            {
+                await signal.WaitAsync(timeout.Token);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return condition();
+        }
     }
 
     /// <summary>Polling is an hour away, so anything that arrives sooner came through the event stream.</summary>
@@ -41,12 +137,12 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         var b = await world.AddDeviceAsync(options: Realtime());
         a.Engine.Start();
         b.Engine.Start();
-        await Assert.That(await WaitAsync(() => Task.FromResult(a.Engine.Runtime.Streaming && b.Engine.Runtime.Streaming), TimeSpan.FromSeconds(10))).IsTrue();
-        await Task.Delay(300); // Let each device's first cycle finish so only the event can wake B.
+        await Assert.That(await WaitForRuntimeAsync([a.Engine, b.Engine], () => a.Engine.Runtime.Streaming && b.Engine.Runtime.Streaming, TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(await WaitForRuntimeAsync([a.Engine, b.Engine], () => a.Engine.Runtime.LastSuccessAt is not null && b.Engine.Runtime.LastSuccessAt is not null, TimeSpan.FromSeconds(10))).IsTrue();
 
         var watch = Stopwatch.StartNew();
         var id = await CaptureAsync(a, "From A");
-        var arrived = await WaitAsync(async () => await b.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{id}';") == 1, TimeSpan.FromSeconds(3));
+        var arrived = await WaitForCycleAsync(b.Engine, async () => await b.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{id}';") == 1, TimeSpan.FromSeconds(3));
 
         await Assert.That(arrived).IsTrue();
         await Assert.That(watch.Elapsed < TimeSpan.FromSeconds(3)).IsTrue();
@@ -67,17 +163,17 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         });
         a.Engine.Start();
         b.Engine.Start();
-        await Assert.That(await WaitAsync(() => Task.FromResult(b.Engine.Runtime.Streaming), TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(await WaitForRuntimeAsync([b.Engine], () => b.Engine.Runtime.Streaming, TimeSpan.FromSeconds(10))).IsTrue();
 
         // B's open stream hears nothing for longer than its silence limit and is reopened; while it is away it cannot connect.
         b.Network.Offline = true;
         var id = await CaptureAsync(a, "While B was away");
         await a.SyncAsync();
-        await Task.Delay(800);
+        await Assert.That(await WaitForRuntimeAsync([b.Engine], () => !b.Engine.Runtime.Streaming, TimeSpan.FromSeconds(10))).IsTrue();
         b.Network.Offline = false;
 
         // The reconnect's first event carries the current sequence, so B pulls what it missed.
-        var arrived = await WaitAsync(async () => await b.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{id}';") == 1, TimeSpan.FromSeconds(10));
+        var arrived = await WaitForCycleAsync(b.Engine, async () => await b.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{id}';") == 1, TimeSpan.FromSeconds(10));
         await Assert.That(arrived).IsTrue();
     }
 
@@ -115,6 +211,7 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         var a = await world.AddDeviceAsync();
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var seen = new List<string>();
+        using var lineSignal = new SemaphoreSlim(0);
         var reader = Task.Run(async () =>
         {
             try
@@ -127,12 +224,15 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
                         {
                             seen.Add(line);
                         }
+
+                        lineSignal.Release();
                     }
                 }
             }
             catch (OperationCanceledException)
             {
                 // Done listening.
+                return;
             }
         });
         bool Heard(string text)
@@ -143,7 +243,7 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
             }
         }
 
-        await WaitAsync(() => Task.FromResult(Heard("seq")), TimeSpan.FromSeconds(5));
+        await Assert.That(await WaitForSignalAsync(() => Heard("seq"), lineSignal, TimeSpan.FromSeconds(5))).IsTrue();
 
         // What a second instance does after its commit: NOTIFY on the account's channel, with no in-process broadcast.
         await using var db = ServerDatabase.Open(world.Server.ConnectionString);
@@ -152,9 +252,9 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         var payload = Chaos.Server.Sync.SyncNotificationListener.Payload(account.Id, 987);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {payload})");
 
-        var heard = await WaitAsync(() => Task.FromResult(Heard("987")), TimeSpan.FromSeconds(5));
+        var heard = await WaitForSignalAsync(() => Heard("987"), lineSignal, TimeSpan.FromSeconds(5));
         await stop.CancelAsync();
-        await Task.WhenAny(reader, Task.Delay(2000));
+        await reader.WaitAsync(TimeSpan.FromSeconds(2));
         await Assert.That(heard).IsTrue();
     }
 

@@ -94,9 +94,10 @@ public sealed class SiteNoteCommands(ISitePageFetcher fetcher, ISiteSummarizer s
         {
             Task.WaitAll([.. _running.Keys], TimeSpan.FromSeconds(5));
         }
-        catch (AggregateException)
+        catch (AggregateException error)
         {
             // FillAsync reports its own failures.
+            System.Diagnostics.Trace.TraceWarning("New site background work failed during shutdown: {0}", error.GetType().Name);
         }
 
         _shutdown.Dispose();

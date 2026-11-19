@@ -52,8 +52,9 @@ public sealed class BlobTests(PostgresServer postgres)
             {
                 Directory.Delete(BlobDirectory, recursive: true);
             }
-            catch (IOException)
+            catch (IOException error)
             {
+                System.Diagnostics.Trace.TraceWarning("Could not remove temporary blob test directory: {0}", error.GetType().Name);
             }
         }
     }

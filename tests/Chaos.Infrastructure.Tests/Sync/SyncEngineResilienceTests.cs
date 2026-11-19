@@ -12,6 +12,7 @@ public sealed class SyncEngineResilienceTests
     private sealed class BrokenService(Func<Exception> error) : IChaosServiceClient
     {
         public int Calls;
+        public TaskCompletionSource ThirdCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsConfigured => true;
         public Task<ServiceSession> GetSessionAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<ServiceAccount> SignInAsync(CancellationToken ct) => throw new NotSupportedException();
@@ -24,13 +25,20 @@ public sealed class SyncEngineResilienceTests
         public Task<string> GetAccessTokenAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<ServiceResponse> CallAsync(HttpMethod method, string path, string? json, CancellationToken ct)
         {
-            Interlocked.Increment(ref Calls);
+            if (Interlocked.Increment(ref Calls) >= 3)
+            {
+                ThirdCall.TrySetResult();
+            }
+
             throw error();
         }
 
         public async IAsyncEnumerable<string> StreamLinesAsync(string path, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
         {
-            await Task.Delay(Timeout.Infinite, ct);
+            var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(static state => ((TaskCompletionSource)state!).TrySetResult(), stopped);
+            await stopped.Task;
+            ct.ThrowIfCancellationRequested();
             yield break;
         }
     }
@@ -68,11 +76,7 @@ public sealed class SyncEngineResilienceTests
         using var engine = new SyncEngine(host.Store, new SyncApplier(host.Store, host.Clock, host.Ids), service, TimeProvider.System, Fast());
 
         engine.Start();
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref service.Calls) < 3 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(20);
-        }
+        await service.ThirdCall.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         await Assert.That(Volatile.Read(ref service.Calls)).IsGreaterThanOrEqualTo(3);
     }

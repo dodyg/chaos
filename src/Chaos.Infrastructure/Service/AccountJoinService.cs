@@ -172,6 +172,7 @@ public sealed class AccountJoinService(IChaosServiceClient service, SyncAccountS
         catch (Exception error) when (error is AppException or IOException)
         {
             // Nothing more can be done here: the safety backup is still in the backups folder for the person to restore.
+            System.Diagnostics.Trace.TraceWarning("Account join recovery failed; the safety backup remains available ({0}).", error.GetType().Name);
         }
     }
 
@@ -199,9 +200,10 @@ public sealed class AccountJoinService(IChaosServiceClient service, SyncAccountS
         {
             marker = JsonSerializer.Deserialize<JoinMarker>(File.ReadAllText(markerPath), Json);
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
             // An unreadable marker is treated as "a join was interrupted" with no backup to name.
+            System.Diagnostics.Trace.TraceWarning("Account join marker could not be read: {0}", error.GetType().Name);
         }
 
         var backup = marker is null ? null : Path.Combine(options.BackupsDirectory, Path.GetFileName(marker.SafetyBackupFileName));

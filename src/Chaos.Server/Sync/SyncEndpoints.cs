@@ -189,6 +189,7 @@ public sealed class SyncHorizonService(IServiceScopeFactory scopes, IOptions<Syn
         catch (OperationCanceledException)
         {
             // Shutting down.
+            log.LogDebug("Sync horizon service stopped.");
         }
     }
 }

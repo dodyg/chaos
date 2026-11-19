@@ -69,13 +69,15 @@ public static class SyncEvents
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException error)
         {
             // The client went away.
+            System.Diagnostics.Trace.TraceInformation("Sync event stream ended after cancellation: {0}", error.GetType().Name);
         }
-        catch (IOException)
+        catch (IOException error)
         {
             // The connection broke while writing.
+            System.Diagnostics.Trace.TraceInformation("Sync event stream connection closed: {0}", error.GetType().Name);
         }
     }
 
