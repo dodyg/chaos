@@ -18,5 +18,6 @@ export function TaskStaleness({ task, lastActivityAtUtc, revision = 0 }: { task:
   const activity = Math.max(Date.parse(task.updatedAtUtc) || 0, Date.parse(lastActivityAtUtc ?? "") || 0, history?.id === task.id ? history.at : 0);
   if (task.status !== "InProgress" || !activity) return null;
   const days = Math.max(0, Math.floor((Date.now() - activity) / 86_400_000));
-  return <span title={`Last activity: ${new Date(activity).toLocaleString()}`} className={cn("inline-flex items-center gap-1 text-xs", days >= 3 ? "font-medium text-red-600 dark:text-red-400" : days >= 1 ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted-foreground")}><Clock className="size-3.5"/>{days === 0 ? "Active today" : `Inactive ${days} ${days === 1 ? "day" : "days"}`}</span>;
+  const description = days === 0 ? "Active today" : `Inactive ${days} ${days === 1 ? "day" : "days"}`;
+  return <span role="img" aria-label={description} title={`${description} · Last activity: ${new Date(activity).toLocaleString()}`} className={cn("inline-flex items-center", days >= 3 ? "text-red-600 dark:text-red-400" : days >= 1 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}><Clock aria-hidden="true" className="size-3.5"/></span>;
 }

@@ -76,19 +76,19 @@ test("in-progress rows show time since the latest task or diary activity", async
     return { ...result, rows: result.rows.map(item => item.task.id === active.id ? { ...item, lastActivityAtUtc: recent } : item) };
   } };
   render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={queryWithActivity} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
-  assert.ok(await screen.findByText("Inactive 2 days"));
-  assert.equal(screen.queryByText("Inactive 10 days"), null);
+  assert.ok(await screen.findByRole("img", { name: "Inactive 2 days" }));
+  assert.equal(screen.queryByRole("img", { name: "Inactive 10 days" }), null);
   cleanup();
 });
 
 test("staleness turns amber after one day and red after three", () => {
   const makeTask = (days: number) => task("t", "Task", { status: "InProgress", updatedAtUtc: new Date(Date.now() - days * 86_400_000).toISOString() });
   const view = render(<TaskStaleness task={makeTask(0)} lastActivityAtUtc={null}/>, { container: dom.window.document.body });
-  assert.ok(screen.getByText("Active today").className.includes("text-muted-foreground"));
+  assert.ok(screen.getByRole("img", { name: "Active today" }).className.includes("text-muted-foreground"));
   view.rerender(<TaskStaleness task={makeTask(1)} lastActivityAtUtc={null}/>);
-  assert.ok(screen.getByText("Inactive 1 day").className.includes("text-amber-600"));
+  assert.ok(screen.getByRole("img", { name: "Inactive 1 day" }).className.includes("text-amber-600"));
   view.rerender(<TaskStaleness task={makeTask(3)} lastActivityAtUtc={null}/>);
-  assert.ok(screen.getByText("Inactive 3 days").className.includes("text-red-600"));
+  assert.ok(screen.getByRole("img", { name: "Inactive 3 days" }).className.includes("text-red-600"));
   cleanup();
 });
 
