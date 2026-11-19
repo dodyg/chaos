@@ -11,6 +11,7 @@ using Chaos.Application.History;
 using Chaos.Application.Pad;
 using Chaos.Application.Pages;
 using Chaos.Application.Planning;
+using Chaos.Application.Reminders;
 using Chaos.Application.Settings;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
@@ -69,6 +70,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["pad_drawing"] = Work,
         ["scratch_task_link"] = Work,
         ["reminder_rule"] = Work,
+        ["reminder_acknowledgement"] = "reminder_ack",
         ["waiting_detail"] = Work,
         ["follow_up"] = Work,
 
@@ -154,6 +156,14 @@ public sealed class SyncCatalogFlushCoverageTests
         await Assert.That(removed).IsEmpty();
     }
 
+    private sealed class CoveragePresenter : INotificationAdapter
+    {
+        public NotificationCapabilities Capabilities { get; } = new("test", false, true, NotificationPermission.Granted, "test");
+        public Task<NotificationScheduleResult> ScheduleAsync(NotificationRequest request, CancellationToken ct) => Task.FromResult(new NotificationScheduleResult(false, null, null));
+        public Task CancelAsync(string osNotificationId, CancellationToken ct) => Task.CompletedTask;
+        public Task<NotificationShowOutcome> ShowAsync(NotificationRequest request, CancellationToken ct) => Task.FromResult(NotificationShowOutcome.InApp);
+    }
+
     private static async Task<ScenarioRun> DriveAsync(string group)
     {
         using var host = await DataHost.StartAsync();
@@ -161,6 +171,14 @@ public sealed class SyncCatalogFlushCoverageTests
         var expected = new Dictionary<string, string>(StringComparer.Ordinal);
         switch (group)
         {
+            case "reminder_ack":
+                var task = await SyncTestHelpers.CaptureTaskAsync(host);
+                var reminders = new ReminderCommands(host.Store, host.Ids, host.Clock, host.Tasks, new CoveragePresenter());
+                await reminders.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, host.Clock.Now, null)));
+                var delivery = (await reminders.DeliverDueAsync()).Single();
+                await reminders.ActAsync(new(Op(), delivery.Job.Id, delivery.Job.Generation, NotificationAction.Dismiss));
+                expected["reminder_acknowledgement"] = (await TextsAsync(host, "SELECT Id FROM ReminderAcknowledgements"))[0];
+                break;
             case Structure:
                 await StructureScenarioAsync(host, expected);
                 break;

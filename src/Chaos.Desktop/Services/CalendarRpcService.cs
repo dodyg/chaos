@@ -81,7 +81,8 @@ public sealed class CalendarRpcService(CalendarQueries queries)
             var page = await queries.UnscheduledAsync(ToFilters(request.Filters), request.Text, request.Cursor, request.Limit ?? CalendarQueries.MaxUnscheduledPage, ct);
             return new(true,
                 [.. page.Rows.Select(row => new QueryRowResponse(TaskRpcService.ToResponse(row.Task), row.ContainerName, row.ContainerArchived, row.TagIds,
-                    [.. row.Matches.Select(match => match.ToString())], null, row.WaitingPerson, null))],
+                    [.. row.Matches.Select(match => match.ToString())], null, row.WaitingPerson, null,
+                    row.LastActivityAtUtc is { } activity ? StorageFormats.Instant(activity) : null))],
                 TagRpcService.Count(page.TotalCount), page.NextCursor, null);
         }
         catch (AppException error) { return new(false, [], 0, null, TaskRpcService.ToErrorResponse(error)); }

@@ -142,7 +142,7 @@ test("a due marker opens its task directly instead of offering to move it", asyn
 test("an unscheduled task is planned with the keyboard: Plan… sets a date and clears the time", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const loose = task("u", "Book dentist");
-  const row: QueryRowResponse = { task: loose, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null };
+  const row: QueryRowResponse = { task: loose, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null };
   const { api, taskApi, calls } = fakes([], [row], [loose]);
   mount(api, taskApi);
   await screen.findByText("Book dentist");

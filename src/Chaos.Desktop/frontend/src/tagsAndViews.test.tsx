@@ -31,7 +31,7 @@ function tag(id: string, path: string, parentId: string | null = null): TagRespo
   return { id, name: path.split("/").at(-1)!, path, parentId, color: path === "home" ? "green" : null, version: "1", depth: path.split("/").length - 1 };
 }
 function resultRow(item: TaskResponse, tagIds: string[] = [], matches: string[] = ["Task"]): QueryRowResponse {
-  return { task: item, containerName: "Inbox", containerArchived: false, tagIds, matches, groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null };
+  return { task: item, containerName: "Inbox", containerArchived: false, tagIds, matches, groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null };
 }
 
 const tags = [tag("home", "home"), tag("garden", "home/garden", "home"), tag("work", "work")];

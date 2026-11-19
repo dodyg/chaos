@@ -4,7 +4,11 @@ using Chaos.Application.Capture;
 using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
 using Chaos.Application.History;
+using Chaos.Application.GitHub;
+using Chaos.Infrastructure.Tests.Testing;
 using Chaos.Application.Pages;
+using Chaos.Application.Reminders;
+using Chaos.Domain.Reminders;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Recurrence;
@@ -171,6 +175,184 @@ public sealed class SyncConvergenceTests
     }
 
     // ---- The scenarios of §P1 item 11 ------------------------------------------------------
+
+    private sealed class ReminderPresenter : INotificationAdapter
+    {
+        public List<string> Cancelled { get; } = [];
+        public NotificationCapabilities Capabilities { get; } = new("test", true, true, NotificationPermission.Granted, "test");
+        public Task<NotificationScheduleResult> ScheduleAsync(NotificationRequest request, CancellationToken ct) =>
+            Task.FromResult(new NotificationScheduleResult(true, GetNotificationId(request.JobId, request.Generation), null));
+        public string GetNotificationId(string jobId, long generation) => $"{jobId}/{generation}";
+        public Task CancelAsync(string osNotificationId, CancellationToken ct) { Cancelled.Add(osNotificationId); return Task.CompletedTask; }
+        public Task<NotificationShowOutcome> ShowAsync(NotificationRequest request, CancellationToken ct) => Task.FromResult(NotificationShowOutcome.System);
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public async Task ReminderDismissal_ClearsRemotePendingOrDeliveredNotification(int mode)
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var adapterA = new ReminderPresenter();
+        var adapterB = new ReminderPresenter();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, adapterA);
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, adapterB);
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        if (mode != 2) await remindersB.ReconcileOsAsync();
+        a.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        if (mode != 0)
+        {
+            b.Clock.Now = target;
+            var onB = (await remindersB.DeliverDueAsync()).Single();
+            await remindersB.MarkPresentedAsync(onB.Job.Id, NotificationPresentation.System);
+        }
+        await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Dismiss));
+        await ExchangeAsync(a, b);
+        await remindersB.DeliverDueAsync();
+        await remindersB.ReconcileOsAsync();
+        await Assert.That((await remindersB.AlertsAsync()).Count).IsEqualTo(0);
+        await Assert.That(adapterB.Cancelled.Count).IsEqualTo(1);
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0")).IsEqualTo(0L);
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task ReminderDone_CompletesTaskAndClearsRemoteToast()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var presenter = new ReminderPresenter();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, new ReminderPresenter());
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, presenter);
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        a.Clock.Now = target;
+        b.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        var onB = (await remindersB.DeliverDueAsync()).Single();
+        await remindersB.MarkPresentedAsync(onB.Job.Id, NotificationPresentation.System);
+        await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Done));
+        await ExchangeAsync(a, b);
+        await remindersB.DeliverDueAsync();
+        await remindersB.ReconcileOsAsync();
+        await Assert.That((await b.Tasks.GetAsync(task.Id))!.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That((await remindersB.AlertsAsync()).Count).IsEqualTo(0);
+        await Assert.That(presenter.Cancelled.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ReminderSnooze_ReschedulesOnRemoteDeviceAndIsIdempotent()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, new ReminderPresenter());
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, new ReminderPresenter());
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        a.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        var outcome = await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Snooze, SnoozeChoice.OneHour));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0 AND Reason=1")).IsEqualTo(1L);
+        var until = await TextAsync(b, "SELECT NotBeforeUtc FROM NotificationJobs WHERE State=0");
+        await Assert.That(until).IsEqualTo(StorageFormats.Instant(outcome.SnoozedUntilUtc!.Value));
+
+        a.Clock.Now = outcome.SnoozedUntilUtc.Value;
+        var next = (await remindersA.DeliverDueAsync()).Single();
+        var second = await remindersA.ActAsync(new(Op(), next.Job.Id, next.Job.Generation, NotificationAction.Snooze, SnoozeChoice.OneHour));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0 AND Reason=1")).IsEqualTo(1L);
+        await Assert.That(await TextAsync(b, "SELECT NotBeforeUtc FROM NotificationJobs WHERE State=0"))
+            .IsEqualTo(StorageFormats.Instant(second.SnoozedUntilUtc!.Value));
+    }
+
+    [Test]
+    public async Task GitHubRunner_RemoteTaskEditIsSentByRunnerOnly()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var api = new FakeGitHub();
+        api.PutRepository(new(10, "R", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", false, true));
+        var issue = new GitHubIssue(1, "I1", 1, "https://github.com/person/repo/issues/1", "Original", "Body", "open", null, new(1, "person"), [], [], null, null, DataHost.Start, DataHost.Start, null, 0, null);
+        api.PutIssue("person/repo", issue);
+        var commandsA = new GitHubConnectionCommands(a.Store, api, a.Ids, a.Clock);
+        var connection = await commandsA.ConnectAsync(new(Op()));
+        var inbox = await a.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
+        var repo = await commandsA.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, GitHubFilter.Empty, false));
+        var inbound = new GitHubInboundCommands(a.Store, a.Ids, a.Clock);
+        using var issuesA = new GitHubIssueFetcher(a.Store, api, inbound, _ => Task.FromResult("backup.db"), a.Clock);
+        using var commentsA = new GitHubCommentFetcher(a.Store, api, new(a.Store, a.Ids, a.Clock), a.Clock);
+        var syncA = new GitHubSyncCommands(a.Store, api, issuesA, commentsA, a.Ids, a.Clock);
+        await syncA.RunAsync(repo.Id, CancellationToken.None);
+        var link = (await a.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        await ExchangeAsync(a, b);
+        var commandsB = new GitHubConnectionCommands(b.Store, api, b.Ids, b.Clock);
+        await Assert.That((await commandsA.StatusAsync()).IsRunner).IsTrue();
+        await Assert.That((await commandsB.StatusAsync()).IsRunner).IsFalse();
+
+        var task = (await b.Tasks.GetAsync(link.TaskId!))!;
+        await b.Tasks.UpdateDetailsAsync(new(Op(), task.Id, task.Version, "Edited on B", task.Notes, null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        await ExchangeAsync(a, b);
+        await Assert.That((await a.Store.QueryAsync((s, ct) => s.GitHub.GetIssueLinkAsync(link.Id, ct)))!.LocalDirty).IsTrue();
+        using var issuesB = new GitHubIssueFetcher(b.Store, api, new(b.Store, b.Ids, b.Clock), _ => Task.FromResult("backup.db"), b.Clock);
+        using var commentsB = new GitHubCommentFetcher(b.Store, api, new(b.Store, b.Ids, b.Clock), b.Clock);
+        var syncB = new GitHubSyncCommands(b.Store, api, issuesB, commentsB, b.Ids, b.Clock);
+        var before = api.Requests;
+        await syncB.RunTaskAsync(task.Id, CancellationToken.None);
+        await Assert.That(async () => await syncB.RunAsync(null, CancellationToken.None)).Throws<AppException>();
+        await Assert.That(api.Requests).IsEqualTo(before);
+        await syncA.RunTaskAsync(task.Id, CancellationToken.None);
+        await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)).Title).IsEqualTo("Edited on B");
+
+        await ExchangeAsync(a, b);
+        await commandsB.SetSelfAssignmentAsync(new(Op(), task.Id, true));
+        await ExchangeAsync(a, b);
+        await syncA.RunTaskAsync(task.Id, CancellationToken.None);
+        await Assert.That((await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)).Assignees.Any(user => user.Id == api.Account.Id)).IsTrue();
+    }
+
+    [Test]
+    public async Task GitHubRunner_HandoffRequiresMatchingAccountAndResetsCheckpoints()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var api = new FakeGitHub();
+        api.PutRepository(new(10, "R", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", false, true));
+        var ca = new GitHubConnectionCommands(a.Store, api, a.Ids, a.Clock);
+        var connection = await ca.ConnectAsync(new(Op()));
+        var inbox = await a.Store.QueryAsync(async (s, ct) => (await s.Containers.GetInboxAsync(connection.SpaceId, ct))!.Id);
+        var repo = await ca.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 10, inbox, null, GitHubFilter.Empty, false));
+        await ExchangeAsync(a, b);
+        await b.Store.ExecuteAsync(async (s, ct) => { await s.GitHub.SaveCheckpointAsync(new(repo.Id, "issues", 1, "{}", b.Clock.Now), ct); return 0; });
+        var cb = new GitHubConnectionCommands(b.Store, api, b.Ids, b.Clock);
+        var local = (await cb.StatusAsync()).Connection!;
+        api.Account = new(2, "other");
+        await Assert.That(async () => await cb.RunOnThisDeviceAsync(new(Op(), local.Id, local.Version))).Throws<AppException>();
+        await Assert.That((await cb.StatusAsync()).IsRunner).IsFalse();
+        api.Account = new(1, "person");
+        await cb.RunOnThisDeviceAsync(new(Op(), local.Id, local.Version));
+        await Assert.That((await cb.StatusAsync()).IsRunner).IsTrue();
+        await Assert.That(await b.Store.QueryAsync((s, ct) => s.GitHub.GetCheckpointAsync(repo.Id, "issues", ct))).IsNull();
+        await ExchangeAsync(a, b);
+        await Assert.That((await ca.StatusAsync()).IsRunner).IsFalse();
+    }
 
     [Test]
     public async Task Edits_to_different_groups_both_survive()

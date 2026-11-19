@@ -12,7 +12,7 @@ namespace Chaos.Infrastructure.Sync;
 /// </summary>
 internal sealed class SyncSchema(SqliteConnection connection)
 {
-    private readonly Dictionary<string, List<(string Column, string? Default, bool Integer)>> _facts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<(string Column, string? Default, bool Integer, bool Required)>> _facts = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<string> Columns(string table)
     {
@@ -27,7 +27,7 @@ internal sealed class SyncSchema(SqliteConnection connection)
     public IReadOnlyList<string> RequiredWithoutDefault(string table)
     {
         LoadFacts(table);
-        return [.. _facts[table].Where(entry => entry.Default is null).Select(entry => entry.Column)];
+        return [.. _facts[table].Where(entry => entry.Required && entry.Default is null).Select(entry => entry.Column)];
     }
 
     /// <summary>The neutral fill value's kind: text when the column is not declared numeric.</summary>
@@ -137,7 +137,7 @@ internal sealed class SyncSchema(SqliteConnection connection)
             return;
         }
 
-        var entries = new List<(string Column, string? Default, bool Integer)>();
+        var entries = new List<(string Column, string? Default, bool Integer, bool Required)>();
         using (var command = connection.CreateCommand())
         {
             command.CommandText = $"PRAGMA table_info({SyncSql.Quote(table)});";
@@ -145,7 +145,7 @@ internal sealed class SyncSchema(SqliteConnection connection)
             while (reader.Read())
             {
                 var @default = reader.IsDBNull(4) ? null : reader.GetValue(4)?.ToString();
-                entries.Add((reader.GetString(1), @default, (reader.GetValue(2) as string ?? "TEXT").Contains("INT", StringComparison.OrdinalIgnoreCase)));
+                entries.Add((reader.GetString(1), @default, (reader.GetValue(2) as string ?? "TEXT").Contains("INT", StringComparison.OrdinalIgnoreCase), reader.GetInt64(3) != 0));
             }
         }
 

@@ -52,11 +52,15 @@ public sealed class GitHubSyncScheduler(GitHubSyncEngine engine, Func<Cancellati
                 {
                     var state = await schedule(_stop.Token);
                     var connection = state.Status.Connection;
-                    if (connection is not { State: 0, DeletedAtUtc: null } || !state.Status.Repositories.Any(r => r.State == 0 && r.DeletedAtUtc is null))
+                    if (!state.Status.IsRunner || connection is not { State: 0, DeletedAtUtc: null } || !state.Status.Repositories.Any(r => r.State == 0 && r.DeletedAtUtc is null))
                     {
                         connectionId = null;
                         attemptedLinks.Clear();
-                        await _changed.WaitAsync(_stop.Token);
+                        using var waitForChange = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+                        var wake = _changed.WaitAsync(waitForChange.Token);
+                        var poll = Task.Delay(TimeSpan.FromSeconds(30), clock, waitForChange.Token);
+                        await await Task.WhenAny(wake, poll);
+                        await waitForChange.CancelAsync();
                         continue;
                     }
                     var now = clock.GetUtcNow();

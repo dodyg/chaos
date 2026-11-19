@@ -27,7 +27,7 @@ public sealed record GitHubSettingsRequest(string OperationId, string Id, string
 public sealed record GitHubFilterDto(IReadOnlyList<string> Labels, string LabelMode, string Assignee, string? Milestone, bool NoMilestone, int IncludeClosedDays);
 public sealed record GitHubAddRequest(string OperationId, string ConnectionId, string ExpectedVersion, string Owner, string Name, string RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
 public sealed record GitHubUpdateRequest(string OperationId, string Id, string ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
-public sealed record GitHubConnectionDto(string Id, string Version, string AccountId, string AccountLogin, string State, bool PostDiaryByDefault, bool CreateLabelsForTags);
+public sealed record GitHubConnectionDto(string Id, string Version, string AccountId, string AccountLogin, string State, bool PostDiaryByDefault, bool CreateLabelsForTags, string? RunnerDeviceName = null, bool IsRunner = false);
 public sealed record GitHubRepositoryDto(string Id, string Version, string RepositoryId, string FullName, string State, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string TaskCategory);
 public sealed record GitHubCandidateDto(string RepositoryId, string Owner, string Name, string FullName, bool IsPrivate, bool HasIssues, bool AlreadyAdded);
 public sealed record GitHubSectionDto(string Id, string Title);
@@ -59,7 +59,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                     result.Add(new(container.Id, container.Name, (await s.Sections.ListByContainerAsync(container.Id, token)).Select(section => new GitHubSectionDto(section.Id, section.Title)).ToArray()));
                 return result;
             }, ct);
-            return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags) : null,
+            return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags, c.RunnerDeviceName, status.IsRunner) : null,
                 status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString())).ToArray(), targets, null, SyncStatus(status.Connection));
         }
         catch (AppException e) { return new(false, null, [], [], TaskRpcService.ToErrorResponse(e)); }
@@ -146,7 +146,9 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         {
             ct.ThrowIfCancellationRequested();
             if (sync is null) throw new AppException(AppErrorKind.UnsupportedCapability, "GitHub sync is not configured in this host.");
-            var connection = (await commands.StatusAsync(ct)).Connection ?? throw AppException.NotFound("Connect to GitHub first.");
+            var current = await commands.StatusAsync(ct);
+            var connection = current.Connection ?? throw AppException.NotFound("Connect to GitHub first.");
+            if (!current.IsRunner) throw AppException.Validation("runner", "GitHub sync runs on another device. Select this device in GitHub settings first.");
             var activity = sync.RequestSync(string.IsNullOrWhiteSpace(request.RepositoryId) ? null : request.RepositoryId, connection.Id);
             return new(true, MapSync(activity), null);
         }
@@ -172,6 +174,19 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         using var rpcScope = ActivityScope.Rpc("github.connect");
         return await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); scheduler?.Wake(); });
     }
+    [NeoRpcMethod("runOnThisDevice")]
+    public async ValueTask<GitHubOperationResponse> RunOnThisDeviceAsync(GitHubChangeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.runOnThisDevice");
+        return await Run(async () =>
+        {
+            async Task Select() => await commands.RunOnThisDeviceAsync(Change(request), ct);
+            if (sync is null) await Select();
+            else await sync.RunPausedAsync(Select, ct);
+            scheduler?.Wake();
+        });
+    }
+
     [NeoRpcMethod("listRepositories")]
     public async ValueTask<GitHubCandidatesResponse> ListRepositoriesAsync(GitHubCandidatesRequest request, CancellationToken ct)
     {

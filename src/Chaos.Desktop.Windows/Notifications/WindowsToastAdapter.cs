@@ -105,6 +105,8 @@ public sealed class WindowsToastAdapter : INotificationAdapter
         }
     }
 
+    public string GetNotificationId(string jobId, long generation) => ToastId(jobId, generation);
+
     public Task CancelAsync(string osNotificationId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -179,8 +181,10 @@ public sealed class WindowsToastAdapter : INotificationAdapter
     }
 
     /// <summary>A 16-character ID per job generation; Windows limits scheduled IDs and tags.</summary>
-    public static string OsId(NotificationRequest request) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{request.JobId}/{request.Generation}")))[..16].ToLowerInvariant();
+    public static string OsId(NotificationRequest request) => ToastId(request.JobId, request.Generation);
+
+    private static string ToastId(string jobId, long generation) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{jobId}/{generation}")))[..16].ToLowerInvariant();
 
     private static XmlDocument Content(NotificationRequest request)
     {

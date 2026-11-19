@@ -90,3 +90,8 @@ public sealed record NotificationJobRecord
     public required DateTimeOffset CreatedAtUtc { get; init; }
     public required DateTimeOffset UpdatedAtUtc { get; init; }
 }
+
+/// <summary>A shared decision about an original reminder target.</summary>
+public sealed record ReminderAcknowledgement(
+    string Id, NotificationSourceKind SourceKind, string SourceId, DateTimeOffset TargetAtUtc,
+    string Action, DateTimeOffset? SnoozedUntilUtc, string Revision, DateTimeOffset UpdatedAtUtc);

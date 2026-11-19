@@ -8,6 +8,27 @@ namespace Chaos.Infrastructure.Sqlite;
 /// <summary>GitHub bookkeeping on the caller's connection and transaction; no network access.</summary>
 public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStore
 {
+    public async Task<string> GetDeviceIdAsync(CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM DeviceSettings WHERE Key='DeviceId'";
+        return await command.ExecuteScalarAsync(ct) as string ?? throw new InvalidOperationException("This device has no identity.");
+    }
+
+    public async Task ResetRunnerStateAsync(string connectionId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM GitHubSyncCheckpoints WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId=$id);
+            DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE ConnectionId=$id);
+            DELETE FROM GitHubConnectionBackoff WHERE ConnectionId=$id;
+            UPDATE GitHubRepositories SET IssuesCursorUtc=NULL, CommentsCursorUtc=NULL, IssuesEtag=NULL, CommentsEtag=NULL, LabelsEtag=NULL, MilestonesEtag=NULL, InitialImportDoneUtc=NULL WHERE ConnectionId=$id;
+            UPDATE GitHubIssueLinks SET LocalDirty=1, LocalDirtySinceUtc=COALESCE(LocalDirtySinceUtc, UpdatedAtUtc), IssueEtag=NULL, NextAttemptUtc=NULL WHERE ConnectionId=$id AND State=0 AND TaskId IS NOT NULL;
+            """;
+        command.Parameters.AddWithValue("$id", connectionId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static GitHubIssueWriteRecord ReadIssueWrite(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), StorageFormats.ParseInstant(r.GetString(2))!.Value);
 
     public async Task<GitHubIssueWriteRecord?> GetIssueWriteAsync(string linkId, CancellationToken ct) =>
@@ -44,6 +65,8 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         AccountId = reader.GetInt64(reader.GetOrdinal("AccountId")),
         AccountLogin = reader.GetString(reader.GetOrdinal("AccountLogin")),
         State = reader.GetInt32(reader.GetOrdinal("State")),
+        RunnerDeviceId = reader.IsDBNull(reader.GetOrdinal("RunnerDeviceId")) ? null : reader.GetString(reader.GetOrdinal("RunnerDeviceId")),
+        RunnerDeviceName = reader.IsDBNull(reader.GetOrdinal("RunnerDeviceName")) ? null : reader.GetString(reader.GetOrdinal("RunnerDeviceName")),
         PostDiaryByDefault = reader.GetInt64(reader.GetOrdinal("PostDiaryByDefault")) != 0,
         CreateLabelsForTags = reader.GetInt64(reader.GetOrdinal("CreateLabelsForTags")) != 0,
         RateLimitResetUtc = reader.IsDBNull(reader.GetOrdinal("RateLimitResetUtc")) ? null : StorageFormats.ParseInstant(reader.GetString(reader.GetOrdinal("RateLimitResetUtc"))),
@@ -60,7 +83,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task AddConnectionAsync(GitHubConnectionRecord row, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO GitHubConnections (Id, SpaceId, ProfileId, WebBaseUrl, ApiBaseUrl, AccountId, AccountLogin, State, PostDiaryByDefault, CreateLabelsForTags, RateLimitResetUtc, LastSyncStartedUtc, LastSyncCompletedUtc, LastErrorKind, LastErrorMessage, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc) VALUES ($Id, $SpaceId, $ProfileId, $WebBaseUrl, $ApiBaseUrl, $AccountId, $AccountLogin, $State, $PostDiaryByDefault, $CreateLabelsForTags, $RateLimitResetUtc, $LastSyncStartedUtc, $LastSyncCompletedUtc, $LastErrorKind, $LastErrorMessage, $Version, $CreatedAtUtc, $UpdatedAtUtc, $DeletedAtUtc);";
+        command.CommandText = "INSERT INTO GitHubConnections (Id, SpaceId, ProfileId, WebBaseUrl, ApiBaseUrl, AccountId, AccountLogin, State, RunnerDeviceId, RunnerDeviceName, PostDiaryByDefault, CreateLabelsForTags, RateLimitResetUtc, LastSyncStartedUtc, LastSyncCompletedUtc, LastErrorKind, LastErrorMessage, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc) VALUES ($Id, $SpaceId, $ProfileId, $WebBaseUrl, $ApiBaseUrl, $AccountId, $AccountLogin, $State, $RunnerDeviceId, $RunnerDeviceName, $PostDiaryByDefault, $CreateLabelsForTags, $RateLimitResetUtc, $LastSyncStartedUtc, $LastSyncCompletedUtc, $LastErrorKind, $LastErrorMessage, $Version, $CreatedAtUtc, $UpdatedAtUtc, $DeletedAtUtc);";
         command.Parameters.AddWithValue("$Id", row.Id);
         command.Parameters.AddWithValue("$SpaceId", row.SpaceId);
         command.Parameters.AddWithValue("$ProfileId", row.ProfileId);
@@ -69,6 +92,8 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$AccountId", row.AccountId);
         command.Parameters.AddWithValue("$AccountLogin", row.AccountLogin);
         command.Parameters.AddWithValue("$State", row.State);
+        command.Parameters.AddWithValue("$RunnerDeviceId", (object?)row.RunnerDeviceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$RunnerDeviceName", (object?)row.RunnerDeviceName ?? DBNull.Value);
         command.Parameters.AddWithValue("$PostDiaryByDefault", row.PostDiaryByDefault);
         command.Parameters.AddWithValue("$CreateLabelsForTags", row.CreateLabelsForTags);
         command.Parameters.AddWithValue("$RateLimitResetUtc", row.RateLimitResetUtc is { } RateLimitResetUtc ? StorageFormats.Instant(RateLimitResetUtc) : (object)DBNull.Value);
@@ -92,7 +117,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task<GitHubConnectionRecord?> UpdateConnectionAsync(GitHubConnectionRecord row, long expectedVersion, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE GitHubConnections SET SpaceId=$SpaceId, ProfileId=$ProfileId, WebBaseUrl=$WebBaseUrl, ApiBaseUrl=$ApiBaseUrl, AccountId=$AccountId, AccountLogin=$AccountLogin, State=$State, PostDiaryByDefault=$PostDiaryByDefault, CreateLabelsForTags=$CreateLabelsForTags, RateLimitResetUtc=$RateLimitResetUtc, LastSyncStartedUtc=$LastSyncStartedUtc, LastSyncCompletedUtc=$LastSyncCompletedUtc, LastErrorKind=$LastErrorKind, LastErrorMessage=$LastErrorMessage, UpdatedAtUtc=$UpdatedAtUtc, DeletedAtUtc=$DeletedAtUtc, Version=Version+1 WHERE Id=$Id AND Version=$expected;";
+        command.CommandText = "UPDATE GitHubConnections SET SpaceId=$SpaceId, ProfileId=$ProfileId, WebBaseUrl=$WebBaseUrl, ApiBaseUrl=$ApiBaseUrl, AccountId=$AccountId, AccountLogin=$AccountLogin, State=$State, RunnerDeviceId=$RunnerDeviceId, RunnerDeviceName=$RunnerDeviceName, PostDiaryByDefault=$PostDiaryByDefault, CreateLabelsForTags=$CreateLabelsForTags, RateLimitResetUtc=$RateLimitResetUtc, LastSyncStartedUtc=$LastSyncStartedUtc, LastSyncCompletedUtc=$LastSyncCompletedUtc, LastErrorKind=$LastErrorKind, LastErrorMessage=$LastErrorMessage, UpdatedAtUtc=$UpdatedAtUtc, DeletedAtUtc=$DeletedAtUtc, Version=Version+1 WHERE Id=$Id AND Version=$expected;";
         command.Parameters.AddWithValue("$Id", row.Id);
         command.Parameters.AddWithValue("$SpaceId", row.SpaceId);
         command.Parameters.AddWithValue("$ProfileId", row.ProfileId);
@@ -101,6 +126,8 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$AccountId", row.AccountId);
         command.Parameters.AddWithValue("$AccountLogin", row.AccountLogin);
         command.Parameters.AddWithValue("$State", row.State);
+        command.Parameters.AddWithValue("$RunnerDeviceId", (object?)row.RunnerDeviceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$RunnerDeviceName", (object?)row.RunnerDeviceName ?? DBNull.Value);
         command.Parameters.AddWithValue("$PostDiaryByDefault", row.PostDiaryByDefault);
         command.Parameters.AddWithValue("$CreateLabelsForTags", row.CreateLabelsForTags);
         command.Parameters.AddWithValue("$RateLimitResetUtc", row.RateLimitResetUtc is { } RateLimitResetUtc ? StorageFormats.Instant(RateLimitResetUtc) : (object)DBNull.Value);

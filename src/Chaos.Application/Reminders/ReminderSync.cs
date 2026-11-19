@@ -92,6 +92,15 @@ public static class ReminderSync
             return;
         }
 
+        // A completed task has no desired target, but a remotely handled toast still needs clearing.
+        foreach (var delivered in await session.Notifications.ListActiveDeliveredByTaskAsync(taskId, ct))
+        {
+            var decision = await session.Notifications.GetAcknowledgementAsync(delivered.SourceKind, delivered.SourceId, delivered.TargetAtUtc, ct);
+            if (decision is not null && (task.IsTerminal ||
+                await session.Notifications.GetAppliedAcknowledgementAsync(decision.Id, ct) != decision.Revision))
+                await session.Notifications.UpdateAsync(delivered with { State = NotificationJobState.Acknowledged, AcknowledgedAtUtc = now, ActionTaken = decision.Action, UpdatedAtUtc = now }, NotificationJobState.Delivered, ct);
+        }
+
         var zone = ProfileZone(profile);
         var desired = new Dictionary<(NotificationSourceKind Kind, string Id), DateTimeOffset?>();
         foreach (var rule in await session.ReminderRules.ListByTaskAsync(taskId, ct))
@@ -226,6 +235,41 @@ public static class ReminderSync
             }
 
             return;
+        }
+
+        if (latest is { State: NotificationJobState.Pending } && latest.TargetAtUtc != desired)
+        {
+            await CancelAsync(session, latest, now, ct);
+            latest = await session.Notifications.FindLatestAsync(kind, sourceId, ct);
+        }
+
+        var acknowledgement = await session.Notifications.GetAcknowledgementAsync(kind, sourceId, desired, ct);
+        if (acknowledgement is not null)
+        {
+            var applied = await session.Notifications.GetAppliedAcknowledgementAsync(acknowledgement.Id, ct);
+            if (applied != acknowledgement.Revision)
+            {
+                var jobs = await session.Notifications.ListBySourceAsync(kind, sourceId, ct);
+                foreach (var job in jobs.Where(row => row.TargetAtUtc == desired))
+                {
+                    if (job.State == NotificationJobState.Pending)
+                        await CancelAsync(session, job, now, ct);
+                    else if (job.State == NotificationJobState.Delivered)
+                        await session.Notifications.UpdateAsync(job with { State = NotificationJobState.Acknowledged, AcknowledgedAtUtc = now, ActionTaken = acknowledgement.Action, UpdatedAtUtc = now }, NotificationJobState.Delivered, ct);
+                }
+
+                latest = await session.Notifications.FindLatestAsync(kind, sourceId, ct);
+                if (acknowledgement.Action == "snooze" && acknowledgement.SnoozedUntilUtc is { } until)
+                {
+                    await AddAsync(session, ids, latest, profile, task, kind, sourceId, desired, until, NotificationReason.Snoozed,
+                        DeliveryInstant(profile, zone, until), now, ct);
+                    latest = await session.Notifications.FindLatestAsync(kind, sourceId, ct);
+                }
+                await session.Notifications.MarkAcknowledgementAppliedAsync(acknowledgement.Id, acknowledgement.Revision, ct);
+            }
+
+            if (acknowledgement.Action != "snooze" || latest is null || latest.State == NotificationJobState.Cancelled)
+                return;
         }
 
         if (latest is not null && latest.State != NotificationJobState.Cancelled && latest.TargetAtUtc == desired)

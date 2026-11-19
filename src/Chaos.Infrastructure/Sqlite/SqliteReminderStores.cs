@@ -154,6 +154,53 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
 /// <summary>Desired and delivered notifications (migration 010).</summary>
 public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chaos.Application.Activity.IActivityRecorder? activity = null) : INotificationJobStore
 {
+    public async Task<ReminderAcknowledgement?> GetAcknowledgementAsync(NotificationSourceKind kind, string sourceId, DateTimeOffset target, CancellationToken ct)
+    {
+        var id = StorageFormats.NameBasedId(Chaos.Sync.NameBasedId.Names.ReminderAcknowledgement((int)kind, sourceId, target));
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM ReminderAcknowledgements WHERE Id=$id";
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? new ReminderAcknowledgement(reader.S("Id"), (NotificationSourceKind)reader.L("SourceKind"),
+            reader.S("SourceId"), reader.I("TargetAtUtc"), reader.S("Action"), reader.In("SnoozedUntilUtc"), reader.S("Revision"), reader.I("UpdatedAtUtc")) : null;
+    }
+
+    public async Task SaveAcknowledgementAsync(ReminderAcknowledgement row, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO ReminderAcknowledgements (Id,SourceKind,SourceId,TargetAtUtc,Action,SnoozedUntilUtc,Revision,UpdatedAtUtc)
+            VALUES ($id,$kind,$source,$target,$action,$until,$revision,$updated)
+            ON CONFLICT(Id) DO UPDATE SET Action=excluded.Action,SnoozedUntilUtc=excluded.SnoozedUntilUtc,Revision=excluded.Revision,UpdatedAtUtc=excluded.UpdatedAtUtc
+            """;
+        command.Parameters.AddWithValue("$id", row.Id);
+        command.Parameters.AddWithValue("$kind", (int)row.SourceKind);
+        command.Parameters.AddWithValue("$source", row.SourceId);
+        command.Parameters.AddWithValue("$target", StorageFormats.Instant(row.TargetAtUtc));
+        command.Parameters.AddWithValue("$action", row.Action);
+        command.Parameters.AddWithValue("$until", SqliteWaitingStore.Instant(row.SnoozedUntilUtc));
+        command.Parameters.AddWithValue("$revision", row.Revision);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(row.UpdatedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> GetAppliedAcknowledgementAsync(string id, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Revision FROM AppliedReminderAcknowledgements WHERE Id=$id";
+        command.Parameters.AddWithValue("$id", id);
+        return (string?)await command.ExecuteScalarAsync(ct);
+    }
+
+    public async Task MarkAcknowledgementAppliedAsync(string id, string revision, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO AppliedReminderAcknowledgements (Id,Revision) VALUES ($id,$revision) ON CONFLICT(Id) DO UPDATE SET Revision=excluded.Revision";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$revision", revision);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct) =>
         (await ReadAsync("SELECT * FROM NotificationJobs WHERE Id=$a", ct, ("$a", id))).FirstOrDefault();
 
@@ -166,6 +213,9 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chao
 
     public Task<IReadOnlyList<NotificationJobRecord>> ListPendingByTaskAsync(string taskId, CancellationToken ct) =>
         ReadAsync("SELECT * FROM NotificationJobs WHERE TaskId=$a AND State=0 ORDER BY Id", ct, ("$a", taskId));
+
+    public Task<IReadOnlyList<NotificationJobRecord>> ListActiveDeliveredByTaskAsync(string taskId, CancellationToken ct) =>
+        ReadAsync("SELECT * FROM NotificationJobs WHERE TaskId=$a AND State=1", ct, ("$a", taskId));
 
     public async Task AddAsync(NotificationJobRecord row, CancellationToken ct)
     {
@@ -217,7 +267,7 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chao
         command.CommandText = """
             SELECT TaskId FROM ReminderRules WHERE ProfileId=$profile AND DeletedAtUtc IS NULL
             UNION SELECT TaskId FROM FollowUps WHERE ProfileId=$profile AND DeletedAtUtc IS NULL AND ResolvedAtUtc IS NULL
-            UNION SELECT TaskId FROM NotificationJobs WHERE ProfileId=$profile AND State=0
+            UNION SELECT TaskId FROM NotificationJobs WHERE ProfileId=$profile AND State IN (0,1)
             ORDER BY 1
             """;
         command.Parameters.AddWithValue("$profile", profileId);

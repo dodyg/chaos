@@ -25,7 +25,7 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
   return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
 }
 function resultRow(item: TaskResponse): QueryRowResponse {
-  return { task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: ["Task"], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null };
+  return { task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: ["Task"], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null };
 }
 const tags: TagResponse[] = [{ id: "bug", name: "bug", path: "bug", parentId: null, color: null, version: "1", depth: 0 }];
 const icons = ["list", "bug", "flag"];

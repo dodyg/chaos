@@ -30,7 +30,7 @@ public sealed record TaskQueryRequest(
     string? Category = null);
 
 public sealed record QueryRowResponse(TaskResponse Task, string ContainerName, bool ContainerArchived, IReadOnlyList<string> TagIds, IReadOnlyList<string> Matches, string? GroupDate,
-    string? WaitingPerson, string? NextFollowUpAtUtc);
+    string? WaitingPerson, string? NextFollowUpAtUtc, string? LastActivityAtUtc = null);
 public sealed record TaskQueryResponse(bool Ok, IReadOnlyList<QueryRowResponse> Rows, int TotalCount, string? NextCursor, TaskErrorResponse? Error);
 /// <summary>Category (Work or Personal) limits every count to that focus; null counts both.</summary>
 public sealed record ViewCountsRequest(string? Category = null);
@@ -109,7 +109,8 @@ public sealed class QueryRpcService(TaskQueries queries)
         [.. row.Matches.Select(match => match.ToString())],
         row.GroupDate is { } date ? StorageFormats.Date(date) : null,
         row.WaitingPerson,
-        row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null);
+        row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null,
+        row.LastActivityAtUtc is { } activity ? StorageFormats.Instant(activity) : null);
 
     private static CapacityCategory? Category(string? value) =>
         string.IsNullOrEmpty(value) ? null : ParseEnum<CapacityCategory>(value, "category");

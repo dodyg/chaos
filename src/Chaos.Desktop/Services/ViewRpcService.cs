@@ -251,7 +251,8 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
         [.. page.Rows.Select(row => new QueryRowResponse(
             TaskRpcService.ToResponse(row.Task), row.ContainerName, row.ContainerArchived, row.TagIds,
             [.. row.Matches.Select(match => match.ToString())], row.GroupDate is { } date ? StorageFormats.Date(date) : null,
-            row.WaitingPerson, row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null))],
+            row.WaitingPerson, row.NextFollowUpAtUtc is { } followUp ? StorageFormats.Instant(followUp) : null,
+            row.LastActivityAtUtc is { } activity ? StorageFormats.Instant(activity) : null))],
         TagRpcService.Count(page.TotalCount), page.NextCursor, layoutJson, null);
 
     private static ViewDto Map(SavedViewRecord view) => new(

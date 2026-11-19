@@ -380,7 +380,9 @@ test("one card is always in the Tab order, even when the last focused card has l
   assert.equal(screen.getByLabelText("Second").tabIndex, 0);
   assert.equal(screen.getByLabelText("First").tabIndex, -1);
   cards = [cards[0]];
-  view.rerender(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={1} onOpen={() => {}} onChanged={() => {}} api={api}/>);
-  await waitFor(() => assert.equal(screen.queryByLabelText("Second"), null));
+  await act(async () => {
+    view.rerender(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={1} onOpen={() => {}} onChanged={() => {}} api={api}/>);
+  });
+  assert.equal(screen.queryByLabelText("Second"), null);
   assert.equal(screen.getByLabelText("First").tabIndex, 0, "the first card takes the Tab stop");
 });

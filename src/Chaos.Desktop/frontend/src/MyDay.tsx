@@ -1,6 +1,7 @@
 import React from "react";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
+import { TaskStaleness } from "./TaskStaleness";
 import { ContextMenu } from "radix-ui";
 import { myDayRpc, queryRpc, type CalendarMeetingDto, type waitingRpc, type DayClockResponse, type DaySuggestionResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { AlertTriangle, CalendarArrowUp, Check, Copy, ImagePlus, NotebookPen, ChevronLeft, ChevronRight, Clock, Eye, FolderKanban, Lightbulb, Plus, X } from "lucide-react";
@@ -338,7 +339,7 @@ export function MyDay({ clock, revision, selectedTaskId, busy, api = myDayRpc, q
 }
 
 function DayRow({ revision, row, selected, busy, onOpen, onView, onSetStatus, onSetCategory, badge, children, dragHandle, reorderTarget }: {
-  revision: number; row: { task: TaskResponse; containerName: string }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; onSetCategory?: (task: TaskResponse, category: Category) => void; badge?: React.ReactNode; children?: React.ReactNode;
+  revision: number; row: { task: TaskResponse; containerName: string; lastActivityAtUtc?: string | null }; selected: boolean; busy: boolean; onOpen: (task: TaskResponse) => void; onView?: (task: TaskResponse) => void; onSetStatus?: (task: TaskResponse, status: string) => void; onSetCategory?: (task: TaskResponse, category: Category) => void; badge?: React.ReactNode; children?: React.ReactNode;
   dragHandle?: React.ReactNode; reorderTarget?: ReturnType<ReturnType<typeof useDragReorder>["target"]>;
 }) {
   const task = row.task;
@@ -357,6 +358,7 @@ function DayRow({ revision, row, selected, busy, onOpen, onView, onSetStatus, on
         {task.plannedDate && <DateText kind="planned" date={task.plannedDate} time={task.plannedTime}/>}
         {task.estimateMinutes !== null && <span className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{task.estimateMinutes} min</span>}
         <StatusBadge status={task.status}/>
+        <TaskStaleness task={task} lastActivityAtUtc={row.lastActivityAtUtc} revision={revision}/>
         <PriorityBadge priority={task.priority}/>
       </div>
     </div>

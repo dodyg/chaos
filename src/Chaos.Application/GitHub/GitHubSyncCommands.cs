@@ -25,7 +25,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
             var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
             if (repo is not { State: 0, DeletedAtUtc: null } || connection is not { State: 0, DeletedAtUtc: null }
-                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RateLimitResetUtc > clock.GetUtcNow()
+                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RunnerDeviceId != await s.GitHub.GetDeviceIdAsync(token) || connection.RateLimitResetUtc > clock.GetUtcNow()
                 || await s.GitHub.GetConnectionRetryAsync(connection.Id, token) > clock.GetUtcNow()) return null;
             return new { Link = link, Repo = repo, Connection = connection };
         }, ct);
@@ -73,6 +73,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
         {
             var (_, space) = await GitHubConnectionCommands.Context(s, token);
             var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token) ?? throw AppException.NotFound("Connect to GitHub first.");
+            if (connection.RunnerDeviceId != await s.GitHub.GetDeviceIdAsync(token)) throw AppException.Validation("runner", "GitHub sync runs on another device. Select this device in GitHub settings first.");
             var all = await s.GitHub.ListSubscriptionsAsync(connection.Id, token);
             if (repositoryId is not null && !all.Any(r => r.Id == repositoryId)) throw AppException.NotFound("Repository subscription was not found.");
             var selected = all.Where(r => r.State == 0 && (repositoryId is null || r.Id == repositoryId)).ToArray();
