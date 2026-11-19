@@ -15,11 +15,17 @@ public sealed class AttachmentTransferTests
     private sealed class FakeTransport(Func<CancellationToken, Task<Stream>> open) : IBlobTransport
     {
         public int Opens;
+        public TaskCompletionSource Opened { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<RemoteBlob?> HeadAsync(string sha256, CancellationToken ct) => Task.FromResult<RemoteBlob?>(null);
         public Task<RemoteUpload> StartUploadAsync(string sha256, long size, CancellationToken ct) => throw new NotSupportedException();
         public Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, CancellationToken ct) => throw new NotSupportedException();
         public Task<RemoteBlob> CompleteUploadAsync(string sha256, CancellationToken ct) => throw new NotSupportedException();
-        public Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct) { Interlocked.Increment(ref Opens); return open(ct); }
+        public Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Opens);
+            Opened.TrySetResult();
+            return open(ct);
+        }
     }
 
     [Test]
@@ -46,10 +52,7 @@ public sealed class AttachmentTransferTests
         using var impatient = new CancellationTokenSource();
         var first = transfer.EnsureAvailableAsync(Sha, Bytes.Length, impatient.Token);
         var second = transfer.EnsureAvailableAsync(Sha, Bytes.Length, CancellationToken.None);
-        while (Volatile.Read(ref transport.Opens) == 0)
-        {
-            await Task.Delay(10);
-        }
+        await transport.Opened.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         impatient.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() => first);

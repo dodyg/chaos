@@ -417,7 +417,7 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         {
             var started = Stopwatch.StartNew();
             await RetitleAsync(a, probe.Id, notes: $"edit {edits++}");
-            await Task.Delay(20);
+            await Task.Yield();
             worst = worst < started.Elapsed ? started.Elapsed : worst;
         }
 
