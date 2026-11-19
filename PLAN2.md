@@ -1079,7 +1079,7 @@ release step. The client's service URL comes from a build-time
 
 - `tests/Chaos.Server.Tests` uses `WebApplicationFactory` with a **real PostgreSQL** database.
   The connection string comes from the environment variable `CHAOS_TEST_PG`. If that is unset,
-  the tests start PostgreSQL through Testcontainers, which needs Docker (checked in P0).
+  the tests start PostgreSQL through Testcontainers, which needs a container runtime (Aspire 17 runs containers through `wslc`, so Docker is not needed).
 - If neither is available, the tests **fail** with a message explaining how to provide one. Never
   skip them silently.
 - `eng/verify.ps1` gains `-NoServer`, which skips the server test project only, prints a warning,
@@ -1693,11 +1693,11 @@ starting P1 while D6 is outstanding; decisions D1–D8 status recorded in `docs/
    5. **Loopback sign-in from the installed package.** Open the system browser and receive the
       redirect on `http://127.0.0.1:<random>/callback` from the installed MSIX. Check that the
       firewall does not prompt. Close the listener after one request or after 5 minutes.
-   6. **Docker or PostgreSQL** for server tests on this machine. Record which one works for
+   6. **Container runtime (`wslc`) or PostgreSQL** for server tests on this machine. Record which one works for
       `CHAOS_TEST_PG` and Testcontainers.
    7. **FullCalendar** (D8). Render the week and month views inside the app with the theme
       tokens and dark mode. Check keyboard focus and RTL. Record the versions and licenses.
-   8. **ClamAV.** Run `clamd` in Docker and scan the EICAR test string through `INSTREAM`.
+   8. **ClamAV.** Run `clamd` as a container (`wslc`, no Docker) and scan the EICAR test string through `INSTREAM`.
 3. Record the Phase 2 owner decisions answered so far (section 4) in `docs/decisions.md`.
 
 **Exit:**
@@ -2409,7 +2409,7 @@ still fire without details, and the limits are stated in Settings.
 
 ### [ ] P12 — Online service foundation and accounts
 
-**Depends on:** P1 and P0 (Docker/PostgreSQL). **Server migration:** `S001_Accounts` (EF Core).
+**Depends on:** P1 and P0 (`wslc` containers/PostgreSQL). **Server migration:** `S001_Accounts` (EF Core).
 **Read:** section 8.
 
 **Progress note 2026-11-18 (branch `feature/p12-online-service`).** Started, with Aspire from the
@@ -2670,7 +2670,7 @@ check over a real network.
    - resume after interruption
    - hash mismatch rejected
    - EICAR blocked (fake scanner in unit tests; live ClamAV in one integration test that needs
-     Docker)
+     `wslc`, no Docker)
    - encryption round trip and a tampered chunk rejected
    - range download
    - quota
