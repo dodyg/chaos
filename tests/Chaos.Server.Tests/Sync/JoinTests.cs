@@ -343,6 +343,18 @@ public sealed class JoinTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task Joining_forgets_which_attachments_an_earlier_account_held()
+    {
+        await using var world = await SyncWorld.StartAsync(postgres);
+        var a = await world.AddDeviceAsync(joined: false);
+        await a.ExecuteAsync("INSERT INTO AttachmentLocalState (Sha256, State, UpdatedAtUtc, Remote, Failures) VALUES ('" + new string('a', 64) + "', 0, '2026-11-18T00:00:00Z', 1, 2);");
+
+        await JoinAndSettleAsync(world, a, JoinMode.Merge);
+
+        await Assert.That(await a.CountAsync("SELECT count(*) FROM AttachmentLocalState WHERE Remote = 0 AND Failures = 0;")).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task Resetting_the_device_identity_gives_a_new_id_and_is_refused_while_signed_in()
     {
         await using var world = await SyncWorld.StartAsync(postgres);

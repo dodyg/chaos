@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "../../Chaos.Desktop/frontend/src/markdownCore";
 
@@ -47,6 +47,29 @@ function MermaidDiagram({ source }) {
   );
 }
 
+// A note holds attachments as chaos:attachment/<id>. The session cookie only travels under /v1/web, so images load from there.
+const attachmentLink = /^chaos:attachment\/([0-9a-fA-F-]{36})$/;
+export function attachmentUrl(src) {
+  const match = typeof src === "string" ? attachmentLink.exec(src) : null;
+  return match ? `/v1/web/attachments/${match[1].toLowerCase()}` : null;
+}
+function urlTransform(url) {
+  return attachmentLink.test(url) ? url : defaultUrlTransform(url);
+}
+
+function NoteImage({ src, alt }) {
+  const url = attachmentUrl(src);
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) {
+    return (
+      <span className="note-image" role="img" aria-label={alt ? `Image unavailable: ${alt}` : "Image unavailable"}>
+        {alt || "Image unavailable"}
+      </span>
+    );
+  }
+  return <img className="note-picture" src={url} alt={alt ?? ""} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 const components = {
   pre({ node, children, ...props }) {
     const code = node?.children?.length === 1 ? node.children[0] : null;
@@ -79,12 +102,8 @@ const components = {
       </a>
     );
   },
-  img({ alt }) {
-    return (
-      <span className="note-image" role="img" aria-label={alt ? `Image unavailable: ${alt}` : "Image unavailable"}>
-        {alt || "Image unavailable"}
-      </span>
-    );
+  img({ src, alt }) {
+    return <NoteImage src={src} alt={alt} />;
   },
   input({ checked }) {
     return <input type="checkbox" checked={checked} disabled aria-label={checked ? "Done" : "Not done"} />;
@@ -101,7 +120,7 @@ const components = {
 export function MarkdownNotes({ children }) {
   return (
     <div className="markdown-notes">
-      <Markdown remarkPlugins={remarkPlugins} components={components}>
+      <Markdown remarkPlugins={remarkPlugins} components={components} urlTransform={urlTransform}>
         {children}
       </Markdown>
     </div>

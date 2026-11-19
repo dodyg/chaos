@@ -22,6 +22,7 @@ import { forgetOfflineSession, useMobileData, writeTask } from "./mobileData.js"
 import { usePwa } from "./usePwa.js";
 import { MarkdownNotes } from "./MarkdownNotes.jsx";
 import { SearchScreen } from "./SearchScreen.jsx";
+import DrawingView from "./DrawingView.jsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -436,9 +437,9 @@ function ReadingView({ route, items }) {
         ? "Drawing"
         : item.markdown
             .split("\n")
+            .map((line) => line.replace(/!?\[([^\]]*)\]\(chaos:attachment\/[0-9a-fA-F-]+\)/g, "$1").replace(/^\s*#+\s*/, ""))
             .find((line) => line.trim())
-            ?.replace(/^\s*#+\s*/, "")
-            .slice(0, 100) || "Empty note"
+            ?.slice(0, 100) || "Empty note"
       : item.title || "Untitled";
   if (route.id)
     return (
@@ -454,7 +455,11 @@ function ReadingView({ route, items }) {
             </div>
             {isPad && selected.isArchived && <p className="reading-meta">Archived</p>}
             {isPad && selected.kind === 1 ? (
-              <p className="reading-meta">Open this drawing on desktop to view it.</p>
+              selected.strokes ? (
+                <DrawingView strokes={selected.strokes} width={selected.drawingWidth} height={selected.drawingHeight} />
+              ) : (
+                <p className="reading-meta">This drawing has not synced yet.</p>
+              )
             ) : markdown.trim() ? (
               <MarkdownNotes>{markdown}</MarkdownNotes>
             ) : (

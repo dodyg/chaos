@@ -44,11 +44,14 @@
     "webUrl": "string?"
   },
   "WebNote": {
+    "drawingHeight": "number?",
+    "drawingWidth": "number?",
     "id": "guid",
     "isArchived": "boolean",
     "kind": "number",
     "markdown": "string",
-    "position": "number"
+    "position": "number",
+    "strokes": "string?"
   },
   "WebPage": {
     "dailyDate": "date?",

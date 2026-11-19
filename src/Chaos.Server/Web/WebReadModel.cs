@@ -14,8 +14,15 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     public bool IsOnMyDay { get; init; }
     public bool IsTerminal => Status is WebReadModel.Done or WebReadModel.Cancelled;
 }
-internal sealed record WebNote(Guid Id, string Markdown, long Kind, long Position, bool IsArchived);
+internal sealed record WebNote(Guid Id, string Markdown, long Kind, long Position, bool IsArchived)
+{
+    /// <summary>For a drawing item (Kind 1): the stored strokes JSON and the canvas size it was drawn on.</summary>
+    public string? Strokes { get; init; }
+    public long? DrawingWidth { get; init; }
+    public long? DrawingHeight { get; init; }
+}
 internal sealed record WebPage(Guid Id, string Title, string Markdown, Guid? ParentId, DateOnly? DailyDate, long Position);
+internal sealed record WebAttachment(string Sha256, string MediaType);
 internal sealed record WebSearchItem(string Kind, Guid Id, string Title, string? Snippet, string? Detail);
 internal sealed record WebSearchResult(IReadOnlyList<WebSearchItem> Items, bool Truncated);
 internal sealed record WebAppearance(string? Theme, string? Background);
@@ -41,13 +48,47 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
     public async Task<IReadOnlyList<WebNote>> PadAsync(Account account, CancellationToken ct)
     {
         var rows = await Rows(account.Id, "pad").ToListAsync(ct);
+        var drawings = (await Rows(account.Id, "pad_drawing").ToListAsync(ct))
+            .ToDictionary(row => row.EntityKey, row => new WebEntity(row));
         return rows.Select(row => (Row: row, Entity: new WebEntity(row)))
             .Where(item => !item.Entity.IsDeleted && InPersonalSpace(item.Entity, account) && Guid.TryParse(item.Row.EntityKey, out _))
-            .Select(item => new WebNote(Guid.Parse(item.Row.EntityKey), item.Entity.Text("text", "RawMarkdown") ?? "",
-                item.Entity.Number("create", "Kind") ?? 0, item.Entity.Number("position", "Position") ?? 0,
-                item.Entity.Text("archived", "ArchivedAtUtc") is not null))
+            .Select(item =>
+            {
+                var kind = item.Entity.Number("create", "Kind") ?? 0;
+                var drawing = kind == 1 ? drawings.GetValueOrDefault(item.Row.EntityKey) : null;
+                return new WebNote(Guid.Parse(item.Row.EntityKey), item.Entity.Text("text", "RawMarkdown") ?? "",
+                    kind, item.Entity.Number("position", "Position") ?? 0,
+                    item.Entity.Text("archived", "ArchivedAtUtc") is not null)
+                {
+                    Strokes = drawing?.Text("strokes", "StrokesJson"),
+                    DrawingWidth = drawing?.Number("strokes", "Width"),
+                    DrawingHeight = drawing?.Number("strokes", "Height"),
+                };
+            })
             .OrderBy(note => note.IsArchived).ThenBy(note => note.Position).ThenBy(note => note.Id).ToList();
     }
+
+    /// <summary>An image attachment in the account's personal space: its blob address and media type. Anything else is not served to the PWA.</summary>
+    public async Task<WebAttachment?> ImageAttachmentAsync(Account account, Guid id, CancellationToken ct)
+    {
+        var row = await Rows(account.Id, "attachment").FirstOrDefaultAsync(e => e.EntityKey == id.ToString("D"), ct);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var entity = new WebEntity(row);
+        if (entity.IsDeleted || !InPersonalSpace(entity, account)
+            || entity.Text("file", "Sha256") is not { Length: > 0 } sha || entity.Text("file", "MediaType") is not { } mediaType
+            || !ImageTypes.Contains(mediaType))
+        {
+            return null;
+        }
+
+        return new WebAttachment(sha, mediaType);
+    }
+
+    private static readonly HashSet<string> ImageTypes = new(StringComparer.OrdinalIgnoreCase) { "image/png", "image/jpeg", "image/gif", "image/webp" };
 
     public async Task<IReadOnlyList<WebPage>> PagesAsync(Account account, CancellationToken ct)
     {

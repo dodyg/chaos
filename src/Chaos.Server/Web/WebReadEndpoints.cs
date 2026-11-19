@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using Chaos.Server.Blobs;
+using Chaos.Server.Data;
 
 namespace Chaos.Server.Web;
 
@@ -11,6 +13,7 @@ internal static class WebReadEndpoints
         web.MapGet("/lists", Lists);
         web.MapGet("/pad", Pad);
         web.MapGet("/pages", Pages);
+        web.MapGet("/attachments/{id:guid}", Attachment);
         web.MapGet("/search", Search);
         web.MapGet("/lists/{id:guid}/tasks", ListTasks);
         web.MapGet("/tasks/{id:guid}", TaskDetail);
@@ -35,6 +38,23 @@ internal static class WebReadEndpoints
     private static async Task<IResult> Pad(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
         await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account
             ? Results.Ok(await model.PadAsync(account, ct)) : Results.Unauthorized();
+
+    /// <summary>An image from a note, served inline to the signed-in web session. The session cookie is only sent under /v1/web, so the PWA loads images from here.</summary>
+    private static async Task<IResult> Attachment(Guid id, ClaimsPrincipal user, WebReadModel model, BlobService blobs, CancellationToken ct)
+    {
+        if (await model.AccountAsync(WebCaller.From(user).AccountId, ct) is not { } account)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (await model.ImageAttachmentAsync(account, id, ct) is not { } image
+            || await blobs.FindAsync(account.Id, image.Sha256, ct) is not { State: BlobStates.Clean } blob)
+        {
+            return Results.NotFound();
+        }
+
+        return new BlobDownloadResult(blobs, blob, 0, Math.Max(blob.ByteSize - 1, 0), partial: false, image.MediaType, "inline");
+    }
 
     private static async Task<IResult> Pages(ClaimsPrincipal user, WebReadModel model, CancellationToken ct) =>
         await model.AccountAsync(WebCaller.From(user).AccountId, ct) is { } account

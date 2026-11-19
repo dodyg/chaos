@@ -74,3 +74,17 @@ test("only http, https, mailto and same-note links are clickable, as in the desk
     await view.close();
   }
 });
+
+test("attachment images load from the web endpoint and other images stay blocked", async () => {
+  const id = "79ABD8C2-7F78-434C-B973-16B9DFBF1B09";
+  const view = await show(`![shot](chaos:attachment/${id})\n\n![remote](https://evil.test/x.png)`);
+  try {
+    const pictures = [...view.container.querySelectorAll("img")];
+    assert.equal(pictures.length, 1);
+    assert.equal(pictures[0].getAttribute("src"), `/v1/web/attachments/${id.toLowerCase()}`);
+    assert.equal(pictures[0].getAttribute("alt"), "shot");
+    assert.match(view.container.querySelector(".note-image").textContent, /remote/);
+  } finally {
+    await view.close();
+  }
+});

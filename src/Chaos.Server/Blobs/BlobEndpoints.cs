@@ -243,18 +243,18 @@ public static class BlobEndpoints
 }
 
 /// <summary>Streams a decrypted range. A chunk that fails its tag aborts the response, so tampered bytes are never delivered as complete.</summary>
-internal sealed class BlobDownloadResult(BlobService blobs, BlobRow blob, long start, long end, bool partial) : IResult
+internal sealed class BlobDownloadResult(BlobService blobs, BlobRow blob, long start, long end, bool partial, string contentType = "application/octet-stream", string disposition = "attachment") : IResult
 {
     public async Task ExecuteAsync(HttpContext http)
     {
         var response = http.Response;
         response.StatusCode = partial ? StatusCodes.Status206PartialContent : StatusCodes.Status200OK;
-        response.ContentType = "application/octet-stream";
+        response.ContentType = contentType;
         response.Headers.AcceptRanges = "bytes";
         response.Headers[BlobEndpoints.StateHeader] = blob.State;
         response.Headers.ETag = $"\"{blob.Sha256}\"";
         response.Headers["X-Content-Type-Options"] = "nosniff";
-        response.Headers.ContentDisposition = "attachment";
+        response.Headers.ContentDisposition = disposition;
         var length = blob.ByteSize == 0 ? 0 : end - start + 1;
         response.ContentLength = length;
         if (partial)

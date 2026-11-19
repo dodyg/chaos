@@ -45,6 +45,7 @@ public sealed class WebReadTests(PostgresServer postgres)
         var purged = Guid.NewGuid();
         var calendar = Guid.NewGuid();
         var note = Guid.NewGuid();
+        var drawing = Guid.NewGuid();
         var page = Guid.NewGuid();
         account.ProfileId = profile;
         account.PersonalSpaceId = space;
@@ -86,6 +87,8 @@ public sealed class WebReadTests(PostgresServer postgres)
                 ("text", Fields(("RawMarkdown", "**Private note**")))),
             Row("pad", Guid.NewGuid(), ("create", Fields(("SpaceId", space.ToString("D")))),
                 ("deleted", Fields(("DeletedAtUtc", now.ToString("o"))))),
+            Row("pad", drawing, ("create", Fields(("SpaceId", space.ToString("D")), ("Kind", 1L)))),
+            Row("pad_drawing", drawing, ("strokes", Fields(("StrokesJson", "{\"v\":1,\"strokes\":[]}"), ("Width", 800L), ("Height", 600L)))),
             Row("page", page, ("create", Fields(("SpaceId", space.ToString("D")), ("DailyDate", "2026-11-18"))),
                 ("title", Fields(("Title", "Journal"))), ("text", Fields(("RawMarkdown", "# Hello")))),
             Row("page", Guid.NewGuid(), ("create", Fields(("SpaceId", Guid.NewGuid().ToString("D")))),
@@ -104,8 +107,12 @@ public sealed class WebReadTests(PostgresServer postgres)
         using var noCookie = await anonymous.GetAsync("/v1/web/today");
         await Assert.That(noCookie.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
         var notes = (await owner.GetFromJsonAsync<WebNote[]>("/v1/web/pad"))!;
-        await Assert.That(notes.Length).IsEqualTo(1);
-        await Assert.That(notes[0].Markdown).IsEqualTo("**Private note**");
+        await Assert.That(notes.Length).IsEqualTo(2);
+        await Assert.That(notes.Single(n => n.Id == note).Markdown).IsEqualTo("**Private note**");
+        var drawn = notes.Single(n => n.Id == drawing);
+        await Assert.That(drawn.Strokes).IsEqualTo("{\"v\":1,\"strokes\":[]}");
+        await Assert.That(drawn.DrawingWidth).IsEqualTo(800L);
+        await Assert.That(drawn.DrawingHeight).IsEqualTo(600L);
         var pages = (await owner.GetFromJsonAsync<WebPage[]>("/v1/web/pages"))!;
         await Assert.That(pages.Length).IsEqualTo(1);
         await Assert.That(pages[0].Markdown).IsEqualTo("# Hello");

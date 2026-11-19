@@ -829,3 +829,20 @@ h2 {
 .search-results + .search-results {
   margin-top: 24px;
 }
+
+.drawing-view {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 0.75rem;
+  border: 1px solid var(--border, rgb(128 128 128 / 0.35));
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.note-picture {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+}

@@ -172,6 +172,30 @@ public sealed class BlobSyncTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task A_file_the_service_has_lost_is_sent_again_after_a_restart_even_though_it_was_once_marked_as_uploaded()
+    {
+        await using var rig = await StartAsync();
+        var a = MoverFor(await rig.World.AddDeviceAsync());
+        var bytes = Random(40_000);
+        var record = await AttachAsync(a, await NewTaskAsync(a.Device, "Holiday"), "shot.bin", bytes);
+        await PassAsync(rig.World, a);
+        await Assert.That((await a.Transfer.RunOnceAsync(CancellationToken.None)).Uploaded).IsEqualTo(0);
+
+        // The service forgets the file (an account or store rebuilt); the device still has it marked as on the service.
+        await using (var db = ServerDatabase.Open(rig.World.Server.ConnectionString))
+        {
+            await db.Blobs.ExecuteDeleteAsync();
+        }
+
+        var restarted = MoverFor(a.Device);
+        var pass = await restarted.Transfer.RunOnceAsync(CancellationToken.None);
+
+        await Assert.That(pass.Uploaded).IsEqualTo(1);
+        await using var check = ServerDatabase.Open(rig.World.Server.ConnectionString);
+        await Assert.That(await check.Blobs.CountAsync(x => x.Sha256 == record.Sha256 && x.State == BlobStates.Clean)).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task A_large_file_comes_only_when_it_is_opened_and_reports_what_it_is_waiting_for()
     {
         await using var rig = await StartAsync();

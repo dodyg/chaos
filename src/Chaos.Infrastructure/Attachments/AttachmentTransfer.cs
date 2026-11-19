@@ -47,6 +47,9 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     private readonly SemaphoreSlim _passGate = new(1, 1);
     private readonly ConcurrentDictionary<string, Task<bool>> _downloads = new();
     private readonly ConcurrentDictionary<string, Progress> _progress = new();
+    // Files whose "already on the service" mark was checked with the service in this run, and for which account.
+    private readonly HashSet<string> _verified = [];
+    private string? _verifiedAccount;
     private readonly Lock _wakeGate = new();
     private CancellationTokenSource? _stop;
     private Task? _loop;
@@ -162,6 +165,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             int uploaded = 0, downloaded = 0, failed = 0;
             try
             {
+                await VerifyOnServiceAsync(ct);
                 foreach (var (sha, size) in await UploadCandidatesAsync(ct))
                 {
                     switch (await TryUploadAsync(sha, size, ct))
@@ -199,6 +203,43 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         finally
         {
             _passGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// A device remembers which files the service holds, but the service can lose them (an account recreated, a store rebuilt) without the
+    /// device hearing of it. Once per run and account, each file marked as on the service that this device can still send is checked with
+    /// a HEAD; one the service does not have goes back to "unknown", so the upload below sends it again.
+    /// </summary>
+    private async Task VerifyOnServiceAsync(CancellationToken ct)
+    {
+        var (account, marked) = await store.QueryAsync((session, _) => Task.FromResult((
+            SyncSql.Text(session.Connection(), "SELECT AccountId FROM SyncState WHERE Id = 1;"),
+            ReadHashes(session.Connection(), $"""
+                SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
+                JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
+                WHERE a.DeletedAtUtc IS NULL AND s.Remote = {OnService}
+                GROUP BY a.Sha256;
+                """))), ct);
+        if (_verifiedAccount != account)
+        {
+            _verified.Clear();
+            _verifiedAccount = account;
+        }
+
+        foreach (var (sha, _) in marked)
+        {
+            if (_verified.Contains(sha) || !await files.ExistsAsync(sha, ct))
+            {
+                continue;
+            }
+
+            if (await transport.HeadAsync(sha, ct) is null)
+            {
+                await SetRemoteAsync(sha, Unknown, ct);
+            }
+
+            _verified.Add(sha);
         }
     }
 
