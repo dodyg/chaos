@@ -12,6 +12,7 @@ import type { Root as HastRoot, ElementContent } from "hast";
 import { ChevronRight, ImageOff, Link2Off, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { attachmentRpc } from "#neoastra";
+import { diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "./markdownCore";
 import { AttachmentCard, internalAttachmentId, thumbnailThresholdBytes, useAttachmentUrl, useThumbnailUrl, type AttachmentApi, type AttachmentInfo } from "./attachments";
 
 /**
@@ -69,13 +70,7 @@ export function internalPadId(url: string): string | null {
   return padLinkPattern.exec(url)?.[1] ?? null;
 }
 
-/** External URLs the host opener accepts; everything else renders as inert text. */
-export function isSafeExternalUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
-  } catch { return false; }
-}
+export { isSafeExternalUrl };
 
 /** IDs of every internal task link in a document (for one batched resolve call). */
 export function internalLinkIds(source: string, read: (url: string) => string | null = internalTaskId): string[] {
@@ -539,18 +534,6 @@ function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLi
  * and limits size; invalid source falls back to the plain code block with the reason shown.
  * Colors come from CSS variables on `.pele` (style.css), so theme changes need no re-render.
  */
-/**
- * The app's CSP (`style-src 'self'`) drops inline `style="…"` attributes parsed from markup, which
- * is where pele defines its colour variables, so fills would fall back to black. Setting the same
- * declarations through the CSSOM is allowed, so each render copies them across.
- */
-function reapplyInlineStyles(root: HTMLElement) {
-  for (const element of root.querySelectorAll<SVGElement>("[style]")) {
-    const css = element.getAttribute("style");
-    if (css) element.style.cssText = css;
-  }
-}
-
 function MermaidDiagram({ code }: { code: string }) {
   const host = React.useRef<HTMLDivElement>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -560,8 +543,8 @@ function MermaidDiagram({ code }: { code: string }) {
     setError(null);
     let mounted: Mounted | undefined;
     try {
-      mounted = mount(element, code, { onRender: () => reapplyInlineStyles(element), onError: failure => setError(failure instanceof Error ? failure.message : "Could not draw this diagram.") });
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not draw this diagram."); }
+      mounted = mount(element, code, { onRender: () => reapplyInlineStyles(element), onError: failure => setError(diagramFailureMessage(failure)) });
+    } catch (failure) { setError(diagramFailureMessage(failure)); }
     return () => { mounted?.destroy(); };
   }, [code]);
   return <div className="grid gap-1">
