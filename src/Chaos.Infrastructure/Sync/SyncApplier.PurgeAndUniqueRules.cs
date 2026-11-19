@@ -209,7 +209,7 @@ public sealed partial class SyncApplier
 
         using var command = connection.CreateCommand();
         var where = string.Join(" AND ", columns.Select((column, position) => $"{SyncSql.Quote(column)} = $c{position}"));
-        command.CommandText = $"SELECT {string.Join(", ", table.Key.Select(SyncSql.Quote))} FROM {SyncSql.Quote(table.Table)} WHERE {where}{PartialIndexPredicate(index)} LIMIT 1;";
+        command.CommandText = $"SELECT {string.Join(", ", table.Key.Select(SyncSql.Quote))} FROM {SyncSql.Quote(table.Table)} WHERE {where}{PartialIndexPredicate(connection, index)} LIMIT 1;";
         for (var position = 0; position < values.Count; position++)
         {
             command.Parameters.AddWithValue($"$c{position}", values[position] ?? DBNull.Value);
@@ -224,20 +224,28 @@ public sealed partial class SyncApplier
         return table.Key.Select((column, position) => (column, reader.GetValue(position)?.ToString() ?? string.Empty)).ToDictionary();
     }
 
-    /// <summary>The partial-index WHERE text of the rule indexes (§7.2): the row the rule must find.</summary>
-    private static string PartialIndexPredicate(string index) => index switch
+    /// <summary>
+    /// The partial-index WHERE text of a rule index (§7.2): the rows the index covers, so the rule finds only a row that can really conflict.
+    /// Read from the migrated schema, so it cannot drift from the index definition.
+    /// </summary>
+    private static string PartialIndexPredicate(SqliteConnection connection, string? index)
     {
-        "UX_RecurrenceOccurrences_Active" => " AND State = 0 AND DeletedAtUtc IS NULL",
-        "UX_RecurrenceOccurrences_Task" or "UX_GitHubIssueLinks_Task" => " AND TaskId IS NOT NULL",
-        "UX_GitHubCommentLinks_Comment" => " AND CommentId IS NOT NULL",
-        "UX_Pages_SpaceDaily" => " AND DailyDate IS NOT NULL AND DeletedAtUtc IS NULL",
-        "UX_FollowUps_ActiveTask" => " AND DeletedAtUtc IS NULL AND ResolvedAtUtc IS NULL",
-        "UX_Spaces_PersonalPerOwner" or "UX_Containers_ActiveNamePerSpace" or "UX_Tags_ActiveSiblingName"
-            or "UX_TaskTemplates_ActiveNamePerSpace" or "UX_WaitingDetails_ActiveTask"
-            or "UX_GitHubConnections_ActivePerSpace" or "UX_GitHubRepositories_ActiveRepository"
-            => " AND DeletedAtUtc IS NULL",
-        _ => string.Empty,
-    };
+        if (index is null)
+        {
+            return string.Empty;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = $name;";
+        command.Parameters.AddWithValue("$name", index);
+        if (command.ExecuteScalar() is not string definition)
+        {
+            return string.Empty;
+        }
+
+        var where = definition.LastIndexOf(" WHERE ", StringComparison.OrdinalIgnoreCase);
+        return where < 0 ? string.Empty : " AND (" + definition[(where + " WHERE ".Length)..].TrimEnd().TrimEnd(';') + ")";
+    }
 
     /// <summary>True when the change's occurrence identity (series and nominal key) already has a row here.</summary>
     private static bool OccurrenceIdentityExists(SqliteConnection connection, MergeResult merge)
