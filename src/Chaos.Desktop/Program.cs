@@ -119,7 +119,7 @@ internal static class Program
             async ct => (await protection.BackupNowAsync(Chaos.Application.Contracts.BackupReason.PreImport, ct)).FileName, clock);
         using var githubComments = new GitHubCommentFetcher(storage.Store, githubApi, new GitHubInboundComments(storage.Store, ids, clock), clock);
         using var githubEngine = new GitHubSyncEngine(new GitHubSyncCommands(storage.Store, githubApi, githubIssues, githubComments, ids, clock), clock, TimeSpan.FromSeconds(10), jobRuns);
-        var github = new GitHubConnectionCommands(storage.Store, githubApi, ids, clock);
+        var github = new GitHubConnectionCommands(storage.Store, githubApi, ids, clock, new MachineDeviceInfo());
         using var githubScheduler = new GitHubSyncScheduler(githubEngine, github.ScheduleAsync, clock);
         githubScheduler.Start();
         // Calendar feeds (PLAN2 P5): addresses live in the protected secret store, never in the database.

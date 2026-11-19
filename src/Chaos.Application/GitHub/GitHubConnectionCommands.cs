@@ -33,8 +33,11 @@ public sealed record GitHubSelfAssignmentCommand(string OperationId, string Task
 public sealed record GitHubTaskActionCommand(string OperationId, string TaskId, long ExpectedVersion);
 
 /// <summary>Local configuration with explicit remote setup reads. No network call holds a database transaction.</summary>
-public sealed partial class GitHubConnectionCommands(IApplicationStore store, IGitHubApi api, IIdGenerator ids, TimeProvider clock)
+public sealed partial class GitHubConnectionCommands(IApplicationStore store, IGitHubApi api, IIdGenerator ids, TimeProvider clock, IDeviceInfo? device = null)
 {
+    private string DeviceName => device?.Name ?? "This device";
+
+
     public Task<bool> RetryTaskAsync(GitHubTaskActionCommand command, CancellationToken ct = default) =>
         TaskAction(command, "retry", ct);
 
@@ -118,7 +121,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
                     ?? throw Conflict();
             }
             var row = new GitHubConnectionRecord { Id = ids.NewId().ToString(), SpaceId = space.Id, ProfileId = profile.Id,
-                AccountId = account.Id, AccountLogin = account.Login, RunnerDeviceId = await s.GitHub.GetDeviceIdAsync(token), RunnerDeviceName = Environment.MachineName, WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", CreatedAtUtc = now, UpdatedAtUtc = now };
+                AccountId = account.Id, AccountLogin = account.Login, RunnerDeviceId = await s.GitHub.GetDeviceIdAsync(token), RunnerDeviceName = DeviceName, WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", CreatedAtUtc = now, UpdatedAtUtc = now };
             await s.GitHub.AddConnectionAsync(row, token);
             return row;
         }, ct);
@@ -139,7 +142,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             var deviceId = await s.GitHub.GetDeviceIdAsync(token);
             if (row.RunnerDeviceId == deviceId) return row;
             await s.GitHub.ResetRunnerStateAsync(row.Id, token);
-            return await s.GitHub.UpdateConnectionAsync(row with { RunnerDeviceId = deviceId, RunnerDeviceName = Environment.MachineName, RateLimitResetUtc = null, LastErrorKind = null, LastErrorMessage = null, UpdatedAtUtc = now }, row.Version, token) ?? throw Conflict();
+            return await s.GitHub.UpdateConnectionAsync(row with { RunnerDeviceId = deviceId, RunnerDeviceName = DeviceName, RateLimitResetUtc = null, LastErrorKind = null, LastErrorMessage = null, UpdatedAtUtc = now }, row.Version, token) ?? throw Conflict();
         }, ct);
     }
 
