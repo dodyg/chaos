@@ -1,6 +1,7 @@
 import { TaskViewAction } from "./TaskViewAction";
 import { asCategory, categoryIcon, categoryTone, type Focus } from "./category";
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { myWeekRpc, type ContainerResponse, type DayClockResponse, type DayReconciliationDto, type TaskResponse, type WeekBoardDto, type WeekDayDto, type WeekDraftDto, type WeekDraftGoalDto, type WeekGoalDto, type WeekOverviewDto, type WeekTaskDto } from "#neoastra";
@@ -185,6 +186,7 @@ function TaskLine({ item, onOpen, children, badge }: { item: WeekTaskDto | undef
         {task.category === "Work" && <Badge variant="outline">Work</Badge>}
         {task.dueDate && <DateText kind="due" date={task.dueDate}/>}
         <StatusBadge status={task.status}/>
+        <TaskStaleness task={task}/>
         <PriorityBadge priority={task.priority}/>
       </div>
     </div>

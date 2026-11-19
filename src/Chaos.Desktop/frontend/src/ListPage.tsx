@@ -1,4 +1,5 @@
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import { DateText, friendlyDate, relativeDays, useToday } from "./dates";
 import { ContextMenu } from "radix-ui";
 import { type captureRpc as CaptureRpc, type containerRpc as ContainerRpc, type taskRpc as TaskRpc, type CaptureDraftDto, type ContainerResponse, type SectionResponse, type TagResponse, type TaskOperationResponse, type TaskResponse } from "#neoastra";
@@ -163,6 +164,7 @@ export function ListPage({ tasks, deleted, sections, setSections, containers, co
   function taskMeta(task: TaskResponse) {
     const parts: React.ReactNode[] = [];
     if (task.status !== "NotStarted") parts.push(<StatusBadge key="status" status={task.status}/>);
+    if (task.status === "InProgress") parts.push(<TaskStaleness key="staleness" task={task} revision={revision}/>);
     if (task.dueDate) parts.push(<DateText key="due" kind="due" date={task.dueDate} time={task.dueTime}><CalendarDays className="size-3.5"/></DateText>);
     else if (task.plannedDate) parts.push(<DateText key="planned" kind="planned" date={task.plannedDate} time={task.plannedTime}><CalendarDays className="size-3.5"/></DateText>);
     if (task.estimateMinutes) parts.push(<span key="estimate" className="inline-flex items-center gap-1"><Clock className="size-3.5"/>{task.estimateMinutes} min</span>);

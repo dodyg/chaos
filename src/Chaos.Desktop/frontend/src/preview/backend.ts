@@ -85,7 +85,7 @@ const ok = <T extends object>(value: T) => ({ ok: true, error: null, ...value })
 const fail = (message: string) => ({ ok: false, error: { kind: "Validation", message, fields: [], correlationId: "preview" } });
 const isFinished = (t: TaskResponse) => t.status === "Done" || t.status === "Cancelled";
 const containerName = (id: string) => containers.find(c => c.id === id)?.name ?? "Inbox";
-const row = (t: TaskResponse, groupDate: string | null = null): QueryRowResponse => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: taskTags.get(t.id) ?? [], matches: [], groupDate, waitingPerson: null, nextFollowUpAtUtc: null });
+const row = (t: TaskResponse, groupDate: string | null = null): QueryRowResponse => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: taskTags.get(t.id) ?? [], matches: [], groupDate, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null });
 const find = (id: string) => tasks.find(t => t.id === id);
 const bump = (version: string) => String(Number(version) + 1);
 function record(label: string) { undo.unshift({ operationId: newId("op"), label, appliedAtUtc: now() }); }
@@ -426,7 +426,7 @@ function calendarHandlers(): Record<string, Handler> {
     },
     "calendar.unscheduled": (r: { filters: Filters; text: string | null }) => {
       const rows = tasks.filter(t => matches(t, r.filters) && t.plannedDate === null && t.status !== "Done" && t.status !== "Cancelled" && (!r.text || t.title.toLowerCase().includes(r.text.toLowerCase())))
-        .map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: [...(taskTags.get(t.id) ?? [])], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null }));
+        .map(t => ({ task: t, containerName: containerName(t.containerId), containerArchived: false, tagIds: [...(taskTags.get(t.id) ?? [])], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null }));
       return ok({ rows, totalCount: rows.length, nextCursor: null });
     },
   };

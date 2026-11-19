@@ -1,4 +1,5 @@
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import { taskRpc, tagRpc, type QueryRowResponse, type TagResponse, type TaskResponse } from "#neoastra";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -138,7 +139,7 @@ function Cell({ column, row, byId, disabled, onOpen, onTitle, onStatus, onPriori
 }) {
   const task = row.task;
   switch (column) {
-    case "title": return <TitleCell task={task} disabled={disabled} onOpen={onOpen} onCommit={onTitle}/>;
+    case "title": return <><TitleCell task={task} disabled={disabled} onOpen={onOpen} onCommit={onTitle}/><TaskStaleness task={task} lastActivityAtUtc={row.lastActivityAtUtc} revision={revision}/></>;
     case "status": return <NativeSelect aria-label={`Status of ${task.title}`} className="h-8 w-48" value={task.status} disabled={disabled} onChange={event => onStatus(event.target.value)}>
       {statuses.map(status => <NativeSelectOption key={status} value={status}>{label(status)}</NativeSelectOption>)}</NativeSelect>;
     case "priority": return <NativeSelect aria-label={`Priority of ${task.title}`} className="h-8 w-28" value={task.priority} disabled={disabled} onChange={event => onPriority(event.target.value)}>

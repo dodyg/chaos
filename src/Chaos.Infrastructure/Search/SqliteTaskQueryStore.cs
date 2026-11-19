@@ -37,7 +37,8 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
         command.CommandText = $"""
             {plan.With}
             SELECT t.*, c.Name AS ContainerName, c.ArchivedAtUtc AS ContainerArchivedAtUtc, x.GroupDate AS GroupDate, x.Kinds AS Kinds,
-                w.Person AS WaitingPerson, f.DueAtUtc AS FollowUpDueAtUtc, {keyColumns}
+                w.Person AS WaitingPerson, f.DueAtUtc AS FollowUpDueAtUtc,
+                (SELECT MAX(h.EffectiveAtUtc) FROM TaskHistory h WHERE h.TaskId = t.Id) AS LastActivityAtUtc, {keyColumns}
             FROM Candidates x
             JOIN Tasks t ON t.Id = x.Id
             JOIN Containers c ON c.Id = t.ContainerId
@@ -64,7 +65,8 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                     ParseKinds(reader.Sn("Kinds")),
                     reader.Dn("GroupDate"),
                     reader.Sn("WaitingPerson"),
-                    reader.In("FollowUpDueAtUtc")), keys));
+                    reader.In("FollowUpDueAtUtc"),
+                    reader.In("LastActivityAtUtc")), keys));
             }
         }
 

@@ -1,4 +1,5 @@
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import { boardRpc, type BoardCardResponse, type BoardColumnResponse, type BoardLaneResponse, type BoardSettingsDto, type TagResponse, type TaskResponse } from "#neoastra";
 import { CalendarDays, CheckSquare, Clock, GripVertical, MoreHorizontal, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -292,6 +293,7 @@ export function Board({ containerId = "", viewId, tags, focus, busy, revision, o
         {card.hasIssueLink && <GitHubTaskMark taskId={task.id} version={task.version} revision={revision} linked/>}
       </div>
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-0.5 text-xs text-muted-foreground">
+        <TaskStaleness task={task} revision={revision}/>
         {task.dueDate
           ? <DateText kind="due" date={task.dueDate} time={task.dueTime}><CalendarDays className="size-3.5"/></DateText>
           : task.plannedDate

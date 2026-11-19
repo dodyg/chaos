@@ -130,7 +130,8 @@ public sealed record TaskQueryRow(
     IReadOnlyList<SearchMatchKind> Matches,
     DateOnly? GroupDate,
     string? WaitingPerson = null,
-    DateTimeOffset? NextFollowUpAtUtc = null);
+    DateTimeOffset? NextFollowUpAtUtc = null,
+    DateTimeOffset? LastActivityAtUtc = null);
 
 /// <summary>A page of rows, the total row count for the same criteria, and the next cursor (null at the end).</summary>
 public sealed record TaskQueryPage(IReadOnlyList<TaskQueryRow> Rows, long TotalCount, string? NextCursor);

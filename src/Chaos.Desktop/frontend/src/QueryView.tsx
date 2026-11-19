@@ -1,5 +1,6 @@
 import { TaskViewAction } from "./TaskViewAction";
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import { DateText, friendlyDate, useToday } from "./dates";
 import { queryRpc, recurrenceRpc, viewRpc, boardRpc, calendarRpc, tagRpc, type ContainerResponse, type UpcomingRecurrenceDto, type QueryRowResponse, type TagResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
 import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
@@ -181,7 +182,7 @@ export function QueryView({ query, tags, revision, selectedTaskId, busy, api = q
               {query.view === "Overdue" && !task.dueDate && <Badge variant="outline">Missed recurrence</Badge>}
               {row.waitingPerson && query.view !== "Waiting" && <span className="inline-flex items-center gap-1"><UserRound className="size-3.5"/>Waiting on <bdi>{row.waitingPerson}</bdi></span>}
               {row.nextFollowUpAtUtc && <Badge variant="outline">Follow up {new Date(row.nextFollowUpAtUtc).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</Badge>}
-              <StatusBadge status={task.status}/>
+              <StatusBadge status={task.status}/><TaskStaleness task={task} lastActivityAtUtc={row.lastActivityAtUtc} revision={revision}/>
               <PriorityBadge priority={task.priority}/>
               {row.matches.filter(match => match !== "Task").map(match => <Badge key={match} variant="outline">{match === "WaitingPerson" ? "Matched the waiting person" : `Matched in ${match === "Subtask" ? "a subtask" : "the diary"}`}</Badge>)}
               {row.tagIds.map(id => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined).map(tag => <TagChip key={tag.id} tag={tag}/>)}

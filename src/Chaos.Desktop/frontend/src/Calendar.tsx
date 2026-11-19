@@ -1,4 +1,5 @@
 import React from "react";
+import { TaskStaleness } from "./TaskStaleness";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
@@ -181,6 +182,7 @@ export function UnscheduledPanel({ filters, revision, onOpen, onPlan, api, listR
         className="flex min-w-0 items-center gap-1 rounded-md border bg-card px-1.5 py-1 text-sm">
         <GripVertical className="size-3.5 shrink-0 cursor-grab text-muted-foreground" aria-hidden="true"/>
         <button type="button" className="min-w-0 flex-1 truncate text-left outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50" onClick={() => onOpen(row.task.id)}>{row.task.title}</button>
+        <TaskStaleness task={row.task} lastActivityAtUtc={row.lastActivityAtUtc} revision={revision}/>
         <Button type="button" size="xs" variant="ghost" className="shrink-0" aria-label={`Plan “${row.task.title}”`} onClick={() => onPlan(row)}>Plan…</Button>
       </div>)}
       {rows.length === 0 && !loading && <p className="text-sm text-muted-foreground">{query ? "No unscheduled task matches." : "Every open task has a planned date."}</p>}

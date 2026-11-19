@@ -20,11 +20,12 @@ Object.defineProperties(globalThis, {
 const { render, screen, waitFor, cleanup, fireEvent, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { MyDay, addDays, nextCheckDelay, laneToDayIndex, dayMarkdown } = await import("./MyDay");
+const { TaskStaleness } = await import("./TaskStaleness");
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
   return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
 }
-const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null });
+const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null });
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
 const summary = (date: string, today: string, open = 0): DaySummaryResponse =>
   ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open, availableMinutes: 480, workAllowanceMinutes: 60, workMinutes: 0, busyMinutes: 0, freeMinutes: 480, meetingsDontFit: false, meetings: [] });
@@ -61,6 +62,34 @@ test("calendar helpers add days across month ends and check again soon after mid
   const now = Date.parse("2026-11-10T23:59:30Z");
   assert.equal(nextCheckDelay(clock("2026-11-10"), now), 31_000);
   assert.equal(nextCheckDelay(clock("2026-11-10"), Date.parse("2026-11-10T08:00:00Z")), 60_000);
+});
+
+test("in-progress rows show time since the latest task or diary activity", async () => {
+  const old = new Date(Date.now() - 10 * 86_400_000).toISOString();
+  const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const active = task("active", "Active task", { status: "InProgress", updatedAtUtc: old });
+  const other = task("other", "Other task", { updatedAtUtc: old });
+  const { api, query } = fakes("2026-11-10", { "2026-11-10": [active, other] });
+  const originalRun = query.run;
+  const queryWithActivity = { ...query, run: async (request: TaskQueryRequest) => {
+    const result = await originalRun(request);
+    return { ...result, rows: result.rows.map(item => item.task.id === active.id ? { ...item, lastActivityAtUtc: recent } : item) };
+  } };
+  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={queryWithActivity} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  assert.ok(await screen.findByText("Inactive 2 days"));
+  assert.equal(screen.queryByText("Inactive 10 days"), null);
+  cleanup();
+});
+
+test("staleness turns amber after one day and red after three", () => {
+  const makeTask = (days: number) => task("t", "Task", { status: "InProgress", updatedAtUtc: new Date(Date.now() - days * 86_400_000).toISOString() });
+  const view = render(<TaskStaleness task={makeTask(0)} lastActivityAtUtc={null}/>, { container: dom.window.document.body });
+  assert.ok(screen.getByText("Active today").className.includes("text-muted-foreground"));
+  view.rerender(<TaskStaleness task={makeTask(1)} lastActivityAtUtc={null}/>);
+  assert.ok(screen.getByText("Inactive 1 day").className.includes("text-amber-600"));
+  view.rerender(<TaskStaleness task={makeTask(3)} lastActivityAtUtc={null}/>);
+  assert.ok(screen.getByText("Inactive 3 days").className.includes("text-red-600"));
+  cleanup();
 });
 
 test("suggestions are only offered; adding one sends today's date and nothing is added by itself", async () => {
