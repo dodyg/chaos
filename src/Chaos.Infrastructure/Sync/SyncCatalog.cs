@@ -480,6 +480,7 @@ public static class SyncCatalog
             [
                 new("create", ["SpaceId", "ProfileId", "WebBaseUrl", "ApiBaseUrl", "AccountId", "AccountLogin", "CreatedAtUtc"]),
                 new("settings", ["PostDiaryByDefault", "CreateLabelsForTags"]),
+                new("runner", ["RunnerDeviceId", "RunnerDeviceName"]),
                 new("state", ["State"]),
                 new("deleted", ["DeletedAtUtc"]),
             ],
@@ -511,10 +512,10 @@ public static class SyncCatalog
                 new("create", ["RepositorySubscriptionId", "ConnectionId", "IssueId", "IssueNodeId", "IssueNumber", "HtmlUrl", "CreatedAtUtc"]),
                 new("base", ["BaseJson", "BaseRemoteUpdatedUtc"]),
                 new("state", ["State", "TaskId", "PlacementManaged"]),
+                new("assignee_intent", ["LocalAssigneeIntent"]),
             ],
-            // LocalDirty/LocalDirtySinceUtc mark this runner device's unpushed edits (§7.11); the
-            // assignee intent belongs to the device that queues the GitHub write.
-            LocalColumns: ["Version", "IssueEtag", "LocalAssigneeIntent", "LocalDirty", "LocalDirtySinceUtc",
+            // LocalDirty/LocalDirtySinceUtc mark this runner device's unpushed edits (§7.11).
+            LocalColumns: ["Version", "IssueEtag", "LocalDirty", "LocalDirtySinceUtc",
                  "LastSyncedUtc", "ConflictNoticeUtc", "LastErrorKind", "LastErrorMessage", "ErrorAttempts", "NextAttemptUtc"],
             UniqueRules:
             [

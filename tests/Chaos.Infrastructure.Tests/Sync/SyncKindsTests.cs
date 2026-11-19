@@ -7,6 +7,13 @@ namespace Chaos.Infrastructure.Tests.Sync;
 public sealed class SyncKindsTests
 {
     [Test]
+    public async Task GitHubRunnerGroups_RequireSchemaThree()
+    {
+        await Assert.That(SyncKinds.Find("github_connection")!.Group("runner")!.Since).IsEqualTo(3);
+        await Assert.That(SyncKinds.Find("github_issue_link")!.Group("assignee_intent")!.Since).IsEqualTo(3);
+    }
+
+    [Test]
     public async Task SyncKinds_MatchTheClientCatalog()
     {
         var catalog = SyncCatalog.Tables.Where(table => table.Mode != SyncMode.LocalOnly).OrderBy(table => table.ApplyOrder).ToList();

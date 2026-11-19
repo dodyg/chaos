@@ -64,6 +64,24 @@ public sealed class GitHubSyncSchedulerTests
     }
 
     [Test]
+    public async Task NonRunner_WaitsUntilThisDeviceBecomesRunner()
+    {
+        var clock = new ManualClock();
+        var runner = new RetryRunner(() => { });
+        var selected = false;
+        using var engine = new GitHubSyncEngine(runner, clock);
+        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult(new GitHubSchedule(Active() with { IsRunner = selected }, null, [])), clock);
+        scheduler.Start();
+        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(30));
+        clock.Advance(TimeSpan.FromSeconds(30));
+        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(30));
+        await Assert.That(runner.Full.Task.IsCompleted).IsFalse();
+        selected = true;
+        scheduler.Wake();
+        await runner.Full.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Test]
     public async Task Retry_IsScheduledAtLinkDeadlineBeforeNextFullPass()
     {
         var clock = new ManualClock();
@@ -135,6 +153,6 @@ public sealed class GitHubSyncSchedulerTests
     {
         var now = DateTimeOffset.UtcNow;
         return new(new GitHubConnectionRecord { Id = "connection", SpaceId = "space", ProfileId = "profile", WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", AccountLogin = "user", CreatedAtUtc = now, UpdatedAtUtc = now },
-            [new GitHubRepositoryRecord { Id = "repo", ConnectionId = "connection", Owner = "owner", Name = "repo", FullName = "owner/repo", HtmlUrl = "https://github.com/owner/repo", TargetContainerId = "inbox", FilterJson = "{}", CreatedAtUtc = now, UpdatedAtUtc = now }]);
+            [new GitHubRepositoryRecord { Id = "repo", ConnectionId = "connection", Owner = "owner", Name = "repo", FullName = "owner/repo", HtmlUrl = "https://github.com/owner/repo", TargetContainerId = "inbox", FilterJson = "{}", CreatedAtUtc = now, UpdatedAtUtc = now }], IsRunner: true);
     }
 }

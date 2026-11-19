@@ -15,7 +15,7 @@ const { fakeActivity } = await import("./activityTestApi");
 const { configureActivity } = await import("./activity");
 const { GitHubSettings } = await import("./GitHubSettings");
 const disconnected: GitHubStatusResponse = { ok: true, connection: null, sync: null, repositories: [], targets: [{ id: "inbox", name: "Inbox", sections: [] }], error: null };
-const connected: GitHubStatusResponse = { ...disconnected, connection: { id: "c1", version: "1", accountId: "3000000000", accountLogin: "person", state: "Active", postDiaryByDefault: true, createLabelsForTags: false } };
+const connected: GitHubStatusResponse = { ...disconnected, connection: { id: "c1", version: "1", accountId: "3000000000", accountLogin: "person", state: "Active", postDiaryByDefault: true, createLabelsForTags: false, runnerDeviceName: "Desktop", isRunner: true } };
 const remote = { repositoryId: "4000000000", owner: "person", name: "repo", fullName: "person/repo", isPrivate: true, hasIssues: true, alreadyAdded: false };
 
 test("opening GitHub settings reads local status without discovery or connecting", async () => {
@@ -139,5 +139,19 @@ test("repository Sync uses its subscription ID and surfaces an account error wit
     assert.deepEqual(requests, ["r1"]);
     assert.equal((screen.getByRole("button", { name: "Sync now" }) as HTMLButtonElement).disabled, true);
     assert.ok(screen.getByRole("button", { name: "Verify login" }));
+  } finally { cleanup(); }
+});
+
+
+test("runner selection identifies the current runner and selects this device", async () => {
+  let current = { ...connected, connection: { ...connected.connection!, isRunner: false, runnerDeviceName: "Laptop" } };
+  let selected = 0;
+  const api = { ...gitHubRpc, status: async () => current, runOnThisDevice: async () => { selected++; current = { ...current, connection: { ...current.connection, isRunner: true } }; return { ok: true, error: null }; } };
+  render(<GitHubSettings api={api}/>);
+  try {
+    await screen.findByText("GitHub sync runs on Laptop.");
+    await userEvent.click(screen.getByRole("button", { name: "Run GitHub sync on this device" }));
+    await screen.findByText("GitHub sync runs on this device.");
+    assert.equal(selected, 1);
   } finally { cleanup(); }
 });

@@ -5,6 +5,8 @@ namespace Chaos.Application.Abstractions;
 /// <summary>GitHub metadata in the caller's transaction. Never contains credentials.</summary>
 public interface IGitHubStore
 {
+    Task<string> GetDeviceIdAsync(CancellationToken ct);
+    Task ResetRunnerStateAsync(string connectionId, CancellationToken ct);
     Task AddConnectionAsync(GitHubConnectionRecord row, CancellationToken ct);
     Task<GitHubConnectionRecord?> GetConnectionAsync(string id, CancellationToken ct);
     Task<GitHubConnectionRecord?> UpdateConnectionAsync(GitHubConnectionRecord row, long expectedVersion, CancellationToken ct);

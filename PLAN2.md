@@ -835,9 +835,10 @@ talking to GitHub:
 - `GitHubConnections` and the issue-link and mapping tables are synced. Checkpoints, backoff,
   runs and the pending-write queue (`GitHubIssueWrites`) are `LocalOnly`.
 - A new synced column, `GitHubConnections.RunnerDeviceId` (P17), says which device runs the
-  GitHub engine. The device that created the connection is the runner. `GitHubSyncScheduler`
+  GitHub engine. The device that created the connection is the runner. Existing connections without
+  a runner require selection on a device after verifying the account. `GitHubSyncScheduler`
   and `GitHubSyncEngine` run only when `RunnerDeviceId` equals the local device ID.
-- **Edits on other devices.** When the runner's applier changes a task that has an issue link, it
+- **Edits on other devices.** Assignee intent also syncs as a field group. When the runner's applier changes a task that has an issue link, it
   calls the existing "mark linked task dirty" path. The runner then pushes the change to GitHub.
   Non-runner devices never queue GitHub writes.
 - **Moving the runner.** Settings shows "GitHub syncs from <device name>" with **Run GitHub sync
@@ -2682,8 +2683,8 @@ opened. A file containing EICAR is blocked on both devices.
 
 ### [ ] P17 — Cross-device behaviour: reminders, GitHub runner, calendars, summaries
 
-**Depends on:** P15. **Migration:** `035_cross_device.sql` (`ReminderAcknowledgements`, synced;
-`GitHubConnections.RunnerDeviceId`). **Read:** sections 7.5 and 7.11.
+**Depends on:** P15. **Migrations:** `036_cross_device.sql` (synced `ReminderAcknowledgements`)
+and `037_github_runner.sql` (`GitHubConnections.RunnerDeviceId`). **Read:** sections 7.5 and 7.11.
 
 1. **Reminder acknowledgements.** Every Done/Dismiss/Snooze action writes an acknowledgement row
    keyed by the deterministic ID. On apply, a device's reminder engine marks matching jobs
@@ -2895,8 +2896,10 @@ If a number is already taken when you start, use the next free number and update
 | 032 | — | Reserved (P11 uses `DeviceSettings`; use this only if a table proves necessary) |
 | 033 | P14 | Account binding, devices display table |
 | 034 | P16 | Attachment transfer state (`Remote`, `NextTryUtc`, `Failures`), `OfflineContainers` (P16 took 034 because P17 had not landed) |
-| 035 | P17 | Reminder acknowledgements, GitHub runner device |
-| 036 | P19 | Place reminders (only if D1) |
+| 035 | Appearance | Profile appearance settings |
+| 036 | P17 | Reminder acknowledgements |
+| 037 | P17 | GitHub runner device |
+| Next free | P19 | Place reminders (only if D1) |
 | S001–S004 | P12, P13, P16, P18 | Server EF Core migrations: accounts/auth with OpenIddict, sync, blobs, calendar feed tokens |
 
 ## Appendix B — Dependencies to resolve and pin

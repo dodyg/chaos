@@ -100,6 +100,7 @@ public static class ActivityActions
         "github.pauseRepository",
         "github.removeRepository",
         "github.retryTask",
+        "github.runOnThisDevice",
         "github.setSelfAssignment",
         "github.status",
         "github.syncNow",

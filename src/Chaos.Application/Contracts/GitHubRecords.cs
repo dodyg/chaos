@@ -16,6 +16,8 @@ public sealed record GitHubConnectionRecord
     public long AccountId { get; init; }
     public required string AccountLogin { get; init; }
     public int State { get; init; }
+    public string? RunnerDeviceId { get; init; }
+    public string? RunnerDeviceName { get; init; }
     public bool PostDiaryByDefault { get; init; } = true;
     public bool CreateLabelsForTags { get; init; }
     public DateTimeOffset? RateLimitResetUtc { get; init; }

@@ -409,6 +409,22 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
             SyncSql.UpsertClock(connection, table.Kind, change.EntityKey, group, winner.Hlc.Encode(), onlyIfNewer: false);
         }
 
+        // A linked task may arrive before its GitHub link. Recheck it once the link lands on
+        // the runner so a task edit received in the same batch cannot be lost.
+        if (table.Kind == "github_issue_link")
+        {
+            using var dirty = connection.CreateCommand();
+            dirty.CommandText = """
+                UPDATE GitHubIssueLinks SET LocalDirty=1, LocalDirtySinceUtc=COALESCE(LocalDirtySinceUtc,$now)
+                WHERE Id=$id AND State=0 AND TaskId IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM GitHubConnections c WHERE c.Id=ConnectionId
+                      AND c.RunnerDeviceId=(SELECT Value FROM DeviceSettings WHERE Key='DeviceId'));
+                """;
+            dirty.Parameters.AddWithValue("$id", key["Id"]);
+            dirty.Parameters.AddWithValue("$now", StorageFormats.Instant(wall));
+            await dirty.ExecuteNonQueryAsync(ct);
+        }
+
         await RefreshSearchDocumentAsync(connection, table, key, ct);
     }
 

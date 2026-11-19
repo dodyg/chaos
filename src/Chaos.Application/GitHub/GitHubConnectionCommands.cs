@@ -20,7 +20,7 @@ public sealed record GitHubFilter(IReadOnlyList<string> Labels, string LabelMode
             labelMode = LabelMode, assignee = Assignee, milestone = NoMilestone ? (object)"none" : Milestone, includeClosedDays = IncludeClosedDays });
     }
 }
-public sealed record GitHubStatus(GitHubConnectionRecord? Connection, IReadOnlyList<GitHubRepositoryRecord> Repositories);
+public sealed record GitHubStatus(GitHubConnectionRecord? Connection, IReadOnlyList<GitHubRepositoryRecord> Repositories, bool IsRunner = false);
 public sealed record GitHubSchedule(GitHubStatus Status, DateTimeOffset? ConnectionRetryUtc, IReadOnlyList<GitHubIssueLinkRecord> LinkRetries);
 public sealed record GitHubRepositoryCandidate(GitHubRepository Repository, bool AlreadyAdded);
 public sealed record GitHubRepositoryCandidates(IReadOnlyList<GitHubRepositoryCandidate> Repositories, string? NextCursor);
@@ -87,7 +87,8 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
     {
         var (_, space) = await Context(s, token);
         var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token);
-        return new GitHubStatus(connection, connection is null ? [] : await s.GitHub.ListSubscriptionsAsync(connection.Id, token));
+        return new GitHubStatus(connection, connection is null ? [] : await s.GitHub.ListSubscriptionsAsync(connection.Id, token),
+            connection is not null && connection.RunnerDeviceId == await s.GitHub.GetDeviceIdAsync(token));
     }, ct);
 
     public Task<GitHubSchedule> ScheduleAsync(CancellationToken ct = default) => store.QueryAsync(async (s, token) =>
@@ -96,7 +97,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
         var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token);
         if (connection is null) return new GitHubSchedule(new(null, []), null, []);
         var repositories = await s.GitHub.ListSubscriptionsAsync(connection.Id, token);
-        return new GitHubSchedule(new(connection, repositories), await s.GitHub.GetConnectionRetryAsync(connection.Id, token),
+        return new GitHubSchedule(new(connection, repositories, connection.RunnerDeviceId == await s.GitHub.GetDeviceIdAsync(token)), await s.GitHub.GetConnectionRetryAsync(connection.Id, token),
             await s.GitHub.ListScheduledRetriesAsync(connection.Id, 200, token));
     }, ct);
 
@@ -117,9 +118,28 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
                     ?? throw Conflict();
             }
             var row = new GitHubConnectionRecord { Id = ids.NewId().ToString(), SpaceId = space.Id, ProfileId = profile.Id,
-                AccountId = account.Id, AccountLogin = account.Login, WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", CreatedAtUtc = now, UpdatedAtUtc = now };
+                AccountId = account.Id, AccountLogin = account.Login, RunnerDeviceId = await s.GitHub.GetDeviceIdAsync(token), RunnerDeviceName = Environment.MachineName, WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", CreatedAtUtc = now, UpdatedAtUtc = now };
             await s.GitHub.AddConnectionAsync(row, token);
             return row;
+        }, ct);
+    }
+
+    /// <summary>Verifies the local CLI account before assigning this device to run GitHub sync.</summary>
+    public async Task<GitHubConnectionRecord> RunOnThisDeviceAsync(ChangeGitHubCommand command, CancellationToken ct = default)
+    {
+        ValidateOperation(command.OperationId);
+        var replay = await Replay<GitHubConnectionRecord>(command.OperationId, "github.runOnThisDevice", command, ct);
+        if (replay is not null) return replay;
+        var account = await api.GetSetupAccountAsync(ct);
+        return await Mutate(command.OperationId, "github.runOnThisDevice", command, async (s, _, _, now, token) =>
+        {
+            var row = await Connection(s, command.Id, token);
+            CheckVersion(row.Version, command.ExpectedVersion);
+            if (account.Id != row.AccountId) throw AppException.Validation("account", "Sign in to the same GitHub account as @" + row.AccountLogin + " on this device.");
+            var deviceId = await s.GitHub.GetDeviceIdAsync(token);
+            if (row.RunnerDeviceId == deviceId) return row;
+            await s.GitHub.ResetRunnerStateAsync(row.Id, token);
+            return await s.GitHub.UpdateConnectionAsync(row with { RunnerDeviceId = deviceId, RunnerDeviceName = Environment.MachineName, RateLimitResetUtc = null, LastErrorKind = null, LastErrorMessage = null, UpdatedAtUtc = now }, row.Version, token) ?? throw Conflict();
         }, ct);
     }
 
