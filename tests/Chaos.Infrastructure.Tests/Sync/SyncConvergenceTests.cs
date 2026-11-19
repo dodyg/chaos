@@ -5,6 +5,8 @@ using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Pages;
+using Chaos.Application.Reminders;
+using Chaos.Domain.Reminders;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Recurrence;
@@ -171,6 +173,113 @@ public sealed class SyncConvergenceTests
     }
 
     // ---- The scenarios of §P1 item 11 ------------------------------------------------------
+
+    private sealed class ReminderPresenter : INotificationAdapter
+    {
+        public List<string> Cancelled { get; } = [];
+        public NotificationCapabilities Capabilities { get; } = new("test", true, true, NotificationPermission.Granted, "test");
+        public Task<NotificationScheduleResult> ScheduleAsync(NotificationRequest request, CancellationToken ct) =>
+            Task.FromResult(new NotificationScheduleResult(true, GetNotificationId(request.JobId, request.Generation), null));
+        public string GetNotificationId(string jobId, long generation) => $"{jobId}/{generation}";
+        public Task CancelAsync(string osNotificationId, CancellationToken ct) { Cancelled.Add(osNotificationId); return Task.CompletedTask; }
+        public Task<NotificationShowOutcome> ShowAsync(NotificationRequest request, CancellationToken ct) => Task.FromResult(NotificationShowOutcome.System);
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    public async Task ReminderDismissal_ClearsRemotePendingOrDeliveredNotification(int mode)
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var adapterA = new ReminderPresenter();
+        var adapterB = new ReminderPresenter();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, adapterA);
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, adapterB);
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        if (mode != 2) await remindersB.ReconcileOsAsync();
+        a.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        if (mode != 0)
+        {
+            b.Clock.Now = target;
+            var onB = (await remindersB.DeliverDueAsync()).Single();
+            await remindersB.MarkPresentedAsync(onB.Job.Id, NotificationPresentation.System);
+        }
+        await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Dismiss));
+        await ExchangeAsync(a, b);
+        await remindersB.DeliverDueAsync();
+        await remindersB.ReconcileOsAsync();
+        await Assert.That((await remindersB.AlertsAsync()).Count).IsEqualTo(0);
+        await Assert.That(adapterB.Cancelled.Count).IsEqualTo(1);
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0")).IsEqualTo(0L);
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task ReminderDone_CompletesTaskAndClearsRemoteToast()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var presenter = new ReminderPresenter();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, new ReminderPresenter());
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, presenter);
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        a.Clock.Now = target;
+        b.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        var onB = (await remindersB.DeliverDueAsync()).Single();
+        await remindersB.MarkPresentedAsync(onB.Job.Id, NotificationPresentation.System);
+        await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Done));
+        await ExchangeAsync(a, b);
+        await remindersB.DeliverDueAsync();
+        await remindersB.ReconcileOsAsync();
+        await Assert.That((await b.Tasks.GetAsync(task.Id))!.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That((await remindersB.AlertsAsync()).Count).IsEqualTo(0);
+        await Assert.That(presenter.Cancelled.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ReminderSnooze_ReschedulesOnRemoteDeviceAndIsIdempotent()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var remindersA = new ReminderCommands(a.Store, a.Ids, a.Clock, a.Tasks, new ReminderPresenter());
+        var remindersB = new ReminderCommands(b.Store, b.Ids, b.Clock, b.Tasks, new ReminderPresenter());
+        var task = await CaptureTaskAsync(a);
+        var target = a.Clock.Now.AddMinutes(10);
+        await remindersA.AddAsync(new(Op(), task.Id, new(ReminderAnchor.Absolute, null, target, null)));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        a.Clock.Now = target;
+        var onA = (await remindersA.DeliverDueAsync()).Single();
+        var outcome = await remindersA.ActAsync(new(Op(), onA.Job.Id, onA.Job.Generation, NotificationAction.Snooze, SnoozeChoice.OneHour));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0 AND Reason=1")).IsEqualTo(1L);
+        var until = await TextAsync(b, "SELECT NotBeforeUtc FROM NotificationJobs WHERE State=0");
+        await Assert.That(until).IsEqualTo(StorageFormats.Instant(outcome.SnoozedUntilUtc!.Value));
+
+        a.Clock.Now = outcome.SnoozedUntilUtc.Value;
+        var next = (await remindersA.DeliverDueAsync()).Single();
+        var second = await remindersA.ActAsync(new(Op(), next.Job.Id, next.Job.Generation, NotificationAction.Snooze, SnoozeChoice.OneHour));
+        await ExchangeAsync(a, b);
+        await remindersB.ResyncAllAsync();
+        await Assert.That(await CountAsync(b, "SELECT COUNT(*) FROM NotificationJobs WHERE State=0 AND Reason=1")).IsEqualTo(1L);
+        await Assert.That(await TextAsync(b, "SELECT NotBeforeUtc FROM NotificationJobs WHERE State=0"))
+            .IsEqualTo(StorageFormats.Instant(second.SnoozedUntilUtc!.Value));
+    }
 
     [Test]
     public async Task Edits_to_different_groups_both_survive()

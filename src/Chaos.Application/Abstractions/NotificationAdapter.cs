@@ -45,6 +45,9 @@ public interface INotificationAdapter
 
     Task CancelAsync(string osNotificationId, CancellationToken ct);
 
+    /// <summary>The stable platform tag for an immediately shown notification, when supported.</summary>
+    string? GetNotificationId(string jobId, long generation) => null;
+
     /// <summary>Shows a due notification now (the app is running).</summary>
     Task<NotificationShowOutcome> ShowAsync(NotificationRequest request, CancellationToken ct);
 }

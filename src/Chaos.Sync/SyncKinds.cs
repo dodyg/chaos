@@ -49,6 +49,7 @@ public static class SyncKinds
         new("recurrence_occurrence", 1, 170, false, ["create", "task", "state", "edit", "series", "deleted"]),
         new("recurrence_exception", 2, 180, false, ["exception"]),
         new("reminder_rule", 1, 190, false, ["create", "rule", "deleted"]),
+        new("reminder_acknowledgement", 1, 195, false, ["decision"]),
         new("waiting_detail", 1, 200, false, ["create", "person", "deleted"]),
         new("follow_up", 1, 210, false, ["create", "kind", "schedule", "resolved", "deleted"]),
         new("day_plan", 1, 220, false, ["create", "seed", "initialized"]),

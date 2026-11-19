@@ -246,6 +246,7 @@ public sealed class ReminderCommands(IApplicationStore store, IIdGenerator ids, 
         {
             var now = clock.GetUtcNow();
             var profile = await RequireProfileAsync(session, token);
+            await ReminderSync.SyncAllAsync(session, profile, now, ids, token);
             var due = await session.Notifications.ListDueAsync(profile.Id, now, DeliveryBatch, token);
             if (due.Count == 0)
             {
@@ -319,9 +320,16 @@ public sealed class ReminderCommands(IApplicationStore store, IIdGenerator ids, 
     public async Task MarkPresentedAsync(string jobId, NotificationPresentation presentation, CancellationToken ct = default) =>
         await store.ExecuteAsync(async (session, token) =>
         {
-            if (await session.Notifications.GetAsync(jobId, token) is { } job && job.State == NotificationJobState.Delivered)
+            if (await session.Notifications.GetAsync(jobId, token) is { } job && job.DeliveredAtUtc is not null)
             {
-                await session.Notifications.UpdateAsync(job with { Presentation = presentation, UpdatedAtUtc = clock.GetUtcNow() }, NotificationJobState.Delivered, token);
+                // An acknowledgement may arrive while ShowAsync is in flight; retain the tag
+                // even then so the next OS reconciliation removes the just-shown toast.
+                await session.Notifications.UpdateAsync(job with
+                {
+                    Presentation = presentation,
+                    OsNotificationId = presentation == NotificationPresentation.System ? job.OsNotificationId ?? adapter.GetNotificationId(job.Id, job.Generation) : job.OsNotificationId,
+                    UpdatedAtUtc = clock.GetUtcNow(),
+                }, job.State, token);
             }
 
             return 0;
@@ -483,11 +491,13 @@ public sealed class ReminderCommands(IApplicationStore store, IIdGenerator ids, 
                 return Outcome(NotificationActionOutcome.Opened);
             case NotificationAction.Dismiss:
                 await AcknowledgeAsync(session, job, "dismiss", now, token);
+                await SaveAcknowledgementAsync(session, job, "dismiss", null, now, token);
                 return Outcome(NotificationActionOutcome.Dismissed);
             case NotificationAction.Done:
                 if (task.IsTerminal)
                 {
                     await AcknowledgeAsync(session, job, "done", now, token);
+                    await SaveAcknowledgementAsync(session, job, "done", null, now, token);
                     return Outcome(NotificationActionOutcome.AlreadyHandled);
                 }
 
@@ -497,6 +507,7 @@ public sealed class ReminderCommands(IApplicationStore store, IIdGenerator ids, 
                 }
 
                 await AcknowledgeAsync(session, job, "done", now, token);
+                await SaveAcknowledgementAsync(session, job, "done", null, now, token);
                 return Outcome(NotificationActionOutcome.Completed, completeVersion: task.Version);
             default:
                 var zone = ReminderSync.ProfileZone(profile);
@@ -538,8 +549,17 @@ public sealed class ReminderCommands(IApplicationStore store, IIdGenerator ids, 
                     CreatedAtUtc = now,
                     UpdatedAtUtc = now,
                 }, token);
+                await SaveAcknowledgementAsync(session, job, "snooze", until, now, token);
                 return Outcome(NotificationActionOutcome.Snoozed, until);
         }
+    }
+
+    private async Task SaveAcknowledgementAsync(IDataSession session, NotificationJobRecord job, string action, DateTimeOffset? until, DateTimeOffset now, CancellationToken token)
+    {
+        var id = StorageFormats.NameBasedId(Chaos.Sync.NameBasedId.Names.ReminderAcknowledgement((int)job.SourceKind, job.SourceId, job.TargetAtUtc));
+        var revision = ids.NewId().ToString();
+        await session.Notifications.SaveAcknowledgementAsync(new ReminderAcknowledgement(id, job.SourceKind, job.SourceId, job.TargetAtUtc, action, until, revision, now), token);
+        await session.Notifications.MarkAcknowledgementAppliedAsync(id, revision, token);
     }
 
     private static async Task AcknowledgeAsync(IDataSession session, NotificationJobRecord job, string action, DateTimeOffset now, CancellationToken token)

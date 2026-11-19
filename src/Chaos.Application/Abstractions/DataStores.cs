@@ -161,11 +161,16 @@ public interface IWaitingStore
 /// </summary>
 public interface INotificationJobStore
 {
+    Task<ReminderAcknowledgement?> GetAcknowledgementAsync(NotificationSourceKind kind, string sourceId, DateTimeOffset target, CancellationToken ct);
+    Task SaveAcknowledgementAsync(ReminderAcknowledgement acknowledgement, CancellationToken ct);
+    Task<string?> GetAppliedAcknowledgementAsync(string id, CancellationToken ct);
+    Task MarkAcknowledgementAppliedAsync(string id, string revision, CancellationToken ct);
     Task<NotificationJobRecord?> GetAsync(string id, CancellationToken ct);
     /// <summary>The newest row of a source: highest generation, then highest sequence.</summary>
     Task<NotificationJobRecord?> FindLatestAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct);
     Task<IReadOnlyList<NotificationJobRecord>> ListBySourceAsync(NotificationSourceKind kind, string sourceId, CancellationToken ct);
     Task<IReadOnlyList<NotificationJobRecord>> ListPendingByTaskAsync(string taskId, CancellationToken ct);
+    Task<IReadOnlyList<NotificationJobRecord>> ListActiveDeliveredByTaskAsync(string taskId, CancellationToken ct);
     Task AddAsync(NotificationJobRecord row, CancellationToken ct);
     /// <returns>False when the row is no longer in <paramref name="expectedState"/> (a concurrent action won).</returns>
     Task<bool> UpdateAsync(NotificationJobRecord row, NotificationJobState expectedState, CancellationToken ct);

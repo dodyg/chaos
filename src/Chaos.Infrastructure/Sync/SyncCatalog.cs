@@ -344,6 +344,10 @@ public static class SyncCatalog
             ApplyOrder: 180), // the row IS its natural key: two devices upsert the same row; removal is a hard delete
 
         // ---- Reminders and follow-ups -------------------------------------------------------
+        new SyncTable("ReminderAcknowledgements", "reminder_acknowledgement", SyncMode.Merge, ["Id"],
+            Groups: [new("decision", ["SourceKind", "SourceId", "TargetAtUtc", "Action", "SnoozedUntilUtc", "Revision"])],
+            ApplyOrder: 195),
+
         new SyncTable("ReminderRules", "reminder_rule", SyncMode.Merge, ["Id"],
             Groups:
             [
@@ -589,6 +593,7 @@ public static class SyncCatalog
             ApplyOrder: 140),
 
         // ---- Local-only: bookkeeping, per-device state, rebuildable data -----------------------
+        new SyncTable("AppliedReminderAcknowledgements", "applied_reminder_acknowledgement", SyncMode.LocalOnly, ["Id"], ApplyOrder: 499),
         new SyncTable("NotificationJobs", "notification_job", SyncMode.LocalOnly, ["Id"], ApplyOrder: 500), // derived per device (§7.4), OS schedule columns included
         new SyncTable("SavedViewMatches", "saved_view_match", SyncMode.LocalOnly, ["ViewId", "TaskId"], ApplyOrder: 530), // each device evaluates its own alerts (PLAN2 §11.2)
         new SyncTable("ViewAlerts", "view_alert", SyncMode.LocalOnly, ["Id"], ApplyOrder: 531), // raised and delivered per device (PLAN2 §11.2)

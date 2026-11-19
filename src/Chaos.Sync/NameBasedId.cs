@@ -55,6 +55,8 @@ public static class NameBasedId
         public static string Summary(string profileId, string kind, DateOnly periodStart, int revision) => $"summary:{profileId}:{kind}:{StorageDate(periodStart)}:{revision}";
         public static string Availability(string profileId, int weekday) => $"availability:{profileId}:{weekday}";
         public static string AvailabilityOverride(string profileId, DateOnly date) => $"availabilityoverride:{profileId}:{StorageDate(date)}";
+        public static string ReminderAcknowledgement(int sourceKind, string sourceId, DateTimeOffset target) =>
+            $"reminderack:{sourceKind}:{sourceId}:{target.UtcDateTime.ToString("o", System.Globalization.CultureInfo.InvariantCulture)}";
         public static string GitHubTask(string connectionId, long repositoryId, int issueNumber) => $"githubtask:{connectionId}:{repositoryId}:{issueNumber}";
         public static string BoardSetting(string targetKind, string targetId) => $"boardsetting:{targetKind}:{targetId}";
         public static string CalendarEventLink(string taskId) => $"calendareventlink:{taskId}";
