@@ -26,6 +26,7 @@ public sealed class OptionsValidationTests
     [Arguments("Blob:PartSize", "0", "Blob:PartSize")]
     [Arguments("Blob:MaxBlobBytes", "0", "Blob:MaxBlobBytes")]
     [Arguments("Blob:UploadExpiry", "00:00:00", "Blob:UploadExpiry")]
+    [Arguments("Blob:S3:ServiceUrl", "not a url", "Blob:S3:ServiceUrl")]
     [Arguments("Clam:Port", "0", "Clam:Port")]
     [Arguments("Limits:AccountQuotaBytes", "0", "Limits:AccountQuotaBytes")]
     [Arguments("Limits:RequestsPerMinutePerDevice", "0", "Limits:RequestsPerMinutePerDevice")]

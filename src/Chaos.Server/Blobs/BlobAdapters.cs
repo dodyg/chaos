@@ -13,6 +13,9 @@ public sealed class BlobOptions
     /// <summary>Where the file store keeps objects. Required outside development.</summary>
     public string? Directory { get; set; }
 
+    /// <summary>An S3-compatible bucket (Less3 in local development). Used instead of <see cref="Directory"/> when <c>Blob:S3:ServiceUrl</c> is set.</summary>
+    public S3Options S3 { get; set; } = new();
+
     /// <summary>Most bytes in one blob (PLAN2 D5: 100 MiB).</summary>
     public long MaxBlobBytes { get; set; } = 100L * 1024 * 1024;
 

@@ -1068,5 +1068,12 @@ plan provides one, and each blocking package stays unticked until the owner conf
   cookie with sliding expiry. Web writes require antiforgery validation. The service worker caches
   only public assets. Offline views live in browser storage and are tied to the session's device ID.
   The readable offline device marker has no authentication authority.
+- **Less3 is the S3-compatible blob store for the sync server.** `S3BlobStore` (AWSSDK.S3 4.0.21) implements `IBlobStore`
+  and is chosen when `Blob:S3:ServiceUrl` is set; otherwise the folder store stays. Settings: `Blob:S3:{ServiceUrl, Bucket,
+  AccessKey, SecretKey, Region, ForcePathStyle, Prefix}`. The SDK's default CRC32 trailers are switched off
+  (`WHEN_REQUIRED`) because S3-compatible stores do not all accept them. The AppHost runs `jchristn77/less3:v4.1.0` with
+  `src/Chaos.AppHost/less3/system.json` (SQLite, signature checks off, volume `chaos-dev-less3`), waits for it, and passes the
+  server its endpoint and the seeded `default` bucket and `default`/`default` keys. Development values only. Verified against a live
+  Less3 container (put, ranged read, delete, prefix delete).
 
 [Mobile web plan and deployment notes](mobile-web.md)

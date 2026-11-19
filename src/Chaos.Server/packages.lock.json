@@ -15,6 +15,15 @@
           "OpenTelemetry.Extensions.Hosting": "1.17.0"
         }
       },
+      "AWSSDK.S3": {
+        "type": "Direct",
+        "requested": "[4.0.21, )",
+        "resolved": "4.0.21",
+        "contentHash": "ZAdrBxqtD0kzuOT05apaWeOn9cEmhuAMiocv2yvCC34HjpXIWKmuIqO2+T7e2E3hNb3EP5lbA16B6tmQMFkHpg==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.3.28, 5.0.0)"
+        }
+      },
       "Microsoft.EntityFrameworkCore.Design": {
         "type": "Direct",
         "requested": "[10.0.15, )",
@@ -87,6 +96,11 @@
           "OpenIddict.Core": "7.8.0",
           "OpenIddict.EntityFrameworkCore.Models": "7.8.0"
         }
+      },
+      "AWSSDK.Core": {
+        "type": "Transitive",
+        "resolved": "4.0.3.28",
+        "contentHash": "OKvL+4Z/SFpOo7lbDbsT7bgcZY03fZkIQNFVV5LDZAt9hVhpX9z1Xn2MsGKSpXo4hwxXeiINv2j5Bb4n1KrVaQ=="
       },
       "Humanizer.Core": {
         "type": "Transitive",

@@ -1,0 +1,27 @@
+{
+  "EnableConsole": false,
+  "ValidateSignatures": false,
+  "HeaderApiKey": "x-api-key",
+  "AdminApiKey": "less3admin",
+  "RegionString": "us-west-1",
+  "Database": {
+    "Type": "Sqlite",
+    "Filename": "/less3/less3.db"
+  },
+  "Webserver": {
+    "Hostname": "*",
+    "Port": 8000,
+    "AccessControl": { "Mode": "DefaultPermit" }
+  },
+  "Storage": {
+    "TempDirectory": "/less3/temp/",
+    "PartsDirectory": "/less3/temp/parts/",
+    "StorageType": "Disk",
+    "DiskDirectory": "/less3/disk/"
+  },
+  "Logging": {
+    "MinimumLevel": "Info",
+    "ConsoleLogging": true,
+    "DiskLogging": false
+  }
+}

@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
     <!-- Direct pin so the service, its tests and the design-time tool share one EF Core version. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />

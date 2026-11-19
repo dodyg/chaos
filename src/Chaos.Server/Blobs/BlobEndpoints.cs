@@ -25,6 +25,8 @@ public static class BlobEndpoints
             .Validate(o => o.PartSize > 0 && o.MaxBlobBytes > 0, "Blob:PartSize and Blob:MaxBlobBytes must be greater than zero.")
             .Validate(o => o.UnreferencedGrace >= TimeSpan.Zero && o.UploadExpiry > TimeSpan.Zero && o.JobInterval > TimeSpan.Zero,
                 "Blob:UnreferencedGrace must not be negative; Blob:UploadExpiry and Blob:JobInterval must be greater than zero.")
+            .Validate(o => o.S3.ServiceUrl is not { Length: > 0 } || (Uri.TryCreate(o.S3.ServiceUrl, UriKind.Absolute, out _) && o.S3.Bucket.Length > 0),
+                "Blob:S3:ServiceUrl must be an absolute URL and Blob:S3:Bucket must not be empty.")
             .ValidateOnStart();
         services.Configure<KeyVaultOptions>(configuration.GetSection(KeyVaultOptions.Section));
         services.AddOptions<ClamOptions>().Bind(configuration.GetSection(ClamOptions.Section))
@@ -35,6 +37,11 @@ public static class BlobEndpoints
         services.TryAddSingleton<IBlobStore>(provider =>
         {
             var options = provider.GetRequiredService<IOptions<BlobOptions>>();
+            if (options.Value.S3.ServiceUrl is { Length: > 0 })
+            {
+                return new S3BlobStore(options);
+            }
+
             if (options.Value.Directory is null && environment.IsDevelopment())
             {
                 options.Value.Directory = Path.Combine(AppContext.BaseDirectory, "blobs");

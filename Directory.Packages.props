@@ -23,6 +23,8 @@
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="17.0.0" />
     <PackageVersion Include="Aspire.Hosting.Dotnet" Version="17.0.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="17.0.0" />
+    <!-- S3-compatible blob storage for the online service (PLAN2 P16): AWSSDK.S3 against Less3 in development. -->
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.21" />
     <!-- Server persistence: EF Core stays on 10 with the stable Npgsql EF provider 10. OpenIddict 7.9.0 needs stable EF Core 11, and Npgsql EF 11 is still RC (it pins EF Core to the same RC), so 7.8.0 stays pinned until Npgsql 11 is stable (decisions 2026-11-18). -->
     <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.6.5" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
