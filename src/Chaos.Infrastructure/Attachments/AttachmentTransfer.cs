@@ -136,9 +136,10 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         {
             loop?.Wait(TimeSpan.FromSeconds(5));
         }
-        catch (AggregateException)
+        catch (AggregateException error)
         {
             // The loop ends by cancellation.
+            System.Diagnostics.Trace.TraceInformation("Attachment transfer stopped during disposal: {0}", error.GetType().Name);
         }
 
         _stop?.Dispose();
@@ -190,6 +191,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             catch (ChaosServiceException error) when (error.Kind is ServiceFailure.Offline or ServiceFailure.SignInAgain or ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
             {
                 // Not reachable or not signed in: the sync status already says so, and the next pass tries again.
+                System.Diagnostics.Trace.TraceInformation("Attachment transfer deferred because the service is unavailable ({0}).", error.Kind);
             }
 
             return new(uploaded, downloaded, failed);

@@ -180,9 +180,10 @@ public sealed class SyncEngine : IDisposable
             loop?.Wait(TimeSpan.FromSeconds(5));
             _events?.Wait(TimeSpan.FromSeconds(5));
         }
-        catch (AggregateException)
+        catch (AggregateException error)
         {
             // The loop ends by cancellation.
+            System.Diagnostics.Trace.TraceInformation("Sync background work stopped during disposal: {0}", error.GetType().Name);
         }
 
         // _cycleGate is not disposed: a SyncNowAsync from outside may still be waiting on it, and a SemaphoreSlim holds no handle to free.
@@ -378,17 +379,19 @@ public sealed class SyncEngine : IDisposable
             {
                 return;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException error)
             {
                 // Silent too long: reopen.
+                System.Diagnostics.Trace.TraceInformation("Sync event stream timed out and will reconnect: {0}", error.GetType().Name);
             }
             catch (ChaosServiceException error) when (error.Kind is ServiceFailure.DeviceRevoked or ServiceFailure.AccountDeleted)
             {
                 await _account.DisableAsync(ct);
             }
-            catch (ChaosServiceException)
+            catch (ChaosServiceException error)
             {
                 // Offline, signed out or refused: back off and try again.
+                System.Diagnostics.Trace.TraceInformation("Sync event stream will retry after service failure ({0}).", error.Kind);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -797,9 +800,10 @@ public sealed class SyncEngine : IDisposable
                 return text;
             }
         }
-        catch (JsonException)
+        catch (JsonException error)
         {
             // Not a problem document: fall through to the status.
+            System.Diagnostics.Trace.TraceInformation("Online service error response was not a problem document: {0}", error.GetType().Name);
         }
 
         return $"The online service answered with an error ({response.Status}).";

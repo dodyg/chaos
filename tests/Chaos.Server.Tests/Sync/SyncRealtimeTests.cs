@@ -133,6 +133,7 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
             catch (OperationCanceledException)
             {
                 // Done listening.
+                return;
             }
         });
         bool Heard(string text)
