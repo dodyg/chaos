@@ -197,7 +197,7 @@ public sealed class AttachmentTests
         var done = await host.Attachments.CommitAsync(new CommitAttachmentCommand(DataHost.Op(), upload.UploadId));
         await Assert.That(done.Attachment.ByteSize).IsEqualTo(4L);
 
-        var small = new AttachmentCommands(host.Store, host.Files, host.Ids, host.Clock, Path.Combine(host.Root, "u2"), new AttachmentLimits(10));
+        var small = new AttachmentCommands(host.Store, host.Files, host.Ids, host.Clock, new DirectoryUploadStaging(Path.Combine(host.Root, "u2")), new AttachmentLimits(10));
         await Assert.That(async () => await small.BeginAsync(new BeginAttachmentUploadCommand(AttachmentOwnerKind.Task, task, "big.bin", 11))).Throws<AppException>();
 
         await Assert.That(async () => await host.Attachments.BeginAsync(new BeginAttachmentUploadCommand(AttachmentOwnerKind.Task, Guid.NewGuid().ToString(), "x", 1))).Throws<AppException>();

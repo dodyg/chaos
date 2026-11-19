@@ -39,43 +39,28 @@ public sealed class AttachmentCommands
     private readonly IAttachmentFileStore _files;
     private readonly IIdGenerator _ids;
     private readonly TimeProvider _clock;
-    private readonly string _uploadsDirectory;
+    private readonly IUploadStaging _staging;
     private readonly AttachmentLimits _limits;
     private readonly ConcurrentDictionary<string, UploadSession> _uploads = new(StringComparer.Ordinal);
     private readonly IImageProcessor? _images;
-    private readonly string? _thumbnailsDirectory;
+    private readonly IThumbnailCache? _thumbnails;
 
     public const int ThumbnailSide = 640;
 
     /// <summary>Images at or above this size show a thumbnail inline; the full image opens on click.</summary>
     public const long ThumbnailThresholdBytes = 2L * 1024 * 1024;
 
-    public AttachmentCommands(IApplicationStore store, IAttachmentFileStore files, IIdGenerator ids, TimeProvider clock, string uploadsDirectory, AttachmentLimits? limits = null,
-        IImageProcessor? images = null, string? thumbnailsDirectory = null)
+    public AttachmentCommands(IApplicationStore store, IAttachmentFileStore files, IIdGenerator ids, TimeProvider clock, IUploadStaging staging, AttachmentLimits? limits = null,
+        IImageProcessor? images = null, IThumbnailCache? thumbnails = null)
     {
         _images = images;
-        _thumbnailsDirectory = thumbnailsDirectory;
+        _thumbnails = thumbnails;
         _store = store;
         _files = files;
         _ids = ids;
         _clock = clock;
-        _uploadsDirectory = uploadsDirectory;
+        _staging = staging;
         _limits = limits ?? AttachmentLimits.Default;
-        // Sessions do not survive a restart, so what an earlier run left behind is unreachable.
-        try
-        {
-            if (Directory.Exists(uploadsDirectory))
-            {
-                foreach (var stale in Directory.EnumerateFiles(uploadsDirectory))
-                {
-                    File.Delete(stale);
-                }
-            }
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            System.Diagnostics.Trace.TraceWarning("Chaos could not clear old uploads: {0}", error.Message);
-        }
     }
 
     public AttachmentLimits Limits => _limits;
@@ -225,12 +210,8 @@ public sealed class AttachmentCommands
             throw AppException.Validation("upload", $"Only {AttachmentLimits.MaxConcurrentUploads} files can be added at once. Wait for one to finish.");
         }
 
-        Directory.CreateDirectory(_uploadsDirectory);
         var uploadId = _ids.NewId().ToString("N");
-        var path = Path.Combine(_uploadsDirectory, uploadId + ".part");
-        await using (File.Create(path))
-        {
-        }
+        var path = await _staging.CreateAsync(uploadId, ct);
 
         var upload = new UploadSession(uploadId, command.OwnerKind, command.OwnerId, command.FileName, fileName, command.Size, path, _clock.GetUtcNow());
         if (!_uploads.TryAdd(uploadId, upload) || _uploads.Count > AttachmentLimits.MaxConcurrentUploads)
@@ -268,8 +249,7 @@ public sealed class AttachmentCommands
                 throw AppException.Validation("chunk", "More data arrived than the file's size said.");
             }
 
-            await using var output = new FileStream(upload.TempPath, FileMode.Append, FileAccess.Write, FileShare.None);
-            await output.WriteAsync(bytes, ct);
+            await _staging.AppendAsync(upload.TempPath, bytes, ct);
             upload.Received += bytes.Length;
             upload.NextIndex++;
         }
@@ -306,7 +286,7 @@ public sealed class AttachmentCommands
                 throw AppException.Validation("upload", "The file did not arrive completely. Try adding it again.");
             }
 
-            await using (var input = new FileStream(upload.TempPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await using (var input = await _staging.OpenReadAsync(upload.TempPath, ct))
             {
                 var head = new byte[(int)Math.Min(input.Length, MediaSniffer.HeadBytes)];
                 await input.ReadExactlyAsync(head, ct);
@@ -504,35 +484,16 @@ public sealed class AttachmentCommands
             throw AppException.Validation("image", "Only images have thumbnails.");
         }
 
-        var cache = _thumbnailsDirectory is null ? null : Path.Combine(_thumbnailsDirectory, $"{row.Sha256}-{ThumbnailSide}.jpg");
-        if (cache is not null && File.Exists(cache))
+        if (_thumbnails is not null && await _thumbnails.TryGetAsync(row.Sha256, ThumbnailSide, ct) is { } cached)
         {
-            try
-            {
-                return await File.ReadAllBytesAsync(cache, ct);
-            }
-            catch (IOException error)
-            {
-                // Treated as a cache miss: the thumbnail is rebuilt below and the cache file rewritten.
-                System.Diagnostics.Trace.TraceWarning("Chaos could not read a cached thumbnail: {0}", error.GetType().Name);
-            }
+            return cached;
         }
 
         await using var source = await OpenBytesAsync(row, 0, ct);
         var made = await images.ThumbnailAsync(source, ThumbnailSide, ct);
-        if (cache is not null)
+        if (_thumbnails is not null)
         {
-            try
-            {
-                Directory.CreateDirectory(_thumbnailsDirectory!);
-                var temp = cache + "." + Guid.NewGuid().ToString("N") + ".partial";
-                await File.WriteAllBytesAsync(temp, made.Bytes, ct);
-                File.Move(temp, cache, overwrite: true);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                System.Diagnostics.Trace.TraceWarning("Chaos could not cache a thumbnail: {0}", error.Message);
-            }
+            await _thumbnails.PutAsync(row.Sha256, ThumbnailSide, made.Bytes, ct);
         }
 
         return made.Bytes;
@@ -590,14 +551,7 @@ public sealed class AttachmentCommands
     {
         if (_uploads.TryRemove(uploadId, out var upload))
         {
-            try
-            {
-                File.Delete(upload.TempPath);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                System.Diagnostics.Trace.TraceWarning("Chaos could not delete an upload: {0}", error.Message);
-            }
+            _staging.Discard(upload.TempPath);
         }
     }
 

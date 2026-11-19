@@ -96,8 +96,8 @@ internal static class Program
         // reminder engine and take back OS notification schedules before files are replaced.
         // Attachment bytes live behind IAttachmentFileStore (PLAN2 §9.1); this is the one place the provider is chosen.
         var attachmentFiles = Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.Create(storage.Options);
-        var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, ids, clock, storage.Options.UploadsDirectory,
-            images: new Chaos.Infrastructure.Attachments.SkiaImageProcessor(), thumbnailsDirectory: storage.Options.ThumbnailsDirectory);
+        var attachmentCommands = new Chaos.Application.Attachments.AttachmentCommands(storage.Store, attachmentFiles, ids, clock, new Chaos.Infrastructure.Attachments.DirectoryUploadStaging(storage.Options.UploadsDirectory),
+            images: new Chaos.Infrastructure.Attachments.SkiaImageProcessor(), thumbnails: new Chaos.Infrastructure.Attachments.DirectoryThumbnailCache(storage.Options.ThumbnailsDirectory));
         var protection = new DataProtectionService(storage.Store, storage.Options,
             new BackupManager(storage.Store.Source, storage.Options.BackupsDirectory, storage.AppVersion, clock, null,
                 attachmentFiles, Chaos.Infrastructure.Attachments.AttachmentFileStoreFactory.CreateBackupStore(storage.Options)), ids, clock);

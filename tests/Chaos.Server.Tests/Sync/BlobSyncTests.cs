@@ -108,7 +108,7 @@ public sealed class BlobSyncTests(PostgresServer postgres)
     private static Mover MoverFor(SyncDevice device)
     {
         var files = AttachmentFileStoreFactory.Create(device.Storage.Options);
-        var commands = new AttachmentCommands(device.Store, files, device.Ids, device.Clock, device.Storage.Options.UploadsDirectory);
+        var commands = new AttachmentCommands(device.Store, files, device.Ids, device.Clock, new Chaos.Infrastructure.Attachments.DirectoryUploadStaging(device.Storage.Options.UploadsDirectory));
         var transport = new CountingTransport(device.Client);
         var transfer = new AttachmentTransfer(device.Store, files, transport, device.Clock);
         commands.Availability = transfer;
