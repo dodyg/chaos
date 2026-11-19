@@ -1,0 +1,80 @@
+name: CI
+
+# Builds and tests every push and pull request, so a broken build or failing test is caught before it lands.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Restores, builds (which also generates the frontend's NeoAstra client) and runs every
+      # test project except the server tests, which have their own job below.
+      - name: Verify
+        shell: pwsh
+        run: ./eng/verify.ps1 -NoServer
+
+      - name: Desktop frontend tests
+        shell: pwsh
+        working-directory: src/Chaos.Desktop/frontend
+        run: |
+          npm ci
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Web frontend tests
+        shell: pwsh
+        working-directory: src/Chaos.Web
+        run: |
+          npm ci
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  server:
+    name: Server tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CHAOS_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Server tests
+        run: dotnet test tests/Chaos.Server.Tests -c Release
