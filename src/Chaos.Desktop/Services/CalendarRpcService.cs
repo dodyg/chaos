@@ -104,7 +104,5 @@ public sealed class CalendarRpcService(CalendarQueries queries)
         ShowCompleted = dto.ShowCompleted,
     };
 
-    private static DateOnly Date(string? value, string field) =>
-        DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date
-        : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly Date(string? value, string field) => RpcParse.Date(value, field);
 }

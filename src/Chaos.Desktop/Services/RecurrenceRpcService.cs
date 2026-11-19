@@ -148,9 +148,8 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
         rule.MonthOfYear, rule.EndKind.ToString(), rule.Count, rule.UntilDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
     private static T EnumValue<T>(string raw) where T : struct, Enum => Enum.TryParse<T>(raw, out var value) && Enum.IsDefined(value)
         ? value : throw AppException.Validation("rule", "Choose a valid recurrence option.");
-    private static long Version(string raw) => long.TryParse(raw, out var value) && value > 0 ? value : throw AppException.Validation("expectedVersion", "Refresh and try again.");
-    private static DateOnly Date(string raw, string field) => DateOnly.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
-        ? value : throw AppException.Validation(field, "Enter a valid date.");
+    private static long Version(string raw) => RpcParse.Version(raw, message: "Refresh and try again.");
+    private static DateOnly Date(string raw, string field) => RpcParse.Date(raw, field);
     private static TimeOnly? Time(string? raw) => string.IsNullOrWhiteSpace(raw) ? null : TimeOnly.TryParse(raw, CultureInfo.InvariantCulture, out var value)
         ? value : throw AppException.Validation("time", "Enter a valid time.");
 }

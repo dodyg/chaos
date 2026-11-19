@@ -145,8 +145,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
             parse.Draft.FirstOccurrence?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture));
     }
 
-    private static DateOnly? Date(string? value, string field) => string.IsNullOrEmpty(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly? Date(string? value, string field) => RpcParse.OptionalDate(value, field);
 
     private static TimeOnly? Time(string? value, string field) => string.IsNullOrEmpty(value) ? null
         : TimeOnly.TryParse(value, CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, "Enter a valid time.");

@@ -106,8 +106,5 @@ public sealed class MyDayRpcService(MyDayCommands days)
     private static DateOnly Date(string? value, string field) =>
         OptionalDate(value, field) ?? throw AppException.Validation(field, "Choose a date.");
 
-    private static DateOnly? OptionalDate(string? value, string field) =>
-        string.IsNullOrWhiteSpace(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) ? date
-        : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly? OptionalDate(string? value, string field) => RpcParse.OptionalDate(value, field);
 }

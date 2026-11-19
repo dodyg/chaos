@@ -150,7 +150,7 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
         try { return new(true, MapSection((await action()).Section), null); }
         catch (AppException e) { return new(false, null, TaskRpcService.ToErrorResponse(e)); }
     }
-    private static DateOnly? Date(string? value) => string.IsNullOrEmpty(value) ? null : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var result) ? result : throw AppException.Validation("deadlineDate", "Enter a valid date.");
+    private static DateOnly? Date(string? value) => RpcParse.OptionalDate(value, "deadlineDate");
     private static long Version(string value) => RpcParse.Version(value, message: "Invalid version. Refresh and try again.");
     private static ContainerKind Kind(string value) => Enum.TryParse<ContainerKind>(value, out var kind) && Enum.IsDefined(kind) ? kind : throw AppException.Validation("kind", "Choose a list or project.");
     private static CapacityCategory? Category(string? value) => string.IsNullOrEmpty(value) ? null : Enum.TryParse<CapacityCategory>(value, out var category) && Enum.IsDefined(category) ? category : throw AppException.Validation("defaultCategory", "Choose Work or Personal.");

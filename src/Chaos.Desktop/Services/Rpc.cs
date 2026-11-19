@@ -38,7 +38,7 @@ internal static class RpcParse
         DateOnly.TryParseExact(value, DateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : throw AppException.Validation(field, message);
 
     public static DateOnly? OptionalDate(string? value, string field, string message = "Enter a valid date.") =>
-        string.IsNullOrEmpty(value) ? null : Date(value, field, message);
+        string.IsNullOrWhiteSpace(value) ? null : Date(value, field, message);
 
     public static TimeOnly? OptionalTime(string? value, string field, string message = "Enter a valid time.") =>
         string.IsNullOrEmpty(value) ? null : TimeOnly.TryParse(value, CultureInfo.InvariantCulture, out var time) ? time : throw AppException.Validation(field, message);

@@ -111,10 +111,7 @@ public sealed class QueryRpcService(TaskQueries queries)
         return start is null && end is null ? null : new LocalDateRange(start, end);
     }
 
-    private static DateOnly? Date(string? value, string field) =>
-        string.IsNullOrWhiteSpace(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) ? date
-        : throw AppException.Validation(field, "Enter a valid date.");
+    private static DateOnly? Date(string? value, string field) => RpcParse.OptionalDate(value, field);
 
     private static T ParseEnum<T>(string value, string field) where T : struct, Enum => RpcParse.Enum<T>(value, field);
 }

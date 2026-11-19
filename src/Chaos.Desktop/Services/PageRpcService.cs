@@ -264,8 +264,5 @@ public sealed class PageRpcService(PageCommands pages)
     private static DateOnly Date(string? value, string field) =>
         OptionalDate(value, field) ?? throw AppException.Validation(field, "Use a date in the form yyyy-MM-dd.");
 
-    private static DateOnly? OptionalDate(string? value, string field) =>
-        string.IsNullOrWhiteSpace(value) ? null
-        : DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date
-        : throw AppException.Validation(field, "Use a date in the form yyyy-MM-dd.");
+    private static DateOnly? OptionalDate(string? value, string field) => RpcParse.OptionalDate(value, field, "Use a date in the form yyyy-MM-dd.");
 }
