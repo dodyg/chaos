@@ -204,10 +204,10 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection, "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
 
     private Task<List<(string Sha, long Size)>> UploadCandidatesAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, """
+        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, $"""
             SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
             LEFT JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
-            WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, 0) IN (0, 3, 4) AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
+            WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, {Unknown}) IN ({Unknown}, {UploadFailed}, {OverQuota}) AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
             GROUP BY a.Sha256 ORDER BY MIN(a.CreatedAtUtc), a.Sha256;
             """, ("$now", StorageFormats.Instant(clock.GetUtcNow())))), ct);
 
@@ -216,15 +216,24 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     /// pinned (PLAN2 §9.2). A file known to be blocked, or backing off after a failure, is left alone.
     /// </summary>
     private Task<List<(string Sha, long Size)>> DownloadCandidatesAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, """
+        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, $"""
             SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
             LEFT JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
-            WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, 0) <> 2 AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
-              AND (a.ByteSize <= $auto OR a.OwnerKind IN (3, 4)
-                   OR (a.OwnerKind = 1 AND EXISTS (SELECT 1 FROM Tasks t JOIN OfflineContainers o ON o.ContainerId = t.ContainerId WHERE t.Id = a.OwnerId))
-                   OR (a.OwnerKind = 2 AND EXISTS (SELECT 1 FROM DiaryEntries d JOIN Tasks t ON t.Id = d.TaskId JOIN OfflineContainers o ON o.ContainerId = t.ContainerId WHERE d.Id = a.OwnerId)))
+            WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, {Unknown}) <> {Blocked} AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
+              AND (a.ByteSize <= $auto OR a.OwnerKind IN ({(int)AttachmentOwnerKind.Pad}, {(int)AttachmentOwnerKind.Page})
+                   OR (a.OwnerKind = {(int)AttachmentOwnerKind.Task} AND EXISTS (SELECT 1 FROM Tasks t JOIN OfflineContainers o ON o.ContainerId = t.ContainerId WHERE t.Id = a.OwnerId))
+                   OR (a.OwnerKind = {(int)AttachmentOwnerKind.Diary} AND EXISTS (SELECT 1 FROM DiaryEntries d JOIN Tasks t ON t.Id = d.TaskId JOIN OfflineContainers o ON o.ContainerId = t.ContainerId WHERE d.Id = a.OwnerId)))
             GROUP BY a.Sha256 ORDER BY MIN(a.CreatedAtUtc), a.Sha256;
             """, ("$now", StorageFormats.Instant(clock.GetUtcNow())), ("$auto", _options.AutoDownloadBytes))), ct);
+
+    /// <summary>One numeric column of a file's device-local row, or 0 when it has none.</summary>
+    private static long LocalScalar(SqliteConnection connection, string column, string sha)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COALESCE((SELECT {column} FROM AttachmentLocalState WHERE Sha256 = $sha), 0);";
+        command.Parameters.AddWithValue("$sha", sha);
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     private static List<(string Sha, long Size)> ReadHashes(SqliteConnection connection, string sql, params (string Name, object Value)[] parameters)
     {
@@ -358,8 +367,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             return false;
         }
 
-        var current = await store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection,
-            "SELECT COALESCE((SELECT Remote FROM AttachmentLocalState WHERE Sha256 = '" + sha + "'), 0);")), ct);
+        var current = await store.QueryAsync((session, _) => Task.FromResult(LocalScalar(((SqliteDataSession)session).Connection, "Remote", sha)), ct);
         if (current == Blocked)
         {
             return false;
@@ -533,9 +541,9 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         {
             var connection = ((SqliteDataSession)session).Connection;
             using var command = connection.CreateCommand();
-            command.CommandText = """
+            command.CommandText = $"""
                 UPDATE AttachmentLocalState SET NextTryUtc = NULL, Failures = 0,
-                    Remote = CASE WHEN Remote IN (3, 4) THEN 0 ELSE Remote END,
+                    Remote = CASE WHEN Remote IN ({UploadFailed}, {OverQuota}) THEN {Unknown} ELSE Remote END,
                     State = CASE WHEN State = 3 THEN 1 ELSE State END
                 WHERE Sha256 = $sha;
                 """;
@@ -564,7 +572,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             string? next = null;
             if (backoff || retryAfter is not null)
             {
-                failures = SyncSql.Scalar(connection, "SELECT COALESCE((SELECT Failures FROM AttachmentLocalState WHERE Sha256 = '" + sha + "'), 0);") + 1;
+                failures = LocalScalar(connection, "Failures", sha) + 1;
                 var wait = retryAfter ?? TimeSpan.FromSeconds(Math.Min(_options.MaxBackoff.TotalSeconds, _options.MinBackoff.TotalSeconds * Math.Pow(2, Math.Min(failures - 1, 20))));
                 next = StorageFormats.Instant(now + wait);
             }
