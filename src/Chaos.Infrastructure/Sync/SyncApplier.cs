@@ -42,7 +42,24 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
         var applied = 0L;
         var purged = 0L;
         var skipped = 0L;
-        var changes = changePayloads.Select(payload => (Change: SyncChangeParser.Parse(payload), Payload: payload)).ToList();
+
+        // A payload that does not parse cannot be parked (it has no change id), so it is skipped with an attention item
+        // instead of failing the whole chunk, which would leave the cursor behind it forever.
+        var changes = new List<(SyncChange Change, string Payload)>();
+        var malformed = new List<string>();
+        foreach (var payload in changePayloads)
+        {
+            try
+            {
+                changes.Add((SyncChangeParser.Parse(payload), payload));
+            }
+            catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException or OverflowException)
+            {
+                malformed.Add(error.GetType().Name);
+            }
+        }
+
+        skipped += malformed.Count;
 
         await store.ExecuteAsync(async (session, token) =>
         {
@@ -55,6 +72,11 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                 // Progress (applied + purged) when each change of this pass was parked: retrying
                 // it is only worth it once something else landed after it.
                 var parkedAtProgress = new Dictionary<string, long>(StringComparer.Ordinal);
+                foreach (var errorType in malformed)
+                {
+                    Attention(connection, "sync.unexpected", null, null, $"A change from another device could not be read ({errorType}) and was ignored.");
+                }
+
                 foreach (var (change, payload) in changes)
                 {
                     var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
@@ -75,7 +97,16 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
                         continue;
                     }
 
-                    var change = SyncChangeParser.Parse(payload);
+                    SyncChange change;
+                    try
+                    {
+                        change = SyncChangeParser.Parse(payload);
+                    }
+                    catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException or OverflowException)
+                    {
+                        continue;
+                    }
+
                     var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
                     if (outcome is StepResult.Parked)
                     {
@@ -205,7 +236,19 @@ public sealed class SyncApplier(SqliteApplicationStore store, TimeProvider clock
     {
         var slip = new ParkSlip();
         SyncSql.Execute(connection, $"SAVEPOINT {ChangeSavepoint};");
-        var outcome = await ApplyOneAsync(connection, schema, change, slip, ct);
+        StepResult outcome;
+        try
+        {
+            outcome = await ApplyOneAsync(connection, schema, change, slip, ct);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // One bad change (a malformed key, an unclassified constraint failure) must not block the chunk: set it aside.
+            slip.Park($"the change could not be applied ({error.GetType().Name}: {error.Message})",
+                "sync.unapplicable", "A change from another device could not be applied. It is set aside and tried again later.");
+            outcome = StepResult.Parked;
+        }
+
         if (outcome is StepResult.Parked)
         {
             SyncSql.Execute(connection, $"ROLLBACK TO {ChangeSavepoint};");

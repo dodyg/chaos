@@ -203,6 +203,11 @@ public sealed class SyncEngine : IDisposable
             {
                 return;
             }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // Nothing may end this loop: report the problem and back off like any other failed cycle.
+                result = ReportUnexpected(error);
+            }
 
             TimeSpan wait;
             if (result.Problem is not null && result.Ran)
@@ -326,6 +331,11 @@ public sealed class SyncEngine : IDisposable
                 // Signed out or refused is not something a retry fixes; only connectivity is.
                 return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
             }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // A malformed response or a local failure is a problem to show and retry, not a reason to stop syncing.
+                return ReportUnexpected(error, pushed, pulled, snapshot);
+            }
         }
         finally
         {
@@ -380,6 +390,11 @@ public sealed class SyncEngine : IDisposable
             {
                 // Offline, signed out or refused: back off and try again.
             }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The stream must keep reconnecting whatever went wrong with it.
+                System.Diagnostics.Trace.TraceWarning("Sync event stream failed: {0}", error.GetType().Name);
+            }
 
             SetRuntime(r => r with { Streaming = false });
             failures++;
@@ -392,6 +407,14 @@ public sealed class SyncEngine : IDisposable
                 return;
             }
         }
+    }
+
+    private SyncCycleResult ReportUnexpected(Exception error, long pushed = 0, long pulled = 0, bool snapshot = false)
+    {
+        System.Diagnostics.Trace.TraceWarning("Sync cycle failed unexpectedly: {0}", error);
+        var problem = "Sync hit an unexpected problem and will try again.";
+        SetRuntime(r => r with { Failure = ServiceFailure.Other, FailureDetail = problem });
+        return Finish(new SyncCycleResult(true, pushed, pulled, snapshot, problem));
     }
 
     private SyncCycleResult Finish(SyncCycleResult result)

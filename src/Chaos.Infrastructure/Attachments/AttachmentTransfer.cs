@@ -94,6 +94,12 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         {
             try
             {
+                // Swap the signal before the pass, so a Wake() during the pass or the wait is kept for the next round.
+                lock (_wakeGate)
+                {
+                    _wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+
                 await RunOnceAsync(ct);
                 Task woken;
                 lock (_wakeGate)
@@ -103,10 +109,6 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
 
                 await Task.WhenAny(woken, Task.Delay(_options.PollInterval, clock, ct));
                 ct.ThrowIfCancellationRequested();
-                lock (_wakeGate)
-                {
-                    _wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -338,7 +340,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
 
     // ---- Download ------------------------------------------------------------------------------------
 
-    public Task<bool> EnsureAvailableAsync(string sha256, long size, CancellationToken ct) => EnsureAsync(sha256, size, automatic: false, ct).ContinueWith(task => task.Result ?? false, ct, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+    public async Task<bool> EnsureAvailableAsync(string sha256, long size, CancellationToken ct) => await EnsureAsync(sha256, size, automatic: false, ct) ?? false;
 
     /// <summary>
     /// Downloads the file unless it is here. Several callers for one file share one download. Returns true when the bytes arrived,
@@ -363,14 +365,20 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             return false;
         }
 
-        var task = _downloads.GetOrAdd(sha, _ => Task.Run(() => DownloadAsync(sha, size, ct), CancellationToken.None));
+        // The download belongs to the engine, not to the first caller: it runs on the engine's own token, and each caller
+        // only stops waiting when its own token is cancelled.
+        var engineToken = _stop?.Token ?? CancellationToken.None;
+        var task = _downloads.GetOrAdd(sha, _ => Task.Run(() => DownloadAsync(sha, size, engineToken), CancellationToken.None));
         try
         {
-            return await task;
+            return await task.WaitAsync(ct);
         }
         finally
         {
-            _downloads.TryRemove(new KeyValuePair<string, Task<bool>>(sha, task));
+            if (task.IsCompleted)
+            {
+                _downloads.TryRemove(new KeyValuePair<string, Task<bool>>(sha, task));
+            }
         }
     }
 
@@ -386,6 +394,12 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             await files.PutAsync(counted, Math.Max(size, 1) + 1024, sha, ct);
             await SetBytesStateAsync(sha, AttachmentBytesState.Present, ct, remote: OnService);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down: do not leave the row in Downloading; the next pass looks again.
+            await SetBytesStateAsync(sha, AttachmentBytesState.Missing, CancellationToken.None);
+            throw;
         }
         catch (BlobTransferException error) when (error.Kind == BlobFailureKind.Blocked)
         {
@@ -440,7 +454,12 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
-        public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = inner.Read(buffer, offset, count);
+            Interlocked.Add(ref progress.Done, read);
+            return read;
+        }
 
         public override void Flush()
         {
