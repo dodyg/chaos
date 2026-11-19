@@ -182,7 +182,7 @@ public sealed class ActivityFeed(SqliteApplicationStore store, TimeProvider cloc
             return Task.FromResult(removed);
         }, ct);
 
-    private static SqliteConnection Conn(IDataSession session) => ((SqliteDataSession)session).Connection;
+    private static SqliteConnection Conn(IDataSession session) => session.Connection();
 
     private static long Head(SqliteConnection connection) => Scalar(connection, "SELECT COALESCE(MAX(Seq), 0) FROM ActivityLog;");
 

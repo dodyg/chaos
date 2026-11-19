@@ -34,7 +34,7 @@ public sealed class SyncCapturePerformanceTests
         // capture cost is paid once, as a bulk import would.
         await host.Store.ExecuteAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var insert = connection.CreateCommand();
             insert.CommandText = """
                 INSERT INTO Tasks (Id, SpaceId, ContainerId, Title, Status, Priority, CapacityCategory, Position, Version, CreatedAtUtc, UpdatedAtUtc)

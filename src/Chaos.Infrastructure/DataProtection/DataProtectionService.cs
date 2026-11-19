@@ -132,7 +132,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
         // The current device's DeviceSettings survive a restore (PLAN2 §7.1): they are read
         // while the live database is still open and written into the file that replaces it.
         var deviceSettings = await store.QueryAsync(async (session, token) =>
-            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection, token), ct);
+            await ReadDeviceSettingsAsync(session.Connection(), token), ct);
         try
         {
             await Quiesce(async () =>
@@ -184,7 +184,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
     public async Task ResetKeepingDeviceAsync(CancellationToken ct)
     {
         var deviceSettings = await store.QueryAsync(async (session, token) =>
-            await ReadDeviceSettingsAsync(((SqliteDataSession)session).Connection, token), ct);
+            await ReadDeviceSettingsAsync(session.Connection(), token), ct);
         await ResetCoreAsync(deleteBackups: false, ct, deviceSettings);
     }
 
@@ -323,7 +323,7 @@ public sealed class DataProtectionService(SqliteApplicationStore store, StorageO
     public async Task<IReadOnlyList<string>> ListScheduledOsNotificationIdsAsync(CancellationToken ct) =>
         await store.QueryAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT OsNotificationId FROM NotificationJobs WHERE OsNotificationId IS NOT NULL;";
             var ids = new List<string>();

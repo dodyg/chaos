@@ -150,7 +150,7 @@ public sealed class SyncFlushTests
         // The week plan store replaces content this way: delete, then insert the same ids.
         await host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = """
                 CREATE TEMP TABLE ReplacedTag AS SELECT * FROM Tags WHERE Id = $id;
                 DELETE FROM Tags WHERE Id = $id;
@@ -184,7 +184,7 @@ public sealed class SyncFlushTests
         var mismatched = 0L;
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT ChangeId, Op, PayloadJson FROM SyncOutbox;";
             using var reader = command.ExecuteReader();
             while (reader.Read())

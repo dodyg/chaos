@@ -203,10 +203,10 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     }
 
     private Task<bool> IsEnabledAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection, "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
+        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(session.Connection(), "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
 
     private Task<List<(string Sha, long Size)>> UploadCandidatesAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, $"""
+        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(session.Connection(), $"""
             SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
             LEFT JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
             WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, {Unknown}) IN ({Unknown}, {UploadFailed}, {OverQuota}) AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
@@ -218,7 +218,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     /// pinned (PLAN2 §9.2). A file known to be blocked, or backing off after a failure, is left alone.
     /// </summary>
     private Task<List<(string Sha, long Size)>> DownloadCandidatesAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(((SqliteDataSession)session).Connection, $"""
+        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(session.Connection(), $"""
             SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
             LEFT JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
             WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, {Unknown}) <> {Blocked} AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
@@ -369,7 +369,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             return false;
         }
 
-        var current = await store.QueryAsync((session, _) => Task.FromResult(LocalScalar(((SqliteDataSession)session).Connection, "Remote", sha)), ct);
+        var current = await store.QueryAsync((session, _) => Task.FromResult(LocalScalar(session.Connection(), "Remote", sha)), ct);
         if (current == Blocked)
         {
             return false;
@@ -488,7 +488,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     {
         var (enabled, remote, bytes, failures) = await store.QueryAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var on = SyncSql.Scalar(connection, "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1;
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT Remote, State, Failures FROM AttachmentLocalState WHERE Sha256 = $sha;";
@@ -541,7 +541,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     {
         await store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = $"""
                 UPDATE AttachmentLocalState SET NextTryUtc = NULL, Failures = 0,
@@ -568,7 +568,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     private Task UpsertAsync(string sha, AttachmentBytesState? state, int? remote, bool backoff, TimeSpan? retryAfter, CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var now = clock.GetUtcNow();
             long failures = 0;
             string? next = null;
@@ -603,7 +603,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     private Task RaiseAttentionAsync(string category, string key, string message, CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using (var exists = connection.CreateCommand())
             {
                 exists.CommandText = "SELECT 1 FROM SyncAttention WHERE Category = $category AND EntityKey = $key AND ResolvedAtUtc IS NULL LIMIT 1;";
@@ -634,7 +634,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     public Task<IReadOnlyList<string>> OfflineContainersAsync(CancellationToken ct) =>
         store.QueryAsync((session, _) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT ContainerId FROM OfflineContainers ORDER BY ContainerId;";
             var ids = new List<string>();
             using var reader = command.ExecuteReader();
@@ -651,7 +651,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     {
         await store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = offline
                 ? "INSERT INTO OfflineContainers (ContainerId, UpdatedAtUtc) SELECT Id, $now FROM Containers WHERE Id = $id ON CONFLICT (ContainerId) DO NOTHING;"

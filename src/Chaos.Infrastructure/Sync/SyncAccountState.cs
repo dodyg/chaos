@@ -26,12 +26,12 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     private static readonly string[] ParentTables = ["Profiles", "Spaces", "Containers"];
 
     public Task<LocalIdentityIds> ReadIdsAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadIds(((SqliteDataSession)session).Connection)), ct);
+        store.QueryAsync((session, _) => Task.FromResult(ReadIds(session.Connection())), ct);
 
     public Task<LocalContentCounts> CountAsync(CancellationToken ct) =>
         store.QueryAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             return Task.FromResult(new LocalContentCounts(
                 SyncSql.Scalar(connection, "SELECT count(*) FROM Tasks WHERE DeletedAtUtc IS NULL;"),
                 SyncSql.Scalar(connection, "SELECT count(*) FROM Containers WHERE DeletedAtUtc IS NULL AND IsInbox = 0;"),
@@ -41,10 +41,10 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
 
     /// <summary>The account this device syncs with, or null when it is offline-only.</summary>
     public Task<string?> BoundAccountAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Text(((SqliteDataSession)session).Connection, "SELECT AccountId FROM SyncState WHERE Id = 1;")), ct);
+        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Text(session.Connection(), "SELECT AccountId FROM SyncState WHERE Id = 1;")), ct);
 
     public Task<bool> IsEnabledAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection, "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
+        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(session.Connection(), "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
 
     private static LocalIdentityIds ReadIds(SqliteConnection connection)
     {
@@ -66,7 +66,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     public Task AdoptAsync(LocalIdentityIds canonical, AdoptFaultInjection? fault = null, CancellationToken ct = default) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var local = ReadIds(connection);
             var statements = 0;
             void Run(string sql, params (string Name, string Value)[] parameters)
@@ -162,7 +162,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     public Task EnableAsync(Guid accountId, CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var ids = ReadIds(connection);
             using var command = connection.CreateCommand();
             command.CommandText = "UPDATE SyncState SET Enabled = 1, AccountId = $account, ProfileBinding = $profile, Cursor = 0, BackfillPending = 1, LastError = NULL WHERE Id = 1;";
@@ -179,7 +179,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     public Task DisableAsync(CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             SyncSql.Execute(connection, "UPDATE SyncState SET Enabled = 0, AccountId = NULL, ProfileBinding = NULL, Cursor = 0, BackfillPending = 0, LastError = NULL WHERE Id = 1;");
             SyncSql.Execute(connection, "DELETE FROM SyncOutbox;");
             SyncSql.Execute(connection, "DELETE FROM SyncPending;");
@@ -192,7 +192,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     public Task ReplaceDeviceIdAsync(Guid deviceId, CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = "UPDATE DeviceSettings SET Value = $id WHERE Key = 'DeviceId'; UPDATE SyncState SET LastHlc = NULL WHERE Id = 1;";
             command.Parameters.AddWithValue("$id", deviceId.ToString("D"));
@@ -201,7 +201,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
         }, ct);
 
     public Task<bool> BackfillPendingAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection, "SELECT BackfillPending FROM SyncState WHERE Id = 1;") == 1), ct);
+        store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(session.Connection(), "SELECT BackfillPending FROM SyncState WHERE Id = 1;") == 1), ct);
 
     /// <summary>
     /// Queues every row and field group the sync bookkeeping has never seen (no clock) as a change, parents first, one table per
@@ -216,7 +216,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
         {
             queued += await store.ExecuteAsync((session, _) =>
             {
-                var connection = ((SqliteDataSession)session).Connection;
+                var connection = session.Connection();
                 long count = 0;
                 var key = string.Join(" || '|' || ", table.Key.Select(column => $"t.{SyncSql.Quote(column)}"));
                 foreach (var group in table.Groups)
@@ -237,7 +237,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
 
         await store.ExecuteAsync((session, _) =>
         {
-            SyncSql.Execute(((SqliteDataSession)session).Connection, "UPDATE SyncState SET BackfillPending = 0 WHERE Id = 1;");
+            SyncSql.Execute(session.Connection(), "UPDATE SyncState SET BackfillPending = 0 WHERE Id = 1;");
             return Task.FromResult(0);
         }, ct);
         return queued;

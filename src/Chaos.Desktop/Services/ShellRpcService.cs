@@ -114,7 +114,7 @@ public sealed class ShellRpcService(ShellActivations activations, IDesktopShell 
         if (store is null) return new(null, null, false);
         return await store.QueryAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT AppearanceTheme, DayBackground, (SELECT BackfillPending FROM SyncState WHERE Id = 1) FROM Profiles WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc LIMIT 1";
             using var reader = await command.ExecuteReaderAsync(token);
@@ -141,7 +141,7 @@ public sealed class ShellRpcService(ShellActivations activations, IDesktopShell 
         catch (JsonException) { return new(false); }
         return await store.ExecuteAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             var column = request.Kind == "theme" ? "AppearanceTheme" : "DayBackground";
             command.CommandText = $"UPDATE Profiles SET {column} = $value WHERE Id = (SELECT Id FROM Profiles WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc LIMIT 1)" + (request.OnlyIfEmpty ? $" AND {column} IS NULL AND (SELECT BackfillPending FROM SyncState WHERE Id = 1) = 0" : "");

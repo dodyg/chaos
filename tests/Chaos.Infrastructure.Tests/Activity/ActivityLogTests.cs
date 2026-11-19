@@ -57,7 +57,7 @@ public sealed class ActivityLogTests
         {
             await Assert.That(async () => await host.Store.ExecuteAsync<int>(async (session, token) =>
             {
-                using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+                using var command = session.Connection().CreateCommand();
                 command.CommandText = "UPDATE Tasks SET Title = 'changed', Version = Version + 1 WHERE Id = $id;";
                 command.Parameters.AddWithValue("$id", id);
                 await command.ExecuteNonQueryAsync(token);
@@ -94,7 +94,7 @@ public sealed class ActivityLogTests
         {
             await host.Store.ExecuteAsync(async (session, token) =>
             {
-                var connection = ((SqliteDataSession)session).Connection;
+                var connection = session.Connection();
                 var dependents = new List<(string Table, string Column)>();
                 using (var find = connection.CreateCommand())
                 {

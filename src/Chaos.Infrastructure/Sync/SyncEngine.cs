@@ -433,7 +433,7 @@ public sealed class SyncEngine : IDisposable
     private Task<State> ReadStateAsync(CancellationToken ct) =>
         _store.QueryAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT Enabled, Cursor FROM SyncState WHERE Id = 1;";
             using var reader = command.ExecuteReader();
@@ -443,7 +443,7 @@ public sealed class SyncEngine : IDisposable
     private Task RecordAsync(string? error, bool pushed, bool pulled, CancellationToken ct) =>
         _store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             var now = StorageFormats.Instant(_clock.GetUtcNow());
             command.CommandText = $"""
@@ -483,7 +483,7 @@ public sealed class SyncEngine : IDisposable
     {
         long total = 0;
         // Only what was queued when this cycle began: edits made meanwhile wait for the next cycle, so a busy writer cannot keep a push going forever.
-        var through = await _store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(((SqliteDataSession)session).Connection, "SELECT COALESCE(MAX(Seq), 0) FROM SyncOutbox;")), ct);
+        var through = await _store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(session.Connection(), "SELECT COALESCE(MAX(Seq), 0) FROM SyncOutbox;")), ct);
         while (true)
         {
             var batch = await ReadOutboxBatchAsync(through, ct);
@@ -544,7 +544,7 @@ public sealed class SyncEngine : IDisposable
     private Task<List<OutboxRow>> ReadOutboxBatchAsync(long through, CancellationToken ct) =>
         _store.QueryAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var rows = new List<OutboxRow>();
             var bytes = 0;
             using var command = connection.CreateCommand();
@@ -582,7 +582,7 @@ public sealed class SyncEngine : IDisposable
 
         return _store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             var names = new List<string>();
             for (var index = 0; index < changeIds.Count; index++)
@@ -718,7 +718,7 @@ public sealed class SyncEngine : IDisposable
         {
             await _store.ExecuteAsync((session, _) =>
             {
-                SyncSql.Execute(((SqliteDataSession)session).Connection, $"UPDATE SyncState SET Cursor = MAX(Cursor, {through.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
+                SyncSql.Execute(session.Connection(), $"UPDATE SyncState SET Cursor = MAX(Cursor, {through.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
                 return Task.FromResult(0);
             }, ct);
         }
@@ -729,7 +729,7 @@ public sealed class SyncEngine : IDisposable
     private Task RaiseParkedAttentionAsync(CancellationToken ct) =>
         _store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var parked = new List<(string ChangeId, string Kind, string Key)>();
             using (var select = connection.CreateCommand())
             {
@@ -756,7 +756,7 @@ public sealed class SyncEngine : IDisposable
     private Task RaiseAttentionAsync(string category, string? kind, string? key, string message, CancellationToken ct) =>
         _store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             if (!OpenAttentionExists(connection, category, key ?? message))
             {
                 InsertAttention(connection, category, kind, key ?? message, message);

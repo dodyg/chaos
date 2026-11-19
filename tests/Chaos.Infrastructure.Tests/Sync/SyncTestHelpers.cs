@@ -23,7 +23,7 @@ internal static class SyncTestHelpers
     public static Task EnableSyncAsync(DataProtection.DataHost host) =>
         host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "UPDATE SyncState SET Enabled = 1 WHERE Id = 1;";
             await command.ExecuteNonQueryAsync(token);
             return 0;
@@ -38,7 +38,7 @@ internal static class SyncTestHelpers
     public static async Task<object?> ScalarAsync(DataProtection.DataHost host, string sql) =>
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             return await command.ExecuteScalarAsync(token);
         });
@@ -50,7 +50,7 @@ internal static class SyncTestHelpers
         var payloads = new List<string>();
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT Op, PayloadJson FROM SyncOutbox WHERE Kind = $kind AND EntityKey = $key ORDER BY Seq;";
             command.Parameters.AddWithValue("$kind", kind);
             command.Parameters.AddWithValue("$key", entityKey);

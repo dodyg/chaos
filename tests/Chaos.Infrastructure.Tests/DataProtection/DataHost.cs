@@ -138,7 +138,7 @@ internal sealed class DataHost : IDisposable
     public async Task<IReadOnlyList<ArchiveTable>> DumpAsync() =>
         await Store.QueryAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var snapshot = connection.BeginTransaction(deferred: true);
             return await JsonArchive.DumpAsync(connection, token);
         });
@@ -146,7 +146,7 @@ internal sealed class DataHost : IDisposable
     public async Task<long> CountAsync(string sql) =>
         await Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             return Convert.ToInt64(await command.ExecuteScalarAsync(token));
         });

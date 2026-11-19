@@ -85,7 +85,7 @@ public sealed class ShellRpcTests
             new ProfileSettingsCommands(storage.Store, new SequentialIdGenerator(), clock), "1", store: storage.Store);
         await storage.Store.ExecuteAsync(async (session, ct) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "UPDATE SyncState SET Enabled = 1, BackfillPending = 1 WHERE Id = 1";
             await command.ExecuteNonQueryAsync(ct);
             return true;
@@ -94,7 +94,7 @@ public sealed class ShellRpcTests
         await Assert.That((await rpc.SaveAppearanceAsync(new("background", "{\"kind\":\"default\"}", true), CancellationToken.None)).Saved).IsFalse();
         await storage.Store.ExecuteAsync(async (session, ct) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "UPDATE SyncState SET BackfillPending = 0 WHERE Id = 1";
             await command.ExecuteNonQueryAsync(ct);
             return true;
@@ -108,7 +108,7 @@ public sealed class ShellRpcTests
         await Assert.That(saved.Background).IsEqualTo(background);
         var outbox = await storage.Store.QueryAsync(async (session, ct) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT PayloadJson FROM SyncOutbox WHERE Kind = 'profile' ORDER BY Seq DESC LIMIT 1";
             return (string?)await command.ExecuteScalarAsync(ct);
         });

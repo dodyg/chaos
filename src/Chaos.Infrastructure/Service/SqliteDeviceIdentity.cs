@@ -16,7 +16,7 @@ public sealed class SqliteDeviceIdentity(IApplicationStore store, string appVers
     {
         var id = await store.QueryAsync((session, _) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT Value FROM DeviceSettings WHERE Key = 'DeviceId';";
             return Task.FromResult(command.ExecuteScalar() as string);
         }, ct);

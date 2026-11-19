@@ -31,7 +31,7 @@ public sealed class SyncStatusReader(SqliteApplicationStore store, SyncEngine en
     {
         var (enabled, lastPush, lastPull, pending, attention) = await store.QueryAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             bool enabledNow;
             string? push, pull;
             using (var state = connection.CreateCommand())
@@ -130,7 +130,7 @@ public sealed class SyncStatusReader(SqliteApplicationStore store, SyncEngine en
     public Task ResolveAsync(string id, CancellationToken ct) =>
         store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var command = connection.CreateCommand();
             command.CommandText = "UPDATE SyncAttention SET ResolvedAtUtc = $now WHERE Id = $id AND ResolvedAtUtc IS NULL;";
             command.Parameters.AddWithValue("$now", StorageFormats.Instant(DateTimeOffset.UtcNow));

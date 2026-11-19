@@ -20,7 +20,7 @@ public sealed class JobRuns(SqliteApplicationStore store, TimeProvider clock) : 
         var id = Guid.NewGuid().ToString("D");
         await store.ExecuteAsync((session, _) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "INSERT INTO JobRuns (Id, Job, StartedAtUtc, Outcome) VALUES ($id, $job, $at, 'running');";
             command.Parameters.AddWithValue("$id", id);
             command.Parameters.AddWithValue("$job", job);
@@ -37,7 +37,7 @@ public sealed class JobRuns(SqliteApplicationStore store, TimeProvider clock) : 
         long? failedSeq = null;
         await store.ExecuteAsync((session, _) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var now = StorageFormats.Instant(clock.GetUtcNow());
             string? job;
             using (var find = connection.CreateCommand())

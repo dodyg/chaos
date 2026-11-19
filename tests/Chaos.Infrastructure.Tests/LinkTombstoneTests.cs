@@ -134,7 +134,7 @@ public sealed class LinkTombstoneTests
         var now = DataHost.Start;
         await host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var insert = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var insert = session.Connection().CreateCommand();
             insert.CommandText = """
                 INSERT INTO WeekPlans (Id, ProfileId, WeekStartDate, State, ConfirmedRevision, ConfirmedAtUtc, DraftRevision, Version, CreatedAtUtc, UpdatedAtUtc)
                 VALUES ($id, $profile, '2026-11-09', 1, 1, $created, 0, 1, $created, $created);

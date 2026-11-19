@@ -26,7 +26,7 @@ public sealed class TransferTests
         var seed = await host.SeedAsync();
         await host.Store.ExecuteAsync(async (session, ct) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = """
                 INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc)
                 SELECT 'g',SpaceId,(SELECT OwnerProfileId FROM Spaces WHERE Id=SpaceId),'https://github.com','https://api.github.com',1,'person',CreatedAtUtc,UpdatedAtUtc FROM Tasks WHERE Id=$task;
@@ -270,7 +270,7 @@ public sealed class TransferTests
         await target.SeedAsync();
         await target.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "UPDATE Tasks SET Title = 'Local version ' || Title;";
             return await command.ExecuteNonQueryAsync(token);
         });

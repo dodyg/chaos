@@ -489,7 +489,7 @@ public sealed class SyncCatalogFlushCoverageTests
     {
         var rows = await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT Kind, EntityKey FROM SyncOutbox;";
             using var reader = await command.ExecuteReaderAsync(token);
             var grouped = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -515,7 +515,7 @@ public sealed class SyncCatalogFlushCoverageTests
         var texts = new List<string>();
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))

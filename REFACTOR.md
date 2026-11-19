@@ -20,6 +20,8 @@ attachment download faults and cancellation, and the sync loop surviving unexpec
 
 The desktop composition root is now `src/Chaos.Desktop/DesktopComposition.cs` (shared clock and ID generator, one owned-disposable stack, workers started last, one ordered pause pipeline, `Availability` passed through the constructor; `ActivityNotifier` is still set once there because storage is built first). `Program.cs` only handles the single-instance guard, the shell and the window; the JSON context moved to `AppJsonContext.cs`.
 
+Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) replaces the 47 `(SqliteDataSession)` casts, and `AuthSetup` loads its key certificates once for both OpenIddict builders. Several small items below were already finished earlier and are stale (catalog dictionary lookup, `SyncEngine` gate, lazy session stores, cached undo wrappers, security-header extension, side effects out of `AttachmentCommands`).
+
 Still open: narrower session
 interfaces, `SELECT *` mappers, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
 from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, the shared markdown package, a typed preview

@@ -31,7 +31,7 @@ public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.At
     public Task<PurgeCounts> PreviewAsync(string? taskId, CancellationToken ct) =>
         store.QueryAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             using var transaction = connection.BeginTransaction(deferred: true);
             Select(connection, taskId);
             var counts = Count(connection, taskId is null);
@@ -41,7 +41,7 @@ public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.At
 
     /// <summary>Active data counts of the live database, to compare with a backup before restoring.</summary>
     public Task<DataCounts> CurrentCountsAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(BackupManager.ReadCounts(((SqliteDataSession)session).Connection)), ct);
+        store.QueryAsync((session, _) => Task.FromResult(BackupManager.ReadCounts(session.Connection())), ct);
 
     /// <summary>Purges every deleted item, or one deleted task when <paramref name="taskId"/> is given.</summary>
     public async Task<PurgeOutcome> PurgeAsync(string? taskId, CancellationToken ct)
@@ -49,7 +49,7 @@ public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.At
         IReadOnlyList<string> orphanedHashes = [];
         var outcome = await store.ExecuteAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             if (taskId is not null)
             {
                 using var check = connection.CreateCommand();
@@ -119,7 +119,7 @@ public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.At
 
         var referenced = await store.QueryAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             return Strings(connection, "SELECT DISTINCT Sha256 FROM Attachments;").ToHashSet(StringComparer.Ordinal);
         }, ct);
         var stale = new List<string>();

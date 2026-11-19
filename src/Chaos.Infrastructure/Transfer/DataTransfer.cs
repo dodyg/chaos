@@ -56,7 +56,7 @@ public sealed class DataTransfer(SqliteApplicationStore store, string appVersion
         {
             await store.QueryAsync<object?>(async (session, token) =>
             {
-                var connection = ((SqliteDataSession)session).Connection;
+                var connection = session.Connection();
                 await using var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None);
                 switch (format)
                 {

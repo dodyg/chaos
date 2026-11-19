@@ -122,7 +122,7 @@ internal sealed class SyncDevice : IAsyncDisposable
     public Task ExecuteAsync(string sql) =>
         Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             await command.ExecuteNonQueryAsync(token);
             return 0;
@@ -135,7 +135,7 @@ internal sealed class SyncDevice : IAsyncDisposable
     public Task<object?> ScalarAsync(string sql) =>
         Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             return await command.ExecuteScalarAsync(token);
         });
@@ -145,7 +145,7 @@ internal sealed class SyncDevice : IAsyncDisposable
         var rows = new List<string>();
         await Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             using var reader = command.ExecuteReader();
             while (reader.Read())

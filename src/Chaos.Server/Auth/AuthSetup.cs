@@ -156,37 +156,41 @@ public static class AuthSetup
         return new Microsoft.IdentityModel.Tokens.ECDsaSecurityKey(key) { KeyId = keyId };
     }
 
-    private static void ConfigureKeys(OpenIddictServerBuilder options, KeyOptions keys, IHostEnvironment environment)
+    /// <summary>Which signing and encryption keys the host uses: the configured certificates, or ephemeral keys in development.</summary>
+    private static (X509Certificate2 Signing, X509Certificate2 Encryption)? LoadCertificates(KeyOptions keys, IHostEnvironment environment)
     {
         if (keys.SigningCertificatePath is { Length: > 0 } signing && keys.EncryptionCertificatePath is { Length: > 0 } encryption)
         {
-            options.AddSigningCertificate(X509CertificateLoader.LoadPkcs12FromFile(signing, keys.SigningCertificatePassword));
-            options.AddEncryptionCertificate(X509CertificateLoader.LoadPkcs12FromFile(encryption, keys.EncryptionCertificatePassword));
+            return (X509CertificateLoader.LoadPkcs12FromFile(signing, keys.SigningCertificatePassword),
+                X509CertificateLoader.LoadPkcs12FromFile(encryption, keys.EncryptionCertificatePassword));
         }
-        else if (environment.IsDevelopment())
+
+        return environment.IsDevelopment()
+            ? null
+            : throw new InvalidOperationException("Auth:SigningCertificatePath and Auth:EncryptionCertificatePath must be set outside development.");
+    }
+
+    private static void ConfigureKeys(OpenIddictServerBuilder options, KeyOptions keys, IHostEnvironment environment)
+    {
+        if (LoadCertificates(keys, environment) is { } certificates)
         {
-            options.AddEphemeralSigningKey().AddEphemeralEncryptionKey();
+            options.AddSigningCertificate(certificates.Signing).AddEncryptionCertificate(certificates.Encryption);
         }
         else
         {
-            throw new InvalidOperationException("Auth:SigningCertificatePath and Auth:EncryptionCertificatePath must be set outside development.");
+            options.AddEphemeralSigningKey().AddEphemeralEncryptionKey();
         }
     }
 
     private static void ConfigureKeys(OpenIddictClientBuilder options, KeyOptions keys, IHostEnvironment environment)
     {
-        if (keys.SigningCertificatePath is { Length: > 0 } signing && keys.EncryptionCertificatePath is { Length: > 0 } encryption)
+        if (LoadCertificates(keys, environment) is { } certificates)
         {
-            options.AddSigningCertificate(X509CertificateLoader.LoadPkcs12FromFile(signing, keys.SigningCertificatePassword));
-            options.AddEncryptionCertificate(X509CertificateLoader.LoadPkcs12FromFile(encryption, keys.EncryptionCertificatePassword));
-        }
-        else if (environment.IsDevelopment())
-        {
-            options.AddEphemeralSigningKey().AddEphemeralEncryptionKey();
+            options.AddSigningCertificate(certificates.Signing).AddEncryptionCertificate(certificates.Encryption);
         }
         else
         {
-            throw new InvalidOperationException("Auth:SigningCertificatePath and Auth:EncryptionCertificatePath must be set outside development.");
+            options.AddEphemeralSigningKey().AddEphemeralEncryptionKey();
         }
     }
 

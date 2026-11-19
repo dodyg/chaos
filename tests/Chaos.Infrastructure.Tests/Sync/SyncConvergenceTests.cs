@@ -69,7 +69,7 @@ public sealed class SyncConvergenceTests
         var payloads = new List<string>();
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "SELECT PayloadJson FROM SyncOutbox ORDER BY Seq;";
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -137,7 +137,7 @@ public sealed class SyncConvergenceTests
         var rows = new List<string>();
         await host.Store.QueryAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = sql;
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -587,7 +587,7 @@ public sealed class SyncConvergenceTests
     private static Task InsertLegacyPageAsync(DataHost host, string id, DateOnly date, string markdown) =>
         host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = """
                 INSERT INTO Pages (Id, SpaceId, Title, RawMarkdown, Position, DailyDate, DraftVersion, Version, CreatedAtUtc, UpdatedAtUtc)
                 VALUES ($id, (SELECT Id FROM Spaces LIMIT 1), $title, $markdown, 0, $date, 0, 1, $now, $now);
@@ -635,7 +635,7 @@ public sealed class SyncConvergenceTests
         var tagId = await SyncTestHelpers.TextAsync(host, $"SELECT Id FROM Tags WHERE NormalizedName = '{tagName}';");
         await host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = "INSERT INTO PageTags (PageId, TagId) VALUES ($page, $tag);";
             command.Parameters.AddWithValue("$page", pageId);
             command.Parameters.AddWithValue("$tag", tagId);
@@ -725,7 +725,7 @@ public sealed class SyncConvergenceTests
     private static Task InsertLegacyOccurrenceAsync(DataHost host, string id, string seriesId) =>
         host.Store.ExecuteAsync(async (session, token) =>
         {
-            using var command = ((SqliteDataSession)session).Connection.CreateCommand();
+            using var command = session.Connection().CreateCommand();
             command.CommandText = """
                 INSERT INTO RecurrenceOccurrences (Id, SeriesId, NominalKey, ScheduleKey, EffectiveLocal, State, CompletedAtUtc, SeriesRevision, Version, CreatedAtUtc, UpdatedAtUtc)
                 VALUES ($id, $series, '2026-11-24', '2026-11-24', '2026-11-24', 1, $now, 1, 1, $now, $now);

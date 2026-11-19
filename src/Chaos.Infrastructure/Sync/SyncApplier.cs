@@ -65,7 +65,7 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
 
         await store.ExecuteAsync(async (session, token) =>
         {
-            var connection = ((SqliteDataSession)session).Connection;
+            var connection = session.Connection();
             var schema = new SyncSchema(connection);
             SyncSql.Execute(connection, "UPDATE SyncApplyState SET Applying = 1 WHERE Id = 1;");
             SyncSql.Execute(connection, "PRAGMA defer_foreign_keys = ON;");
