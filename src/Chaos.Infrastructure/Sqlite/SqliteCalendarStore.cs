@@ -1,3 +1,4 @@
+using System.Globalization;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Microsoft.Data.Sqlite;
@@ -7,6 +8,36 @@ namespace Chaos.Infrastructure.Sqlite;
 /// <summary>Calendar sources, the meeting cache, fetch state and event links (PLAN2 P5; migration 028).</summary>
 public sealed class SqliteCalendarStore(SqliteConnection connection, Chaos.Application.Activity.IActivityRecorder? activity = null) : ICalendarStore
 {
+    /// <summary>What each enabled source last fetched, in the shape the online service stores for My Day on other devices.</summary>
+    public IReadOnlyList<Chaos.Sync.CalendarCacheSnapshot> ReadCacheSnapshots()
+    {
+        var result = new List<Chaos.Sync.CalendarCacheSnapshot>();
+        using var sources = connection.CreateCommand();
+        sources.CommandText = "SELECT s.Id, st.LastSuccessUtc FROM CalendarSources s JOIN CalendarSourceState st ON st.SourceId = s.Id WHERE s.Enabled = 1 AND s.DeletedAtUtc IS NULL AND st.LastSuccessUtc IS NOT NULL";
+        using var sourceReader = sources.ExecuteReader();
+        while (sourceReader.Read())
+        {
+            var id = sourceReader.GetString(0);
+            var fetched = DateTimeOffset.Parse(sourceReader.GetString(1), CultureInfo.InvariantCulture);
+            var events = new List<Chaos.Sync.CalendarCacheEvent>();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT ExternalId, StartUtc, EndUtc, AllDay, StartDate, EndDate, Title, Location, VideoUrl, WebUrl, Busy, FetchedUtc FROM CalendarEvents WHERE SourceId = $id";
+            command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                events.Add(new Chaos.Sync.CalendarCacheEvent(reader.GetString(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                    DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture), reader.GetInt64(3) != 0,
+                    reader.IsDBNull(4) ? null : DateOnly.ParseExact(reader.GetString(4), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    reader.IsDBNull(5) ? null : DateOnly.ParseExact(reader.GetString(5), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9), reader.GetInt64(10) != 0, DateTimeOffset.Parse(reader.GetString(11), CultureInfo.InvariantCulture)));
+            }
+            result.Add(new Chaos.Sync.CalendarCacheSnapshot(id, fetched, events));
+        }
+        return result;
+    }
+
     public async Task<CalendarSourceRecord?> GetSourceAsync(string id, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
