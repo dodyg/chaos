@@ -23,8 +23,7 @@ The desktop composition root is now `src/Chaos.Desktop/DesktopComposition.cs` (s
 Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) replaces the 47 `(SqliteDataSession)` casts, and `AuthSetup` loads its key certificates once for both OpenIddict builders. Several small items below were already finished earlier and are stale (catalog dictionary lookup, `SyncEngine` gate, lazy session stores, cached undo wrappers, security-header extension, side effects out of `AttachmentCommands`).
 
 Still open: narrower session
-interfaces, splitting the command classes themselves (queries
-from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
+interfaces, splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
 backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
 
 ## 0. Build and test status
@@ -113,7 +112,8 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   Move these behind `IAttachmentFileStore` or a small device-info abstraction.
 - **Large files:** `Planning/MyWeekCommands.cs` (1,399 lines, 68 members), `Pages/PageCommands.cs`,
   `Pad/PadCommands.cs` and `Tags/TagCommands.cs`. Split queries from commands, and move the request and result
-  records into their own files.
+  records into their own files. (Done: `MyWeekCommands` is split into contracts, commands and read model, and the page, pad and tag
+  records have their own files. `PageCommands`, `PadCommands` and `TagCommands` (680–830 lines each) still mix queries and commands.)
 
 ### Desktop RPC services (`src/Chaos.Desktop/Services`)
 - There are 167 `catch (AppException)` blocks that each map the error by hand, and the `Version`/`Date` parsers
