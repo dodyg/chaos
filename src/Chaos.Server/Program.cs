@@ -28,7 +28,7 @@ builder.AddNpgsqlDbContext<ChaosDbContext>(
     configureDbContextOptions: options => options.UseOpenIddict());
 
 builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
-builder.Services.AddServiceRateLimits();
+builder.Services.AddServiceRateLimits().AddAccountServices();
 builder.Services.AddSyncService(builder.Configuration);
 builder.Services.AddBlobService(builder.Configuration, builder.Environment);
 builder.Services.AddWebSessions(builder.Environment);
