@@ -2,7 +2,13 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { type BoardCardResponse, type BoardColumnResponse, type BoardGetResponse, type BoardSettingsDto, type TaskResponse } from "#neoastra";
+import {
+  type BoardCardResponse,
+  type BoardColumnResponse,
+  type BoardGetResponse,
+  type BoardSettingsDto,
+  type TaskResponse,
+} from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -24,7 +30,28 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { Board, dropPlacement, loadLayout, saveLayout } = await import("./Board");
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
-  return { id, title, spaceId: "space", containerId: "list-1", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
+  return {
+    id,
+    title,
+    spaceId: "space",
+    containerId: "list-1",
+    notes: "",
+    status: "NotStarted",
+    plannedDate: null,
+    dueDate: null,
+    version: "1",
+    createdAtUtc: "2026-01-01T00:00:00Z",
+    updatedAtUtc: "2026-01-01T00:00:00Z",
+    priority: "Normal",
+    estimateMinutes: null,
+    category: "Personal",
+    plannedTime: null,
+    plannedZoneId: null,
+    dueTime: null,
+    dueZoneId: null,
+    sectionId: null,
+    ...patch,
+  };
 }
 
 const statusColumns: BoardColumnResponse[] = [
@@ -32,31 +59,73 @@ const statusColumns: BoardColumnResponse[] = [
   { key: "InProgress", title: "In progress", isNone: false },
   { key: "Done", title: "Done", isNone: false },
 ];
-const defaultSettings: BoardSettingsDto = { groupBy: "Status", swimlaneBy: "None", columnTagId: null, swimlaneTagId: null, wipLimitsJson: "{}", hiddenColumnsJson: "[]", version: "3", isDefault: false };
+const defaultSettings: BoardSettingsDto = {
+  groupBy: "Status",
+  swimlaneBy: "None",
+  columnTagId: null,
+  swimlaneTagId: null,
+  wipLimitsJson: "{}",
+  hiddenColumnsJson: "[]",
+  version: "3",
+  isDefault: false,
+};
 
 function card(item: TaskResponse, patch: Partial<BoardCardResponse> = {}): BoardCardResponse {
   return { task: item, tagIds: [], subtasksTotal: 0, subtasksDone: 0, hasIssueLink: false, columnKey: item.status, laneKey: "", ...patch };
 }
 
 /** A fake board service: it serves one board and logs every move and settings write. */
-function fakes(options: { cards: BoardCardResponse[]; wipLimitsJson?: string; truncated?: boolean; totalCount?: number; askAboutSubtasks?: boolean; lanes?: BoardGetResponse["lanes"]; failMoves?: boolean }) {
+function fakes(options: {
+  cards: BoardCardResponse[];
+  wipLimitsJson?: string;
+  truncated?: boolean;
+  totalCount?: number;
+  askAboutSubtasks?: boolean;
+  lanes?: BoardGetResponse["lanes"];
+  failMoves?: boolean;
+}) {
   const calls: { method: string; request: Record<string, unknown> }[] = [];
   const board: BoardGetResponse = {
-    ok: true, error: null, settings: { ...defaultSettings, wipLimitsJson: options.wipLimitsJson ?? "{}" },
-    columns: statusColumns, lanes: options.lanes ?? [{ key: "", title: "All tasks", isNone: true }],
-    cards: options.cards, totalCount: options.totalCount ?? options.cards.length, truncated: options.truncated ?? false,
+    ok: true,
+    error: null,
+    settings: { ...defaultSettings, wipLimitsJson: options.wipLimitsJson ?? "{}" },
+    columns: statusColumns,
+    lanes: options.lanes ?? [{ key: "", title: "All tasks", isNone: true }],
+    cards: options.cards,
+    totalCount: options.totalCount ?? options.cards.length,
+    truncated: options.truncated ?? false,
   };
   const api = {
     get: async () => structuredClone(board),
     move: async (request: Record<string, unknown> & { toColumn: string | null; subtaskChoice: string | null }) => {
       calls.push({ method: "move", request });
       if (options.failMoves) {
-        return { ok: false, task: null, warning: null, error: { kind: "VersionConflict", message: "This task changed elsewhere while you were working. Refresh and try again.", fields: [], correlationId: "x" } };
+        return {
+          ok: false,
+          task: null,
+          warning: null,
+          error: {
+            kind: "VersionConflict",
+            message: "This task changed elsewhere while you were working. Refresh and try again.",
+            fields: [],
+            correlationId: "x",
+          },
+        };
       }
       if (options.askAboutSubtasks && request.toColumn === "Done" && request.subtaskChoice === null) {
-        return { ok: false, task: null, warning: null, error: { kind: "Validation", message: "Open subtasks", fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }], correlationId: "x" } };
+        return {
+          ok: false,
+          task: null,
+          warning: null,
+          error: {
+            kind: "Validation",
+            message: "Open subtasks",
+            fields: [{ fieldPath: "openSubtaskChoice", message: "Choose how to handle the open subtasks." }],
+            correlationId: "x",
+          },
+        };
       }
-      return { ok: true, task: (options.cards.find(item => item.task.id === request.taskId)?.task ?? null), error: null, warning: null };
+      return { ok: true, task: options.cards.find((item) => item.task.id === request.taskId)?.task ?? null, error: null, warning: null };
     },
     updateSettings: async (request: Record<string, unknown>) => {
       calls.push({ method: "updateSettings", request });
@@ -103,7 +172,10 @@ async function actionsOf(title: string) {
 }
 
 function mount(api: Parameters<typeof Board>[0]["api"], onOpen: (task: TaskResponse) => void = () => {}) {
-  return render(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={onOpen} onChanged={() => {}} api={api}/>, { container: dom.window.document.body });
+  return render(
+    <Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={onOpen} onChanged={() => {}} api={api} />,
+    { container: dom.window.document.body },
+  );
 }
 
 test("the layout preference is remembered per container and switching never touches tasks", () => {
@@ -169,14 +241,34 @@ test("after a move the board reads itself again, so the next move sends the new 
   let reads = 0;
   const moves: Record<string, unknown>[] = [];
   const read = (): BoardGetResponse => ({
-    ok: true, error: null, settings: defaultSettings, columns: statusColumns, lanes: [{ key: "", title: "All tasks", isNone: true }],
-    cards: [card(task("a", "First", { version: String(version) })), card(task("b", "Second", { version: String(version) }))], totalCount: 2, truncated: false,
+    ok: true,
+    error: null,
+    settings: defaultSettings,
+    columns: statusColumns,
+    lanes: [{ key: "", title: "All tasks", isNone: true }],
+    cards: [card(task("a", "First", { version: String(version) })), card(task("b", "Second", { version: String(version) }))],
+    totalCount: 2,
+    truncated: false,
   });
   const api = {
-    get: async () => { reads++; return read(); },
+    get: async () => {
+      reads++;
+      return read();
+    },
     move: async (request: Record<string, unknown>) => {
       moves.push(request);
-      if (request.expectedVersion !== String(version)) return { ok: false, task: null, warning: null, error: { kind: "VersionConflict", message: "This task changed elsewhere while you were working. Refresh and try again.", fields: [], correlationId: "x" } };
+      if (request.expectedVersion !== String(version))
+        return {
+          ok: false,
+          task: null,
+          warning: null,
+          error: {
+            kind: "VersionConflict",
+            message: "This task changed elsewhere while you were working. Refresh and try again.",
+            fields: [],
+            correlationId: "x",
+          },
+        };
       version++; // the reorder bumps both cards
       return { ok: true, task: null, error: null, warning: null };
     },
@@ -221,8 +313,14 @@ test("dragging within a column reorders it, and dropping on the same place moves
   dropAt(screen.getByLabelText("First"), 0);
   await waitFor(() => assert.equal(calls.length, 1));
   assert.deepEqual(
-    { taskId: calls[0].request.taskId, fromColumn: calls[0].request.fromColumn, toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) },
-    { taskId: "b", fromColumn: "NotStarted", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null });
+    {
+      taskId: calls[0].request.taskId,
+      fromColumn: calls[0].request.fromColumn,
+      toColumn: calls[0].request.toColumn,
+      ...placementOf(calls[0].request),
+    },
+    { taskId: "b", fromColumn: "NotStarted", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null },
+  );
 });
 
 test("an empty cell shows where the dragged card will land, and ending the drag clears it", async () => {
@@ -231,7 +329,7 @@ test("an empty cell shows where the dragged card will land, and ending the drag 
   await screen.findByText("First");
   dragCard("First");
   const done = screen.getByRole("region", { name: /Done column/ });
-  await new Promise(resolve => setTimeout(resolve, 0)); // the drag styles the card after dragstart
+  await new Promise((resolve) => setTimeout(resolve, 0)); // the drag styles the card after dragstart
   fireEvent.dragOver(done, { dataTransfer: dataTransfer() });
   assert.ok(await screen.findByText("Drop here."));
   fireEvent.dragEnd(screen.getByLabelText("First"), { dataTransfer: dataTransfer() });
@@ -241,7 +339,13 @@ test("an empty cell shows where the dragged card will land, and ending the drag 
 test("a card keeps its swimlane: another lane refuses the drop", async () => {
   const high = card(task("a", "Urgent one", { priority: "High" }), { laneKey: "High" });
   const low = card(task("b", "Later one", { priority: "Low", status: "InProgress" }), { laneKey: "Low" });
-  const { api, calls } = fakes({ cards: [high, low], lanes: [{ key: "High", title: "High", isNone: false }, { key: "Low", title: "Low", isNone: false }] });
+  const { api, calls } = fakes({
+    cards: [high, low],
+    lanes: [
+      { key: "High", title: "High", isNone: false },
+      { key: "Low", title: "Low", isNone: false },
+    ],
+  });
   mount(api);
   await screen.findByText("Later one");
   dragCard("Urgent one");
@@ -253,7 +357,10 @@ test("a card keeps its swimlane: another lane refuses the drop", async () => {
   dragCard("Urgent one");
   dropAt(screen.getByRole("region", { name: "High · In progress column" }), 0);
   await waitFor(() => assert.equal(calls.length, 1));
-  assert.deepEqual({ toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) }, { toColumn: "InProgress", beforeTaskId: null, afterTaskId: null });
+  assert.deepEqual(
+    { toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) },
+    { toColumn: "InProgress", beforeTaskId: null, afterTaskId: null },
+  );
 });
 
 test("a refused move keeps the board on screen and says why", async () => {
@@ -272,7 +379,7 @@ test("arrow keys walk the cards across columns and Enter opens the task", async 
   const second = card(task("b", "Second", { status: "InProgress" }));
   const opened: TaskResponse[] = [];
   const { api } = fakes({ cards: [first, second] });
-  mount(api, task => opened.push(task));
+  mount(api, (task) => opened.push(task));
   await screen.findByText("Second");
   const start = screen.getByLabelText("First");
   start.focus();
@@ -282,7 +389,10 @@ test("arrow keys walk the cards across columns and Enter opens the task", async 
   fireEvent.keyDown(screen.getByLabelText("Second"), { key: "ArrowLeft" });
   assert.equal(dom.window.document.activeElement, screen.getByLabelText("First"));
   fireEvent.keyDown(screen.getByLabelText("First"), { key: "Enter" });
-  assert.deepEqual(opened.map(item => item.id), ["a"]);
+  assert.deepEqual(
+    opened.map((item) => item.id),
+    ["a"],
+  );
 });
 
 test("the card menu moves a card up and to another column", async () => {
@@ -295,13 +405,19 @@ test("the card menu moves a card up and to another column", async () => {
   await user.click(screen.getByRole("button", { name: "Actions for Second" }));
   await user.click(screen.getByRole("menuitem", { name: "Move up" }));
   await waitFor(() => assert.equal(calls.length, 1));
-  assert.deepEqual({ taskId: calls[0].request.taskId, toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) }, { taskId: "b", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null });
+  assert.deepEqual(
+    { taskId: calls[0].request.taskId, toColumn: calls[0].request.toColumn, ...placementOf(calls[0].request) },
+    { taskId: "b", toColumn: "NotStarted", beforeTaskId: "a", afterTaskId: null },
+  );
 
   await user.click(await actionsOf("First"));
   await user.click(screen.getByRole("menuitem", { name: "Move to column…" }));
   await user.click(screen.getByRole("menuitem", { name: "Move to In progress" }));
   await waitFor(() => assert.equal(calls.length, 2));
-  assert.deepEqual({ taskId: calls[1].request.taskId, toColumn: calls[1].request.toColumn, ...placementOf(calls[1].request) }, { taskId: "a", toColumn: "InProgress", beforeTaskId: null, afterTaskId: null });
+  assert.deepEqual(
+    { taskId: calls[1].request.taskId, toColumn: calls[1].request.toColumn, ...placementOf(calls[1].request) },
+    { taskId: "a", toColumn: "InProgress", beforeTaskId: null, afterTaskId: null },
+  );
 });
 
 test("moving to Done with open subtasks asks and retries with the chosen handling", async () => {
@@ -345,7 +461,16 @@ test("hidden columns are not drawn until they are unhidden in the settings", asy
   const first = card(task("a", "First"));
   const second = card(task("b", "Second", { status: "Done" }));
   const { api } = fakes({ cards: [first, second] });
-  const board: BoardGetResponse = { ok: true, error: null, settings: { ...defaultSettings, hiddenColumnsJson: '["Done"]' }, columns: statusColumns, lanes: [{ key: "", title: "All tasks", isNone: true }], cards: [first, second], totalCount: 2, truncated: false };
+  const board: BoardGetResponse = {
+    ok: true,
+    error: null,
+    settings: { ...defaultSettings, hiddenColumnsJson: '["Done"]' },
+    columns: statusColumns,
+    lanes: [{ key: "", title: "All tasks", isNone: true }],
+    cards: [first, second],
+    totalCount: 2,
+    truncated: false,
+  };
   (api as unknown as { get: () => Promise<BoardGetResponse> }).get = async () => structuredClone(board);
   mount(api);
   assert.ok(await screen.findByText("First"));
@@ -370,18 +495,32 @@ test("after a menu move the moved card has the focus, and Escape in a menu retur
 test("one card is always in the Tab order, even when the last focused card has left the board", async () => {
   let cards = [card(task("a", "First")), card(task("b", "Second"))];
   const api = {
-    get: async () => ({ ok: true, error: null, settings: defaultSettings, columns: statusColumns, lanes: [{ key: "", title: "All tasks", isNone: true }], cards, totalCount: cards.length, truncated: false }),
+    get: async () => ({
+      ok: true,
+      error: null,
+      settings: defaultSettings,
+      columns: statusColumns,
+      lanes: [{ key: "", title: "All tasks", isNone: true }],
+      cards,
+      totalCount: cards.length,
+      truncated: false,
+    }),
     move: async () => ({ ok: true, task: null, error: null, warning: null }),
     updateSettings: async () => ({ ok: true, settings: defaultSettings, error: null }),
   } as unknown as Parameters<typeof Board>[0]["api"];
-  const view = render(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={() => {}} onChanged={() => {}} api={api}/>, { container: dom.window.document.body });
+  const view = render(
+    <Board containerId="list-1" tags={[]} focus={null} busy={false} revision={0} onOpen={() => {}} onChanged={() => {}} api={api} />,
+    { container: dom.window.document.body },
+  );
   await screen.findByText("Second");
   act(() => screen.getByLabelText("Second").focus());
   assert.equal(screen.getByLabelText("Second").tabIndex, 0);
   assert.equal(screen.getByLabelText("First").tabIndex, -1);
   cards = [cards[0]];
   await act(async () => {
-    view.rerender(<Board containerId="list-1" tags={[]} focus={null} busy={false} revision={1} onOpen={() => {}} onChanged={() => {}} api={api}/>);
+    view.rerender(
+      <Board containerId="list-1" tags={[]} focus={null} busy={false} revision={1} onOpen={() => {}} onChanged={() => {}} api={api} />,
+    );
   });
   assert.equal(screen.queryByLabelText("Second"), null);
   assert.equal(screen.getByLabelText("First").tabIndex, 0, "the first card takes the Tab stop");

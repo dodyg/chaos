@@ -8,10 +8,10 @@ import { modelledCommands } from "./preview/backend";
 const manifest = JSON.parse(readFileSync(new URL("../../obj/neoastra/neoastra.manifest.json", import.meta.url), "utf8")) as {
   services: { name: string; commands: { name: string }[] }[];
 };
-const real = new Set(manifest.services.flatMap(service => service.commands.map(command => `${service.name}.${command.name}`)));
+const real = new Set(manifest.services.flatMap((service) => service.commands.map((command) => `${service.name}.${command.name}`)));
 
 test("every command the preview answers is a command the desktop host has", () => {
-  const stale = modelledCommands().filter(command => !real.has(command));
+  const stale = modelledCommands().filter((command) => !real.has(command));
   assert.ok(modelledCommands().length > 40, "the preview handlers were not found");
   assert.deepEqual(stale, [], "these preview handlers name commands the host does not have; rename or remove them");
 });

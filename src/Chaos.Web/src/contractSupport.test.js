@@ -9,11 +9,18 @@ test("a fixture shaped like the server's record passes", () => {
 });
 
 test("a renamed, missing or mistyped field is reported", () => {
-  assert.throws(() => assertServerShape("WebSearchResult", { truncated: false, items: [{ kind: "task", id, name: "Task" }] }), /items\[0\]\.name is not a field of WebSearchItem[\s\S]*items\[0\]\.title is missing/);
+  assert.throws(
+    () => assertServerShape("WebSearchResult", { truncated: false, items: [{ kind: "task", id, name: "Task" }] }),
+    /items\[0\]\.name is not a field of WebSearchItem[\s\S]*items\[0\]\.title is missing/,
+  );
   assert.throws(() => assertServerShape("WebSearchResult", { truncated: "no", items: [] }), /truncated is not a boolean/);
-  assert.throws(() => assertServerShape("WebSearchResult", { truncated: false, items: [{ kind: "task", id: "x", title: "t" }] }), /id is not a guid/);
+  assert.throws(
+    () => assertServerShape("WebSearchResult", { truncated: false, items: [{ kind: "task", id: "x", title: "t" }] }),
+    /id is not a guid/,
+  );
 });
 
 test("the snapshot covers the records the PWA reads", () => {
-  for (const name of ["WebToday", "WebTask", "WebList", "WebSearchResult", "WebPage", "WebNote", "WebAppearance"]) assert.ok(serverContract[name], name);
+  for (const name of ["WebToday", "WebTask", "WebList", "WebSearchResult", "WebPage", "WebNote", "WebAppearance"])
+    assert.ok(serverContract[name], name);
 });

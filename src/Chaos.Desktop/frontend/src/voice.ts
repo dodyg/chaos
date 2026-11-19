@@ -25,11 +25,16 @@ export function classifyMicError(error: unknown): MicProblem {
 
 export function micMessage(problem: MicProblem): string {
   switch (problem) {
-    case "unsupported": return "This version of Chaos cannot record audio. Attach an audio file instead.";
-    case "denied": return "Microphone access was denied. Allow it for Chaos in Windows privacy settings, or attach an audio file instead.";
-    case "missing": return "No microphone was found. Plug one in, or attach an audio file instead.";
-    case "busy": return "The microphone is in use by another app, or could not be started. Close the other app and try again, or attach an audio file instead.";
-    default: return "Recording could not start. Try again, or attach an audio file instead.";
+    case "unsupported":
+      return "This version of Chaos cannot record audio. Attach an audio file instead.";
+    case "denied":
+      return "Microphone access was denied. Allow it for Chaos in Windows privacy settings, or attach an audio file instead.";
+    case "missing":
+      return "No microphone was found. Plug one in, or attach an audio file instead.";
+    case "busy":
+      return "The microphone is in use by another app, or could not be started. Close the other app and try again, or attach an audio file instead.";
+    default:
+      return "Recording could not start. Try again, or attach an audio file instead.";
   }
 }
 

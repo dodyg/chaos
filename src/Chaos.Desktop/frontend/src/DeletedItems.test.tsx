@@ -18,7 +18,7 @@ const many = Array.from({ length: 120 }, (_, i) => ({ id: `n${i}`, title: i === 
 
 test("a long trash draws a bounded list and finds the rest by name", () => {
   const restored: string[] = [];
-  render(<DeletedItems noun="notes" items={many} name={item => item.title} busy={false} onRestore={item => restored.push(item.id)}/>);
+  render(<DeletedItems noun="notes" items={many} name={(item) => item.title} busy={false} onRestore={(item) => restored.push(item.id)} />);
   assert.equal(screen.getAllByRole("button", { name: "Restore" }).length, 50);
   assert.ok(screen.getByText("Showing 50 of 120. Type to find the others."));
 
@@ -35,7 +35,7 @@ test("a long trash draws a bounded list and finds the rest by name", () => {
 });
 
 test("a short trash has no find box", () => {
-  render(<DeletedItems noun="notes" items={many.slice(0, 5)} name={item => item.title} busy={false} onRestore={() => {}}/>);
+  render(<DeletedItems noun="notes" items={many.slice(0, 5)} name={(item) => item.title} busy={false} onRestore={() => {}} />);
   assert.equal(screen.queryByRole("searchbox"), null);
   assert.equal(screen.getAllByRole("button", { name: "Restore" }).length, 5);
   cleanup();

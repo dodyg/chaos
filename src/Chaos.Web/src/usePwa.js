@@ -5,7 +5,7 @@ export function usePwa() {
   const [update, setUpdate] = useState(null);
 
   useEffect(() => {
-    const onInstall = event => {
+    const onInstall = (event) => {
       event.preventDefault();
       setInstall(event);
     };
@@ -43,15 +43,20 @@ export function usePwa() {
     };
     serviceWorker.addEventListener("controllerchange", changed);
     document.addEventListener("visibilitychange", check);
-    serviceWorker.register("/app/sw.js").then(result => {
-      if (closed) return;
-      registration = result;
-      registration.addEventListener("updatefound", found);
-      found();
-      inspect();
-    }).catch(error => console.warn("Chaos offline shell could not start.", error));
+    serviceWorker
+      .register("/app/sw.js")
+      .then((result) => {
+        if (closed) return;
+        registration = result;
+        registration.addEventListener("updatefound", found);
+        found();
+        inspect();
+      })
+      .catch((error) => console.warn("Chaos offline shell could not start.", error));
 
-    const activate = () => { reloading = true; };
+    const activate = () => {
+      reloading = true;
+    };
     addEventListener("chaos-reload", activate);
     return () => {
       closed = true;
@@ -64,13 +69,17 @@ export function usePwa() {
   }, []);
 
   return {
-    offerInstall: install ? async () => {
-      setInstall(null);
-      await install.prompt();
-    } : null,
-    reloadForUpdate: update ? () => {
-      dispatchEvent(new Event("chaos-reload"));
-      update.postMessage("activate-update");
-    } : null,
+    offerInstall: install
+      ? async () => {
+          setInstall(null);
+          await install.prompt();
+        }
+      : null,
+    reloadForUpdate: update
+      ? () => {
+          dispatchEvent(new Event("chaos-reload"));
+          update.postMessage("activate-update");
+        }
+      : null,
   };
 }

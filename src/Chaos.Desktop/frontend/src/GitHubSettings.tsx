@@ -1,6 +1,14 @@
 import React from "react";
 import { RefreshCw } from "lucide-react";
-import { gitHubRpc as githubRpc, type GitHubStatusResponse, type GitHubCandidateDto, type GitHubRepositoryDto, type GitHubFilterDto, type GitHubTargetDto, type GitHubOperationResponse } from "#neoastra";
+import {
+  gitHubRpc as githubRpc,
+  type GitHubStatusResponse,
+  type GitHubCandidateDto,
+  type GitHubRepositoryDto,
+  type GitHubFilterDto,
+  type GitHubTargetDto,
+  type GitHubOperationResponse,
+} from "#neoastra";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -9,46 +17,184 @@ import { trackSync, setSyncObserved } from "./syncActivity";
 import { useActivity, useJobChange } from "./activity";
 
 type Api = typeof githubRpc;
-const emptyFilter: GitHubFilterDto = { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 };
-type Options = { targetContainerId: string; targetSectionId: string | null; filter: GitHubFilterDto; milestonesAsProjects: boolean; taskCategory: string };
-function RepositoryOptions({ targets, repository, busy, onSave, onCancel }: { targets: ReadonlyArray<GitHubTargetDto>; repository?: GitHubRepositoryDto; busy: boolean; onSave: (options: Options) => void; onCancel: () => void }) {
+const emptyFilter: GitHubFilterDto = {
+  labels: [],
+  labelMode: "any",
+  assignee: "any",
+  milestone: null,
+  noMilestone: false,
+  includeClosedDays: 0,
+};
+type Options = {
+  targetContainerId: string;
+  targetSectionId: string | null;
+  filter: GitHubFilterDto;
+  milestonesAsProjects: boolean;
+  taskCategory: string;
+};
+function RepositoryOptions({
+  targets,
+  repository,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  targets: ReadonlyArray<GitHubTargetDto>;
+  repository?: GitHubRepositoryDto;
+  busy: boolean;
+  onSave: (options: Options) => void;
+  onCancel: () => void;
+}) {
   const [container, setContainer] = React.useState(repository?.targetContainerId ?? targets[0]?.id ?? "");
   const [section, setSection] = React.useState(repository?.targetSectionId ?? "");
   const [filter, setFilter] = React.useState(() => repository?.filter ?? emptyFilter);
   const [labels, setLabels] = React.useState(filter.labels.join(", "));
   const [projects, setProjects] = React.useState(repository?.milestonesAsProjects ?? false);
   const [category, setCategory] = React.useState(repository?.taskCategory ?? "Personal");
-  return <form className="grid gap-3 rounded-lg border p-4" onSubmit={e => { e.preventDefault(); onSave({ targetContainerId: container, targetSectionId: section || null, filter: { ...filter, labels: labels.split(",").map(v => v.trim()).filter(Boolean) }, milestonesAsProjects: projects, taskCategory: category }); }}>
-    <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
-      <legend className="px-1 text-sm font-semibold">Sync filters</legend>
-      <p className="text-sm text-muted-foreground">Choose which GitHub issues sync with Chaos. Linked tasks that no longer match stay in Chaos but stop syncing.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Labels (comma separated)"><Input value={labels} onChange={e => setLabels(e.target.value)}/></Field>
-        <Field label="Label matching"><NativeSelect value={filter.labelMode} onChange={e => setFilter({ ...filter, labelMode: e.target.value })}><NativeSelectOption value="any">Any label</NativeSelectOption><NativeSelectOption value="all">All labels</NativeSelectOption></NativeSelect></Field>
-        <Field label="Assigned to"><NativeSelect value={filter.assignee} onChange={e => setFilter({ ...filter, assignee: e.target.value })}><NativeSelectOption value="any">Anyone</NativeSelectOption><NativeSelectOption value="me">Me</NativeSelectOption><NativeSelectOption value="none">Unassigned</NativeSelectOption></NativeSelect></Field>
-        <Field label="Milestone number (optional)"><Input type="number" min="1" step="1" disabled={filter.noMilestone} value={filter.milestone ?? ""} onChange={e => setFilter({ ...filter, milestone: e.target.value || null })}/></Field>
-        <Field label="Include issues closed in the last days"><Input type="number" min="0" max="365" value={filter.includeClosedDays} onChange={e => setFilter({ ...filter, includeClosedDays: Number(e.target.value) })}/></Field>
+  return (
+    <form
+      className="grid gap-3 rounded-lg border p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          targetContainerId: container,
+          targetSectionId: section || null,
+          filter: {
+            ...filter,
+            labels: labels
+              .split(",")
+              .map((v) => v.trim())
+              .filter(Boolean),
+          },
+          milestonesAsProjects: projects,
+          taskCategory: category,
+        });
+      }}
+    >
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
+        <legend className="px-1 text-sm font-semibold">Sync filters</legend>
+        <p className="text-sm text-muted-foreground">
+          Choose which GitHub issues sync with Chaos. Linked tasks that no longer match stay in Chaos but stop syncing.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Labels (comma separated)">
+            <Input value={labels} onChange={(e) => setLabels(e.target.value)} />
+          </Field>
+          <Field label="Label matching">
+            <NativeSelect value={filter.labelMode} onChange={(e) => setFilter({ ...filter, labelMode: e.target.value })}>
+              <NativeSelectOption value="any">Any label</NativeSelectOption>
+              <NativeSelectOption value="all">All labels</NativeSelectOption>
+            </NativeSelect>
+          </Field>
+          <Field label="Assigned to">
+            <NativeSelect value={filter.assignee} onChange={(e) => setFilter({ ...filter, assignee: e.target.value })}>
+              <NativeSelectOption value="any">Anyone</NativeSelectOption>
+              <NativeSelectOption value="me">Me</NativeSelectOption>
+              <NativeSelectOption value="none">Unassigned</NativeSelectOption>
+            </NativeSelect>
+          </Field>
+          <Field label="Milestone number (optional)">
+            <Input
+              type="number"
+              min="1"
+              step="1"
+              disabled={filter.noMilestone}
+              value={filter.milestone ?? ""}
+              onChange={(e) => setFilter({ ...filter, milestone: e.target.value || null })}
+            />
+          </Field>
+          <Field label="Include issues closed in the last days">
+            <Input
+              type="number"
+              min="0"
+              max="365"
+              value={filter.includeClosedDays}
+              onChange={(e) => setFilter({ ...filter, includeClosedDays: Number(e.target.value) })}
+            />
+          </Field>
+        </div>
+        <p className="text-xs text-muted-foreground">Use 0 to import only open issues; linked issues can still sync when closed.</p>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={filter.noMilestone}
+            onChange={(e) => setFilter({ ...filter, noMilestone: e.target.checked, milestone: null })}
+          />
+          Only issues without a milestone
+        </label>
+      </fieldset>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
+        <legend className="px-1 text-sm font-semibold">Task destination</legend>
+        <p className="text-sm text-muted-foreground">
+          Choose where newly imported issues become tasks and how they count toward capacity. Changes apply to new imports; existing tasks
+          keep their destination and category.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Destination">
+            <NativeSelect
+              value={container}
+              onChange={(e) => {
+                setContainer(e.target.value);
+                setSection("");
+              }}
+            >
+              {targets.map((t) => (
+                <NativeSelectOption key={t.id} value={t.id}>
+                  {t.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="Section">
+            <NativeSelect value={section} onChange={(e) => setSection(e.target.value)}>
+              <NativeSelectOption value="">No section</NativeSelectOption>
+              {targets
+                .find((t) => t.id === container)
+                ?.sections.map((s) => (
+                  <NativeSelectOption key={s.id} value={s.id}>
+                    {s.title}
+                  </NativeSelectOption>
+                ))}
+            </NativeSelect>
+          </Field>
+          <Field label="Task category">
+            <NativeSelect value={category} onChange={(e) => setCategory(e.target.value)}>
+              <NativeSelectOption value="Personal">Personal</NativeSelectOption>
+              <NativeSelectOption value="Work">Work</NativeSelectOption>
+            </NativeSelect>
+          </Field>
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-0.5" checked={projects} onChange={(e) => setProjects(e.target.checked)} />
+          Use milestones as projects
+        </label>
+        <p className="text-xs text-muted-foreground">
+          When enabled, issues with a milestone go to a project for that milestone; the destination above is used for issues without one. A
+          milestone change can move a linked task whose placement is still managed by GitHub.
+        </p>
+      </fieldset>
+      <div className="flex gap-2">
+        <Button disabled={busy || !container}>Save repository</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
       </div>
-      <p className="text-xs text-muted-foreground">Use 0 to import only open issues; linked issues can still sync when closed.</p>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={filter.noMilestone} onChange={e => setFilter({ ...filter, noMilestone: e.target.checked, milestone: null })}/>Only issues without a milestone</label>
-    </fieldset>
-    <fieldset className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4">
-      <legend className="px-1 text-sm font-semibold">Task destination</legend>
-      <p className="text-sm text-muted-foreground">Choose where newly imported issues become tasks and how they count toward capacity. Changes apply to new imports; existing tasks keep their destination and category.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Destination"><NativeSelect value={container} onChange={e => { setContainer(e.target.value); setSection(""); }}>{targets.map(t => <NativeSelectOption key={t.id} value={t.id}>{t.name}</NativeSelectOption>)}</NativeSelect></Field>
-        <Field label="Section"><NativeSelect value={section} onChange={e => setSection(e.target.value)}><NativeSelectOption value="">No section</NativeSelectOption>{targets.find(t => t.id === container)?.sections.map(s => <NativeSelectOption key={s.id} value={s.id}>{s.title}</NativeSelectOption>)}</NativeSelect></Field>
-        <Field label="Task category"><NativeSelect value={category} onChange={e => setCategory(e.target.value)}><NativeSelectOption value="Personal">Personal</NativeSelectOption><NativeSelectOption value="Work">Work</NativeSelectOption></NativeSelect></Field>
-      </div>
-      <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={projects} onChange={e => setProjects(e.target.checked)}/>Use milestones as projects</label>
-      <p className="text-xs text-muted-foreground">When enabled, issues with a milestone go to a project for that milestone; the destination above is used for issues without one. A milestone change can move a linked task whose placement is still managed by GitHub.</p>
-    </fieldset>
-    <div className="flex gap-2"><Button disabled={busy || !container}>Save repository</Button><Button type="button" variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button></div>
-  </form>;
+    </form>
+  );
 }
 
-export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 1000 }: { api?: Api; onSynced?: () => void; pollIntervalMs?: number }) {
-  const onSyncedRef = React.useRef(onSynced); onSyncedRef.current = onSynced;
+export function GitHubSettings({
+  api = githubRpc,
+  onSynced,
+  pollIntervalMs = 1000,
+}: {
+  api?: Api;
+  onSynced?: () => void;
+  pollIntervalMs?: number;
+}) {
+  const onSyncedRef = React.useRef(onSynced);
+  onSyncedRef.current = onSynced;
   const notifiedFinish = React.useRef<string | null>(null);
   const pending = React.useRef(new Map<string, string>());
   const [status, setStatus] = React.useState<GitHubStatusResponse | null>(null);
@@ -60,27 +206,63 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
   const [chosen, setChosen] = React.useState<GitHubCandidateDto | null>(null);
   const [editing, setEditing] = React.useState<GitHubRepositoryDto | null>(null);
   const [confirm, setConfirm] = React.useState<GitHubRepositoryDto | "disconnect" | null>(null);
-  async function load() { const result = await api.status({}); if (!result.ok) throw new Error(result.error?.message ?? "Could not load GitHub settings."); setStatus(result); }
-  React.useEffect(() => { void load().catch(() => setError("Could not load GitHub settings.")); }, [api]);
+  async function load() {
+    const result = await api.status({});
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not load GitHub settings.");
+    setStatus(result);
+  }
+  React.useEffect(() => {
+    void load().catch(() => setError("Could not load GitHub settings."));
+  }, [api]);
   // A sync run starting or finishing (pushed by the host) refreshes the status; focus does the same only while the stream is unavailable.
-  useJobChange("github.sync", () => { void api.status({}).then(result => { if (result.ok) setStatus(result); else setError(result.error?.message ?? "Could not refresh sync status."); }).catch(() => setError("Could not refresh sync status. Reload settings to check again.")); });
-  useActivity([], () => { void load().catch(() => undefined); });
+  useJobChange("github.sync", () => {
+    void api
+      .status({})
+      .then((result) => {
+        if (result.ok) setStatus(result);
+        else setError(result.error?.message ?? "Could not refresh sync status.");
+      })
+      .catch(() => setError("Could not refresh sync status. Reload settings to check again."));
+  });
+  useActivity([], () => {
+    void load().catch(() => undefined);
+  });
   React.useEffect(() => {
     const finished = status?.sync?.finishedAtUtc;
-    if (!status?.sync?.running && finished && finished !== notifiedFinish.current) { notifiedFinish.current = finished; onSyncedRef.current?.(); }
+    if (!status?.sync?.running && finished && finished !== notifiedFinish.current) {
+      notifiedFinish.current = finished;
+      onSyncedRef.current?.();
+    }
   }, [status?.sync?.running, status?.sync?.finishedAtUtc]);
-  React.useEffect(() => { setSyncObserved("github", status?.sync?.running === true); }, [status?.sync?.running]);
+  React.useEffect(() => {
+    setSyncObserved("github", status?.sync?.running === true);
+  }, [status?.sync?.running]);
   React.useEffect(() => () => setSyncObserved("github", false), []);
   async function syncNow(repositoryId: string | null = null) {
     await run(async () => {
       const result = await trackSync("github", api.syncNow({ repositoryId }));
       if (!result.ok) throw new Error(result.error?.message ?? "Could not start GitHub sync.");
-      setStatus(current => current ? { ...current, sync: result.sync } : current);
+      setStatus((current) => (current ? { ...current, sync: result.sync } : current));
       await load();
     });
   }
-  async function run(action: () => Promise<void>) { if (busy) return; setBusy(true); setError(null); try { await action(); } catch (e) { setError(e instanceof Error ? e.message : "Could not complete the request."); } finally { setBusy(false); } }
-  async function retry<T extends { operationId: string }>(method: string, send: (request: T) => Promise<GitHubOperationResponse>, request: T) {
+  async function run(action: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not complete the request.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function retry<T extends { operationId: string }>(
+    method: string,
+    send: (request: T) => Promise<GitHubOperationResponse>,
+    request: T,
+  ) {
     const { operationId: unused, ...payload } = request;
     const key = method + JSON.stringify(payload);
     const operationId = pending.current.get(key) ?? request.operationId;
@@ -89,60 +271,372 @@ export function GitHubSettings({ api = githubRpc, onSynced, pollIntervalMs = 100
     if (result.ok) pending.current.delete(key);
     return result;
   }
-  async function change(action: () => Promise<GitHubOperationResponse>) { const result = await action(); if (!result.ok) throw new Error(result.error?.message ?? "Could not save GitHub settings."); await load(); }
+  async function change(action: () => Promise<GitHubOperationResponse>) {
+    const result = await action();
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not save GitHub settings.");
+    await load();
+  }
   async function discover(next: boolean) {
-    await run(async () => { const result = await api.listRepositories({ cursor: next ? cursor : null }); if (!result.ok) throw new Error(result.error?.message ?? "Could not list repositories."); setCandidates(next ? [...candidates, ...result.repositories] : result.repositories); setCursor(result.nextCursor); });
+    await run(async () => {
+      const result = await api.listRepositories({ cursor: next ? cursor : null });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not list repositories.");
+      setCandidates(next ? [...candidates, ...result.repositories] : result.repositories);
+      setCursor(result.nextCursor);
+    });
   }
   const connection = status?.connection;
   const sync = status?.sync;
   const working = busy || sync?.running === true;
-  const versioned = (r: { id: string; version: string }, paused = false) => ({ operationId: crypto.randomUUID(), id: r.id, expectedVersion: r.version, paused });
-  return <section aria-label="GitHub connection" className="grid gap-4">
-    <div><h2 className="text-lg font-semibold">GitHub</h2><p className="text-sm text-muted-foreground">Connect GitHub issues to your personal tasks. GitHub CLI keeps your login on this computer.</p></div>
-    <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void run(load)}>Reload settings</Button>
-    {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
-    {!status ? <p>Loading GitHub settings…</p> : !connection ? <div className="grid gap-3 rounded-xl border p-4">
-      <p>Install GitHub CLI 2.103.3 or newer in its standard Program Files location. In a terminal, run <code>gh auth login --hostname github.com</code> and complete sign-in there, then return here.</p>
-      <p className="text-sm text-muted-foreground">Connecting verifies the CLI account. Chaos uses its login in memory to call GitHub. Disconnecting leaves GitHub CLI signed in.</p>
-      <Button className="justify-self-start" disabled={working} onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}>Connect using GitHub CLI</Button>
-    </div> : <>
-      <div className="flex flex-wrap items-center gap-3"><p>Connected as <strong>@{connection.accountLogin}</strong> · {connection.state}</p>
-        <Button variant="outline" disabled={working} onClick={() => void run(() => change(() => retry("pauseConnection", api.pauseConnection, versioned(connection, connection.state !== "Paused"))))}>{connection.state === "Paused" ? "Resume connection" : "Pause connection"}</Button>
-        <Button variant="outline" disabled={working} onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}>Verify login</Button>
-        <Button variant="outline" disabled={working} onClick={() => setConfirm("disconnect")}>Disconnect</Button>
+  const versioned = (r: { id: string; version: string }, paused = false) => ({
+    operationId: crypto.randomUUID(),
+    id: r.id,
+    expectedVersion: r.version,
+    paused,
+  });
+  return (
+    <section aria-label="GitHub connection" className="grid gap-4">
+      <div>
+        <h2 className="text-lg font-semibold">GitHub</h2>
+        <p className="text-sm text-muted-foreground">
+          Connect GitHub issues to your personal tasks. GitHub CLI keeps your login on this computer.
+        </p>
       </div>
-      <div className="grid gap-2 rounded-xl border p-4" aria-label="GitHub sync">
-        <p className="text-sm">{connection.isRunner ? "GitHub sync runs on this device." : connection.runnerDeviceName ? `GitHub sync runs on ${connection.runnerDeviceName}.` : "Choose a device to run GitHub sync."}</p>
-        {!connection.isRunner && <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void run(() => change(() => retry("runOnThisDevice", api.runOnThisDevice, versioned(connection))))}>Run GitHub sync on this device</Button>}
-        <Button className="justify-self-start" aria-busy={sync?.running === true} disabled={working || !connection.isRunner || connection.state !== "Active" || !status.repositories.some(r => r.state === "Active")} onClick={() => void syncNow()}><RefreshCw aria-hidden="true" className={sync?.running ? "motion-safe:animate-spin" : undefined}/>{sync?.running ? "Syncing…" : sync?.morePages ? "Continue sync" : "Sync now"}</Button>
-        <p className="text-sm text-muted-foreground">Sync changes with GitHub. Actions on linked tasks sync that issue in the background. The first import includes the newest 100 comments; older comments stay on GitHub.</p>
-        {sync?.running && <p role="status" className="text-sm">Fetching GitHub issues and comments…</p>}
-        {sync?.error && <Banner tone="error">{sync.error.message} Some changes may already have arrived; retry to continue.</Banner>}
-        {!sync?.running && sync?.created != null && <p role="status" className="text-sm">Imported {sync.created} {sync.created === 1 ? "task" : "tasks"}; updated {sync.updated ?? 0} {sync.updated === 1 ? "task" : "tasks"}; {sync.commentChanges ?? 0} comment {sync.commentChanges === 1 ? "change" : "changes"}.{sync.morePages ? " More pages remain. Continue sync to fetch them." : " This pass is complete."}{sync.conflicts ? ` GitHub won ${sync.conflicts} conflicts; local values are kept in history.` : ""}</p>}
-        {!sync?.running && sync?.finishedAtUtc && <p className="text-xs text-muted-foreground">Last pass: <time dateTime={sync.finishedAtUtc}>{new Date(sync.finishedAtUtc).toLocaleString()}</time></p>}
-      </div>
-      <label className="flex gap-2 text-sm"><input type="checkbox" disabled={working} checked={connection.postDiaryByDefault} onChange={e => void run(() => change(() => retry("updateSettings", api.updateSettings, { ...versioned(connection), postDiaryByDefault: e.target.checked, createLabelsForTags: connection.createLabelsForTags })))}/>Post new diary updates to GitHub by default</label>
-      <label className="flex gap-2 text-sm"><input type="checkbox" disabled={working} checked={connection.createLabelsForTags} onChange={e => void run(() => change(() => retry("updateSettings", api.updateSettings, { ...versioned(connection), postDiaryByDefault: connection.postDiaryByDefault, createLabelsForTags: e.target.checked })))}/>Allow creating GitHub labels for local tags</label>
-      <div className="grid gap-3"><h3 className="font-semibold">Repositories</h3>{status.repositories.length === 0 && <p className="text-sm text-muted-foreground">No repositories added yet.</p>}
-        {status.repositories.map(r => <div key={r.id} className="grid gap-2 rounded-xl border p-3"><div className="flex flex-wrap items-center gap-2"><strong dir="auto" className="mr-auto">{r.fullName}</strong><span className="text-sm">{r.state}</span>
-          <Button variant="outline" size="sm" aria-label={`Sync ${r.fullName}`} disabled={working || !connection.isRunner || connection.state !== "Active" || r.state !== "Active"} onClick={() => void syncNow(r.id)}>Sync</Button>
-          <Button variant="outline" size="sm" disabled={working} onClick={() => { setEditing(r); setChosen(null); }}>Edit repository</Button>
-          <Button variant="outline" size="sm" disabled={working} onClick={() => void run(() => change(() => retry("pauseRepository", api.pauseRepository, versioned(r, r.state === "Active"))))}>{r.state === "Unavailable" ? "Retry repository" : r.state === "Paused" ? "Resume" : "Pause"}</Button>
-          <Button variant="outline" size="sm" disabled={working} onClick={() => setConfirm(r)}>Remove</Button></div>
-          {editing?.id === r.id && <RepositoryOptions key={r.version} targets={status.targets} repository={r} busy={working} onCancel={() => setEditing(null)} onSave={options => void run(async () => { await change(() => retry("updateRepository", api.updateRepository, { operationId: crypto.randomUUID(), id: r.id, expectedVersion: r.version, ...options })); setEditing(null); })}/>}
-        </div>)}
-      </div>
-      <div className="grid gap-3 rounded-xl border p-4"><h3 className="font-semibold">Add a repository</h3><p className="text-sm text-muted-foreground">Repository visibility does not guarantee permission to update issues.</p>
-        <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void discover(false)}>Browse repositories</Button>
-        <form className="flex items-end gap-2" onSubmit={e => { e.preventDefault(); void run(async () => { const parts = lookup.trim().split("/"); if (parts.length !== 2) throw new Error("Enter owner/repository."); const result = await api.lookupRepository({ owner: parts[0], name: parts[1] }); if (!result.ok) throw new Error(result.error?.message ?? "Repository not found."); setCandidates(result.repositories); setCursor(null); }); }}><Field label="Find owner/repository"><Input value={lookup} onChange={e => setLookup(e.target.value)} placeholder="owner/repository"/></Field><Button variant="outline" disabled={working || !lookup.trim()}>Find</Button></form>
-        {candidates.map(c => { const added = c.alreadyAdded || status.repositories.some(r => r.repositoryId === c.repositoryId); return <div key={c.repositoryId} className="flex items-center gap-2"><span className="mr-auto">{c.fullName}{c.isPrivate ? " · Private" : ""}</span><Button variant="outline" size="sm" disabled={working || added || !c.hasIssues} onClick={() => { setChosen(c); setEditing(null); }}>{added ? "Already added" : !c.hasIssues ? "Issues disabled" : "Choose"}</Button></div>; })}
-        {cursor && <Button variant="outline" disabled={working} onClick={() => void discover(true)}>More repositories</Button>}
-        {chosen && <div className="grid gap-2"><p>Adding {chosen.fullName}</p><RepositoryOptions key={chosen.repositoryId} targets={status.targets} busy={working} onCancel={() => setChosen(null)} onSave={options => void run(async () => { await change(() => retry("addRepository", api.addRepository, { operationId: crypto.randomUUID(), connectionId: connection.id, expectedVersion: connection.version, repositoryId: chosen.repositoryId, owner: chosen.owner, name: chosen.name, ...options })); setChosen(null); })}/></div>}
-      </div>
-      {confirm && <div role="alertdialog" aria-label={confirm === "disconnect" ? "Disconnect GitHub?" : "Remove repository?"} className="grid gap-3 rounded-xl border p-4">
-        <p>{confirm === "disconnect" ? "Disconnect GitHub? Your tasks stay in Chaos as ordinary tasks. GitHub CLI remains signed in." : `Remove ${confirm.fullName}? Its tasks stay in Chaos as ordinary tasks.`}</p>
-        <div className="flex gap-2"><Button disabled={working} onClick={() => void run(async () => { await change(() => confirm === "disconnect" ? retry("disconnect", api.disconnect, versioned(connection)) : retry("removeRepository", api.removeRepository, versioned(confirm))); setConfirm(null); setCandidates([]); setChosen(null); setEditing(null); })}>Confirm {confirm === "disconnect" ? "disconnect" : "removal"}</Button><Button variant="outline" disabled={working} onClick={() => setConfirm(null)}>Cancel</Button></div>
-      </div>}
-    </>}
-  </section>;
+      <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void run(load)}>
+        Reload settings
+      </Button>
+      {error && (
+        <Banner tone="error" onDismiss={() => setError(null)}>
+          {error}
+        </Banner>
+      )}
+      {!status ? (
+        <p>Loading GitHub settings…</p>
+      ) : !connection ? (
+        <div className="grid gap-3 rounded-xl border p-4">
+          <p>
+            Install GitHub CLI 2.103.3 or newer in its standard Program Files location. In a terminal, run{" "}
+            <code>gh auth login --hostname github.com</code> and complete sign-in there, then return here.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Connecting verifies the CLI account. Chaos uses its login in memory to call GitHub. Disconnecting leaves GitHub CLI signed in.
+          </p>
+          <Button
+            className="justify-self-start"
+            disabled={working}
+            onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}
+          >
+            Connect using GitHub CLI
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <p>
+              Connected as <strong>@{connection.accountLogin}</strong> · {connection.state}
+            </p>
+            <Button
+              variant="outline"
+              disabled={working}
+              onClick={() =>
+                void run(() =>
+                  change(() => retry("pauseConnection", api.pauseConnection, versioned(connection, connection.state !== "Paused"))),
+                )
+              }
+            >
+              {connection.state === "Paused" ? "Resume connection" : "Pause connection"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={working}
+              onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}
+            >
+              Verify login
+            </Button>
+            <Button variant="outline" disabled={working} onClick={() => setConfirm("disconnect")}>
+              Disconnect
+            </Button>
+          </div>
+          <div className="grid gap-2 rounded-xl border p-4" aria-label="GitHub sync">
+            <p className="text-sm">
+              {connection.isRunner
+                ? "GitHub sync runs on this device."
+                : connection.runnerDeviceName
+                  ? `GitHub sync runs on ${connection.runnerDeviceName}.`
+                  : "Choose a device to run GitHub sync."}
+            </p>
+            {!connection.isRunner && (
+              <Button
+                variant="outline"
+                className="justify-self-start"
+                disabled={working}
+                onClick={() => void run(() => change(() => retry("runOnThisDevice", api.runOnThisDevice, versioned(connection))))}
+              >
+                Run GitHub sync on this device
+              </Button>
+            )}
+            <Button
+              className="justify-self-start"
+              aria-busy={sync?.running === true}
+              disabled={
+                working || !connection.isRunner || connection.state !== "Active" || !status.repositories.some((r) => r.state === "Active")
+              }
+              onClick={() => void syncNow()}
+            >
+              <RefreshCw aria-hidden="true" className={sync?.running ? "motion-safe:animate-spin" : undefined} />
+              {sync?.running ? "Syncing…" : sync?.morePages ? "Continue sync" : "Sync now"}
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              Sync changes with GitHub. Actions on linked tasks sync that issue in the background. The first import includes the newest 100
+              comments; older comments stay on GitHub.
+            </p>
+            {sync?.running && (
+              <p role="status" className="text-sm">
+                Fetching GitHub issues and comments…
+              </p>
+            )}
+            {sync?.error && <Banner tone="error">{sync.error.message} Some changes may already have arrived; retry to continue.</Banner>}
+            {!sync?.running && sync?.created != null && (
+              <p role="status" className="text-sm">
+                Imported {sync.created} {sync.created === 1 ? "task" : "tasks"}; updated {sync.updated ?? 0}{" "}
+                {sync.updated === 1 ? "task" : "tasks"}; {sync.commentChanges ?? 0} comment{" "}
+                {sync.commentChanges === 1 ? "change" : "changes"}.
+                {sync.morePages ? " More pages remain. Continue sync to fetch them." : " This pass is complete."}
+                {sync.conflicts ? ` GitHub won ${sync.conflicts} conflicts; local values are kept in history.` : ""}
+              </p>
+            )}
+            {!sync?.running && sync?.finishedAtUtc && (
+              <p className="text-xs text-muted-foreground">
+                Last pass: <time dateTime={sync.finishedAtUtc}>{new Date(sync.finishedAtUtc).toLocaleString()}</time>
+              </p>
+            )}
+          </div>
+          <label className="flex gap-2 text-sm">
+            <input
+              type="checkbox"
+              disabled={working}
+              checked={connection.postDiaryByDefault}
+              onChange={(e) =>
+                void run(() =>
+                  change(() =>
+                    retry("updateSettings", api.updateSettings, {
+                      ...versioned(connection),
+                      postDiaryByDefault: e.target.checked,
+                      createLabelsForTags: connection.createLabelsForTags,
+                    }),
+                  ),
+                )
+              }
+            />
+            Post new diary updates to GitHub by default
+          </label>
+          <label className="flex gap-2 text-sm">
+            <input
+              type="checkbox"
+              disabled={working}
+              checked={connection.createLabelsForTags}
+              onChange={(e) =>
+                void run(() =>
+                  change(() =>
+                    retry("updateSettings", api.updateSettings, {
+                      ...versioned(connection),
+                      postDiaryByDefault: connection.postDiaryByDefault,
+                      createLabelsForTags: e.target.checked,
+                    }),
+                  ),
+                )
+              }
+            />
+            Allow creating GitHub labels for local tags
+          </label>
+          <div className="grid gap-3">
+            <h3 className="font-semibold">Repositories</h3>
+            {status.repositories.length === 0 && <p className="text-sm text-muted-foreground">No repositories added yet.</p>}
+            {status.repositories.map((r) => (
+              <div key={r.id} className="grid gap-2 rounded-xl border p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <strong dir="auto" className="mr-auto">
+                    {r.fullName}
+                  </strong>
+                  <span className="text-sm">{r.state}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Sync ${r.fullName}`}
+                    disabled={working || !connection.isRunner || connection.state !== "Active" || r.state !== "Active"}
+                    onClick={() => void syncNow(r.id)}
+                  >
+                    Sync
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={working}
+                    onClick={() => {
+                      setEditing(r);
+                      setChosen(null);
+                    }}
+                  >
+                    Edit repository
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={working}
+                    onClick={() =>
+                      void run(() => change(() => retry("pauseRepository", api.pauseRepository, versioned(r, r.state === "Active"))))
+                    }
+                  >
+                    {r.state === "Unavailable" ? "Retry repository" : r.state === "Paused" ? "Resume" : "Pause"}
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={working} onClick={() => setConfirm(r)}>
+                    Remove
+                  </Button>
+                </div>
+                {editing?.id === r.id && (
+                  <RepositoryOptions
+                    key={r.version}
+                    targets={status.targets}
+                    repository={r}
+                    busy={working}
+                    onCancel={() => setEditing(null)}
+                    onSave={(options) =>
+                      void run(async () => {
+                        await change(() =>
+                          retry("updateRepository", api.updateRepository, {
+                            operationId: crypto.randomUUID(),
+                            id: r.id,
+                            expectedVersion: r.version,
+                            ...options,
+                          }),
+                        );
+                        setEditing(null);
+                      })
+                    }
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 rounded-xl border p-4">
+            <h3 className="font-semibold">Add a repository</h3>
+            <p className="text-sm text-muted-foreground">Repository visibility does not guarantee permission to update issues.</p>
+            <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void discover(false)}>
+              Browse repositories
+            </Button>
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void run(async () => {
+                  const parts = lookup.trim().split("/");
+                  if (parts.length !== 2) throw new Error("Enter owner/repository.");
+                  const result = await api.lookupRepository({ owner: parts[0], name: parts[1] });
+                  if (!result.ok) throw new Error(result.error?.message ?? "Repository not found.");
+                  setCandidates(result.repositories);
+                  setCursor(null);
+                });
+              }}
+            >
+              <Field label="Find owner/repository">
+                <Input value={lookup} onChange={(e) => setLookup(e.target.value)} placeholder="owner/repository" />
+              </Field>
+              <Button variant="outline" disabled={working || !lookup.trim()}>
+                Find
+              </Button>
+            </form>
+            {candidates.map((c) => {
+              const added = c.alreadyAdded || status.repositories.some((r) => r.repositoryId === c.repositoryId);
+              return (
+                <div key={c.repositoryId} className="flex items-center gap-2">
+                  <span className="mr-auto">
+                    {c.fullName}
+                    {c.isPrivate ? " · Private" : ""}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={working || added || !c.hasIssues}
+                    onClick={() => {
+                      setChosen(c);
+                      setEditing(null);
+                    }}
+                  >
+                    {added ? "Already added" : !c.hasIssues ? "Issues disabled" : "Choose"}
+                  </Button>
+                </div>
+              );
+            })}
+            {cursor && (
+              <Button variant="outline" disabled={working} onClick={() => void discover(true)}>
+                More repositories
+              </Button>
+            )}
+            {chosen && (
+              <div className="grid gap-2">
+                <p>Adding {chosen.fullName}</p>
+                <RepositoryOptions
+                  key={chosen.repositoryId}
+                  targets={status.targets}
+                  busy={working}
+                  onCancel={() => setChosen(null)}
+                  onSave={(options) =>
+                    void run(async () => {
+                      await change(() =>
+                        retry("addRepository", api.addRepository, {
+                          operationId: crypto.randomUUID(),
+                          connectionId: connection.id,
+                          expectedVersion: connection.version,
+                          repositoryId: chosen.repositoryId,
+                          owner: chosen.owner,
+                          name: chosen.name,
+                          ...options,
+                        }),
+                      );
+                      setChosen(null);
+                    })
+                  }
+                />
+              </div>
+            )}
+          </div>
+          {confirm && (
+            <div
+              role="alertdialog"
+              aria-label={confirm === "disconnect" ? "Disconnect GitHub?" : "Remove repository?"}
+              className="grid gap-3 rounded-xl border p-4"
+            >
+              <p>
+                {confirm === "disconnect"
+                  ? "Disconnect GitHub? Your tasks stay in Chaos as ordinary tasks. GitHub CLI remains signed in."
+                  : `Remove ${confirm.fullName}? Its tasks stay in Chaos as ordinary tasks.`}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  disabled={working}
+                  onClick={() =>
+                    void run(async () => {
+                      await change(() =>
+                        confirm === "disconnect"
+                          ? retry("disconnect", api.disconnect, versioned(connection))
+                          : retry("removeRepository", api.removeRepository, versioned(confirm)),
+                      );
+                      setConfirm(null);
+                      setCandidates([]);
+                      setChosen(null);
+                      setEditing(null);
+                    })
+                  }
+                >
+                  Confirm {confirm === "disconnect" ? "disconnect" : "removal"}
+                </Button>
+                <Button variant="outline" disabled={working} onClick={() => setConfirm(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
 }

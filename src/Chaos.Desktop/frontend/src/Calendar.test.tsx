@@ -28,32 +28,120 @@ afterEach(() => cleanup());
 const today = localDate(new Date());
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
-  return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "7", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
+  return {
+    id,
+    title,
+    spaceId: "space",
+    containerId: "inbox",
+    notes: "",
+    status: "NotStarted",
+    plannedDate: null,
+    dueDate: null,
+    version: "7",
+    createdAtUtc: "2026-01-01T00:00:00Z",
+    updatedAtUtc: "2026-01-01T00:00:00Z",
+    priority: "Normal",
+    estimateMinutes: null,
+    category: "Personal",
+    plannedTime: null,
+    plannedZoneId: null,
+    dueTime: null,
+    dueZoneId: null,
+    sectionId: null,
+    ...patch,
+  };
 }
 function entry(kind: string, id: string, title: string, patch: Partial<CalendarEntryDto> = {}): CalendarEntryDto {
-  return { kind, taskId: id, title, status: "NotStarted", priority: "Normal", containerName: "Inbox", date: today, time: null, endTime: null, isBlock: false, isEstimated: false, estimateMinutes: null, category: "Personal", ...patch };
+  return {
+    kind,
+    taskId: id,
+    title,
+    status: "NotStarted",
+    priority: "Normal",
+    containerName: "Inbox",
+    date: today,
+    time: null,
+    endTime: null,
+    isBlock: false,
+    isEstimated: false,
+    estimateMinutes: null,
+    category: "Personal",
+    ...patch,
+  };
 }
-const day = (date: string, patch: Partial<CalendarDayDto> = {}): CalendarDayDto =>
-  ({ date, availableMinutes: 480, workAllowanceMinutes: null, busyMinutes: 0, plannedMinutes: 0, workMinutes: 0, unknownEstimates: 0, openCount: 0, overTotal: false, overWork: false, ...patch });
+const day = (date: string, patch: Partial<CalendarDayDto> = {}): CalendarDayDto => ({
+  date,
+  availableMinutes: 480,
+  workAllowanceMinutes: null,
+  busyMinutes: 0,
+  plannedMinutes: 0,
+  workMinutes: 0,
+  unknownEstimates: 0,
+  openCount: 0,
+  overTotal: false,
+  overWork: false,
+  ...patch,
+});
 
 function fakes(entries: CalendarEntryDto[], unscheduled: QueryRowResponse[] = [], tasks: TaskResponse[] = [], editOk = true) {
   const calls: { method: string; request: Record<string, unknown> }[] = [];
   const api = {
     range: async (request: Record<string, unknown>): Promise<CalendarRangeResponse> => {
       calls.push({ method: "range", request });
-      return { ok: true, error: null, from: request.from as string, to: request.to as string, today, zoneId: "Europe/Paris", entries, meetings: [], days: [day(today, { plannedMinutes: 600, overTotal: true })], truncated: false };
+      return {
+        ok: true,
+        error: null,
+        from: request.from as string,
+        to: request.to as string,
+        today,
+        zoneId: "Europe/Paris",
+        entries,
+        meetings: [],
+        days: [day(today, { plannedMinutes: 600, overTotal: true })],
+        truncated: false,
+      };
     },
-    unscheduled: async (request: Record<string, unknown>) => { calls.push({ method: "unscheduled", request }); return { ok: true, error: null, rows: unscheduled, totalCount: unscheduled.length, nextCursor: null }; },
+    unscheduled: async (request: Record<string, unknown>) => {
+      calls.push({ method: "unscheduled", request });
+      return { ok: true, error: null, rows: unscheduled, totalCount: unscheduled.length, nextCursor: null };
+    },
   } as unknown as NonNullable<Parameters<typeof Calendar>[0]["api"]>;
   const taskApi = {
-    get: async (request: { taskId: string }) => { calls.push({ method: "get", request }); const found = tasks.find(item => item.id === request.taskId); return { ok: !!found, task: found ?? null, error: found ? null : { message: "gone" } }; },
-    edit: async (request: Record<string, unknown>) => { calls.push({ method: "edit", request }); return editOk ? { ok: true, task: tasks[0], error: null } : { ok: false, task: null, error: { message: "This task changed elsewhere." } }; },
+    get: async (request: { taskId: string }) => {
+      calls.push({ method: "get", request });
+      const found = tasks.find((item) => item.id === request.taskId);
+      return { ok: !!found, task: found ?? null, error: found ? null : { message: "gone" } };
+    },
+    edit: async (request: Record<string, unknown>) => {
+      calls.push({ method: "edit", request });
+      return editOk
+        ? { ok: true, task: tasks[0], error: null }
+        : { ok: false, task: null, error: { message: "This task changed elsewhere." } };
+    },
   } as unknown as NonNullable<Parameters<typeof Calendar>[0]["taskApi"]>;
   return { api, taskApi, calls };
 }
 
-function mount(api: ReturnType<typeof fakes>["api"], taskApi: ReturnType<typeof fakes>["taskApi"], extra: { onOpen?: (task: TaskResponse) => void; onChanged?: () => void; focus?: "Work" | "Personal" | null } = {}) {
-  return render(<Calendar tags={[]} containers={[]} focus={extra.focus ?? null} busy={false} revision={0} today={today} onOpen={extra.onOpen ?? (() => {})} onChanged={extra.onChanged ?? (() => {})} api={api} taskApi={taskApi}/>, { container: dom.window.document.body });
+function mount(
+  api: ReturnType<typeof fakes>["api"],
+  taskApi: ReturnType<typeof fakes>["taskApi"],
+  extra: { onOpen?: (task: TaskResponse) => void; onChanged?: () => void; focus?: "Work" | "Personal" | null } = {},
+) {
+  return render(
+    <Calendar
+      tags={[]}
+      containers={[]}
+      focus={extra.focus ?? null}
+      busy={false}
+      revision={0}
+      today={today}
+      onOpen={extra.onOpen ?? (() => {})}
+      onChanged={extra.onChanged ?? (() => {})}
+      api={api}
+      taskApi={taskApi}
+    />,
+    { container: dom.window.document.body },
+  );
 }
 
 test("a timed block with an estimate ends at start plus estimate; due entries and untimed ones are all-day", () => {
@@ -81,7 +169,7 @@ test("the range is read with the focus and the filters, and an overloaded day ca
   const { api, taskApi, calls } = fakes([entry("Planned", "a", "Write report")]);
   mount(api, taskApi, { focus: "Work" });
   await screen.findByText("Write report");
-  const range = calls.find(call => call.method === "range")!.request as { from: string; to: string; filters: Record<string, unknown> };
+  const range = calls.find((call) => call.method === "range")!.request as { from: string; to: string; filters: Record<string, unknown> };
   assert.equal(range.filters.category, "Work");
   assert.equal(range.filters.showPlanned, true);
   assert.equal(range.filters.showCompleted, false);
@@ -105,8 +193,8 @@ test("a planned entry opens a menu whose Move to date saves the planned date and
   await user.type(date, "2026-12-03");
   await user.type(within(dialog).getByLabelText("Time (optional)"), "14:30");
   await user.click(within(dialog).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.ok(calls.some(call => call.method === "edit")));
-  const edit = calls.find(call => call.method === "edit")!.request;
+  await waitFor(() => assert.ok(calls.some((call) => call.method === "edit")));
+  const edit = calls.find((call) => call.method === "edit")!.request;
   assert.equal(edit.taskId, "a");
   assert.equal(edit.expectedVersion, "7");
   assert.equal(edit.plannedDate, "2026-12-03");
@@ -133,7 +221,7 @@ test("a due marker opens its task directly instead of offering to move it", asyn
   const user = userEvent.setup({ document: dom.window.document });
   const opened: string[] = [];
   const { api, taskApi } = fakes([entry("Due", "d", "File taxes")], [], [task("d", "File taxes", { dueDate: today })]);
-  mount(api, taskApi, { onOpen: item => opened.push(item.id) });
+  mount(api, taskApi, { onOpen: (item) => opened.push(item.id) });
   await user.click(await screen.findByText("File taxes"));
   await waitFor(() => assert.deepEqual(opened, ["d"]));
   assert.equal(screen.queryByRole("region", { name: "Selected entry" }), null);
@@ -142,7 +230,17 @@ test("a due marker opens its task directly instead of offering to move it", asyn
 test("an unscheduled task is planned with the keyboard: Plan… sets a date and clears the time", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const loose = task("u", "Book dentist");
-  const row: QueryRowResponse = { task: loose, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null };
+  const row: QueryRowResponse = {
+    task: loose,
+    containerName: "Inbox",
+    containerArchived: false,
+    tagIds: [],
+    matches: [],
+    groupDate: null,
+    waitingPerson: null,
+    nextFollowUpAtUtc: null,
+    lastActivityAtUtc: null,
+  };
   const { api, taskApi, calls } = fakes([], [row], [loose]);
   mount(api, taskApi);
   await screen.findByText("Book dentist");
@@ -152,8 +250,8 @@ test("an unscheduled task is planned with the keyboard: Plan… sets a date and 
   await user.clear(date);
   await user.type(date, "2026-12-05");
   await user.click(within(dialog).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.ok(calls.some(call => call.method === "edit")));
-  const edit = calls.find(call => call.method === "edit")!.request;
+  await waitFor(() => assert.ok(calls.some((call) => call.method === "edit")));
+  const edit = calls.find((call) => call.method === "edit")!.request;
   assert.equal(edit.plannedDate, "2026-12-05");
   assert.equal(edit.plannedTime, null);
   assert.equal(edit.plannedZoneId, null);
@@ -163,9 +261,11 @@ test("turning off Planned and Due is sent as filters, and the grid keys move a h
   const user = userEvent.setup({ document: dom.window.document });
   const { api, taskApi, calls } = fakes([]);
   mount(api, taskApi);
-  await waitFor(() => assert.ok(calls.some(call => call.method === "range")));
+  await waitFor(() => assert.ok(calls.some((call) => call.method === "range")));
   await user.click(screen.getByLabelText("Due"));
-  await waitFor(() => assert.equal((calls.filter(call => call.method === "range").at(-1)!.request.filters as { showDue: boolean }).showDue, false));
+  await waitFor(() =>
+    assert.equal((calls.filter((call) => call.method === "range").at(-1)!.request.filters as { showDue: boolean }).showDue, false),
+  );
   const grid = screen.getByRole("group", { name: /Calendar grid/ });
   grid.focus();
   await user.keyboard("{ArrowRight}");

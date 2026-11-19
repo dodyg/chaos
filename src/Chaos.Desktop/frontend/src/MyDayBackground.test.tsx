@@ -17,12 +17,12 @@ const { DayBackgroundSettings, backgroundScenes, loadDayBackground, useDayBackgr
 
 function Settings() {
   const { background, save } = useDayBackground();
-  return <DayBackgroundSettings background={background} onSave={save}/>;
+  return <DayBackgroundSettings background={background} onSave={save} />;
 }
 
 test("background color and image persist locally and reset to default", async () => {
   dom.window.localStorage.clear();
-  render(<Settings/>);
+  render(<Settings />);
   fireEvent.click(screen.getByLabelText("Ocean"));
   assert.deepEqual(loadDayBackground(), { kind: "color", value: "#245e77" });
   fireEvent.click(screen.getByLabelText("Mountain sunset"));
@@ -38,7 +38,7 @@ test("background color and image persist locally and reset to default", async ()
 
 test("rejects oversized images without replacing the current background", () => {
   dom.window.localStorage.clear();
-  render(<Settings/>);
+  render(<Settings />);
   fireEvent.click(screen.getByLabelText("Ocean"));
   const image = new dom.window.File([new Uint8Array(2 * 1024 * 1024 + 1)], "large.png", { type: "image/png" });
   fireEvent.change(screen.getByLabelText("Background image"), { target: { files: [image] } });

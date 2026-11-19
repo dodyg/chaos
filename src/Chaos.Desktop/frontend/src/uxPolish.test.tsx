@@ -27,7 +27,10 @@ test("dates read as people say them and due dates carry urgency", () => {
   assert.equal(friendlyDate("2026-11-13", today), "Today");
   assert.equal(friendlyDate("2026-11-14", today), "Tomorrow");
   assert.equal(friendlyDate("2026-11-12", today), "Yesterday");
-  assert.equal(friendlyDate("2026-11-16", today), new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" }).format(new Date("2026-11-16T00:00:00Z")));
+  assert.equal(
+    friendlyDate("2026-11-16", today),
+    new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" }).format(new Date("2026-11-16T00:00:00Z")),
+  );
   assert.ok(!friendlyDate("2026-11-30", today).includes("2026"), "this year's dates leave the year out");
   assert.ok(friendlyDate("2027-01-05", today).includes("2027"));
   assert.equal(daysBetween("2026-11-13", "2026-11-30"), 17);
@@ -55,10 +58,18 @@ test("the command palette filters, moves with the arrows, runs on Enter and find
     { id: "b", group: "Go to", label: "My Week", run: () => ran.push("My Week") },
     { id: "c", group: "Lists", label: "Home", run: () => ran.push("Home") },
   ];
-  render(<CommandPalette commands={commands} searchTasks={async text => [{ id: "t1", title: `Found ${text}`, detail: "Inbox" }]} onOpenTask={id => opened.push(id)} onClose={() => closed++}/>, { container: dom.window.document.body });
+  render(
+    <CommandPalette
+      commands={commands}
+      searchTasks={async (text) => [{ id: "t1", title: `Found ${text}`, detail: "Inbox" }]}
+      onOpenTask={(id) => opened.push(id)}
+      onClose={() => closed++}
+    />,
+    { container: dom.window.document.body },
+  );
   const box = screen.getByRole("combobox", { name: "Search commands, lists and tasks" });
   fireEvent.change(box, { target: { value: "my" } });
-  assert.equal(screen.getAllByRole("option").filter(option => option.textContent?.startsWith("My")).length, 2);
+  assert.equal(screen.getAllByRole("option").filter((option) => option.textContent?.startsWith("My")).length, 2);
   fireEvent.keyDown(box, { key: "ArrowDown" });
   fireEvent.keyDown(box, { key: "Enter" });
   assert.deepEqual(ran, ["My Week"]);
@@ -77,12 +88,28 @@ test("J/K move between task rows, X toggles done, M adds to My Day and folded ro
   const toggled: string[] = [];
   const added: string[] = [];
   function Rows() {
-    return <div onKeyDown={event => handleListKeys(event, id => added.push(id))}>
-      {["a", "b"].map(id => <div key={id} data-task-row={id}><input type="checkbox" aria-label={`Done ${id}`} onChange={() => toggled.push(id)}/><button type="button" data-slot="row-title">Task {id}</button></div>)}
-      <details><summary>Finished</summary><div data-task-row="c"><button type="button" data-slot="row-title">Task c</button></div></details>
-    </div>;
+    return (
+      <div onKeyDown={(event) => handleListKeys(event, (id) => added.push(id))}>
+        {["a", "b"].map((id) => (
+          <div key={id} data-task-row={id}>
+            <input type="checkbox" aria-label={`Done ${id}`} onChange={() => toggled.push(id)} />
+            <button type="button" data-slot="row-title">
+              Task {id}
+            </button>
+          </div>
+        ))}
+        <details>
+          <summary>Finished</summary>
+          <div data-task-row="c">
+            <button type="button" data-slot="row-title">
+              Task c
+            </button>
+          </div>
+        </details>
+      </div>
+    );
   }
-  render(<Rows/>, { container: dom.window.document.body });
+  render(<Rows />, { container: dom.window.document.body });
   const first = screen.getByRole("button", { name: "Task a" });
   first.focus();
   fireEvent.keyDown(first, { key: "j" });

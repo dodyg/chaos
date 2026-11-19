@@ -5,7 +5,9 @@ import { trackSync, setSyncObserved } from "./syncActivity";
 // The hook reads the same snapshot; observe it through a subscription-free probe by tracking promises.
 test("tracked syncs and observed syncs combine per kind and settle back to idle", async () => {
   let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const tracked = trackSync("calendar", pending);
   setSyncObserved("github", true);
   release();

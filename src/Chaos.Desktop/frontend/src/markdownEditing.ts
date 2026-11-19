@@ -3,7 +3,8 @@
  * selection and returns the replaced range plus the selection to restore, so the editor can
  * apply it as one native edit (keeping the textarea's own undo history and caret).
  */
-export type FormatAction = "heading" | "bold" | "italic" | "strike" | "bullets" | "numbers" | "checklist" | "quote" | "code" | "codeBlock" | "link" | "table";
+export type FormatAction =
+  "heading" | "bold" | "italic" | "strike" | "bullets" | "numbers" | "checklist" | "quote" | "code" | "codeBlock" | "link" | "table";
 
 export type TextEdit = {
   /** Range of the original text to replace. */
@@ -25,7 +26,7 @@ const wrappers: Partial<Record<FormatAction, [string, string, string]>> = {
 const linePrefixes: Partial<Record<FormatAction, (index: number) => string>> = {
   heading: () => "## ",
   bullets: () => "- ",
-  numbers: index => `${index + 1}. `,
+  numbers: (index) => `${index + 1}. `,
   checklist: () => "- [ ] ",
   quote: () => "> ",
 };
@@ -44,7 +45,13 @@ export function formatEdit(text: string, selectionStart: number, selectionEnd: n
       return { start, end, insert: inner, selectionStart: start, selectionEnd: start + inner.length };
     }
     const inner = selected || placeholder;
-    return { start, end, insert: `${open}${inner}${close}`, selectionStart: start + open.length, selectionEnd: start + open.length + inner.length };
+    return {
+      start,
+      end,
+      insert: `${open}${inner}${close}`,
+      selectionStart: start + open.length,
+      selectionEnd: start + open.length + inner.length,
+    };
   }
 
   const prefix = linePrefixes[action];
@@ -55,7 +62,9 @@ export function formatEdit(text: string, selectionStart: number, selectionEnd: n
     const lines = text.slice(lineStart, lineEnd).split("\n");
     const prefixes = lines.map((_, index) => prefix(index));
     const allPrefixed = lines.every((line, index) => line.startsWith(prefixes[index]));
-    const replaced = lines.map((line, index) => allPrefixed ? line.slice(prefixes[index].length) : `${prefixes[index]}${line}`).join("\n");
+    const replaced = lines
+      .map((line, index) => (allPrefixed ? line.slice(prefixes[index].length) : `${prefixes[index]}${line}`))
+      .join("\n");
     return { start: lineStart, end: lineEnd, insert: replaced, selectionStart: lineStart, selectionEnd: lineStart + replaced.length };
   }
 
@@ -89,24 +98,24 @@ export function linkQueryAt(text: string, caret: number): { start: number; query
 
 /** Markdown for an internal task link: a readable label plus the stable ID. */
 export function taskLinkMarkdown(title: string, taskId: string): string {
-  const label = title.replace(/[[\]\\]/g, character => `\\${character}`);
+  const label = title.replace(/[[\]\\]/g, (character) => `\\${character}`);
   return `[${label}](chaos:task/${taskId})`;
 }
 
 /** Markdown for an internal pad-note link: a readable label plus the stable note ID. */
 export function padLinkMarkdown(label: string, itemId: string): string {
-  const text = label.replace(/[[\]\\]/g, character => `\\${character}`);
+  const text = label.replace(/[[\]\\]/g, (character) => `\\${character}`);
   return `[${text}](chaos:pad/${itemId})`;
 }
 
 /** Markdown for an internal page link: a readable label plus the stable page ID, so renames and moves keep it working. */
 export function pageLinkMarkdown(title: string, pageId: string): string {
-  const label = title.replace(/[[\]\\]/g, character => `\\${character}`);
+  const label = title.replace(/[[\]\\]/g, (character) => `\\${character}`);
   return `[${label}](chaos:page/${pageId})`;
 }
 
 /** Markdown for an internal list or project link. */
 export function listLinkMarkdown(name: string, containerId: string): string {
-  const label = name.replace(/[[\]\\]/g, character => `\\${character}`);
+  const label = name.replace(/[[\]\\]/g, (character) => `\\${character}`);
   return `[${label}](chaos:list/${containerId})`;
 }

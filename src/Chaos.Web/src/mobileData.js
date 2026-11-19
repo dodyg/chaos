@@ -21,7 +21,7 @@ function openDatabase() {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
     request.onblocked = () => reject(new Error("Offline storage is busy."));
-  }).catch(error => {
+  }).catch((error) => {
     database = undefined;
     throw error;
   });
@@ -48,7 +48,7 @@ async function cacheTransaction(update) {
 async function bindOfflineSession(session) {
   const { deviceId, expiresAt } = session;
   let changed = false;
-  await cacheTransaction(previous => {
+  await cacheTransaction((previous) => {
     changed = previous.deviceId !== deviceId;
     if (!changed && previous.expiresAt === expiresAt) return previous;
     return { ...(changed ? {} : previous), deviceId, expiresAt };
@@ -59,7 +59,7 @@ async function bindOfflineSession(session) {
 export async function forgetOfflineSession() {
   let changed = false;
   try {
-    await cacheTransaction(previous => {
+    await cacheTransaction((previous) => {
       changed = Boolean(previous.deviceId);
       return changed ? {} : previous;
     });
@@ -70,7 +70,7 @@ export async function forgetOfflineSession() {
 
 function storeViews(deviceId, path, data, lists, appearance) {
   const updatedAt = new Date().toISOString();
-  return cacheTransaction(previous => {
+  return cacheTransaction((previous) => {
     if (previous.deviceId !== deviceId) return previous;
     const snapshot = { ...previous, lists: { data: lists, updatedAt }, appearance };
     delete snapshot.today;
@@ -82,8 +82,11 @@ function storeViews(deviceId, path, data, lists, appearance) {
 
 async function readOffline(path) {
   const snapshot = await cacheTransaction();
-  const marker = document.cookie.split(";").map(cookie => cookie.trim())
-    .find(cookie => cookie.startsWith("chaos.web-offline="))?.slice("chaos.web-offline=".length);
+  const marker = document.cookie
+    .split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith("chaos.web-offline="))
+    ?.slice("chaos.web-offline=".length);
   if (!snapshot.deviceId || snapshot.deviceId !== marker || !(Date.parse(snapshot.expiresAt) > Date.now())) {
     if (snapshot.deviceId) await forgetOfflineSession();
     return { data: null, lists: [] };
@@ -98,8 +101,8 @@ async function readOffline(path) {
     const source = [myDay, lastList]
       .filter(Boolean)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .find(entry => entry.data.tasks.some(task => task.id === id));
-    if (source) record = { ...source, data: source.data.tasks.find(task => task.id === id) };
+      .find((entry) => entry.data.tasks.some((task) => task.id === id));
+    if (source) record = { ...source, data: source.data.tasks.find((task) => task.id === id) };
   }
   return { data: record?.data ?? null, updatedAt: record?.updatedAt, lists: lists?.data ?? [], appearance: snapshot.appearance ?? null };
 }
@@ -118,7 +121,10 @@ async function request(path, { signal, session, method = "GET", body } = {}) {
     let response;
     try {
       response = await fetch(api + path, {
-        method, headers, signal: attempt.signal, cache: "no-store",
+        method,
+        headers,
+        signal: attempt.signal,
+        cache: "no-store",
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch (cause) {
@@ -128,11 +134,16 @@ async function request(path, { signal, session, method = "GET", body } = {}) {
     if ([502, 503, 504].includes(response.status)) throw new ConnectionError("Chaos is temporarily unavailable.");
     if (!response.ok) {
       const problem = await response.json().catch(() => ({}));
-      throw new ApiError(response.status, problem.detail ?? ({
-        401: "Sign in to continue.",
-        404: "This item is no longer available.",
-        429: "Too many requests. Try again in a minute.",
-      })[response.status] ?? "Chaos could not complete the request.");
+      throw new ApiError(
+        response.status,
+        problem.detail ??
+          {
+            401: "Sign in to continue.",
+            404: "This item is no longer available.",
+            429: "Too many requests. Try again in a minute.",
+          }[response.status] ??
+          "Chaos could not complete the request.",
+      );
     }
     return response.status === 204 ? null : await response.json();
   } finally {
@@ -147,7 +158,7 @@ export function useMobileData(path) {
   const [state, setState] = useState(emptyView);
   const [revision, setRevision] = useState(0);
   const [connected, setConnected] = useState(() => navigator.onLine);
-  const refresh = useCallback(() => setRevision(value => value + 1), []);
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
   useEffect(() => {
     const networkChanged = () => {
@@ -211,7 +222,11 @@ export function useMobileData(path) {
         if (signal.aborted) return;
         const options = { signal, session };
         const listPicker = request("/lists", options);
-        const [data, lists, appearance] = await Promise.all([path === "/lists" ? listPicker : request(path, options), listPicker, request("/appearance", options)]);
+        const [data, lists, appearance] = await Promise.all([
+          path === "/lists" ? listPicker : request(path, options),
+          listPicker,
+          request("/appearance", options),
+        ]);
         if (signal.aborted) return;
         setState({ mode: "ready", path, data, lists, appearance, session });
         void storeViews(session.deviceId, path, data, lists, appearance).catch(() => undefined);

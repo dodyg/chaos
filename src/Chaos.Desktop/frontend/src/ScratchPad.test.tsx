@@ -2,7 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { padRpc, tagRpc, type CaptureDraftDto, type CapturePreviewRequest, type PadItemResponse, type PadMakeTaskRequest, type PadSaveRequest } from "#neoastra";
+import {
+  padRpc,
+  tagRpc,
+  type CaptureDraftDto,
+  type CapturePreviewRequest,
+  type PadItemResponse,
+  type PadMakeTaskRequest,
+  type PadSaveRequest,
+} from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -20,7 +28,23 @@ const { ScratchPad, titleFromSelection } = await import("./ScratchPad");
 const { DraftRegistry } = await import("./padAutosave");
 
 function note(id: string, markdown: string, draftVersion = "1"): PadItemResponse {
-  return { id, markdown, version: "2", draftVersion, archived: false, archivedAtUtc: null, deleted: false, createdAtUtc: "2026-11-01T00:00:00Z", updatedAtUtc: "2026-11-01T00:00:00Z", tagIds: [], tasks: [], kind: "text", previewAttachmentId: null, width: 0, height: 0 };
+  return {
+    id,
+    markdown,
+    version: "2",
+    draftVersion,
+    archived: false,
+    archivedAtUtc: null,
+    deleted: false,
+    createdAtUtc: "2026-11-01T00:00:00Z",
+    updatedAtUtc: "2026-11-01T00:00:00Z",
+    tagIds: [],
+    tasks: [],
+    kind: "text",
+    previewAttachmentId: null,
+    width: 0,
+    height: 0,
+  };
 }
 
 /** A pad API over in-memory notes; `failSaves` makes every autosave fail like a full disk. */
@@ -34,9 +58,20 @@ function padApi(notes: PadItemResponse[], options: { failSaves?: boolean } = {})
     reviewStatus: async () => ({ ok: true, due: false, lastReviewedAtUtc: null, suggestions: [], error: null }),
     save: async (request: PadSaveRequest) => {
       saves.push(request);
-      if (options.failSaves) return { ok: false, item: null, applied: false, error: { kind: "storageFull", message: "The disk is full.", fields: [], correlationId: "c" } };
-      const index = notes.findIndex(row => row.id === request.itemId);
-      notes[index] = { ...notes[index], markdown: request.markdown, draftVersion: request.clientRevision, version: String(Number(notes[index].version) + 1) };
+      if (options.failSaves)
+        return {
+          ok: false,
+          item: null,
+          applied: false,
+          error: { kind: "storageFull", message: "The disk is full.", fields: [], correlationId: "c" },
+        };
+      const index = notes.findIndex((row) => row.id === request.itemId);
+      notes[index] = {
+        ...notes[index],
+        markdown: request.markdown,
+        draftVersion: request.clientRevision,
+        version: String(Number(notes[index].version) + 1),
+      };
       return { ok: true, item: notes[index], applied: true, error: null };
     },
     makeTask: async (request: PadMakeTaskRequest) => {
@@ -47,24 +82,87 @@ function padApi(notes: PadItemResponse[], options: { failSaves?: boolean } = {})
   return { api, saves, made };
 }
 
-const tagApi = { ...tagRpc, targetTags: async () => ({ ok: true, tagIds: [], error: null }), suggest: async () => ({ ok: true, tags: [], error: null }) } as unknown as typeof tagRpc;
+const tagApi = {
+  ...tagRpc,
+  targetTags: async () => ({ ok: true, tagIds: [], error: null }),
+  suggest: async () => ({ ok: true, tags: [], error: null }),
+} as unknown as typeof tagRpc;
 
 /** Quick add for Make task: "today" in the selection becomes the planned date. */
 const captureApi = {
   preview: async (request: CapturePreviewRequest) => {
     const at = request.text.indexOf("today");
     const title = at < 0 ? request.text : request.text.slice(0, at).trim();
-    const draft: CaptureDraftDto = { title, notes: null, containerId: null, priority: "Normal", estimateMinutes: null, plannedDate: at < 0 ? null : "2026-11-10", plannedTime: null,
-      dueDate: null, dueTime: null, zoneId: "UTC", recurrence: null, reminders: [], tagIds: [], tagPaths: [], waitingOn: null, followUpDate: null, followUpTime: null, subtasks: [], category: null };
-    const tokens = at < 0 ? [] : [{ kind: "PlannedDate", start: at, end: at + 5, text: "today", language: "en", state: "Applied", summary: "Planned today" }];
-    return { ok: true, isBatch: false, errors: [], capturedAtUtc: null, error: null,
-      items: [{ lineNumber: 1, sourceStart: 0, text: request.text, draft, tokens, warnings: [], languages: [], needsTitle: !title, tags: [], containerCandidates: [], firstOccurrence: null }] };
+    const draft: CaptureDraftDto = {
+      title,
+      notes: null,
+      containerId: null,
+      priority: "Normal",
+      estimateMinutes: null,
+      plannedDate: at < 0 ? null : "2026-11-10",
+      plannedTime: null,
+      dueDate: null,
+      dueTime: null,
+      zoneId: "UTC",
+      recurrence: null,
+      reminders: [],
+      tagIds: [],
+      tagPaths: [],
+      waitingOn: null,
+      followUpDate: null,
+      followUpTime: null,
+      subtasks: [],
+      category: null,
+    };
+    const tokens =
+      at < 0
+        ? []
+        : [{ kind: "PlannedDate", start: at, end: at + 5, text: "today", language: "en", state: "Applied", summary: "Planned today" }];
+    return {
+      ok: true,
+      isBatch: false,
+      errors: [],
+      capturedAtUtc: null,
+      error: null,
+      items: [
+        {
+          lineNumber: 1,
+          sourceStart: 0,
+          text: request.text,
+          draft,
+          tokens,
+          warnings: [],
+          languages: [],
+          needsTitle: !title,
+          tags: [],
+          containerCandidates: [],
+          firstOccurrence: null,
+        },
+      ],
+    };
   },
 };
 
 function renderPad(api: typeof padRpc, registry: InstanceType<typeof DraftRegistry>, errors: string[] = []) {
-  return render(<ScratchPad api={api} tagApi={tagApi} captureApi={captureApi} registry={registry} containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null, defaultCategory: null }]}
-    tags={[]} revision={0} focus={null} links={{}} onChanged={() => {}} onOpenTask={() => {}} onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
+  return render(
+    <ScratchPad
+      api={api}
+      tagApi={tagApi}
+      captureApi={captureApi}
+      registry={registry}
+      containers={[{ id: "inbox", name: "Inbox", kind: "Inbox", version: "1", archived: false, deadlineDate: null, defaultCategory: null }]}
+      tags={[]}
+      revision={0}
+      focus={null}
+      links={{}}
+      onChanged={() => {}}
+      onOpenTask={() => {}}
+      onError={(message) => {
+        if (message) errors.push(message);
+      }}
+    />,
+    { container: dom.window.document.body },
+  );
 }
 
 test("a selection's first line becomes the quick-add title without list or heading markers", () => {
@@ -80,7 +178,7 @@ test("Make task reads the selection with quick add, saves the latest text first,
   renderPad(api, new DraftRegistry());
 
   await user.click(await screen.findByRole("button", { name: "Open note: Ideas" }));
-  const area = await screen.findByLabelText("Note") as HTMLTextAreaElement;
+  const area = (await screen.findByLabelText("Note")) as HTMLTextAreaElement;
   await user.type(area, " today");
   const text = area.value;
   assert.equal(text, "Ideas\n- call 😀 Sam today");
@@ -91,7 +189,7 @@ test("Make task reads the selection with quick add, saves the latest text first,
 
   await user.click(screen.getByRole("button", { name: "Make task" }));
   assert.equal((screen.getByLabelText("Make task from selection") as HTMLTextAreaElement).value, quote);
-  const title = await screen.findByLabelText("Title") as HTMLInputElement;
+  const title = (await screen.findByLabelText("Title")) as HTMLInputElement;
   assert.equal(title.value, "call 😀 Sam"); // "today" became the planned date
   await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -116,7 +214,7 @@ test("a failed save survives leaving the pad and is offered for retry or copy on
   renderPad(api, registry);
 
   await user.click(await screen.findByRole("button", { name: "Open note: draft" }));
-  const area = await screen.findByLabelText("Note") as HTMLTextAreaElement;
+  const area = (await screen.findByLabelText("Note")) as HTMLTextAreaElement;
   await user.type(area, " with more");
   assert.equal(await registry.flushAll(), false); // what the app does when the user navigates away
   assert.ok(saves.length > 0);
@@ -126,7 +224,7 @@ test("a failed save survives leaving the pad and is offered for retry or copy on
   const closed = await screen.findByRole("button", { name: "Open note: draft with more" });
   assert.match(closed.closest("li, article, div.flex")?.parentElement?.textContent ?? "", /Not saved/);
   await user.click(closed);
-  assert.equal((await screen.findByLabelText("Note") as HTMLTextAreaElement).value, "draft with more");
+  assert.equal(((await screen.findByLabelText("Note")) as HTMLTextAreaElement).value, "draft with more");
   const alert = screen.getByRole("alert");
   assert.match(alert.textContent ?? "", /The disk is full\./);
   assert.ok(screen.getByRole("button", { name: "Retry" }));
@@ -138,12 +236,15 @@ test("a new note is stored only once something is typed; closed untouched it lea
   const notes: PadItemResponse[] = [note("n1", "Existing")];
   const { api, saves } = padApi(notes);
   const creates: string[] = [];
-  const withCreate = { ...api, create: async (request: { markdown: string }) => {
-    creates.push(request.markdown);
-    const created = note(`n${notes.length + 1}`, request.markdown, "0");
-    notes.push(created);
-    return { ok: true, items: [created], error: null };
-  } } as unknown as typeof padRpc;
+  const withCreate = {
+    ...api,
+    create: async (request: { markdown: string }) => {
+      creates.push(request.markdown);
+      const created = note(`n${notes.length + 1}`, request.markdown, "0");
+      notes.push(created);
+      return { ok: true, items: [created], error: null };
+    },
+  } as unknown as typeof padRpc;
   const registry = new DraftRegistry();
   renderPad(withCreate, registry);
   await screen.findByRole("button", { name: /Open note: Existing/ });
@@ -171,16 +272,37 @@ test("New site sends the address to the local summarizer, opens the summary note
   const { api } = padApi(notes);
   const added: string[] = [];
   const errors: string[] = [];
-  const siteApi = { add: async (request: { url: string }) => {
-    added.push(request.url);
-    if (request.url.includes("down")) return { ok: false, item: null, error: { message: "Chaos could not reach the local model.", fields: [] } };
-    const created = note("s1", "https://example.com/a\n\n_Summarizing in the background…_\n", "0");
-    notes.push(created);
-    return { ok: true, item: created, error: null };
-  } } as unknown as typeof import("#neoastra").siteRpc;
+  const siteApi = {
+    add: async (request: { url: string }) => {
+      added.push(request.url);
+      if (request.url.includes("down"))
+        return { ok: false, item: null, error: { message: "Chaos could not reach the local model.", fields: [] } };
+      const created = note("s1", "https://example.com/a\n\n_Summarizing in the background…_\n", "0");
+      notes.push(created);
+      return { ok: true, item: created, error: null };
+    },
+  } as unknown as typeof import("#neoastra").siteRpc;
   const user = userEvent.setup({ document: dom.window.document });
-  render(<ScratchPad api={api} tagApi={tagApi} siteApi={siteApi} captureApi={captureApi} registry={new DraftRegistry()} containers={[]}
-    tags={[]} revision={0} focus={null} links={{}} onChanged={() => {}} onOpenTask={() => {}} onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
+  render(
+    <ScratchPad
+      api={api}
+      tagApi={tagApi}
+      siteApi={siteApi}
+      captureApi={captureApi}
+      registry={new DraftRegistry()}
+      containers={[]}
+      tags={[]}
+      revision={0}
+      focus={null}
+      links={{}}
+      onChanged={() => {}}
+      onOpenTask={() => {}}
+      onError={(message) => {
+        if (message) errors.push(message);
+      }}
+    />,
+    { container: dom.window.document.body },
+  );
 
   await user.click(await screen.findByRole("button", { name: /New site/ }));
   const input = await screen.findByLabelText("Web address");

@@ -10,20 +10,30 @@ export function isSafeExternalUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 /** Splits CSS declaration text on top-level semicolons (not those inside parentheses or quotes). */
 export function declarationsOf(css: string): Array<[string, string, string]> {
   const parts: string[] = [];
-  let depth = 0, quote = "", start = 0;
+  let depth = 0,
+    quote = "",
+    start = 0;
   for (let index = 0; index < css.length; index++) {
     const ch = css[index];
-    if (quote) { if (ch === quote) quote = ""; continue; }
-    if (ch === "\"" || ch === "'") quote = ch;
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
     else if (ch === "(") depth++;
     else if (ch === ")") depth = Math.max(0, depth - 1);
-    else if (ch === ";" && depth === 0) { parts.push(css.slice(start, index)); start = index + 1; }
+    else if (ch === ";" && depth === 0) {
+      parts.push(css.slice(start, index));
+      start = index + 1;
+    }
   }
   parts.push(css.slice(start));
   const result: Array<[string, string, string]> = [];

@@ -18,9 +18,12 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
   const middleA = a.slice(head, a.length - tail);
   const middleB = b.slice(head, b.length - tail);
-  const result: DiffLine[] = a.slice(0, head).map(text => ({ kind: "same", text }));
+  const result: DiffLine[] = a.slice(0, head).map((text) => ({ kind: "same", text }));
   if ((middleA.length + 1) * (middleB.length + 1) > maxCells) {
-    result.push(...middleA.map(text => ({ kind: "removed" as const, text })), ...middleB.map(text => ({ kind: "added" as const, text })));
+    result.push(
+      ...middleA.map((text) => ({ kind: "removed" as const, text })),
+      ...middleB.map((text) => ({ kind: "added" as const, text })),
+    );
   } else {
     const n = middleA.length;
     const m = middleB.length;
@@ -33,16 +36,24 @@ export function lineDiff(before: string, after: string): DiffLine[] {
     let i = 0;
     let j = 0;
     while (i < n || j < m) {
-      if (i < n && j < m && middleA[i] === middleB[j]) { result.push({ kind: "same", text: middleA[i] }); i++; j++; }
-      else if (j >= m || (i < n && table[i + 1][j] >= table[i][j + 1])) { result.push({ kind: "removed", text: middleA[i] }); i++; }
-      else { result.push({ kind: "added", text: middleB[j] }); j++; }
+      if (i < n && j < m && middleA[i] === middleB[j]) {
+        result.push({ kind: "same", text: middleA[i] });
+        i++;
+        j++;
+      } else if (j >= m || (i < n && table[i + 1][j] >= table[i][j + 1])) {
+        result.push({ kind: "removed", text: middleA[i] });
+        i++;
+      } else {
+        result.push({ kind: "added", text: middleB[j] });
+        j++;
+      }
     }
   }
-  result.push(...a.slice(a.length - tail).map(text => ({ kind: "same" as const, text })));
+  result.push(...a.slice(a.length - tail).map((text) => ({ kind: "same" as const, text })));
   return result;
 }
 
 /** How many lines were added and removed. */
 export function diffStats(lines: DiffLine[]): { added: number; removed: number } {
-  return { added: lines.filter(line => line.kind === "added").length, removed: lines.filter(line => line.kind === "removed").length };
+  return { added: lines.filter((line) => line.kind === "added").length, removed: lines.filter((line) => line.kind === "removed").length };
 }

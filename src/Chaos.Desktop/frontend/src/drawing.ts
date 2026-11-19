@@ -46,7 +46,8 @@ export function parseDrawing(json: string | null | undefined): Drawing {
       if (!item || !Array.isArray(item.points)) continue;
       const points: Point[] = [];
       for (const p of item.points as unknown[]) {
-        if (!Array.isArray(p) || typeof p[0] !== "number" || typeof p[1] !== "number" || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+        if (!Array.isArray(p) || typeof p[0] !== "number" || typeof p[1] !== "number" || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))
+          continue;
         points.push([p[0], p[1], typeof p[2] === "number" && p[2] > 0 && p[2] <= 1 ? p[2] : 0.5]);
       }
       if (points.length === 0) continue;
@@ -65,7 +66,12 @@ export function serializeDrawing(drawing: Drawing): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   return JSON.stringify({
     v: 1,
-    strokes: drawing.strokes.map(s => ({ tool: s.tool, color: s.color, size: s.size, points: s.points.map(([x, y, p]) => [round(x), round(y), round(p)]) })),
+    strokes: drawing.strokes.map((s) => ({
+      tool: s.tool,
+      color: s.color,
+      size: s.size,
+      points: s.points.map(([x, y, p]) => [round(x), round(y), round(p)]),
+    })),
   });
 }
 
@@ -120,7 +126,7 @@ export function strokeHit(stroke: Stroke, x: number, y: number, radius: number):
 
 /** Stroke-level eraser: removes every stroke under the point. Returns the same object when none was hit. */
 export function eraseAt(drawing: Drawing, x: number, y: number, radius: number): Drawing {
-  const kept = drawing.strokes.filter(stroke => !strokeHit(stroke, x, y, radius));
+  const kept = drawing.strokes.filter((stroke) => !strokeHit(stroke, x, y, radius));
   return kept.length === drawing.strokes.length ? drawing : { v: 1, strokes: kept };
 }
 
@@ -152,8 +158,12 @@ export class StrokeHistory {
     this.future = [];
   }
 
-  get canUndo() { return this.past.length > 0; }
-  get canRedo() { return this.future.length > 0; }
+  get canUndo() {
+    return this.past.length > 0;
+  }
+  get canRedo() {
+    return this.future.length > 0;
+  }
 
   undo(current: Drawing): Drawing | null {
     const previous = this.past.pop();
@@ -169,5 +179,8 @@ export class StrokeHistory {
     return next;
   }
 
-  clear() { this.past = []; this.future = []; }
+  clear() {
+    this.past = [];
+    this.future = [];
+  }
 }

@@ -19,31 +19,72 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { App } = await import("./App");
 
 function row(id: string, title: string): TaskResponse {
-  return { id, title, spaceId: "space", containerId: id, notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null };
+  return {
+    id,
+    title,
+    spaceId: "space",
+    containerId: id,
+    notes: "",
+    status: "NotStarted",
+    plannedDate: null,
+    dueDate: null,
+    version: "1",
+    createdAtUtc: "2026-01-01T00:00:00Z",
+    updatedAtUtc: "2026-01-01T00:00:00Z",
+    priority: "Normal",
+    estimateMinutes: null,
+    category: "Personal",
+    plannedTime: null,
+    plannedZoneId: null,
+    dueTime: null,
+    dueZoneId: null,
+    sectionId: null,
+  };
 }
 
 test("completion filtering covers sections and preserves full ordering when hidden tasks intervene", async () => {
-  const container: ContainerResponse = { id: "project", name: "Sprint", kind: "Project", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
+  const container: ContainerResponse = {
+    id: "project",
+    name: "Sprint",
+    kind: "Project",
+    version: "1",
+    archived: false,
+    deadlineDate: null,
+    defaultCategory: null,
+  };
   const items = [
-    { ...row("first", "First open task"), containerId: "project", sectionId: "phase", notes: "## Full details\n\nA **rendered** description." },
+    {
+      ...row("first", "First open task"),
+      containerId: "project",
+      sectionId: "phase",
+      notes: "## Full details\n\nA **rendered** description.",
+    },
     { ...row("done", "Completed task"), containerId: "project", sectionId: "phase", status: "Done" },
     { ...row("last", "Last open task"), containerId: "project", sectionId: "phase", status: "InProgress" },
     { ...row("cancelled", "Cancelled task"), containerId: "project", status: "Cancelled" },
   ];
   const moves: number[] = [];
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }),
-      reorder: async (request: { insertionIndex: number }) => { moves.push(request.insertionIndex); return { ok: true, task: items[0], error: null, operationId: "move", warning: null }; },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      reorder: async (request: { insertionIndex: number }) => {
+        moves.push(request.insertionIndex);
+        return { ok: true, task: items[0], error: null, operationId: "move", warning: null };
+      },
     },
-    containerRpc: { ...containerRpc,
-      list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [container], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
       tasks: async () => ({ ok: true, tasks: items, error: null }),
       sections: async () => ({ ok: true, sections: [{ id: "phase", title: "Phase", version: "1" }], error: null }),
       deletedSections: async () => ({ ok: true, sections: [], error: null }),
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   try {
     await user.click(await screen.findByRole("button", { name: "Sprint" }));
     await screen.findByRole("button", { name: "Completed task" });
@@ -75,22 +116,66 @@ test("completion filtering covers sections and preserves full ordering when hidd
     await user.click(within(screen.getByRole("radiogroup", { name: "Completion" })).getByRole("radio", { name: "All" }));
     assert.ok(screen.getByRole("button", { name: "First open task" }));
     assert.ok(screen.getByText("Showing 4 of 4 tasks"));
-  } finally { cleanup(); }
+  } finally {
+    cleanup();
+  }
 });
 
 test("deleting an active repeating task offers skip or end and delete", async () => {
   const repeated = { ...row("repeat", "Repeated"), containerId: "inbox" };
   let ended = false;
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [repeated], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
-    recurrenceRpc: { ...recurrenceRpc,
-      get: async () => ({ ok: true, rule: { mode: "FixedSchedule", frequency: "Day", interval: 1, anchorDate: "2026-11-10", anchorTime: null, zoneId: "UTC", weekdays: [], monthDay: null, ordinal: null, ordinalWeekday: null, monthOfYear: null, endKind: "Never", count: null, untilDate: null }, ended: false, occurrences: [{ taskId: repeated.id, nominalKey: "2026-11-10T00:00:00", effectiveLocal: "2026-11-10T00:00:00", state: "Active", completedAtUtc: null, revision: "1" }], error: null }),
-      endAndDelete: async (request: { operationId: string }) => { ended = true; return { ok: true, task: repeated, operationId: request.operationId, error: null, warning: null }; },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [repeated], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+    },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
+    },
+    recurrenceRpc: {
+      ...recurrenceRpc,
+      get: async () => ({
+        ok: true,
+        rule: {
+          mode: "FixedSchedule",
+          frequency: "Day",
+          interval: 1,
+          anchorDate: "2026-11-10",
+          anchorTime: null,
+          zoneId: "UTC",
+          weekdays: [],
+          monthDay: null,
+          ordinal: null,
+          ordinalWeekday: null,
+          monthOfYear: null,
+          endKind: "Never",
+          count: null,
+          untilDate: null,
+        },
+        ended: false,
+        occurrences: [
+          {
+            taskId: repeated.id,
+            nominalKey: "2026-11-10T00:00:00",
+            effectiveLocal: "2026-11-10T00:00:00",
+            state: "Active",
+            completedAtUtc: null,
+            revision: "1",
+          },
+        ],
+        error: null,
+      }),
+      endAndDelete: async (request: { operationId: string }) => {
+        ended = true;
+        return { ok: true, task: repeated, operationId: request.operationId, error: null, warning: null };
+      },
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   await screen.findByRole("button", { name: "Repeated" });
   await user.click(screen.getByRole("button", { name: "Delete Repeated" }));
   const dialog = await screen.findByRole("dialog", { name: "Delete repeating task?" });
@@ -102,16 +187,40 @@ test("deleting an active repeating task offers skip or end and delete", async ()
 
 test("a delayed previous list cannot replace the selected list", async () => {
   let finishA!: (value: ListTasksResponse) => void;
-  const slowA = new Promise<ListTasksResponse>(resolve => { finishA = resolve; });
+  const slowA = new Promise<ListTasksResponse>((resolve) => {
+    finishA = resolve;
+  });
   let requestedA = false;
   let finishedA = false;
-  const containers: ContainerResponse[] = ["a", "b"].map(id => ({ id, name: id.toUpperCase(), kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null }));
+  const containers: ContainerResponse[] = ["a", "b"].map((id) => ({
+    id,
+    name: id.toUpperCase(),
+    kind: "List",
+    version: "1",
+    archived: false,
+    deadlineDate: null,
+    defaultCategory: null,
+  }));
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async (request: { containerId: string | null }) => { if (request.containerId === "a") finishedA = true; return { ok: true, tasks: [], error: null }; } },
-    containerRpc: { ...containerRpc,
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async (request: { containerId: string | null }) => {
+        if (request.containerId === "a") finishedA = true;
+        return { ok: true, tasks: [], error: null };
+      },
+    },
+    containerRpc: {
+      ...containerRpc,
       list: async () => ({ ok: true, containers, error: null }),
       listDeleted: async () => ({ ok: true, containers: [], error: null }),
-      tasks: async (request: { containerId: string }) => { if (request.containerId === "a") { requestedA = true; return slowA; } return { ok: true, tasks: [row("b", "Task B")], error: null }; },
+      tasks: async (request: { containerId: string }) => {
+        if (request.containerId === "a") {
+          requestedA = true;
+          return slowA;
+        }
+        return { ok: true, tasks: [row("b", "Task B")], error: null };
+      },
       sections: async () => ({ ok: true, sections: [], error: null }),
       deletedSections: async () => ({ ok: true, sections: [], error: null }),
     },
@@ -123,7 +232,10 @@ test("a delayed previous list cannot replace the selected list", async () => {
   await waitFor(() => assert.equal(requestedA, true));
   await user.click(within(screen.getByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "B" }));
   await screen.findByRole("button", { name: "Task B" });
-  await act(async () => { finishA({ ok: true, tasks: [row("a", "Task A")], error: null }); await slowA; });
+  await act(async () => {
+    finishA({ ok: true, tasks: [row("a", "Task A")], error: null });
+    await slowA;
+  });
   await waitFor(() => assert.equal(finishedA, true));
   assert.equal(screen.queryByRole("button", { name: "Task A" }), null);
   assert.ok(screen.getByRole("button", { name: "Task B" }));
@@ -131,11 +243,33 @@ test("a delayed previous list cannot replace the selected list", async () => {
 });
 
 test("tasks are grouped under their section and ordered within that group", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
+  const container: ContainerResponse = {
+    id: "project",
+    name: "Project",
+    kind: "List",
+    version: "1",
+    archived: false,
+    deadlineDate: null,
+    defaultCategory: null,
+  };
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
-      tasks: async () => ({ ok: true, tasks: [{ ...row("one", "Unsectioned"), sectionId: null }, { ...row("two", "Section task"), sectionId: "section" }], error: null }),
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+    },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [container], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
+      tasks: async () => ({
+        ok: true,
+        tasks: [
+          { ...row("one", "Unsectioned"), sectionId: null },
+          { ...row("two", "Section task"), sectionId: "section" },
+        ],
+        error: null,
+      }),
       sections: async () => ({ ok: true, sections: [{ id: "section", title: "Phase", version: "1" }], error: null }),
       deletedSections: async () => ({ ok: true, sections: [], error: null }),
     },
@@ -156,10 +290,20 @@ test("dragging a task below a sibling sends the corresponding reorder", async ()
   const second = { ...row("second", "Second"), containerId: "inbox" };
   let requested: { taskId: string; insertionIndex: number; expectedVersion: string } | null = null;
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [first, second], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }),
-      reorder: async (request: { operationId: string; taskId: string; expectedVersion: string; insertionIndex: number }) => { requested = request; return { ok: true, operationId: request.operationId, task: first, error: null, warning: null }; },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [first, second], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      reorder: async (request: { operationId: string; taskId: string; expectedVersion: string; insertionIndex: number }) => {
+        requested = request;
+        return { ok: true, operationId: request.operationId, task: first, error: null, warning: null };
+      },
     },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
+    },
   };
   render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   const firstButton = await screen.findByRole("button", { name: "First" });
@@ -172,19 +316,48 @@ test("dragging a task below a sibling sends the corresponding reorder", async ()
   const drop = new dom.window.MouseEvent("drop", { bubbles: true, cancelable: true, clientY: 100 });
   Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
   fireEvent(target, drop);
-  await waitFor(() => assert.deepEqual(requested && { taskId: requested.taskId, insertionIndex: requested.insertionIndex, expectedVersion: requested.expectedVersion }, { taskId: "first", insertionIndex: 1, expectedVersion: "1" }));
+  await waitFor(() =>
+    assert.deepEqual(
+      requested && { taskId: requested.taskId, insertionIndex: requested.insertionIndex, expectedVersion: requested.expectedVersion },
+      { taskId: "first", insertionIndex: 1, expectedVersion: "1" },
+    ),
+  );
   cleanup();
 });
 
 test("dragging onto a different section does not reorder the wrong sibling set", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
+  const container: ContainerResponse = {
+    id: "project",
+    name: "Project",
+    kind: "List",
+    version: "1",
+    archived: false,
+    deadlineDate: null,
+    defaultCategory: null,
+  };
   let reordered = false;
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }),
-      reorder: async (request: { operationId: string }) => { reordered = true; return { ok: true, operationId: request.operationId, task: row("one", "Outside"), error: null, warning: null }; },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+      reorder: async (request: { operationId: string }) => {
+        reordered = true;
+        return { ok: true, operationId: request.operationId, task: row("one", "Outside"), error: null, warning: null };
+      },
     },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
-      tasks: async () => ({ ok: true, tasks: [{ ...row("one", "Outside"), containerId: "project" }, { ...row("two", "Inside"), containerId: "project", sectionId: "section" }], error: null }),
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [container], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
+      tasks: async () => ({
+        ok: true,
+        tasks: [
+          { ...row("one", "Outside"), containerId: "project" },
+          { ...row("two", "Inside"), containerId: "project", sectionId: "section" },
+        ],
+        error: null,
+      }),
       sections: async () => ({ ok: true, sections: [{ id: "section", title: "Phase", version: "1" }], error: null }),
       deletedSections: async () => ({ ok: true, sections: [], error: null }),
     },
@@ -203,23 +376,52 @@ test("dragging onto a different section does not reorder the wrong sibling set",
 });
 
 test("dragging moves a task into an empty section and back to unsectioned", async () => {
-  const container: ContainerResponse = { id: "project", name: "Project", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null };
+  const container: ContainerResponse = {
+    id: "project",
+    name: "Project",
+    kind: "List",
+    version: "1",
+    archived: false,
+    deadlineDate: null,
+    defaultCategory: null,
+  };
   let current = { ...row("one", "Outside"), containerId: "project" };
   const moves: Parameters<typeof containerRpc.moveTask>[0][] = [];
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [container], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }),
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+    },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [container], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
       tasks: async () => ({ ok: true, tasks: [current], error: null }),
       sections: async () => ({ ok: true, sections: [{ id: "section", title: "Phase", version: "1" }], error: null }),
-      moveTask: async (request: Parameters<typeof containerRpc.moveTask>[0]) => { moves.push(request); current = { ...current, sectionId: request.sectionId, version: String(Number(current.version) + 1) }; return { ok: true, operationId: request.operationId, task: current, error: null, warning: null }; },
+      moveTask: async (request: Parameters<typeof containerRpc.moveTask>[0]) => {
+        moves.push(request);
+        current = { ...current, sectionId: request.sectionId, version: String(Number(current.version) + 1) };
+        return { ok: true, operationId: request.operationId, task: current, error: null, warning: null };
+      },
     },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   await user.click(within(await screen.findByRole("navigation", { name: "Lists and projects" })).getByRole("button", { name: "Project" }));
   await screen.findByRole("button", { name: "Outside" });
   const data = new Map<string, string>();
-  const dataTransfer = { setData: (type: string, value: string) => { data.set(type, value); }, getData: (type: string) => data.get(type) ?? "", get types() { return [...data.keys()]; }, effectAllowed: "", dropEffect: "" };
+  const dataTransfer = {
+    setData: (type: string, value: string) => {
+      data.set(type, value);
+    },
+    getData: (type: string) => data.get(type) ?? "",
+    get types() {
+      return [...data.keys()];
+    },
+    effectAllowed: "",
+    dropEffect: "",
+  };
   function dragTo(target: HTMLElement) {
     const source = screen.getByRole("button", { name: "Outside" }).closest("li")!;
     fireEvent.dragStart(within(source).getByTitle("Drag to reorder"), { dataTransfer });
@@ -246,11 +448,22 @@ test("dragging a list in the list navigation reorders it and keeps the Inbox fir
   const calls: Parameters<typeof containerRpc.reorder>[0][] = [];
   let listCalls = 0;
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
-    containerRpc: { ...containerRpc,
-      list: async () => { listCalls++; return { ok: true, containers, error: null }; },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+    },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => {
+        listCalls++;
+        return { ok: true, containers, error: null };
+      },
       listDeleted: async () => ({ ok: true, containers: [], error: null }),
-      reorder: async (request: Parameters<typeof containerRpc.reorder>[0]) => { calls.push(request); return { ok: true, container: containers[2], error: null }; },
+      reorder: async (request: Parameters<typeof containerRpc.reorder>[0]) => {
+        calls.push(request);
+        return { ok: true, container: containers[2], error: null };
+      },
     },
   };
   render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
@@ -263,6 +476,9 @@ test("dragging a list in the list navigation reorders it and keeps the Inbox fir
   fireEvent.dragOver(alpha, { dataTransfer, clientY: 0 });
   fireEvent.drop(alpha, { dataTransfer, clientY: 0 });
   await waitFor(() => assert.equal(listCalls, 2));
-  assert.deepEqual(calls.map(r => ({ containerId: r.containerId, expectedVersion: r.expectedVersion, insertionIndex: r.insertionIndex })), [{ containerId: "b", expectedVersion: "5", insertionIndex: 1 }]);
+  assert.deepEqual(
+    calls.map((r) => ({ containerId: r.containerId, expectedVersion: r.expectedVersion, insertionIndex: r.insertionIndex })),
+    [{ containerId: "b", expectedVersion: "5", insertionIndex: 1 }],
+  );
   cleanup();
 });

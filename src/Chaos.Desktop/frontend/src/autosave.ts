@@ -12,7 +12,13 @@ type Versioned = { readonly id: string; readonly version: string };
  * a failure keeps the draft (a newer change replaces it) and reports the message. Switching to
  * another item, or unmounting, saves what is waiting at once.
  */
-export function useAutosave<T extends Versioned>({ currentId, save, validate, onSaved, onError }: {
+export function useAutosave<T extends Versioned>({
+  currentId,
+  save,
+  validate,
+  onSaved,
+  onError,
+}: {
   currentId: string | null;
   save: (draft: T) => Promise<{ saved: T } | { error: string }>;
   validate?: (draft: T) => string | null;
@@ -33,14 +39,21 @@ export function useAutosave<T extends Versioned>({ currentId, save, validate, on
     const queued = pending.current;
     if (!queued) return;
     const problem = callbacks.current.validate?.(queued);
-    if (problem) { setState("error"); callbacks.current.onError(problem); return; }
+    if (problem) {
+      setState("error");
+      callbacks.current.onError(problem);
+      return;
+    }
     pending.current = null;
     setState("saving");
     const draft = { ...queued, version: String(Math.max(Number(queued.version), versions.current.get(queued.id) ?? 0)) };
     const work = (async () => {
       let outcome: { saved: T } | { error: string };
-      try { outcome = await callbacks.current.save(draft); }
-      catch (e) { outcome = { error: e instanceof Error ? e.message : "The change could not be saved." }; }
+      try {
+        outcome = await callbacks.current.save(draft);
+      } catch (e) {
+        outcome = { error: e instanceof Error ? e.message : "The change could not be saved." };
+      }
       if ("error" in outcome) {
         pending.current ??= queued;
         setState("error");
@@ -54,18 +67,31 @@ export function useAutosave<T extends Versioned>({ currentId, save, validate, on
       setState(pending.current ? "pending" : "saved");
     })();
     inFlight.current = work;
-    try { await work; } finally { if (inFlight.current === work) inFlight.current = null; }
+    try {
+      await work;
+    } finally {
+      if (inFlight.current === work) inFlight.current = null;
+    }
   }, []);
 
-  const schedule = React.useCallback((draft: T) => {
-    pending.current = draft;
-    setState("pending");
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => void flush(), autosaveDelayMs);
-  }, [flush]);
+  const schedule = React.useCallback(
+    (draft: T) => {
+      pending.current = draft;
+      setState("pending");
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => void flush(), autosaveDelayMs);
+    },
+    [flush],
+  );
 
-  React.useEffect(() => () => { if (currentId !== null && pending.current?.id === currentId) void flush(); }, [currentId, flush]);
+  React.useEffect(
+    () => () => {
+      if (currentId !== null && pending.current?.id === currentId) void flush();
+    },
+    [currentId, flush],
+  );
 
-  const label = state === "saving" ? "Saving…" : state === "pending" ? "Unsaved changes" : state === "error" ? "Not saved" : "All changes saved";
+  const label =
+    state === "saving" ? "Saving…" : state === "pending" ? "Unsaved changes" : state === "error" ? "Not saved" : "All changes saved";
   return { state, label, flush, schedule, dirty: () => pending.current !== null || inFlight.current !== null };
 }

@@ -2,7 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { myDayRpc, queryRpc, type DayClockResponse, type DaySummaryResponse, type QueryRowResponse, type TaskQueryRequest, type TaskResponse } from "#neoastra";
+import {
+  myDayRpc,
+  queryRpc,
+  type DayClockResponse,
+  type DaySummaryResponse,
+  type QueryRowResponse,
+  type TaskQueryRequest,
+  type TaskResponse,
+} from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -23,12 +31,58 @@ const { MyDay, addDays, nextCheckDelay, laneToDayIndex, dayMarkdown } = await im
 const { TaskStaleness } = await import("./TaskStaleness");
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
-  return { id, title, spaceId: "space", containerId: "inbox", notes: "", status: "NotStarted", plannedDate: null, dueDate: null, version: "1", createdAtUtc: "2026-01-01T00:00:00Z", updatedAtUtc: "2026-01-01T00:00:00Z", priority: "Normal", estimateMinutes: null, category: "Personal", plannedTime: null, plannedZoneId: null, dueTime: null, dueZoneId: null, sectionId: null, ...patch };
+  return {
+    id,
+    title,
+    spaceId: "space",
+    containerId: "inbox",
+    notes: "",
+    status: "NotStarted",
+    plannedDate: null,
+    dueDate: null,
+    version: "1",
+    createdAtUtc: "2026-01-01T00:00:00Z",
+    updatedAtUtc: "2026-01-01T00:00:00Z",
+    priority: "Normal",
+    estimateMinutes: null,
+    category: "Personal",
+    plannedTime: null,
+    plannedZoneId: null,
+    dueTime: null,
+    dueZoneId: null,
+    sectionId: null,
+    ...patch,
+  };
 }
-const row = (item: TaskResponse): QueryRowResponse => ({ task: item, containerName: "Inbox", containerArchived: false, tagIds: [], matches: [], groupDate: null, waitingPerson: null, nextFollowUpAtUtc: null, lastActivityAtUtc: null });
+const row = (item: TaskResponse): QueryRowResponse => ({
+  task: item,
+  containerName: "Inbox",
+  containerArchived: false,
+  tagIds: [],
+  matches: [],
+  groupDate: null,
+  waitingPerson: null,
+  nextFollowUpAtUtc: null,
+  lastActivityAtUtc: null,
+});
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
-const summary = (date: string, today: string, open = 0): DaySummaryResponse =>
-  ({ date, clock: clock(today), exists: true, editable: date >= today, openCount: open, finishedCount: 0, remainingMinutes: 0, unknownEstimates: open, availableMinutes: 480, workAllowanceMinutes: 60, workMinutes: 0, busyMinutes: 0, freeMinutes: 480, meetingsDontFit: false, meetings: [] });
+const summary = (date: string, today: string, open = 0): DaySummaryResponse => ({
+  date,
+  clock: clock(today),
+  exists: true,
+  editable: date >= today,
+  openCount: open,
+  finishedCount: 0,
+  remainingMinutes: 0,
+  unknownEstimates: open,
+  availableMinutes: 480,
+  workAllowanceMinutes: 60,
+  workMinutes: 0,
+  busyMinutes: 0,
+  freeMinutes: 480,
+  meetingsDontFit: false,
+  meetings: [],
+});
 
 /** A fake day service: one chosen task per date in `days`, suggestions for today, and a log of changes. */
 function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: TaskResponse[] = []) {
@@ -41,9 +95,20 @@ function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: T
   const api = {
     ...myDayRpc,
     clock: async () => ({ ok: true, clock: clock(today), error: null }),
-    open: async (request: { date: string | null }) => ({ ok: true, day: summary(request.date ?? today, today, (days[request.date ?? today] ?? []).length), error: null }),
-    suggestions: async () => ({ ok: true, suggestions: suggested.map(item => ({ task: item, containerName: "Inbox", reason: "Overdue" })), error: null }),
-    add: change("add"), remove: change("remove"), move: change("move"), carryOver: change("carryOver"),
+    open: async (request: { date: string | null }) => ({
+      ok: true,
+      day: summary(request.date ?? today, today, (days[request.date ?? today] ?? []).length),
+      error: null,
+    }),
+    suggestions: async () => ({
+      ok: true,
+      suggestions: suggested.map((item) => ({ task: item, containerName: "Inbox", reason: "Overdue" })),
+      error: null,
+    }),
+    add: change("add"),
+    remove: change("remove"),
+    move: change("move"),
+    carryOver: change("carryOver"),
   } as unknown as typeof myDayRpc;
   const query = {
     ...queryRpc,
@@ -71,23 +136,39 @@ test("in-progress rows show time since the latest task or diary activity", async
   const other = task("other", "Other task", { updatedAtUtc: old });
   const { api, query } = fakes("2026-11-10", { "2026-11-10": [active, other] });
   const originalRun = query.run;
-  const queryWithActivity = { ...query, run: async (request: TaskQueryRequest) => {
-    const result = await originalRun(request);
-    return { ...result, rows: result.rows.map(item => item.task.id === active.id ? { ...item, lastActivityAtUtc: recent } : item) };
-  } };
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={queryWithActivity} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  const queryWithActivity = {
+    ...query,
+    run: async (request: TaskQueryRequest) => {
+      const result = await originalRun(request);
+      return { ...result, rows: result.rows.map((item) => (item.task.id === active.id ? { ...item, lastActivityAtUtc: recent } : item)) };
+    },
+  };
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={queryWithActivity}
+      onOpen={() => {}}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   assert.ok(await screen.findByRole("img", { name: "Inactive 2 days" }));
   assert.equal(screen.queryByRole("img", { name: "Inactive 10 days" }), null);
   cleanup();
 });
 
 test("staleness turns amber after one day and red after three", () => {
-  const makeTask = (days: number) => task("t", "Task", { status: "InProgress", updatedAtUtc: new Date(Date.now() - days * 86_400_000).toISOString() });
-  const view = render(<TaskStaleness task={makeTask(0)} lastActivityAtUtc={null}/>, { container: dom.window.document.body });
+  const makeTask = (days: number) =>
+    task("t", "Task", { status: "InProgress", updatedAtUtc: new Date(Date.now() - days * 86_400_000).toISOString() });
+  const view = render(<TaskStaleness task={makeTask(0)} lastActivityAtUtc={null} />, { container: dom.window.document.body });
   assert.ok(screen.getByRole("img", { name: "Active today" }).className.includes("text-muted-foreground"));
-  view.rerender(<TaskStaleness task={makeTask(1)} lastActivityAtUtc={null}/>);
+  view.rerender(<TaskStaleness task={makeTask(1)} lastActivityAtUtc={null} />);
   assert.ok(screen.getByRole("img", { name: "Inactive 1 day" }).className.includes("text-amber-600"));
-  view.rerender(<TaskStaleness task={makeTask(3)} lastActivityAtUtc={null}/>);
+  view.rerender(<TaskStaleness task={makeTask(3)} lastActivityAtUtc={null} />);
   assert.ok(screen.getByRole("img", { name: "Inactive 3 days" }).className.includes("text-red-600"));
   cleanup();
 });
@@ -96,14 +177,35 @@ test("suggestions are only offered; adding one sends today's date and nothing is
   const late = task("t1", "Pay the invoice", { dueDate: "2026-11-08" });
   const { api, query, calls, queries } = fakes("2026-11-10", {}, [late]);
   const user = userEvent.setup({ document: dom.window.document });
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   await screen.findByText("Nothing chosen yet.");
   await screen.findByText("Pay the invoice");
   assert.equal(calls.length, 0);
-  assert.ok(queries.every(request => request.view === "MyDay" && request.day === "2026-11-10"));
+  assert.ok(queries.every((request) => request.view === "MyDay" && request.day === "2026-11-10"));
   await user.click(screen.getByRole("button", { name: "Add Pay the invoice to My Day" }));
-  await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["add"]));
-  assert.deepEqual(calls[0].request, { operationId: (calls[0].request as { operationId: string }).operationId, date: "2026-11-10", taskId: "t1" });
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["add"],
+    ),
+  );
+  assert.deepEqual(calls[0].request, {
+    operationId: (calls[0].request as { operationId: string }).operationId,
+    date: "2026-11-10",
+    taskId: "t1",
+  });
   cleanup();
 });
 
@@ -111,27 +213,47 @@ test("an earlier day is read-only but reviewable, and its unfinished work can be
   const left = task("t2", "Draft the report");
   const { api, query, calls } = fakes("2026-11-10", { "2026-11-09": [left], "2026-11-10": [] });
   const user = userEvent.setup({ document: dom.window.document });
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   await screen.findByText("Nothing chosen yet.");
   await user.click(screen.getByRole("button", { name: "Previous day" }));
   await screen.findByRole("heading", { name: "Yesterday" });
   await screen.findByText("Draft the report");
   assert.equal(screen.queryByRole("button", { name: /Remove Draft the report/ }), null);
   await user.click(screen.getByRole("button", { name: "Carry unfinished to today" }));
-  await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["carryOver"]));
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["carryOver"],
+    ),
+  );
   assert.equal((calls[0].request as { fromDate: string }).fromDate, "2026-11-09");
   cleanup();
 });
 
 test("when the local date rolls over, a person looking at today moves to the new today", async () => {
-  const { api, query, queries } = fakes("2026-11-11", { "2026-11-10": [task("t3", "Old day task")], "2026-11-11": [task("t4", "New day task")] });
+  const { api, query, queries } = fakes("2026-11-11", {
+    "2026-11-10": [task("t3", "Old day task")],
+    "2026-11-11": [task("t4", "New day task")],
+  });
   const props = { revision: 0, selectedTaskId: null, busy: false, api, queryApi: query, onOpen: () => {}, onChanged: () => {} };
-  const view = render(<MyDay clock={clock("2026-11-10")} {...props}/>, { container: dom.window.document.body });
+  const view = render(<MyDay clock={clock("2026-11-10")} {...props} />, { container: dom.window.document.body });
   await screen.findByText("Old day task");
-  view.rerender(<MyDay clock={clock("2026-11-11")} {...props}/>);
+  view.rerender(<MyDay clock={clock("2026-11-11")} {...props} />);
   await screen.findByText("New day task");
   assert.equal(screen.queryByText("Old day task"), null);
-  assert.ok(queries.some(request => request.day === "2026-11-11"));
+  assert.ok(queries.some((request) => request.day === "2026-11-11"));
   cleanup();
 });
 
@@ -139,7 +261,22 @@ test("chosen tasks can be reordered with a drag handle or keyboard and removed f
   const { api, query, calls } = fakes("2026-11-10", { "2026-11-10": [task("a", "First"), task("b", "Second")] });
   const user = userEvent.setup({ document: dom.window.document });
   const viewed: TaskResponse[] = [];
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onView={task => { viewed.push(task); }} onChanged={() => {}}/>, { container: dom.window.document.body });
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onView={(task) => {
+        viewed.push(task);
+      }}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   await screen.findByText("Second");
   await user.click(screen.getByRole("button", { name: "View First" }));
   assert.equal(viewed[0]?.id, "a");
@@ -160,9 +297,16 @@ test("chosen tasks can be reordered with a drag handle or keyboard and removed f
   fireEvent.keyDown(screen.getByRole("button", { name: "Reorder First" }), { key: "ArrowDown" });
   await waitFor(() => assert.equal(calls.length, 2));
   assert.deepEqual({ ...(calls[1].request as object), operationId: "" }, { operationId: "", date: "2026-11-10", taskId: "a", index: 1 });
-  await waitFor(() => assert.equal((screen.getByRole("button", { name: "Remove First from this day" }) as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal((screen.getByRole("button", { name: "Remove First from this day" }) as HTMLButtonElement).disabled, false),
+  );
   await user.click(screen.getByRole("button", { name: "Remove First from this day" }));
-  await waitFor(() => assert.deepEqual(calls.map(call => call.method), ["move", "move", "remove"]));
+  await waitFor(() =>
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["move", "move", "remove"],
+    ),
+  );
   cleanup();
 });
 
@@ -171,7 +315,20 @@ test("chosen tasks offer completion and a status menu while earlier days remain 
   const { api, query } = fakes("2026-11-10", { "2026-11-10": [item], "2026-11-09": [item] });
   const changes: string[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} onSetStatus={(_, status) => changes.push(status)}/>, { container: dom.window.document.body });
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+      onSetStatus={(_, status) => changes.push(status)}
+    />,
+    { container: dom.window.document.body },
+  );
   await user.click(await screen.findByRole("checkbox", { name: "Mark Plan the meeting as done" }));
   assert.deepEqual(changes, ["Done"]);
   fireEvent.contextMenu(screen.getByRole("button", { name: "Plan the meeting" }));
@@ -196,20 +353,47 @@ test("a lane insertion index maps onto the day's single manual order", () => {
 });
 
 test("a day mixing work and personal shows lanes with their own totals; a focus shows one category and asks the server for it", async () => {
-  const items = [task("w1", "Ship release", { category: "Work", estimateMinutes: 90 }), task("p1", "Water plants", { estimateMinutes: 15 })];
+  const items = [
+    task("w1", "Ship release", { category: "Work", estimateMinutes: 90 }),
+    task("p1", "Water plants", { estimateMinutes: 15 }),
+  ];
   const { api, query, queries } = fakes("2026-11-10", { "2026-11-10": items }, [task("s1", "Gym", { dueDate: "2026-11-08" })]);
   const changed: string[] = [];
-  const view = render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}
-    onSetCategory={(item, category) => changed.push(`${item.id}:${category}`)}/>, { container: dom.window.document.body });
+  const view = render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+      onSetCategory={(item, category) => changed.push(`${item.id}:${category}`)}
+    />,
+    { container: dom.window.document.body },
+  );
   const work = await screen.findByRole("list", { name: "Work chosen tasks" });
   assert.ok(within(work).getByText("Ship release"));
   assert.ok(within(screen.getByRole("list", { name: "Personal chosen tasks" })).getByText("Water plants"));
   const byCategory = screen.getByRole("status", { name: "Today by category" });
   assert.ok(within(byCategory).getByText("More work than planned"));
   assert.match(byCategory.textContent ?? "", /1 open · 1 h 30 minof 1 h/);
-  assert.ok(queries.every(request => request.category === null));
+  assert.ok(queries.every((request) => request.category === null));
 
-  view.rerender(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}} focus="Work"/>);
+  view.rerender(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+      focus="Work"
+    />,
+  );
   await waitFor(() => assert.equal(queries.at(-1)?.category, "Work"));
   await screen.findByText("Work only");
   assert.equal(screen.queryByRole("list", { name: "Work chosen tasks" }), null);
@@ -219,13 +403,44 @@ test("a day mixing work and personal shows lanes with their own totals; a focus 
 });
 
 test("dayMarkdown lists meetings and tasks as Markdown", () => {
-  const meetings = [{ id: "m", title: "Standup", start: "09:00", end: "09:30", allDay: false, busy: true, videoUrl: "https://meet.example/x", webUrl: null }] as never;
-  const text = dayMarkdown("My Day: Tuesday", meetings, [row(task("a", "Write\nreport", { priority: "High", dueDate: "2026-11-20", estimateMinutes: 90 })), row(task("b", "Call"))], [row(task("c", "Done thing", { status: "Done" }))]);
-  assert.equal(text, [
-    "# My Day: Tuesday", "", "## Meetings", "", "- 09:00–09:30 [Standup](https://meet.example/x)", "",
-    "## Tasks", "", "- [ ] Write report (Inbox, High, due 2026-11-20, 1 h 30 min)", "- [ ] Call (Inbox)", "",
-    "## Finished", "", "- [x] Done thing (Inbox)", "",
-  ].join("\n"));
+  const meetings = [
+    {
+      id: "m",
+      title: "Standup",
+      start: "09:00",
+      end: "09:30",
+      allDay: false,
+      busy: true,
+      videoUrl: "https://meet.example/x",
+      webUrl: null,
+    },
+  ] as never;
+  const text = dayMarkdown(
+    "My Day: Tuesday",
+    meetings,
+    [row(task("a", "Write\nreport", { priority: "High", dueDate: "2026-11-20", estimateMinutes: 90 })), row(task("b", "Call"))],
+    [row(task("c", "Done thing", { status: "Done" }))],
+  );
+  assert.equal(
+    text,
+    [
+      "# My Day: Tuesday",
+      "",
+      "## Meetings",
+      "",
+      "- 09:00–09:30 [Standup](https://meet.example/x)",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] Write report (Inbox, High, due 2026-11-20, 1 h 30 min)",
+      "- [ ] Call (Inbox)",
+      "",
+      "## Finished",
+      "",
+      "- [x] Done thing (Inbox)",
+      "",
+    ].join("\n"),
+  );
   assert.equal(dayMarkdown("D", [], [], []), "# D\n\nNothing chosen.\n");
 });
 
@@ -233,8 +448,27 @@ test("the Copy button puts the day's Markdown on the clipboard", async () => {
   const written: string[] = [];
   const { api, query } = fakes("2026-11-10", { "2026-11-10": [task("a", "Plan the meeting")] });
   const user = userEvent.setup({ document: dom.window.document });
-  Object.defineProperty(dom.window.navigator, "clipboard", { value: { writeText: async (value: string) => { written.push(value); } }, configurable: true });
-  render(<MyDay clock={clock("2026-11-10")} revision={0} selectedTaskId={null} busy={false} api={api} queryApi={query} onOpen={() => {}} onChanged={() => {}}/>, { container: dom.window.document.body });
+  Object.defineProperty(dom.window.navigator, "clipboard", {
+    value: {
+      writeText: async (value: string) => {
+        written.push(value);
+      },
+    },
+    configurable: true,
+  });
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   await screen.findByText("Plan the meeting");
   await user.click(screen.getByRole("button", { name: /Copy/ }));
   await screen.findByRole("button", { name: /Copied/ });

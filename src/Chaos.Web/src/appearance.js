@@ -1,4 +1,8 @@
-const scenes = import.meta.glob("../../Chaos.Desktop/frontend/src/assets/day-backgrounds/*.svg", { eager: true, query: "?url&no-inline", import: "default" });
+const scenes = import.meta.glob("../../Chaos.Desktop/frontend/src/assets/day-backgrounds/*.svg", {
+  eager: true,
+  query: "?url&no-inline",
+  import: "default",
+});
 
 export function sceneBackgroundStyle(name) {
   if (typeof name !== "string" || !/^[a-z]+$/i.test(name)) return undefined;
@@ -13,6 +17,8 @@ export function dayBackgroundStyle(raw) {
     if (background?.kind === "scene" && /^[a-z]+$/.test(background.value)) {
       return sceneBackgroundStyle(background.value);
     }
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
   return undefined;
 }

@@ -12,11 +12,23 @@ export function SyncLogo() {
   const jobs = useJobs();
   const githubRunning = jobs["github.sync"]?.running === true;
   const calendarRunning = jobs["calendar.refresh"]?.running === true;
-  React.useEffect(() => { setSyncObserved("github", githubRunning); }, [githubRunning]);
-  React.useEffect(() => { setSyncObserved("calendar", calendarRunning); }, [calendarRunning]);
-  React.useEffect(() => () => { setSyncObserved("github", false); setSyncObserved("calendar", false); }, []);
+  React.useEffect(() => {
+    setSyncObserved("github", githubRunning);
+  }, [githubRunning]);
+  React.useEffect(() => {
+    setSyncObserved("calendar", calendarRunning);
+  }, [calendarRunning]);
+  React.useEffect(
+    () => () => {
+      setSyncObserved("github", false);
+      setSyncObserved("calendar", false);
+    },
+    [],
+  );
   const mode = github && calendar ? "both" : github ? "github" : calendar ? "calendar" : undefined;
-  return <span className="sync-logo" data-sync={mode} data-testid="sync-logo">
-    <img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt=""/>
-  </span>;
+  return (
+    <span className="sync-logo" data-sync={mode} data-testid="sync-logo">
+      <img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt="" />
+    </span>
+  );
 }

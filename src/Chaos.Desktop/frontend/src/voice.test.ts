@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyMicError, extensionFor, formatElapsed, levelFromSamples, maxVoiceMs, micMessage, pickMimeType, recorderSupported, voiceTitle } from "./voice";
+import {
+  classifyMicError,
+  extensionFor,
+  formatElapsed,
+  levelFromSamples,
+  maxVoiceMs,
+  micMessage,
+  pickMimeType,
+  recorderSupported,
+  voiceTitle,
+} from "./voice";
 
 test("recording needs both getUserMedia and MediaRecorder", () => {
   assert.equal(recorderSupported({ mediaDevices: { getUserMedia: () => {} }, MediaRecorder: function Recorder() {} }), true);
@@ -22,9 +32,18 @@ test("microphone failures map to plain, actionable states", () => {
 });
 
 test("the recording format is the first one the WebView supports, in playable order", () => {
-  assert.equal(pickMimeType(type => type.startsWith("audio/webm")), "audio/webm;codecs=opus");
-  assert.equal(pickMimeType(type => type === "audio/mp4"), "audio/mp4");
-  assert.equal(pickMimeType(() => false), null);
+  assert.equal(
+    pickMimeType((type) => type.startsWith("audio/webm")),
+    "audio/webm;codecs=opus",
+  );
+  assert.equal(
+    pickMimeType((type) => type === "audio/mp4"),
+    "audio/mp4",
+  );
+  assert.equal(
+    pickMimeType(() => false),
+    null,
+  );
   assert.equal(extensionFor("audio/webm;codecs=opus"), "webm");
   assert.equal(extensionFor("audio/mp4"), "m4a");
   assert.equal(extensionFor("audio/ogg;codecs=opus"), "ogg");

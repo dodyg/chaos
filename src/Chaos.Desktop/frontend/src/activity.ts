@@ -34,19 +34,26 @@ class ActivityHub {
 
   constructor(private readonly api: ActivityApi) {}
 
-  get jobs() { return this.jobsSnapshot; }
+  get jobs() {
+    return this.jobsSnapshot;
+  }
 
   subscribe(subscriber: Subscriber) {
     this.subscribers.add(subscriber);
     void this.start();
-    return () => { this.subscribers.delete(subscriber); };
+    return () => {
+      this.subscribers.delete(subscriber);
+    };
   }
 
   subscribeJobs(listener: () => void) {
     this.jobListeners.add(listener);
     this.jobUsers++;
     void this.start().then(() => this.refreshJobs());
-    return () => { this.jobListeners.delete(listener); this.jobUsers--; };
+    return () => {
+      this.jobListeners.delete(listener);
+      this.jobUsers--;
+    };
   }
 
   private start() {
@@ -66,7 +73,10 @@ class ActivityHub {
   }
 
   private schedule() {
-    if (this.pulling) { this.again = true; return; }
+    if (this.pulling) {
+      this.again = true;
+      return;
+    }
     void this.pull();
   }
 
@@ -102,8 +112,14 @@ class ActivityHub {
 
   private dispatch(entries: readonly ActivityEntryDto[], reason: ActivityReason) {
     for (const subscriber of [...this.subscribers]) {
-      if (reason === "reset") { subscriber.run([], reason); continue; }
-      const touched = subscriber.kinds === "*" ? entries : entries.filter(entry => entry.entities.some(entity => (subscriber.kinds as ReadonlySet<string>).has(entity.kind)));
+      if (reason === "reset") {
+        subscriber.run([], reason);
+        continue;
+      }
+      const touched =
+        subscriber.kinds === "*"
+          ? entries
+          : entries.filter((entry) => entry.entities.some((entity) => (subscriber.kinds as ReadonlySet<string>).has(entity.kind)));
       if (touched.length > 0) subscriber.run(touched, reason);
     }
   }
@@ -116,8 +132,10 @@ class ActivityHub {
       for (const job of result.jobs) next[job.job] = job;
       if (JSON.stringify(next) === JSON.stringify(this.jobsSnapshot)) return;
       this.jobsSnapshot = Object.freeze(next);
-      this.jobListeners.forEach(listener => listener());
-    } catch { /* the next push retries */ }
+      this.jobListeners.forEach((listener) => listener());
+    } catch {
+      /* the next push retries */
+    }
   }
 
   focusReload() {
@@ -136,7 +154,9 @@ class ActivityHub {
 let hub: ActivityHub | null = null;
 let configured: ActivityApi = activityRpc;
 
-function current() { return hub ??= new ActivityHub(configured); }
+function current() {
+  return (hub ??= new ActivityHub(configured));
+}
 
 /** Tests and the preview use their own transport; calling this drops the running hub. */
 export function configureActivity(api: ActivityApi = activityRpc) {
@@ -151,16 +171,26 @@ export function configureActivity(api: ActivityApi = activityRpc) {
  * focus only while the push subscription is unavailable.
  */
 export function useActivity(kinds: readonly string[] | "*", handler: ActivityHandler) {
-  const handlerRef = React.useRef(handler); handlerRef.current = handler;
+  const handlerRef = React.useRef(handler);
+  handlerRef.current = handler;
   const key = kinds === "*" ? "*" : [...kinds].sort().join("|");
   React.useEffect(() => {
     const active = current();
-    const subscriber: Subscriber = { kinds: kinds === "*" ? "*" : new Set(kinds), run: (entries, reason) => handlerRef.current(entries, reason) };
+    const subscriber: Subscriber = {
+      kinds: kinds === "*" ? "*" : new Set(kinds),
+      run: (entries, reason) => handlerRef.current(entries, reason),
+    };
     const release = active.subscribe(subscriber);
-    function wake() { if (document.visibilityState === "visible") active.focusReload(); }
+    function wake() {
+      if (document.visibilityState === "visible") active.focusReload();
+    }
     window.addEventListener("focus", wake);
     document.addEventListener("visibilitychange", wake);
-    return () => { release(); window.removeEventListener("focus", wake); document.removeEventListener("visibilitychange", wake); };
+    return () => {
+      release();
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 }
@@ -170,8 +200,12 @@ export function useJobs(): Readonly<Record<string, ActivityJobDto>> {
   return React.useSyncExternalStore(subscribeJobs, jobsSnapshot, () => noJobs);
 }
 
-function subscribeJobs(listener: () => void) { return current().subscribeJobs(listener); }
-function jobsSnapshot() { return current().jobs; }
+function subscribeJobs(listener: () => void) {
+  return current().subscribeJobs(listener);
+}
+function jobsSnapshot() {
+  return current().jobs;
+}
 
 /**
  * Calls <paramref name="handler"/> when the named job starts or finishes a run after this component
@@ -181,9 +215,16 @@ export function useJobChange(job: string, handler: () => void) {
   const state = useJobs()[job];
   const signature = state ? `${state.running}|${state.lastRunId ?? ""}` : null;
   const seen = React.useRef<string | null | undefined>(undefined);
-  const handlerRef = React.useRef(handler); handlerRef.current = handler;
+  const handlerRef = React.useRef(handler);
+  handlerRef.current = handler;
   React.useEffect(() => {
-    if (seen.current === undefined) { seen.current = signature; return; }
-    if (seen.current !== signature) { seen.current = signature; handlerRef.current(); }
+    if (seen.current === undefined) {
+      seen.current = signature;
+      return;
+    }
+    if (seen.current !== signature) {
+      seen.current = signature;
+      handlerRef.current();
+    }
   }, [signature]);
 }

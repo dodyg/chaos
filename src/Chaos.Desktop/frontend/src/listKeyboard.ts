@@ -15,7 +15,9 @@ const titleSelector = "[data-slot=row-title]";
 
 /** Row titles in reading order, skipping rows inside a folded section. */
 function rowTitles(root: HTMLElement) {
-  return Array.from(root.querySelectorAll<HTMLElement>(`${rowSelector} ${titleSelector}`)).filter(title => !title.closest("details:not([open])"));
+  return Array.from(root.querySelectorAll<HTMLElement>(`${rowSelector} ${titleSelector}`)).filter(
+    (title) => !title.closest("details:not([open])"),
+  );
 }
 
 /**
@@ -31,7 +33,7 @@ export function handleListKeys(event: React.KeyboardEvent<HTMLElement>, onAddToM
   const titles = rowTitles(event.currentTarget);
   if (titles.length === 0) return;
   const row = target.closest<HTMLElement>(rowSelector);
-  const current = row ? titles.findIndex(title => row.contains(title)) : -1;
+  const current = row ? titles.findIndex((title) => row.contains(title)) : -1;
 
   if (key === "j" || key === "arrowdown" || key === "k" || key === "arrowup") {
     // Arrow keys inside a row's own controls (a drag handle moves the task) stay with them.
@@ -46,12 +48,21 @@ export function handleListKeys(event: React.KeyboardEvent<HTMLElement>, onAddToM
   if (!row || current < 0) return;
   if (key === "x") {
     const box = row.querySelector<HTMLInputElement>("input[type=checkbox]");
-    if (box && !box.disabled) { event.preventDefault(); box.click(); }
+    if (box && !box.disabled) {
+      event.preventDefault();
+      box.click();
+    }
   } else if (key === "v") {
     const view = row.querySelector<HTMLButtonElement>("button[aria-label^='View ']");
-    if (view && !view.disabled) { event.preventDefault(); view.click(); }
+    if (view && !view.disabled) {
+      event.preventDefault();
+      view.click();
+    }
   } else if (key === "m") {
     const id = row.dataset.taskRow;
-    if (id) { event.preventDefault(); onAddToMyDay(id); }
+    if (id) {
+      event.preventDefault();
+      onAddToMyDay(id);
+    }
   }
 }

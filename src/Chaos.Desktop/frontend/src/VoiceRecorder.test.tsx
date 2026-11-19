@@ -29,25 +29,49 @@ function fakeEngine(options: { supported?: boolean; fail?: string } = {}) {
       if (options.fail) throw Object.assign(new Error("mic"), { name: options.fail });
       log.started++;
       return {
-        onLevel: listener => { emit = listener; },
-        stop: async () => { log.stopped++; return { blob: new Blob(["abc"], { type: "audio/webm" }), mimeType: "audio/webm" }; },
-        cancel: () => { log.cancelled++; },
+        onLevel: (listener) => {
+          emit = listener;
+        },
+        stop: async () => {
+          log.stopped++;
+          return { blob: new Blob(["abc"], { type: "audio/webm" }), mimeType: "audio/webm" };
+        },
+        cancel: () => {
+          log.cancelled++;
+        },
       };
     },
   };
   return { engine, log, level: (value: number) => emit(value) };
 }
 
-function renderRecorder(engine: Engine, handlers: { onRecorded?: (file: File, at: Date) => Promise<void>; onAttachFile?: (file: File) => Promise<void> } = {}, errors: string[] = []) {
-  return render(<VoiceRecorder engine={engine} onRecorded={handlers.onRecorded ?? (async () => {})} onAttachFile={handlers.onAttachFile ?? (async () => {})}
-    onError={message => { if (message) errors.push(message); }}/>, { container: dom.window.document.body });
+function renderRecorder(
+  engine: Engine,
+  handlers: { onRecorded?: (file: File, at: Date) => Promise<void>; onAttachFile?: (file: File) => Promise<void> } = {},
+  errors: string[] = [],
+) {
+  return render(
+    <VoiceRecorder
+      engine={engine}
+      onRecorded={handlers.onRecorded ?? (async () => {})}
+      onAttachFile={handlers.onAttachFile ?? (async () => {})}
+      onError={(message) => {
+        if (message) errors.push(message);
+      }}
+    />,
+    { container: dom.window.document.body },
+  );
 }
 
 test("recording shows a timer and a level meter, and Stop and save hands back a webm file", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const { engine, log, level } = fakeEngine();
   const recorded: File[] = [];
-  renderRecorder(engine, { onRecorded: async file => { recorded.push(file); } });
+  renderRecorder(engine, {
+    onRecorded: async (file) => {
+      recorded.push(file);
+    },
+  });
   await user.click(screen.getByRole("button", { name: /Voice note/ }));
   assert.ok(await screen.findByRole("timer", { name: "Recording time" }));
   const meter = screen.getByRole("meter", { name: "Microphone level" });
@@ -66,7 +90,11 @@ test("Discard throws the recording away without saving", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const { engine, log } = fakeEngine();
   let saved = 0;
-  renderRecorder(engine, { onRecorded: async () => { saved++; } });
+  renderRecorder(engine, {
+    onRecorded: async () => {
+      saved++;
+    },
+  });
   await user.click(screen.getByRole("button", { name: /Voice note/ }));
   await user.click(await screen.findByRole("button", { name: /Discard/ }));
   assert.equal(log.cancelled, 1);
@@ -76,10 +104,18 @@ test("Discard throws the recording away without saving", async () => {
 });
 
 test("a denied, missing or unsupported microphone is shown plainly with an audio file fallback", async () => {
-  for (const [options, expected] of [[{ fail: "NotAllowedError" }, /denied/], [{ fail: "NotFoundError" }, /No microphone/], [{ supported: false }, /cannot record/]] as const) {
+  for (const [options, expected] of [
+    [{ fail: "NotAllowedError" }, /denied/],
+    [{ fail: "NotFoundError" }, /No microphone/],
+    [{ supported: false }, /cannot record/],
+  ] as const) {
     const user = userEvent.setup({ document: dom.window.document });
     const attached: File[] = [];
-    renderRecorder(fakeEngine(options).engine, { onAttachFile: async file => { attached.push(file); } });
+    renderRecorder(fakeEngine(options).engine, {
+      onAttachFile: async (file) => {
+        attached.push(file);
+      },
+    });
     await user.click(screen.getByRole("button", { name: /Voice note/ }));
     const alert = await screen.findByRole("alert");
     assert.match(alert.textContent ?? "", expected);
@@ -95,7 +131,15 @@ test("a denied, missing or unsupported microphone is shown plainly with an audio
 test("a failure while storing the recording is reported and the button comes back", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const errors: string[] = [];
-  renderRecorder(fakeEngine().engine, { onRecorded: async () => { throw new Error("The disk is full."); } }, errors);
+  renderRecorder(
+    fakeEngine().engine,
+    {
+      onRecorded: async () => {
+        throw new Error("The disk is full.");
+      },
+    },
+    errors,
+  );
   await user.click(screen.getByRole("button", { name: /Voice note/ }));
   await user.click(await screen.findByRole("button", { name: /Stop and save/ }));
   await waitFor(() => assert.deepEqual(errors, ["The disk is full."]));
@@ -107,7 +151,11 @@ test("the recording stops by itself at 30 minutes", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const { engine, log } = fakeEngine();
   const recorded: File[] = [];
-  renderRecorder(engine, { onRecorded: async file => { recorded.push(file); } });
+  renderRecorder(engine, {
+    onRecorded: async (file) => {
+      recorded.push(file);
+    },
+  });
   await user.click(screen.getByRole("button", { name: /Voice note/ }));
   await screen.findByRole("timer", { name: "Recording time" });
   const realNow = Date.now;

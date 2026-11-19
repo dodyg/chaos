@@ -50,8 +50,9 @@ function commentStart(value: string): number {
   let quote = "";
   for (let index = 0; index < value.length; index++) {
     const character = value[index];
-    if (quote) { if (character === quote) quote = ""; }
-    else if (character === '"' || character === "'") quote = character;
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") quote = character;
     else if (character === "#" && index > 0 && /\s/.test(value[index - 1])) return index;
   }
   return -1;
@@ -63,9 +64,13 @@ function splitFlow(inner: string): string[] {
   let quote = "";
   for (let index = 0; index < inner.length; index++) {
     const character = inner[index];
-    if (quote) { if (character === quote) quote = ""; }
-    else if (character === '"' || character === "'") quote = character;
-    else if (character === ",") { parts.push(inner.slice(start, index)); start = index + 1; }
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === ",") {
+      parts.push(inner.slice(start, index));
+      start = index + 1;
+    }
   }
   parts.push(inner.slice(start));
   return parts;
@@ -75,8 +80,14 @@ function keyColon(line: string): number {
   let quote = "";
   for (let index = 0; index < line.length; index++) {
     const character = line[index];
-    if (quote) { if (character === quote) quote = ""; continue; }
-    if ((character === '"' || character === "'") && index === 0) { quote = character; continue; }
+    if (quote) {
+      if (character === quote) quote = "";
+      continue;
+    }
+    if ((character === '"' || character === "'") && index === 0) {
+      quote = character;
+      continue;
+    }
     if (character === ":" && (index + 1 === line.length || line[index + 1] === " " || line[index + 1] === "\t")) return index;
   }
   return -1;
@@ -89,7 +100,13 @@ export function parseFrontMatter(text: string): FrontMatter {
   if (close < 0) return { ...none, present: false, error: "The front matter has no closing --- line." };
   const bodyStart = all[close].end;
   const yaml = text.slice(all[0].end, all[close].start).replace(/\n$/, "");
-  const fail = (index: number, message: string): FrontMatter => ({ present: true, error: `Line ${index + 1}: ${message}`, properties: [], yaml, bodyStart });
+  const fail = (index: number, message: string): FrontMatter => ({
+    present: true,
+    error: `Line ${index + 1}: ${message}`,
+    properties: [],
+    yaml,
+    bodyStart,
+  });
   const properties: FrontMatterProperty[] = [];
   let openList: FrontMatterProperty | null = null;
   for (let index = 1; index < close; index++) {
@@ -108,14 +125,16 @@ export function parseFrontMatter(text: string): FrontMatter {
     if (colon <= 0) return fail(index, "Expected key: value.");
     let key = line.slice(0, colon).trim();
     if (key.startsWith('"') || key.startsWith("'")) key = unquote(key).value;
-    if (properties.some(property => property.key === key)) return fail(index, `The key "${key}" appears twice.`);
+    if (properties.some((property) => property.key === key)) return fail(index, `The key "${key}" appears twice.`);
     let raw = line.slice(colon + 1).trim();
     const comment = commentStart(raw);
     if (comment >= 0) raw = raw.slice(0, comment).trimEnd();
     let values: string[];
     let list = false;
-    if (!raw) { values = []; list = true; }
-    else if (raw.startsWith("[")) {
+    if (!raw) {
+      values = [];
+      list = true;
+    } else if (raw.startsWith("[")) {
       if (!raw.endsWith("]")) return fail(index, "A [list] is not closed.");
       values = [];
       list = true;
@@ -139,13 +158,13 @@ export function parseFrontMatter(text: string): FrontMatter {
 
 export function frontMatterValue(frontMatter: FrontMatter, key: string): string | null {
   if (frontMatter.error) return null;
-  const property = frontMatter.properties.find(item => item.key === key);
+  const property = frontMatter.properties.find((item) => item.key === key);
   return property && property.values.length === 1 ? property.values[0] : null;
 }
 
 export function frontMatterList(frontMatter: FrontMatter, key: string): string[] {
   if (frontMatter.error) return [];
-  return frontMatter.properties.find(item => item.key === key)?.values ?? [];
+  return frontMatter.properties.find((item) => item.key === key)?.values ?? [];
 }
 
 /** The page text split into its front matter block (with both `---` lines) and its body. */
@@ -172,7 +191,8 @@ const plainScalar = /^[^\s"'#[\]{},&*!|>%@`:-][^#:]*$/;
 /** A YAML value written the simplest safe way: plain when it can be, quoted otherwise. */
 export function yamlScalar(value: string): string {
   if (value === "") return '""';
-  if (plainScalar.test(value) && value.trim() === value && !/^(true|false|null|yes|no|~)$/i.test(value) && !/^[\d.+-]/.test(value)) return value;
+  if (plainScalar.test(value) && value.trim() === value && !/^(true|false|null|yes|no|~)$/i.test(value) && !/^[\d.+-]/.test(value))
+    return value;
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
@@ -183,18 +203,23 @@ export function yamlScalar(value: string): string {
 export function setProperty(text: string, key: string, value: string | string[] | null): string {
   const { head, body, frontMatter } = splitPage(text);
   if (frontMatter.error) return text;
-  const rendered = value === null ? null
-    : Array.isArray(value) ? `${key}: [${value.map(yamlScalar).join(", ")}]`
-    : `${key}: ${yamlScalar(value)}`;
+  const rendered =
+    value === null ? null : Array.isArray(value) ? `${key}: [${value.map(yamlScalar).join(", ")}]` : `${key}: ${yamlScalar(value)}`;
   if (!frontMatter.present) return rendered === null ? text : joinPage(withYaml(rendered), body);
   const yamlLines = frontMatter.yaml ? frontMatter.yaml.split("\n") : [];
-  const start = yamlLines.findIndex(line => !/^\s/.test(line) && keyColon(line) > 0 && unquote(line.slice(0, keyColon(line)).trim()).value === key);
+  const start = yamlLines.findIndex(
+    (line) => !/^\s/.test(line) && keyColon(line) > 0 && unquote(line.slice(0, keyColon(line)).trim()).value === key,
+  );
   if (start < 0) {
     if (rendered === null) return text;
     yamlLines.push(rendered);
   } else {
     let end = start + 1;
-    while (end < yamlLines.length && (/^\s/.test(yamlLines[end]) || yamlLines[end].trimStart().startsWith("- ") || yamlLines[end].trim() === "-")) end++;
+    while (
+      end < yamlLines.length &&
+      (/^\s/.test(yamlLines[end]) || yamlLines[end].trimStart().startsWith("- ") || yamlLines[end].trim() === "-")
+    )
+      end++;
     yamlLines.splice(start, end - start, ...(rendered === null ? [] : [rendered]));
   }
   void head;
@@ -206,8 +231,12 @@ export function pageProperties(frontMatter: FrontMatter) {
   return {
     icon: frontMatterValue(frontMatter, "icon"),
     background: frontMatterValue(frontMatter, "background"),
-    tags: frontMatterList(frontMatter, "tags").map(tag => tag.replace(/^#/, "").trim()).filter(Boolean),
-    aliases: frontMatterList(frontMatter, "aliases").map(alias => alias.trim()).filter(Boolean),
+    tags: frontMatterList(frontMatter, "tags")
+      .map((tag) => tag.replace(/^#/, "").trim())
+      .filter(Boolean),
+    aliases: frontMatterList(frontMatter, "aliases")
+      .map((alias) => alias.trim())
+      .filter(Boolean),
   };
 }
 

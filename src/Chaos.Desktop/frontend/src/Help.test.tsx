@@ -27,7 +27,7 @@ test("every query word must appear in a help topic", () => {
 test("help search narrows the topics and its links go to the matching page", async () => {
   const visited: string[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<Help onNavigate={view => visited.push(view)}/>, { container: dom.window.document.body });
+  render(<Help onNavigate={(view) => visited.push(view)} />, { container: dom.window.document.body });
   assert.ok(screen.getByRole("heading", { name: "Quick add in plain language" }));
   assert.ok(screen.getByRole("navigation", { name: "Help topics" }));
 
@@ -44,7 +44,7 @@ test("help search narrows the topics and its links go to the matching page", asy
 
 test("help covers GitHub issue sync and Google Calendar", async () => {
   const user = userEvent.setup({ document: dom.window.document });
-  render(<Help onNavigate={() => {}}/>, { container: dom.window.document.body });
+  render(<Help onNavigate={() => {}} />, { container: dom.window.document.body });
   assert.ok(screen.getByRole("heading", { name: "GitHub issues" }));
   await user.type(screen.getByLabelText("Search help"), "gh auth");
   assert.ok(screen.getByRole("heading", { name: "GitHub issues" }));
@@ -57,11 +57,19 @@ test("help covers GitHub issue sync and Google Calendar", async () => {
 
 test("F1 and the sidebar Help button open the help page", async () => {
   const api = {
-    taskRpc: { ...taskRpc, listInbox: async () => ({ ok: true, tasks: [], error: null }), listDeleted: async () => ({ ok: true, tasks: [], error: null }) },
-    containerRpc: { ...containerRpc, list: async () => ({ ok: true, containers: [], error: null }), listDeleted: async () => ({ ok: true, containers: [], error: null }) },
+    taskRpc: {
+      ...taskRpc,
+      listInbox: async () => ({ ok: true, tasks: [], error: null }),
+      listDeleted: async () => ({ ok: true, tasks: [], error: null }),
+    },
+    containerRpc: {
+      ...containerRpc,
+      list: async () => ({ ok: true, containers: [], error: null }),
+      listDeleted: async () => ({ ok: true, containers: [], error: null }),
+    },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<App initialView="tasks" api={api} templates={<></>}/>, { container: dom.window.document.body });
+  render(<App initialView="tasks" api={api} templates={<></>} />, { container: dom.window.document.body });
   fireEvent.keyDown(dom.window.document.body, { key: "F1" });
   assert.ok(await screen.findByRole("heading", { name: "Using Chaos" }));
 

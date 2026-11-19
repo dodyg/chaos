@@ -3,8 +3,19 @@ import { Eraser, Highlighter, PenLine, Redo2, SquareDashedMousePointer, Undo2 } 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
-  eraseAt, highlighterAlpha, isUsableRegion, outlinePath, palette, penSizes, regionBetween, StrokeHistory, strokeOutline,
-  type Drawing, type Point, type Region, type Stroke,
+  eraseAt,
+  highlighterAlpha,
+  isUsableRegion,
+  outlinePath,
+  palette,
+  penSizes,
+  regionBetween,
+  StrokeHistory,
+  strokeOutline,
+  type Drawing,
+  type Point,
+  type Region,
+  type Stroke,
 } from "./drawing";
 
 export type DrawingTool = "pen" | "highlighter" | "eraser" | "select";
@@ -54,7 +65,7 @@ export async function renderDrawingPng(drawing: Drawing, width: number, height: 
   const ctx = canvas.getContext("2d");
   if (!ctx || typeof Path2D === "undefined") return null;
   paintDrawing(ctx, drawing, width, height);
-  return await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), "image/png"));
+  return await new Promise<Blob | null>((resolve) => canvas.toBlob((blob) => resolve(blob), "image/png"));
 }
 
 const eraserRadius = 10;
@@ -77,7 +88,9 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
   const history = React.useRef(new StrokeHistory());
   const drawingRef = React.useRef(drawing);
   drawingRef.current = drawing;
-  const live = React.useRef<{ stroke: Stroke | null; erasing: boolean; dragFrom: { x: number; y: number } | null; pointer: number } | null>(null);
+  const live = React.useRef<{ stroke: Stroke | null; erasing: boolean; dragFrom: { x: number; y: number } | null; pointer: number } | null>(
+    null,
+  );
   const lastValue = React.useRef(value);
 
   React.useEffect(() => {
@@ -135,7 +148,11 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
   function onPointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     if (readOnly || (event.pointerType === "mouse" && event.button !== 0)) return;
     event.preventDefault();
-    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* capture is best effort */ }
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* capture is best effort */
+    }
     const [x, y, pressure] = toDrawingPoint(event);
     if (tool === "eraser") {
       live.current = { stroke: null, erasing: true, dragFrom: null, pointer: event.pointerId };
@@ -145,7 +162,12 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
       setRegion(null);
       onSelectRegion?.(null);
     } else {
-      live.current = { stroke: { tool, color, size, points: [[x, y, pressure]] }, erasing: false, dragFrom: null, pointer: event.pointerId };
+      live.current = {
+        stroke: { tool, color, size, points: [[x, y, pressure]] },
+        erasing: false,
+        dragFrom: null,
+        pointer: event.pointerId,
+      };
       repaint();
     }
   }
@@ -174,7 +196,8 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
       const x = (sample.clientX - rect.left) * scaleX;
       const y = (sample.clientY - rect.top) * scaleY;
       if (gesture.erasing) eraseUnder(x, y);
-      else if (gesture.stroke) gesture.stroke.points.push([x, y, event.pointerType === "pen" && sample.pressure > 0 ? sample.pressure : 0.5]);
+      else if (gesture.stroke)
+        gesture.stroke.points.push([x, y, event.pointerType === "pen" && sample.pressure > 0 ? sample.pressure : 0.5]);
       else if (gesture.dragFrom) setRegion(regionBetween(gesture.dragFrom, { x, y }, width, height));
     }
     if (gesture.stroke) repaint();
@@ -196,65 +219,164 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
     } else if (gesture.dragFrom) {
       const [endX, endY] = toDrawingPoint(event);
       const chosen = regionBetween(gesture.dragFrom, { x: endX, y: endY }, width, height);
-      if (isUsableRegion(chosen)) { setRegion(chosen); onSelectRegion?.(chosen); } else { setRegion(null); onSelectRegion?.(null); }
+      if (isUsableRegion(chosen)) {
+        setRegion(chosen);
+        onSelectRegion?.(chosen);
+      } else {
+        setRegion(null);
+        onSelectRegion?.(null);
+      }
     }
   }
 
   function undo() {
     const previous = history.current.undo(drawingRef.current);
     if (!previous) return;
-    setDrawing(previous); drawingRef.current = previous; emit(previous); bump();
+    setDrawing(previous);
+    drawingRef.current = previous;
+    emit(previous);
+    bump();
   }
 
   function redo() {
     const next = history.current.redo(drawingRef.current);
     if (!next) return;
-    setDrawing(next); drawingRef.current = next; emit(next); bump();
+    setDrawing(next);
+    drawingRef.current = next;
+    emit(next);
+    bump();
   }
 
-  function clearRegion() { setRegion(null); onSelectRegion?.(null); }
+  function clearRegion() {
+    setRegion(null);
+    onSelectRegion?.(null);
+  }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     const mod = event.ctrlKey || event.metaKey;
-    if (mod && event.key.toLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); undo(); }
-    else if (mod && (event.key.toLowerCase() === "y" || (event.key.toLowerCase() === "z" && event.shiftKey))) { event.preventDefault(); redo(); }
-    else if (event.key === "Escape" && region) { event.preventDefault(); clearRegion(); }
+    if (mod && event.key.toLowerCase() === "z" && !event.shiftKey) {
+      event.preventDefault();
+      undo();
+    } else if (mod && (event.key.toLowerCase() === "y" || (event.key.toLowerCase() === "z" && event.shiftKey))) {
+      event.preventDefault();
+      redo();
+    } else if (event.key === "Escape" && region) {
+      event.preventDefault();
+      clearRegion();
+    }
   }
 
   const tools: { id: DrawingTool; name: string; icon: React.ReactNode }[] = [
-    { id: "pen", name: "Pen", icon: <PenLine/> },
-    { id: "highlighter", name: "Highlighter", icon: <Highlighter/> },
-    { id: "eraser", name: "Eraser", icon: <Eraser/> },
-    { id: "select", name: "Select a part", icon: <SquareDashedMousePointer/> },
+    { id: "pen", name: "Pen", icon: <PenLine /> },
+    { id: "highlighter", name: "Highlighter", icon: <Highlighter /> },
+    { id: "eraser", name: "Eraser", icon: <Eraser /> },
+    { id: "select", name: "Select a part", icon: <SquareDashedMousePointer /> },
   ];
   const inkTool = tool === "pen" || tool === "highlighter";
 
-  return <div className="grid gap-2" onKeyDown={onKeyDown}>
-    {!readOnly && <div role="toolbar" aria-label="Drawing tools" className="flex flex-wrap items-center gap-1.5">
-      {tools.map(item => <Button key={item.id} type="button" size="sm" variant={tool === item.id ? "secondary" : "outline"} aria-pressed={tool === item.id}
-        onClick={() => { setTool(item.id); if (item.id !== "select") clearRegion(); }}>{item.icon}{item.name}</Button>)}
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true"/>
-      <div role="group" aria-label="Ink colour" className="flex gap-1">
-        {palette.map(swatch => <button key={swatch.value} type="button" aria-label={swatch.name} aria-pressed={color === swatch.value} disabled={!inkTool}
-          className={cn("size-6 rounded-full border-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-40", color === swatch.value ? "border-primary ring-1 ring-primary" : "border-border")}
-          style={{ backgroundColor: swatch.value }} onClick={() => setColor(swatch.value)}/>)}
+  return (
+    <div className="grid gap-2" onKeyDown={onKeyDown}>
+      {!readOnly && (
+        <div role="toolbar" aria-label="Drawing tools" className="flex flex-wrap items-center gap-1.5">
+          {tools.map((item) => (
+            <Button
+              key={item.id}
+              type="button"
+              size="sm"
+              variant={tool === item.id ? "secondary" : "outline"}
+              aria-pressed={tool === item.id}
+              onClick={() => {
+                setTool(item.id);
+                if (item.id !== "select") clearRegion();
+              }}
+            >
+              {item.icon}
+              {item.name}
+            </Button>
+          ))}
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <div role="group" aria-label="Ink colour" className="flex gap-1">
+            {palette.map((swatch) => (
+              <button
+                key={swatch.value}
+                type="button"
+                aria-label={swatch.name}
+                aria-pressed={color === swatch.value}
+                disabled={!inkTool}
+                className={cn(
+                  "size-6 rounded-full border-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-40",
+                  color === swatch.value ? "border-primary ring-1 ring-primary" : "border-border",
+                )}
+                style={{ backgroundColor: swatch.value }}
+                onClick={() => setColor(swatch.value)}
+              />
+            ))}
+          </div>
+          <div role="group" aria-label="Ink size" className="flex gap-1">
+            {penSizes.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="xs"
+                variant={size === option.value ? "secondary" : "ghost"}
+                aria-pressed={size === option.value}
+                disabled={!inkTool}
+                onClick={() => setSize(option.value)}
+              >
+                {option.name}
+              </Button>
+            ))}
+          </div>
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Undo"
+            title="Undo (Ctrl+Z)"
+            disabled={!history.current.canUndo}
+            onClick={undo}
+          >
+            <Undo2 />
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Redo"
+            title="Redo (Ctrl+Y)"
+            disabled={!history.current.canRedo}
+            onClick={redo}
+          >
+            <Redo2 />
+          </Button>
+        </div>
+      )}
+      <div className="overflow-auto rounded-lg border bg-white">
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          role="img"
+          aria-label={`${label}: ${drawing.strokes.length} stroke${drawing.strokes.length === 1 ? "" : "s"}. Drawing needs a mouse, pen or touch.`}
+          className={cn(
+            "block h-auto w-full max-w-full touch-none select-none",
+            !readOnly && (tool === "eraser" ? "cursor-cell" : "cursor-crosshair"),
+          )}
+          style={{ aspectRatio: `${width} / ${height}`, touchAction: "none" }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        />
       </div>
-      <div role="group" aria-label="Ink size" className="flex gap-1">
-        {penSizes.map(option => <Button key={option.value} type="button" size="xs" variant={size === option.value ? "secondary" : "ghost"} aria-pressed={size === option.value} disabled={!inkTool} onClick={() => setSize(option.value)}>{option.name}</Button>)}
-      </div>
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true"/>
-      <Button type="button" size="icon-sm" variant="ghost" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!history.current.canUndo} onClick={undo}><Undo2/></Button>
-      <Button type="button" size="icon-sm" variant="ghost" aria-label="Redo" title="Redo (Ctrl+Y)" disabled={!history.current.canRedo} onClick={redo}><Redo2/></Button>
-    </div>}
-    <div className="overflow-auto rounded-lg border bg-white">
-      <canvas ref={canvasRef} width={width} height={height} role="img"
-        aria-label={`${label}: ${drawing.strokes.length} stroke${drawing.strokes.length === 1 ? "" : "s"}. Drawing needs a mouse, pen or touch.`}
-        className={cn("block h-auto w-full max-w-full touch-none select-none", !readOnly && (tool === "eraser" ? "cursor-cell" : "cursor-crosshair"))}
-        style={{ aspectRatio: `${width} / ${height}`, touchAction: "none" }}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}/>
+      {tool === "select" && !readOnly && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {region
+            ? "Part selected. Choose Make task, or press Escape to clear it."
+            : "Drag over the part of the drawing you want a task for."}
+        </p>
+      )}
     </div>
-    {tool === "select" && !readOnly && <p className="text-xs text-muted-foreground" role="status">
-      {region ? "Part selected. Choose Make task, or press Escape to clear it." : "Drag over the part of the drawing you want a task for."}
-    </p>}
-  </div>;
+  );
 }

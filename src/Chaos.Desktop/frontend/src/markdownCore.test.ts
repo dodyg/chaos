@@ -4,16 +4,21 @@ import { JSDOM } from "jsdom";
 import { declarationsOf, diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "./markdownCore";
 
 test("only http, https and mailto links are safe", () => {
-  for (const url of ["http://example.com", "https://example.com/a?b=1", "mailto:a@example.com"]) assert.equal(isSafeExternalUrl(url), true, url);
-  for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "tel:123", "chaos:task/1", "not a url", ""]) assert.equal(isSafeExternalUrl(url), false, url);
+  for (const url of ["http://example.com", "https://example.com/a?b=1", "mailto:a@example.com"])
+    assert.equal(isSafeExternalUrl(url), true, url);
+  for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "tel:123", "chaos:task/1", "not a url", ""])
+    assert.equal(isSafeExternalUrl(url), false, url);
 });
 
 test("style declarations split on top-level semicolons only and keep !important", () => {
-  assert.deepEqual(declarationsOf("--_fg:var(--pele-fg,#1f1f1f);fill: url(\"data:image/svg+xml;utf8,<a/>\") ;stroke:red !important;;broken"), [
-    ["--_fg", "var(--pele-fg,#1f1f1f)", ""],
-    ["fill", "url(\"data:image/svg+xml;utf8,<a/>\")", ""],
-    ["stroke", "red", "important"],
-  ]);
+  assert.deepEqual(
+    declarationsOf('--_fg:var(--pele-fg,#1f1f1f);fill: url("data:image/svg+xml;utf8,<a/>") ;stroke:red !important;;broken'),
+    [
+      ["--_fg", "var(--pele-fg,#1f1f1f)", ""],
+      ["fill", 'url("data:image/svg+xml;utf8,<a/>")', ""],
+      ["stroke", "red", "important"],
+    ],
+  );
 });
 
 test("reapplying inline styles sets each declaration on the element", () => {

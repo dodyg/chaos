@@ -51,7 +51,10 @@ function itemBlock(lines: Line[], index: number): { first: number; after: number
       // Blank lines belong to the item only when deeper content follows them.
       let next = after + 1;
       while (next < lines.length && !lines[next].text.trim()) next++;
-      if (next < lines.length && indentOf(lines[next].text) > indent) { after = next; continue; }
+      if (next < lines.length && indentOf(lines[next].text) > indent) {
+        after = next;
+        continue;
+      }
       break;
     }
     if (indentOf(text) <= indent) break;
@@ -90,10 +93,12 @@ export function indentItem(text: string, selectionStart: number, selectionEnd: n
   const range = blockRange(lines, block.first, block.after);
   const original = text.slice(range.start, range.end);
   const parts = original.split("\n");
-  const replaced = parts.map(line => line.trim() ? indentUnit + line : line).join("\n");
+  const replaced = parts.map((line) => (line.trim() ? indentUnit + line : line)).join("\n");
   return {
-    start: range.start, end: range.end, insert: replaced,
-    ...shift(selectionStart, selectionEnd, offset => {
+    start: range.start,
+    end: range.end,
+    insert: replaced,
+    ...shift(selectionStart, selectionEnd, (offset) => {
       if (offset < range.start) return offset;
       // Every non-blank line starting at or before the offset gained one indent.
       let added = 0;
@@ -112,22 +117,29 @@ export function indentItem(text: string, selectionStart: number, selectionEnd: n
 export function outdentItem(text: string, selectionStart: number, selectionEnd: number): TextEdit | null {
   const lines = splitLines(text);
   const block = selectedBlocks(lines, selectionStart, selectionEnd);
-  if (!block || block.indent === 0) return block ? { start: selectionStart, end: selectionStart, insert: "", selectionStart, selectionEnd } : null;
+  if (!block || block.indent === 0)
+    return block ? { start: selectionStart, end: selectionStart, insert: "", selectionStart, selectionEnd } : null;
   const range = blockRange(lines, block.first, block.after);
   const original = text.slice(range.start, range.end);
-  const removeFrom = (line: string) => line.startsWith(indentUnit) ? indentUnit.length : line.startsWith("\t") ? 1 : line.startsWith(" ") ? 1 : 0;
+  const removeFrom = (line: string) =>
+    line.startsWith(indentUnit) ? indentUnit.length : line.startsWith("\t") ? 1 : line.startsWith(" ") ? 1 : 0;
   const parts = original.split("\n");
-  const replaced = parts.map(line => line.slice(removeFrom(line))).join("\n");
+  const replaced = parts.map((line) => line.slice(removeFrom(line))).join("\n");
   return {
-    start: range.start, end: range.end, insert: replaced,
-    ...shift(selectionStart, selectionEnd, offset => {
+    start: range.start,
+    end: range.end,
+    insert: replaced,
+    ...shift(selectionStart, selectionEnd, (offset) => {
       if (offset < range.start) return offset;
       let consumed = 0;
       let removed = 0;
       for (const line of parts) {
         const lineEnd = range.start + consumed + line.length;
         const cut = removeFrom(line);
-        if (offset <= lineEnd) { removed += Math.min(cut, offset - (range.start + consumed)); break; }
+        if (offset <= lineEnd) {
+          removed += Math.min(cut, offset - (range.start + consumed));
+          break;
+        }
         removed += cut;
         consumed += line.length + 1;
       }
@@ -158,7 +170,8 @@ export function moveItem(text: string, selectionStart: number, selectionEnd: num
   } else {
     let next = block.after;
     while (next < lines.length && !lines[next].text.trim()) next++;
-    if (next < lines.length && indentOf(lines[next].text) === block.indent && listItem.test(lines[next].text)) other = itemBlock(lines, next);
+    if (next < lines.length && indentOf(lines[next].text) === block.indent && listItem.test(lines[next].text))
+      other = itemBlock(lines, next);
   }
   if (!other) return null;
   const upper = direction === "up" ? other : block;
@@ -192,7 +205,13 @@ export function continueList(text: string, selectionStart: number, selectionEnd:
   }
   const nextMarker = number ? `${Number(number) + 1}${delimiter}` : marker;
   const insert = `\n${indent}${nextMarker}${space}${checkbox ? "[ ] " : ""}`;
-  return { start: selectionStart, end: selectionEnd, insert, selectionStart: selectionStart + insert.length, selectionEnd: selectionStart + insert.length };
+  return {
+    start: selectionStart,
+    end: selectionEnd,
+    insert,
+    selectionStart: selectionStart + insert.length,
+    selectionEnd: selectionStart + insert.length,
+  };
 }
 
 /** Headings of a Markdown body in order (outside code fences), with their line offsets. */
@@ -202,7 +221,10 @@ export function headingsOf(body: string): { level: number; text: string; start: 
   for (const line of splitLines(body)) {
     const trimmed = line.text.trimStart();
     const fenceMatch = /^(`{3,}|~{3,})/.exec(trimmed);
-    if (fenceMatch) { fence = fence === null ? fenceMatch[1][0] : fence === fenceMatch[1][0] ? null : fence; continue; }
+    if (fenceMatch) {
+      fence = fence === null ? fenceMatch[1][0] : fence === fenceMatch[1][0] ? null : fence;
+      continue;
+    }
     if (fence !== null) continue;
     const match = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.text);
     if (match) result.push({ level: match[1].length, text: match[2], start: line.start, end: line.end });

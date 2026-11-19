@@ -6,8 +6,15 @@ import { serverContract } from "./contractSupport.js";
 // The variable names the PWA uses for server records, and the records they can hold. A property read on one of them that no
 // such record has is a field the server no longer sends (or never did): the screen would show nothing, silently.
 const holders = {
-  task: ["WebTask"], list: ["WebList"], meeting: ["WebMeeting"], item: ["WebSearchItem", "WebPage", "WebNote", "WebList"], page: ["WebPage"],
-  note: ["WebNote"], selected: ["WebPage", "WebNote"], parent: ["WebPage"], appearance: ["WebAppearance"],
+  task: ["WebTask"],
+  list: ["WebList"],
+  meeting: ["WebMeeting"],
+  item: ["WebSearchItem", "WebPage", "WebNote", "WebList"],
+  page: ["WebPage"],
+  note: ["WebNote"],
+  selected: ["WebPage", "WebNote"],
+  parent: ["WebPage"],
+  appearance: ["WebAppearance"],
 };
 const files = ["main.jsx", "SearchScreen.jsx", "mobileData.js", "pageContent.js"];
 
@@ -19,7 +26,7 @@ test("every property the PWA reads from a server record exists in the server con
     for (const [name, records] of Object.entries(holders)) {
       for (const match of source.matchAll(new RegExp("(?<![A-Za-z0-9_./])" + name + "[?]?[.]([a-zA-Z]+)", "g"))) {
         reads++;
-        if (!records.some(record => match[1] in serverContract[record])) unknown.push(`${file}: ${name}.${match[1]}`);
+        if (!records.some((record) => match[1] in serverContract[record])) unknown.push(`${file}: ${name}.${match[1]}`);
       }
     }
   }

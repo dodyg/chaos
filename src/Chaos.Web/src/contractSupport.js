@@ -4,13 +4,13 @@ import { readFileSync } from "node:fs";
 const contract = JSON.parse(readFileSync(new URL("../contract/web-dto.json", import.meta.url), "utf8"));
 
 const scalarCheck = {
-  string: value => typeof value === "string",
-  guid: value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value),
-  date: value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value),
-  time: value => typeof value === "string" && /^\d{2}:\d{2}(:\d{2})?/.test(value),
-  datetime: value => typeof value === "string" && !Number.isNaN(Date.parse(value)),
-  boolean: value => typeof value === "boolean",
-  number: value => typeof value === "number",
+  string: (value) => typeof value === "string",
+  guid: (value) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value),
+  date: (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value),
+  time: (value) => typeof value === "string" && /^\d{2}:\d{2}(:\d{2})?/.test(value),
+  datetime: (value) => typeof value === "string" && !Number.isNaN(Date.parse(value)),
+  boolean: (value) => typeof value === "boolean",
+  number: (value) => typeof value === "number",
 };
 
 function problems(type, value, where) {

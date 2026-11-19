@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { pageContent } from "./pageContent.js";
 
 test("page front matter extracts the scene and keeps only the Markdown body", () => {
-  assert.deepEqual(pageContent('---\r\nbackground: "Tide" # scene\r\ntags: [one, two]\r\n---\r\n\r\n# Hello'),
-    { background: "Tide", body: "\r\n# Hello" });
+  assert.deepEqual(pageContent('---\r\nbackground: "Tide" # scene\r\ntags: [one, two]\r\n---\r\n\r\n# Hello'), {
+    background: "Tide",
+    body: "\r\n# Hello",
+  });
 });
 
 test("pages without valid front matter retain all of their text", () => {

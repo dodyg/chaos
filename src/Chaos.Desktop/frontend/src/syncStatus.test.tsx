@@ -25,23 +25,45 @@ afterEach(() => cleanup());
 
 type Api = NonNullable<Parameters<typeof SyncPanel>[0]["api"]>;
 
-const status = (patch: Partial<SyncStatusResponse>): SyncStatusResponse => ({ ok: true, kind: "Synced", lastSyncedUtc: new Date().toISOString(), pending: 0, detail: null, attention: [], ...patch });
-const item = (id: string, actions = ["Sync now", "Dismiss"]) => ({ id, category: "sync.parked", message: "Some changes could not be applied.", suggestion: "Syncing again may fix it.", createdUtc: "2026-11-18T10:00:00Z", actions });
+const status = (patch: Partial<SyncStatusResponse>): SyncStatusResponse => ({
+  ok: true,
+  kind: "Synced",
+  lastSyncedUtc: new Date().toISOString(),
+  pending: 0,
+  detail: null,
+  attention: [],
+  ...patch,
+});
+const item = (id: string, actions = ["Sync now", "Dismiss"]) => ({
+  id,
+  category: "sync.parked",
+  message: "Some changes could not be applied.",
+  suggestion: "Syncing again may fix it.",
+  createdUtc: "2026-11-18T10:00:00Z",
+  actions,
+});
 
 function fake(initial: SyncStatusResponse) {
   const state = { current: initial, syncNow: 0, dismissed: [] as string[] };
   const api: Api = {
     status: async () => state.current,
-    syncNow: async () => { state.syncNow++; return state.current; },
-    dismiss: async ({ id }) => { state.dismissed.push(id); state.current = { ...state.current, kind: "Synced", attention: state.current.attention.filter(a => a.id !== id) }; return state.current; },
+    syncNow: async () => {
+      state.syncNow++;
+      return state.current;
+    },
+    dismiss: async ({ id }) => {
+      state.dismissed.push(id);
+      state.current = { ...state.current, kind: "Synced", attention: state.current.attention.filter((a) => a.id !== id) };
+      return state.current;
+    },
   };
   return { api, state };
 }
 
 test("the indicator shows nothing for a computer that never used an account", async () => {
   const { api } = fake(status({ kind: "Hidden" }));
-  const { container } = render(<SyncIndicator api={api} onOpen={() => {}}/>);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  const { container } = render(<SyncIndicator api={api} onOpen={() => {}} />);
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(container.querySelector("button"), null);
 });
 
@@ -58,7 +80,14 @@ test("every state has its own wording and the indicator opens Settings when clic
   for (const [patch, expected] of cases) {
     cleanup();
     let opened = 0;
-    render(<SyncIndicator api={fake(status(patch)).api} onOpen={() => { opened++; }}/>);
+    render(
+      <SyncIndicator
+        api={fake(status(patch)).api}
+        onOpen={() => {
+          opened++;
+        }}
+      />,
+    );
     const label = await screen.findByText(expected);
     assert.equal(statusLabel(status(patch)), expected);
     await userEvent.click(label);
@@ -68,7 +97,7 @@ test("every state has its own wording and the indicator opens Settings when clic
 
 test("the indicator follows the engine as the status changes", async () => {
   const { api, state } = fake(status({ kind: "Syncing" }));
-  render(<SyncIndicator api={api} onOpen={() => {}}/>);
+  render(<SyncIndicator api={api} onOpen={() => {}} />);
   await screen.findByText("Syncing…");
   state.current = status({ kind: "Offline", pending: 2 });
   await waitFor(() => assert.ok(screen.getByText("Offline — 2 changes waiting")), { timeout: 6000 });
@@ -76,7 +105,7 @@ test("the indicator follows the engine as the status changes", async () => {
 
 test("the Sync page shows the pending count and Sync now asks for a cycle", async () => {
   const { api, state } = fake(status({ kind: "Offline", pending: 4, detail: "Offline. 4 changes are waiting." }));
-  render(<SyncPanel api={api}/>);
+  render(<SyncPanel api={api} />);
   await screen.findByText("Offline. 4 changes are waiting.");
   assert.ok(screen.getByText("4 changes"));
   await userEvent.click(screen.getByRole("button", { name: /Sync now/ }));
@@ -85,7 +114,7 @@ test("the Sync page shows the pending count and Sync now asks for a cycle", asyn
 
 test("attention items show their explanation and actions; dismissing one removes it", async () => {
   const { api, state } = fake(status({ kind: "NeedsAttention", attention: [item("one"), item("two", ["Dismiss"])] }));
-  render(<SyncPanel api={api}/>);
+  render(<SyncPanel api={api} />);
   const list = await screen.findByRole("list", { name: "Needs attention" });
   assert.equal(list.querySelectorAll("li").length, 2);
   assert.ok(screen.getAllByText("Syncing again may fix it.").length >= 1);
@@ -101,11 +130,13 @@ test("attention items show their explanation and actions; dismissing one removes
 });
 
 test("the Sync page is absent while signed out of an account that never synced, and says so after sign-out", async () => {
-  const hidden = render(<SyncPanel api={fake(status({ kind: "Hidden" })).api}/>);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  const hidden = render(<SyncPanel api={fake(status({ kind: "Hidden" })).api} />);
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(hidden.container.querySelector("section"), null);
   hidden.unmount();
-  render(<SyncPanel api={fake(status({ kind: "SignedOut", detail: "Signed out. This computer keeps its data and works offline." })).api}/>);
+  render(
+    <SyncPanel api={fake(status({ kind: "SignedOut", detail: "Signed out. This computer keeps its data and works offline." })).api} />,
+  );
   await screen.findByText("Signed out. This computer keeps its data and works offline.");
   assert.equal((screen.getByRole("button", { name: /Sync now/ }) as HTMLButtonElement).disabled, true);
 });

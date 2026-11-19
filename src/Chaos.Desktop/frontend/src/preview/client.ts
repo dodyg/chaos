@@ -12,8 +12,16 @@ export function invoke<TRequest, TResult>(command: string, args: TRequest, _opti
   return handle(command, args) as Promise<TResult>;
 }
 
-export async function invokeChannel<TRequest, TItem>(_command: string, _args: TRequest, _options?: NeoRpcCallOptions): Promise<AsyncIterable<TItem>> {
-  return { async *[Symbol.asyncIterator]() { /* no streams in the preview */ } };
+export async function invokeChannel<TRequest, TItem>(
+  _command: string,
+  _args: TRequest,
+  _options?: NeoRpcCallOptions,
+): Promise<AsyncIterable<TItem>> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      /* no streams in the preview */
+    },
+  };
 }
 
 export async function subscribe<T>(event: string, handler: (payload: T) => void, _options?: NeoRpcCallOptions): Promise<NeoRpcUnsubscribe> {

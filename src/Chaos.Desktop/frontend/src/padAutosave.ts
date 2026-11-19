@@ -9,15 +9,13 @@
 
 export type SaveStatus = "saved" | "pending" | "saving" | "failed";
 
-export type SaveOutcome =
-  | { ok: true; draftVersion: number; version: string; markdown: string }
-  | { ok: false; message: string };
+export type SaveOutcome = { ok: true; draftVersion: number; version: string; markdown: string } | { ok: false; message: string };
 
 export type Scheduler = { set: (callback: () => void, ms: number) => unknown; clear: (handle: unknown) => void };
 
 export const browserScheduler: Scheduler = {
   set: (callback, ms) => setTimeout(callback, ms),
-  clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
 export type DraftSnapshot = {
@@ -69,15 +67,27 @@ export class DraftSaver {
   }
 
   get snapshot(): DraftSnapshot {
-    return { itemId: this.itemId, text: this.text, revision: this.revision, acknowledged: this.acknowledged, status: this.status, error: this.error, version: this.version };
+    return {
+      itemId: this.itemId,
+      text: this.text,
+      revision: this.revision,
+      acknowledged: this.acknowledged,
+      status: this.status,
+      error: this.error,
+      version: this.version,
+    };
   }
 
   /** True while some typed text is not acknowledged by the store yet. */
-  get dirty(): boolean { return this.acknowledged < this.revision; }
+  get dirty(): boolean {
+    return this.acknowledged < this.revision;
+  }
 
   subscribe(listener: (snapshot: DraftSnapshot) => void): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /** Records a new text and schedules a save after the idle delay. */
@@ -109,19 +119,30 @@ export class DraftSaver {
    * revision, false when a save failed (the text is kept; call flush again to retry).
    */
   flush(): Promise<boolean> {
-    if (this.timer !== null) { this.scheduler.clear(this.timer); this.timer = null; }
-    this.flushing ??= this.run().finally(() => { this.flushing = null; });
+    if (this.timer !== null) {
+      this.scheduler.clear(this.timer);
+      this.timer = null;
+    }
+    this.flushing ??= this.run().finally(() => {
+      this.flushing = null;
+    });
     return this.flushing;
   }
 
   dispose(): void {
-    if (this.timer !== null) { this.scheduler.clear(this.timer); this.timer = null; }
+    if (this.timer !== null) {
+      this.scheduler.clear(this.timer);
+      this.timer = null;
+    }
     this.listeners.clear();
   }
 
   private schedule() {
     if (this.timer !== null) this.scheduler.clear(this.timer);
-    this.timer = this.scheduler.set(() => { this.timer = null; void this.flush(); }, this.delayMs);
+    this.timer = this.scheduler.set(() => {
+      this.timer = null;
+      void this.flush();
+    }, this.delayMs);
   }
 
   private async run(): Promise<boolean> {
@@ -131,8 +152,11 @@ export class DraftSaver {
       this.status = "saving";
       this.notify();
       let outcome: SaveOutcome;
-      try { outcome = await this.save(revision, text); }
-      catch (error) { outcome = { ok: false, message: error instanceof Error ? error.message : "The note could not be saved." }; }
+      try {
+        outcome = await this.save(revision, text);
+      } catch (error) {
+        outcome = { ok: false, message: error instanceof Error ? error.message : "The note could not be saved." };
+      }
       if (!outcome.ok) {
         this.status = "failed";
         this.error = outcome.message;
@@ -170,7 +194,9 @@ export class DraftRegistry {
   private readonly savers = new Map<string, DraftSaver>();
   private readonly listeners = new Set<() => void>();
 
-  get(itemId: string): DraftSaver | undefined { return this.savers.get(itemId); }
+  get(itemId: string): DraftSaver | undefined {
+    return this.savers.get(itemId);
+  }
 
   getOrCreate(options: DraftSaverOptions): DraftSaver {
     let saver = this.savers.get(options.itemId);
@@ -185,23 +211,34 @@ export class DraftRegistry {
   /** Drops a saver that holds nothing unsaved (e.g. after its note was deleted). */
   forget(itemId: string): void {
     const saver = this.savers.get(itemId);
-    if (saver && !saver.dirty) { saver.dispose(); this.savers.delete(itemId); }
+    if (saver && !saver.dirty) {
+      saver.dispose();
+      this.savers.delete(itemId);
+    }
   }
 
-  get dirty(): boolean { return [...this.savers.values()].some(saver => saver.dirty); }
+  get dirty(): boolean {
+    return [...this.savers.values()].some((saver) => saver.dirty);
+  }
 
-  get failed(): DraftSaver[] { return [...this.savers.values()].filter(saver => saver.snapshot.status === "failed"); }
+  get failed(): DraftSaver[] {
+    return [...this.savers.values()].filter((saver) => saver.snapshot.status === "failed");
+  }
 
   /** Saves every note with unsaved text; true when all of them are acknowledged. */
   async flushAll(): Promise<boolean> {
-    const results = await Promise.all([...this.savers.values()].filter(saver => saver.dirty).map(saver => saver.flush()));
+    const results = await Promise.all([...this.savers.values()].filter((saver) => saver.dirty).map((saver) => saver.flush()));
     return results.every(Boolean);
   }
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
-  private notify() { for (const listener of this.listeners) listener(); }
+  private notify() {
+    for (const listener of this.listeners) listener();
+  }
 }

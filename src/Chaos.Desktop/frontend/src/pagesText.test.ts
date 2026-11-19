@@ -11,11 +11,17 @@ function applied(text: string, edit: TextEdit | null) {
 }
 
 test("front matter: reads values, flow and block lists, and keeps the body", () => {
-  const text = "---\nbackground: lighthouse\nicon: \"🛠️\"\ntags: [home/renovation, '#errands']\naliases:\n  - Kitchen\n  - Cucina\nfoo: bar # comment\n---\n\n# Kitchen";
+  const text =
+    "---\nbackground: lighthouse\nicon: \"🛠️\"\ntags: [home/renovation, '#errands']\naliases:\n  - Kitchen\n  - Cucina\nfoo: bar # comment\n---\n\n# Kitchen";
   const parsed = parseFrontMatter(text);
   assert.equal(parsed.error, null);
-  assert.deepEqual(pageProperties(parsed), { icon: "🛠️", background: "lighthouse", tags: ["home/renovation", "errands"], aliases: ["Kitchen", "Cucina"] });
-  assert.equal(parsed.properties.find(p => p.key === "foo")?.values[0], "bar");
+  assert.deepEqual(pageProperties(parsed), {
+    icon: "🛠️",
+    background: "lighthouse",
+    tags: ["home/renovation", "errands"],
+    aliases: ["Kitchen", "Cucina"],
+  });
+  assert.equal(parsed.properties.find((p) => p.key === "foo")?.values[0], "bar");
   assert.equal(splitPage(text).body, "\n# Kitchen");
 });
 
@@ -33,11 +39,11 @@ test("front matter: setting one property leaves every other line untouched", () 
   const changed = setProperty(text, "aliases", ["A", "B c"]);
   assert.equal(changed, "---\n# my notes\nfoo:   keep  me\naliases: [A, B c]\nicon: x\n---\nbody");
   assert.equal(setProperty(changed, "icon", null), "---\n# my notes\nfoo:   keep  me\naliases: [A, B c]\n---\nbody");
-  assert.equal(setProperty("plain body", "background", "#2f6f4e"), "---\nbackground: \"#2f6f4e\"\n---\nplain body");
+  assert.equal(setProperty("plain body", "background", "#2f6f4e"), '---\nbackground: "#2f6f4e"\n---\nplain body');
   // Unreadable YAML is never rewritten.
   assert.equal(setProperty("---\ntags: [a\n---\nb", "icon", "x"), "---\ntags: [a\n---\nb");
   assert.equal(joinPage("---\n---\n", "x"), "---\n---\nx");
-  assert.equal(yamlScalar("yes"), "\"yes\"");
+  assert.equal(yamlScalar("yes"), '"yes"');
   assert.equal(yamlScalar("home/renovation"), "home/renovation");
 });
 
@@ -75,13 +81,25 @@ test("outline: Enter continues a list, and ends it on an empty item", () => {
 });
 
 test("headings and words", () => {
-  assert.deepEqual(headingsOf("# A\ntext\n```\n# not\n```\n## B ##").map(h => [h.level, h.text]), [[1, "A"], [2, "B"]]);
+  assert.deepEqual(
+    headingsOf("# A\ntext\n```\n# not\n```\n## B ##").map((h) => [h.level, h.text]),
+    [
+      [1, "A"],
+      [2, "B"],
+    ],
+  );
   assert.equal(wordCount("Kitchen renovation: don't forget 3 quotes — مرحبا"), 7);
 });
 
 test("line diff lists removals before additions and keeps the rest", () => {
   const diff = lineDiff("a\nb\nc", "a\nB\nc\nd");
-  assert.deepEqual(diff.map(line => `${line.kind[0]}${line.text}`), ["sa", "rb", "aB", "sc", "ad"]);
+  assert.deepEqual(
+    diff.map((line) => `${line.kind[0]}${line.text}`),
+    ["sa", "rb", "aB", "sc", "ad"],
+  );
   assert.deepEqual(diffStats(diff), { added: 2, removed: 1 });
-  assert.deepEqual(lineDiff("same", "same").map(line => line.kind), ["same"]);
+  assert.deepEqual(
+    lineDiff("same", "same").map((line) => line.kind),
+    ["same"],
+  );
 });

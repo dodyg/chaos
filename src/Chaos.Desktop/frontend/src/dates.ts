@@ -65,12 +65,29 @@ export function useToday() {
 }
 
 /** A due or planned date as a span with its tone and the exact date in the tooltip. */
-export function DateText({ kind, date, time, className, children }: { kind: "due" | "planned"; date: string; time?: string | null; className?: string; children?: React.ReactNode }) {
+export function DateText({
+  kind,
+  date,
+  time,
+  className,
+  children,
+}: {
+  kind: "due" | "planned";
+  date: string;
+  time?: string | null;
+  className?: string;
+  children?: React.ReactNode;
+}) {
   const today = useToday();
   const tone = dueTone(date, today, kind);
   const label = dateLabel(kind === "due" ? "Due" : "Planned", date, time, today);
-  return React.createElement("span", {
-    className: ["inline-flex items-center gap-1", toneClass[tone], className].filter(Boolean).join(" "),
-    title: `${kind === "due" ? "Due" : "Planned"} ${date}${time ? ` ${time.slice(0, 5)}` : ""} (${relativeDays(date, today)})${tone === "overdue" ? " · overdue" : ""}`,
-  }, children, label);
+  return React.createElement(
+    "span",
+    {
+      className: ["inline-flex items-center gap-1", toneClass[tone], className].filter(Boolean).join(" "),
+      title: `${kind === "due" ? "Due" : "Planned"} ${date}${time ? ` ${time.slice(0, 5)}` : ""} (${relativeDays(date, today)})${tone === "overdue" ? " · overdue" : ""}`,
+    },
+    children,
+    label,
+  );
 }
