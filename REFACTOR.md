@@ -24,7 +24,7 @@ Also done: `session.Connection()` (one `SqliteSessionExtensions` accessor) repla
 
 Still open: narrower session
 interfaces, `SELECT *` mappers, one source for `SyncKinds`/partial-index predicates, splitting the command classes themselves (queries
-from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, the shared markdown package, a typed preview
+from commands), splitting `App.tsx` beyond `useAutoClear`, a typed Chaos.Web REST client, a typed preview
 backend, Prettier/Biome, and the server test gaps (they need PostgreSQL).
 
 ## 0. Build and test status
@@ -166,7 +166,7 @@ with shared singletons for the clock and ID generator and one explicit, ordered 
   handlers, a catch-all that guesses the response shape for unknown commands (`:808-819`), and a reimplemented
   view filter evaluator (`:199-237`). Type the handlers from the NeoAstra manifest and make unknown commands
   fail loudly.
-- **Markdown and mermaid rendering are duplicated** between the desktop app (`markdown.tsx`, unified/remark) and
+- **Markdown and mermaid rendering are duplicated (done: `markdownCore.ts` holds the shared link, style and diagram rules)** between the desktop app (`markdown.tsx`, unified/remark) and
   Chaos.Web (`MarkdownNotes.jsx`, react-markdown), so the two will render differently. Extract a shared package.
 - **Dependencies are not pinned.** `react`, `react-dom`, `vite`, `tsx`, `@types/react` and
   `@vitejs/plugin-react` are set to `latest` in `frontend/package.json`, against `docs/dependency-versions.md`.
