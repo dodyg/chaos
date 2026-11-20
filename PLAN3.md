@@ -1420,7 +1420,7 @@ The final `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PROCES
 
 **Exit:** the service behaves exactly as before on top of streams, and the P13 and P15 end-to-end suites pass.
 
-### [ ] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
+### [x] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
 
 **Depends on:** Q2. **Server migration:** `S006_Spaces` (`SpaceMembers`, `SpaceInvites`, audit kinds).
 **Read:** 7, 8 (all), E7, E8, E10.
@@ -1465,6 +1465,18 @@ owner's recorded web-contract snapshot exception; there are no in-scope failing 
 Exact blocker: owner decision or plan amendment to mark the Q17/Q19 agent/claim rows and Q9 `space_state` row
 as deferred matrix evidence for Q3, or move to those packages and return to tick Q3. No other Q3 behavior is
 known to be missing.
+
+**Q3 completion 2026-11-20.** The owner confirmed E10 and directed that the 8.4 cells needing later packages be
+proven there: the Agent column and the claim row in Q17 (added to its test list), and the `space_state` cells
+in Q9 (added to its test list). Both are recorded in `docs/decisions.md`. Every other 8.4 cell and every Q3
+exit test passes. The final `eng/verify.ps1` used PostgreSQL 18.7 through `wslc` and `DOTNET_PROCESSOR_COUNT=2`.
+The solution run reported 1402/1403. Its direct fallback passed Domain 273, Application 116, Infrastructure
+715, Sync 30 and Desktop 98, with Server at 170/171. The only failure in both runs is the web-contract snapshot
+that the owner told us to disregard. The gate therefore exited 1 before its Slopwatch step, so Slopwatch was
+run separately in strict mode and found 0 issues. Desktop frontend passed 293/293 and web passed 16/16. Web lint
+exited 0 with the existing `react-hooks/exhaustive-deps` warning. The separate uncommitted S007 blob-custody
+work in the `dodyg-fix-plan3-q3-blockers` worktree is not part of Q3 and was not merged. Smallest next
+action: Q4.
 
 1. **Endpoints:**
    - `/v2/streams`
@@ -1679,6 +1691,8 @@ rebuild). **Read:** 9.6, 9.7.
    - duplicate space tags from two members merge (`MergeTag`)
    - custom state ↔ base status invariant under concurrent edits
    - the GitHub status mapping is unaffected
+   - the `space_state` cells of the 8.4 matrix in `PermissionMatrixTests` (Owner yes; Editor, Viewer and Agent
+     `forbidden`; non-member `not-member`), deferred from Q3 (decision 2026-11-20)
 
 **Exit:** a team can use "In review" on its board, and members share tags while their own tags stay private.
 
@@ -1851,7 +1865,8 @@ and keep `AUTOINCREMENT` continuing from the old maximum (copy `sqlite_sequence`
 
    Delegating to an agent is wired in Q20.
 3. Tests:
-   - agent rows of the permission matrix
+   - agent rows of the permission matrix, and the "Claim a task" row for every role, deferred from Q3
+     (decision 2026-11-20)
    - claim compare-and-set with two concurrent agents (one wins)
    - expiry returns the task to the queue with a note
    - revert skips groups changed later by a person
