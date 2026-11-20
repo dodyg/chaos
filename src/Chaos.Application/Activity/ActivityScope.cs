@@ -20,18 +20,20 @@ public sealed class ActivityScope
 {
     private static readonly AsyncLocal<ActivityScope?> Ambient = new();
 
-    private ActivityScope(string source, string action, string operationId, string? jobRunId)
+    private ActivityScope(string source, string action, string operationId, string? jobRunId, string? actorId)
     {
         Source = source;
         Action = action;
         OperationId = operationId;
         JobRunId = jobRunId;
+        ActorId = actorId;
     }
 
     public string Source { get; }
     public string Action { get; }
     public string OperationId { get; }
     public string? JobRunId { get; }
+    public string? ActorId { get; }
 
     public static ActivityScope? Current => Ambient.Value;
 
@@ -59,10 +61,10 @@ public sealed class ActivityScope
         public void Dispose() => StrictFlow.Value = previous;
     }
 
-    public static IDisposable Open(string source, string action, string? operationId = null, string? jobRunId = null)
+    public static IDisposable Open(string source, string action, string? operationId = null, string? jobRunId = null, string? actorId = null)
     {
         var previous = Ambient.Value;
-        Ambient.Value = new ActivityScope(source, action, operationId ?? Guid.NewGuid().ToString("D"), jobRunId ?? previous?.JobRunId);
+        Ambient.Value = new ActivityScope(source, action, operationId ?? Guid.NewGuid().ToString("D"), jobRunId ?? previous?.JobRunId, actorId ?? previous?.ActorId);
         return new Restore(previous);
     }
 

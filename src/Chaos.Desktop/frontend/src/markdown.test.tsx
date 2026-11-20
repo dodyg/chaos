@@ -396,6 +396,14 @@ test("app undo: the newest change is offered, Ctrl+Z outside text fields undoes 
   cleanup();
 });
 
+test("history actors display both legacy and current identities", async () => {
+  const { actorLabel } = await import("./TaskJournal");
+  assert.equal(actorLabel("local"), "You");
+  assert.equal(actorLabel("person:00000000-0000-0000-0000-000000000001"), "You");
+  assert.equal(actorLabel("github:someone"), "GitHub: someone");
+  assert.equal(actorLabel("sync"), "Sync");
+});
+
 test("the journal shows diary Markdown and history events, opens an earlier version and restores chosen values", async () => {
   const { TaskJournal } = await import("./TaskJournal");
   const restored: { fields: readonly string[]; entryId: string; expectedVersion: string }[] = [];
@@ -403,6 +411,7 @@ test("the journal shows diary Markdown and history events, opens an earlier vers
     id: "h1",
     operationId: "o1",
     eventKind: "task.updated",
+    actor: "local",
     changedFields: ["Title", "Notes"],
     effectiveAtUtc: "2026-11-10T09:00:00.0000000Z",
     version: "2",

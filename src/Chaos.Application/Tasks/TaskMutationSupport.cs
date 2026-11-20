@@ -168,13 +168,15 @@ internal static class TaskMutationSupport
             return;
         }
 
+        var profile = await session.Profiles.GetPrimaryAsync(token)
+            ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet. Restart Chaos to complete first-run setup.");
         await session.History.AddAsync(new TaskHistoryRecord
         {
             Id = ids.NewId().ToString(),
             TaskId = after.Task.Id,
             OperationId = operationId,
             EffectiveAtUtc = now,
-            Actor = "local",
+            Actor = AmbientActorContext.Instance.CurrentActor(profile.Id),
             EventKind = eventKind,
             ChangedFields = changedFields,
             SnapshotBefore = before is null ? null : StoredJsonFormats.Snapshot(before),

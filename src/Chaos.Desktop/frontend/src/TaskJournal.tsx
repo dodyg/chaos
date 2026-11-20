@@ -95,6 +95,16 @@ export function describeEvent(event: HistoryEntryResponse): string {
 
 export const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+export function actorLabel(actor: string): string {
+  if (actor === "local") return "You";
+  // Q1 only has the local profile; shared-member name lookup arrives with sharing.
+  if (actor.startsWith("person:")) return "You";
+  if (actor.startsWith("agent:")) return "Agent";
+  if (actor.startsWith("github:")) return `GitHub: ${actor.slice(7)}`;
+  if (actor === "sync") return "Sync";
+  return "Unknown person";
+}
+
 function errorText(error: { message: string; fields: ReadonlyArray<{ message: string }> } | null, fallback: string) {
   return error?.fields.map((field) => field.message).join("; ") || error?.message || fallback;
 }
@@ -483,7 +493,7 @@ export function TaskJournal({
               item.event && (
                 <li key={`e-${item.event.id}`} className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
                   <span>
-                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> · {when(item.event.effectiveAtUtc)}
+                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> · {actorLabel(item.event.actor)} · {when(item.event.effectiveAtUtc)}
                   </span>
                   <Button
                     type="button"

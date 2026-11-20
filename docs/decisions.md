@@ -1100,3 +1100,9 @@ plan provides one, and each blocking package stays unticked until the owner conf
 ## 2026-11-20 (MCP SDK update)
 
 - At the owner's direction, update `ModelContextProtocol` and the Q0 MCP experiments from 1.4.1 to 2.4.0. The ASP.NET Core experiment uses matching `ModelContextProtocol.AspNetCore` 2.4.0. This supersedes the 1.4.1 pin in the preceding Q0 entry; the relay's scope and remaining limitations are unchanged.
+
+## 2026-11-20 (Q0 waiver and Q1 start)
+
+- The owner waived the cross-user pipe check and directed work to continue with Q1. The check has not been performed; this waiver does not establish that another user is denied. The owner also directed that the recorded web contract snapshot failure be disregarded. The previously reported intermittent desktop test remains recorded in PLAN3.
+- Q1 routing metadata may identify a parent in a named field group, including `github_issue_link.state.TaskId`. The owner chose this on 2026-11-20 because the existing link stores the task in `state`, not `create` or its key. Q3 must handle a first change without that group as `parent-unknown`; existing location wins for subsequent changes, including edits to `state`.
+- When an offline data root adopts an account's canonical profile, its pre-binding `person:<localProfileId>` history actors are rewritten to the canonical profile ID with the other adopted references. Existing `local` rows are not rewritten. Q1 displays person actors as the local person; shared-member name resolution belongs to Q4.

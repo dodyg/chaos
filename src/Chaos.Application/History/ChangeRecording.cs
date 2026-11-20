@@ -380,7 +380,7 @@ public sealed class RecordingDataSession : IDataSession
                 TaskId = taskId,
                 OperationId = OperationId,
                 EffectiveAtUtc = now,
-                Actor = "local",
+                Actor = AmbientActorContext.Instance.CurrentActor(profile.Id),
                 EventKind = HistoryEventKind ?? intent.EventKind ?? DerivedEventKind(before, after, diaryChanged),
                 ChangedFields = fields,
                 SnapshotBefore = beforeJson,

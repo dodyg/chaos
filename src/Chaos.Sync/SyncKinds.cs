@@ -1,11 +1,18 @@
 namespace Chaos.Sync;
 
 /// <summary>One field group of a synced kind and the client schema version in which it first appeared (PLAN2 §7.12 forward compatibility).</summary>
-public sealed record SyncGroupInfo(string Name, int Since);
+public enum SyncWrite { Owner, Editor, Commenter, Author, Agent, Server }
+public enum SyncRouteKind { Account, OwnSpace, Parent, FollowsTag, ServerOnly }
+public sealed record SyncRoute(SyncRouteKind Kind, string? ParentKind = null, string? Column = null, int? KeyPart = null, string? Group = null, string? DiscriminatorColumn = null);
+public sealed record OverlayRef(string Kind, string? Column = null, int? KeyPart = null, string? Group = null);
+
+public sealed record SyncGroupInfo(string Name, int Since, SyncWrite Write = SyncWrite.Editor);
 
 /// <summary>A synced kind as the service needs to know it: its key parts, whether its create group names a space, and its groups.</summary>
 public sealed record SyncKindInfo(string Kind, int KeyParts, int ApplyOrder, bool HasSpace, IReadOnlyList<SyncGroupInfo> Groups)
 {
+    public SyncRoute Route { get; init; } = new(SyncRouteKind.Account);
+    public IReadOnlyList<OverlayRef> OverlayRefs { get; init; } = [];
     public SyncKindInfo(string kind, int keyParts, int applyOrder, bool hasSpace, string[] groups)
         : this(kind, keyParts, applyOrder, hasSpace, [.. groups.Select(name => new SyncGroupInfo(name, 1))])
     {
@@ -22,7 +29,7 @@ public sealed record SyncKindInfo(string Kind, int KeyParts, int ApplyOrder, boo
 /// </summary>
 public static class SyncKinds
 {
-    public static readonly IReadOnlyList<SyncKindInfo> All =
+    private static readonly IReadOnlyList<SyncKindInfo> Definitions =
     [
         new("profile", 1, 10, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("zone", 1), new("locale", 1), new("dates", 1), new("planning", 1), new("reminders", 1), new("quiet", 1), new("appearance", 2), new("day_background", 2), new("deleted", 1) }),
         new("space", 1, 20, false, ["create", "name", "deleted"]),
@@ -75,6 +82,55 @@ public static class SyncKinds
         new("page_tag", 2, 430, false, ["deleted"]),
         new("attachment", 1, 440, true, ["create", "name", "file", "deleted"]),
     ];
+
+    public static readonly IReadOnlyList<SyncKindInfo> All = [.. Definitions.Select(Describe)];
+
+    private static SyncKindInfo Describe(SyncKindInfo kind)
+    {
+        var route = kind.Kind switch
+        {
+            "profile" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
+            "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
+            "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"), // Q9 adds this nullable column.
+            "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
+            "section" => Parent("container", "ContainerId"),
+            "subtask" or "diary_entry" => Parent("task", "TaskId"),
+            "task_history" => Parent("task", "TaskId", "record"),
+            "github_issue_link" => Parent("task", "TaskId", "state"),
+            "pad_drawing" or "scratch_task_link" => KeyParent("pad", 0),
+            "recurrence_occurrence" => Parent("recurrence_series", "SeriesId"),
+            "recurrence_exception" => KeyParent("recurrence_series", 0),
+            "page_task_link" => KeyParent("page", 0),
+            "github_repository" => Parent("github_connection", "ConnectionId"),
+            "github_checklist_item" => Parent("github_issue_link", "IssueLinkId", "base"),
+            "github_comment_link" => KeyParent("diary_entry", 0),
+            "github_label_tag" or "github_milestone_project" => KeyParent("github_repository", 0),
+            "board_setting" => new SyncRoute(SyncRouteKind.Parent, Column: "TargetId", Group: "create", DiscriminatorColumn: "TargetKind"),
+            "task_tag" or "subtask_tag" or "pad_tag" or "page_tag" => new SyncRoute(SyncRouteKind.FollowsTag, ParentKind: "tag", KeyPart: 1),
+            _ => throw new InvalidOperationException($"Missing sync route for {kind.Kind}."),
+        };
+        IReadOnlyList<OverlayRef> overlays = kind.Kind switch
+        {
+            "calendar_event_link" or "reminder_rule" or "waiting_detail" or "follow_up" or "day_plan_item" or "week_assignment" => [new("task", "TaskId", Group: "create")],
+            "week_goal_task" or "task_tag" => [new("task", KeyPart: kind.Kind == "week_goal_task" ? 1 : 0)],
+            "subtask_tag" => [new("subtask", KeyPart: 0)],
+            "pad_tag" => [new("pad", KeyPart: 0)],
+            "page_tag" => [new("page", KeyPart: 0)],
+            _ => [],
+        };
+        return kind with { Route = route, OverlayRefs = overlays, Groups = [.. kind.Groups.Select(group => group with { Write = WriteFor(kind.Kind, group.Name) })] };
+    }
+
+    private static SyncRoute Parent(string kind, string column, string group = "create") => new(SyncRouteKind.Parent, kind, column, Group: group);
+    private static SyncRoute KeyParent(string kind, int part) => new(SyncRouteKind.Parent, kind, KeyPart: part);
+    private static SyncWrite WriteFor(string kind, string group) => kind switch
+    {
+        "space" => SyncWrite.Owner,
+        "diary_entry" when group == "create" => SyncWrite.Commenter,
+        "diary_entry" => SyncWrite.Author,
+        _ when kind.StartsWith("github_", StringComparison.Ordinal) => SyncWrite.Owner,
+        _ => SyncWrite.Editor,
+    };
 
     private static readonly Dictionary<string, SyncKindInfo> ByKind = All.ToDictionary(kind => kind.Kind, StringComparer.Ordinal);
 

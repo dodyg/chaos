@@ -1347,9 +1347,17 @@ The steps below add only what is specific to each package.
 - Each spike has a recorded result.
 - The desktop relay is implemented and its scope and remaining limitations are recorded.
 
-### [ ] Q1: Routing and permission metadata in Chaos.Sync
+### [x] Q1: Routing and permission metadata in Chaos.Sync
 
 **Depends on:** Q0 and E1. **Migration:** none. **Read:** 5, 6.1, 7.3, 7.4.
+
+**Progress note 2026-11-20.** The owner waived Q0's cross-user pipe check and directed work to continue with Q1; the web contract snapshot failure was also directed to be disregarded. Q0 remains unticked: its earlier gate and relay limitations remain recorded above. Added explicit v1/v2 protocol constants without changing current v1 traffic, and person/agent actor ID parsing and formatting. Sync tests passed 30/30; Slopwatch found 0 issues. Routing and permission metadata, actor context and history integration, remaining guards, and the complete gate are not yet done. Smallest next action: implement the routing metadata against the existing catalog and its column guards.
+
+**Q1 gate attempt 2026-11-20.** The Release build passed; Domain 273/273, Application 115/115 and Sync 30/30 passed. The server suite reported 12 passed and 134 failed because `CHAOS_TEST_PG` was unset (including the previously recorded snapshot failure); the solution run was interrupted after the server failures, so no complete Desktop or Infrastructure counts are claimed. Desktop frontend passed 292/292, web passed 16/16, and web lint exited 0 with the existing hook-dependency warning. Re-run the full gate with PostgreSQL supplied through `wslc`.
+
+**Q1 completion 2026-11-20.** Added route, group write-role and overlay-reference metadata for all existing kinds; the catalog guard checks the routing categories and source columns against a migrated SQLite database. `tag.SpaceId` remains a documented Q9 future column. Added ambient actor context, person/agent ID parsing, history actor output, journal labels and account-adoption rewriting of the new local actor form. Old `local` rows are unchanged. Q4 must replace the Q1 journal's local-person label with the member directory when shared actors become possible. The owner chose routing through `github_issue_link.state.TaskId`; the decision and Q3 handling are in `docs/decisions.md`.
+
+The complete `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PROCESSOR_COUNT=2`. The solution and its automatic fallback both passed Domain 273, Application 116, Infrastructure 715, Sync 30 and Desktop 98; Server passed 145/146 in both, with only the web-contract snapshot failure the owner directed us to disregard. The gate therefore exited 1, and its automatic Slopwatch step did not run; a separate strict Slopwatch run reported 0 issues. The strengthened route-category guard was added after the Release build and passed separately (4/4 guard tests). Desktop frontend passed 293/293, web passed 16/16, and web lint exited 0 with one existing hook-dependency warning. Smallest next action: Q2, preserving the recorded snapshot exception.
 
 1. In `Chaos.Sync`:
    - Add `SyncRoute`, `SyncWrite`, `OverlayRefs` and the extended `SyncKindInfo`/`SyncGroupInfo`.

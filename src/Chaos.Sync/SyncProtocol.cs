@@ -4,6 +4,8 @@ namespace Chaos.Sync;
 public static class SyncProtocol
 {
     public const int Version = 1;
+    public const int Version1 = 1;
+    public const int Version2 = 2;
 
     public const string ProtocolHeader = "Chaos-Protocol";
     public const string SchemaHeader = "Chaos-Client-Schema";

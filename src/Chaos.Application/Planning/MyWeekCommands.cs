@@ -893,13 +893,15 @@ public sealed partial class MyWeekCommands(IApplicationStore store, IIdGenerator
     private async Task WriteHistoryAsync(IDataSession session, string operationId, TaskAggregateSnapshot? before, TaskRecord updated, string eventKind, IReadOnlyList<string> fields, DateTimeOffset now, CancellationToken token)
     {
         var after = await RecordingDataSession.BuildAggregateAsync(session, updated.Id, token) ?? new TaskAggregateSnapshot(updated, []);
+        var profile = await session.Profiles.GetPrimaryAsync(token)
+            ?? throw new AppException(AppErrorKind.StorageUnavailable, "No local profile exists yet. Restart Chaos to complete first-run setup.");
         await session.History.AddAsync(new TaskHistoryRecord
         {
             Id = StorageFormats.Id(ids.NewId()),
             TaskId = updated.Id,
             OperationId = operationId,
             EffectiveAtUtc = now,
-            Actor = "local",
+            Actor = AmbientActorContext.Instance.CurrentActor(profile.Id),
             EventKind = eventKind,
             ChangedFields = fields,
             SnapshotBefore = before is null ? null : StoredJsonFormats.Snapshot(before),

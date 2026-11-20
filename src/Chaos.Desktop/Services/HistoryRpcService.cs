@@ -10,7 +10,7 @@ using Chaos.Desktop.Platform;
 namespace Chaos.Desktop.Services;
 
 public sealed record HistoryTaskRequest(string TaskId);
-public sealed record HistoryEntryResponse(string Id, string OperationId, string EventKind, IReadOnlyList<string> ChangedFields, string EffectiveAtUtc, string Version);
+public sealed record HistoryEntryResponse(string Id, string OperationId, string EventKind, IReadOnlyList<string> ChangedFields, string EffectiveAtUtc, string Version, string Actor);
 public sealed record HistoryListResponse(bool Ok, IReadOnlyList<HistoryEntryResponse> Entries, TaskErrorResponse? Error);
 public sealed record HistoryAsOfRequest(string TaskId, string? AtUtc, string? EntryId);
 public sealed record SnapshotSubtaskResponse(string Id, string Title, string Notes, string Status, IReadOnlyList<string> TagIds);
@@ -233,7 +233,7 @@ internal static class HistoryRpc
 
     public static HistoryEntryResponse Map(TaskHistoryRecord entry) => new(
         entry.Id, entry.OperationId, entry.EventKind, entry.ChangedFields,
-        StorageFormats.Instant(entry.EffectiveAtUtc), entry.AggregateVersion.ToString(CultureInfo.InvariantCulture));
+        StorageFormats.Instant(entry.EffectiveAtUtc), entry.AggregateVersion.ToString(CultureInfo.InvariantCulture), entry.Actor);
 
     public static DiaryEntryResponse Map(DiaryEntryRecord entry) => new(
         entry.Id, entry.TaskId, StorageFormats.Instant(entry.EntryAtUtc), entry.RawMarkdown,

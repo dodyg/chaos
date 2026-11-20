@@ -106,6 +106,11 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
                     }
 
                     Run($"UPDATE {SyncSql.Quote(parent)} SET Id = $to WHERE Id = $from;", ("$to", to), ("$from", from));
+                    if (parent == "Profiles")
+                    {
+                        // Offline history names the device's profile until it adopts the account's canonical identity.
+                        Run("UPDATE TaskHistory SET Actor = $to WHERE Actor = $from;", ("$to", $"person:{to}"), ("$from", $"person:{from}"));
+                    }
                     // History keeps JSON snapshots of the aggregates it describes; undoing from one must name the IDs that exist now.
                     Run("UPDATE TaskHistory SET SnapshotBefore = replace(SnapshotBefore, $from, $to), SnapshotAfter = replace(SnapshotAfter, $from, $to) WHERE instr(COALESCE(SnapshotBefore, '') || COALESCE(SnapshotAfter, ''), $from) > 0;", ("$to", to), ("$from", from));
                     foreach (var (table, column, _) in columns.Where(c => c.Parent == parent))
