@@ -149,10 +149,17 @@ export function TaskJournal({
   React.useEffect(() => {
     let active = true;
     setPeople([]);
-    void peopleRpc.list({ spaceId: task.spaceId })
-      .then((result) => { if (active && result.ok) setPeople(result.people); })
-      .catch(() => { if (active) setPeople([]); });
-    return () => { active = false; };
+    void peopleRpc
+      .list({ spaceId: task.spaceId })
+      .then((result) => {
+        if (active && result.ok) setPeople(result.people);
+      })
+      .catch(() => {
+        if (active) setPeople([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [task.spaceId, revision]);
   React.useEffect(() => {
     let active = true;
@@ -505,7 +512,8 @@ export function TaskJournal({
               item.event && (
                 <li key={`e-${item.event.id}`} className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
                   <span>
-                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> · {actorLabel(item.event.actor, people)} · {when(item.event.effectiveAtUtc)}
+                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> ·{" "}
+                    {actorLabel(item.event.actor, people)} · {when(item.event.effectiveAtUtc)}
                   </span>
                   <Button
                     type="button"

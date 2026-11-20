@@ -400,7 +400,16 @@ test("history actors display both legacy and current identities", async () => {
   const { actorLabel } = await import("./TaskJournal");
   assert.equal(actorLabel("local"), "You");
   assert.equal(actorLabel("person:00000000-0000-0000-0000-000000000001"), "Unknown person");
-  const person = { actorId: "person:00000000-0000-0000-0000-000000000001", displayName: "Former member", initials: "FM", colorIndex: 0, kind: "person", isMe: false, role: 2, former: true };
+  const person = {
+    actorId: "person:00000000-0000-0000-0000-000000000001",
+    displayName: "Former member",
+    initials: "FM",
+    colorIndex: 0,
+    kind: "person",
+    isMe: false,
+    role: 2,
+    former: true,
+  };
   assert.equal(actorLabel(person.actorId, [person]), "Former member");
   assert.equal(actorLabel(person.actorId, [{ ...person, isMe: true }]), "You");
   assert.equal(actorLabel("github:someone"), "GitHub: someone");

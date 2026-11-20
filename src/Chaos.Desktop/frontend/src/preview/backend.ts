@@ -1894,7 +1894,19 @@ const handlers: Record<string, Handler> = {
 
   "tags.list": () => ok({ tags }),
   "people.list": () => ok({ people: [] }),
-  "people.get": (r: { actorId: string }) => ok({ person: { actorId: r.actorId, displayName: "Unknown person", initials: "UP", colorIndex: 0, kind: null, isMe: false, role: null, former: false } }),
+  "people.get": (r: { actorId: string }) =>
+    ok({
+      person: {
+        actorId: r.actorId,
+        displayName: "Unknown person",
+        initials: "UP",
+        colorIndex: 0,
+        kind: null,
+        isMe: false,
+        role: null,
+        former: false,
+      },
+    }),
   "tags.listDeleted": () => ok({ tags: [] }),
   "tags.targetTags": (r: { targetId: string }) => ok({ tagIds: taskTags.get(r.targetId) ?? [] }),
   "tags.suggest": () => ok({ tags }),
