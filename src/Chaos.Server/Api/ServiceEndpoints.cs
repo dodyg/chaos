@@ -115,7 +115,7 @@ public static class ServiceEndpoints
         var rows = await db.Database.SqlQuery<KindCount>($"""
             SELECT e."Kind" AS "Kind", count(*) AS "Count"
             FROM "SyncEntities" e
-            WHERE e."AccountId" = {accountId} AND e."PurgedAt" IS NULL
+            WHERE e."StreamId" = {accountId} AND e."PurgedAt" IS NULL
               AND e."Kind" = ANY ({CountedKinds})
               AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND NOT (e."Kind" = 'container' AND (e."Groups" -> 'create' -> 'values' ->> 'IsInbox') = '1')

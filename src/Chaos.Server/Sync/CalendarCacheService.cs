@@ -38,9 +38,9 @@ public sealed class CalendarCacheService(ChaosDbContext db, TimeProvider clock)
             if (Encoding.UTF8.GetByteCount(json) > SyncProtocol.MaxPushBytes) return CalendarCacheOutcome.TooLarge;
             var now = clock.GetUtcNow();
             await db.Database.ExecuteSqlInterpolatedAsync($"""
-                INSERT INTO "SyncEntities" ("AccountId", "Kind", "EntityKey", "Groups", "LastSeq", "UpdatedAt")
+                INSERT INTO "SyncEntities" ("StreamId", "Kind", "EntityKey", "Groups", "LastSeq", "UpdatedAt")
                 VALUES ({accountId}, 'calendar_cache', {cache.SourceId}, CAST({json} AS jsonb), 0, {now})
-                ON CONFLICT ("AccountId", "Kind", "EntityKey") DO UPDATE
+                ON CONFLICT ("StreamId", "Kind", "EntityKey") DO UPDATE
                 SET "Groups" = EXCLUDED."Groups", "UpdatedAt" = EXCLUDED."UpdatedAt"
                 WHERE ("SyncEntities"."Groups" ->> 'FetchedAt')::timestamptz <= (EXCLUDED."Groups" ->> 'FetchedAt')::timestamptz
                 """, ct);

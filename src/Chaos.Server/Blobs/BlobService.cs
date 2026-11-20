@@ -341,7 +341,7 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
     private const string ReferencedSql = """
         EXISTS (
             SELECT 1 FROM "SyncEntities" e
-            WHERE e."AccountId" = b."AccountId" AND e."Kind" = 'attachment' AND e."PurgedAt" IS NULL
+            WHERE e."StreamId" = b."AccountId" AND e."Kind" = 'attachment' AND e."PurgedAt" IS NULL
               AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256")
         """;

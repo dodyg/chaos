@@ -122,6 +122,7 @@ public sealed class AccountService(ChaosDbContext db, TimeProvider clock)
     {
         var account = new Account { Id = Guid.NewGuid(), CreatedAt = clock.GetUtcNow(), PrimaryEmail = email };
         db.Accounts.Add(account);
+        db.SyncStreams.Add(new SyncStream { Id = account.Id, AccountId = account.Id, Kind = 1, CreatedAt = account.CreatedAt });
         return account;
     }
 

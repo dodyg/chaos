@@ -25,8 +25,7 @@ public sealed class AccountDeletion(ChaosDbContext db, BlobService blobs, TimePr
             // Tokens first: they point at authorizations. The OpenIddict tables have no account column, only the subject.
             await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreToken>().Where(t => t.Subject == subject).ExecuteDeleteAsync(ct);
             await db.Set<OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization>().Where(a => a.Subject == subject).ExecuteDeleteAsync(ct);
-            await db.SyncChanges.Where(c => c.AccountId == accountId).ExecuteDeleteAsync(ct);
-            await db.SyncEntities.Where(e => e.AccountId == accountId).ExecuteDeleteAsync(ct);
+            await db.SyncStreams.Where(s => s.Id == accountId).ExecuteDeleteAsync(ct);
             await db.EmailCodes.Where(c => c.Email == email).ExecuteDeleteAsync(ct);
             // Devices and logins go with the account row (cascade).
             await db.Accounts.Where(a => a.Id == accountId).ExecuteDeleteAsync(ct);

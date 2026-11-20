@@ -36,7 +36,7 @@ public static class SyncEvents
         using var subscription = broadcaster.Subscribe(caller.AccountId, seq => queue.Writer.TryWrite(seq));
 
         // Subscribed before reading the current sequence, so a push in between is heard rather than lost.
-        var current = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.NextSeq - 1).FirstOrDefaultAsync(ct);
+        var current = await db.SyncStreams.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.NextSeq - 1).FirstOrDefaultAsync(ct);
         long sent = -1;
         try
         {

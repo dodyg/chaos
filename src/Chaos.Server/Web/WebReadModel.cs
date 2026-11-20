@@ -107,7 +107,7 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
         var spaceKey = space.ToString("D");
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT * FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" IN ('task', 'pad', 'page') AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" IN ('task', 'pad', 'page') AND "PurgedAt" IS NULL
               AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND "Groups" -> 'create' -> 'values' ->> 'SpaceId' = {spaceKey}
               AND (strpos(lower(coalesce("Groups" -> 'title' -> 'values' ->> 'Title', '')), lower({query})) > 0
@@ -218,9 +218,9 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
     private async Task<IEnumerable<WebTask>> TasksByKeyAsync(Account account, string[] keys, CancellationToken ct)
     {
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
-            SELECT "AccountId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "LastSeq", "UpdatedAt"
+            SELECT "StreamId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "MovedTo", "LastSeq", "UpdatedAt"
             FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
               AND "EntityKey" = ANY({keys})
             """).AsNoTracking().ToListAsync(ct);
         return rows.Select(row => ReadTask(row.EntityKey, new WebEntity(row), account, includeNotes: false)).OfType<WebTask>();
@@ -244,9 +244,9 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
     {
         var key = listId.ToString("D");
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
-            SELECT "AccountId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "LastSeq", "UpdatedAt"
+            SELECT "StreamId", "Kind", "EntityKey", "Groups" - 'notes' AS "Groups", "PurgedAt", "MovedTo", "LastSeq", "UpdatedAt"
             FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'task' AND "PurgedAt" IS NULL
               AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND "Groups" -> 'place' -> 'values' ->> 'ContainerId' = {key}
             """).AsNoTracking().ToListAsync(ct);
@@ -289,7 +289,7 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
         var day = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var plan = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT * FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'day_plan' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'day_plan' AND "PurgedAt" IS NULL
               AND "Groups" -> 'create' -> 'values' ->> 'ProfileId' = {profile}
               AND "Groups" -> 'create' -> 'values' ->> 'LocalDate' = {day}
             ORDER BY "EntityKey" LIMIT 1
@@ -302,7 +302,7 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
         var rows = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT * FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'day_plan_item' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'day_plan_item' AND "PurgedAt" IS NULL
               AND "Groups" -> 'create' -> 'values' ->> 'DayPlanId' = {plan.EntityKey}
             ORDER BY "EntityKey"
             """).AsNoTracking().ToListAsync(ct);
@@ -326,7 +326,7 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
         var earliest = date.AddDays(-Math.Min(6, date.DayNumber)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var week = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT * FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'week_plan' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'week_plan' AND "PurgedAt" IS NULL
               AND "Groups" -> 'create' -> 'values' ->> 'ProfileId' = {profile}
               AND "Groups" -> 'state' -> 'values' ->> 'State' = '1'
               AND "Groups" -> 'create' -> 'values' ->> 'WeekStartDate' BETWEEN {earliest} AND {day}
@@ -340,7 +340,7 @@ internal sealed class WebReadModel(ChaosDbContext db, TimeProvider clock)
 
         var assignments = await db.SyncEntities.FromSqlInterpolated($"""
             SELECT * FROM "SyncEntities"
-            WHERE "AccountId" = {account.Id} AND "Kind" = 'week_assignment' AND "PurgedAt" IS NULL
+            WHERE "StreamId" = {account.Id} AND "Kind" = 'week_assignment' AND "PurgedAt" IS NULL
               AND "Groups" -> 'create' -> 'values' ->> 'WeekPlanId' = {week.EntityKey}
               AND "Groups" -> 'placement' -> 'values' ->> 'LocalDate' = {day}
             ORDER BY "EntityKey"

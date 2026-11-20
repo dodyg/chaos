@@ -16,17 +16,25 @@ public sealed class Account
     public Guid? PersonalSpaceId { get; set; }
     public Guid? InboxId { get; set; }
 
-    /// <summary>The next sync sequence number; assigned under a row lock (PLAN2 §8.3).</summary>
-    public long NextSeq { get; set; } = 1;
-
     public long StorageBytes { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 
-    /// <summary>The highest sequence number whose change-log rows were pruned (PLAN2 §7.12 horizon); a cursor below it needs the snapshot.</summary>
-    public long ChangesPrunedThroughSeq { get; set; }
-
     public List<AccountLogin> Logins { get; } = [];
     public List<Device> Devices { get; } = [];
+}
+
+/// <summary>An independently ordered account or space change stream.</summary>
+public sealed class SyncStream
+{
+    public Guid Id { get; set; }
+    public short Kind { get; set; }
+    public Guid? AccountId { get; set; }
+    public Guid? SpaceId { get; set; }
+    public long NextSeq { get; set; } = 1;
+    public long ChangesPrunedThroughSeq { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? DeletedAt { get; set; }
+    public DateTimeOffset? PurgeAfter { get; set; }
 }
 
 /// <summary>One way of signing in to an account: an email address or an external provider's subject.</summary>
@@ -121,6 +129,7 @@ public sealed class SyncEntityRow
     public required string Groups { get; set; }
 
     public DateTimeOffset? PurgedAt { get; set; }
+    public Guid? MovedTo { get; set; }
     public long LastSeq { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
@@ -136,6 +145,8 @@ public sealed class SyncChangeRow
     public required string Op { get; set; }
     public required string Groups { get; set; }
     public Guid? OriginDevice { get; set; }
+    public Guid? ActorId { get; set; }
+    public string? PreviousGroups { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
 

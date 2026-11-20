@@ -27,11 +27,6 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
-                    b.Property<long>("ChangesPrunedThroughSeq")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasDefaultValue(0L);
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -43,11 +38,6 @@ namespace Chaos.Server.Data.Migrations
 
                     b.Property<Guid?>("InboxId")
                         .HasColumnType("uuid");
-
-                    b.Property<long>("NextSeq")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasDefaultValue(1L);
 
                     b.Property<Guid?>("PersonalSpaceId")
                         .HasColumnType("uuid");
@@ -72,10 +62,6 @@ namespace Chaos.Server.Data.Migrations
 
                     b.ToTable("Accounts", null, t =>
                         {
-                            t.HasCheckConstraint("CK_Accounts_ChangesPrunedThroughSeq", "\"ChangesPrunedThroughSeq\" >= 0");
-
-                            t.HasCheckConstraint("CK_Accounts_NextSeq", "\"NextSeq\" >= 1");
-
                             t.HasCheckConstraint("CK_Accounts_PrimaryEmail_Lower", "\"PrimaryEmail\" = lower(\"PrimaryEmail\")");
 
                             t.HasCheckConstraint("CK_Accounts_StorageBytes", "\"StorageBytes\" >= 0");
@@ -331,10 +317,14 @@ namespace Chaos.Server.Data.Migrations
             modelBuilder.Entity("Chaos.Server.Data.SyncChangeRow", b =>
                 {
                     b.Property<Guid>("AccountId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uuid")
+                        .HasColumnName("StreamId");
 
                     b.Property<long>("Seq")
                         .HasColumnType("bigint");
+
+                    b.Property<Guid?>("ActorId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid>("ChangeId")
                         .HasColumnType("uuid");
@@ -361,6 +351,9 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<Guid?>("OriginDevice")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PreviousGroups")
+                        .HasColumnType("jsonb");
+
                     b.HasKey("AccountId", "Seq");
 
                     b.HasIndex("AccountId", "ChangeId")
@@ -381,7 +374,8 @@ namespace Chaos.Server.Data.Migrations
             modelBuilder.Entity("Chaos.Server.Data.SyncEntityRow", b =>
                 {
                     b.Property<Guid>("AccountId")
-                        .HasColumnType("uuid");
+                        .HasColumnType("uuid")
+                        .HasColumnName("StreamId");
 
                     b.Property<string>("Kind")
                         .HasColumnType("text");
@@ -396,6 +390,9 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<long>("LastSeq")
                         .HasColumnType("bigint");
 
+                    b.Property<Guid?>("MovedTo")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTimeOffset?>("PurgedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -404,9 +401,58 @@ namespace Chaos.Server.Data.Migrations
 
                     b.HasKey("AccountId", "Kind", "EntityKey");
 
+                    b.HasIndex("Kind", "EntityKey");
+
                     b.ToTable("SyncEntities", null, t =>
                         {
                             t.HasCheckConstraint("CK_SyncEntities_LastSeq", "\"LastSeq\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncStream", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("ChangesPrunedThroughSeq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<short>("Kind")
+                        .HasColumnType("smallint");
+
+                    b.Property<long>("NextSeq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L);
+
+                    b.Property<DateTimeOffset?>("PurgeAfter")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SpaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.ToTable("SyncStreams", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SyncStreams_Identity", "(\"Kind\" = 1 AND \"AccountId\" IS NOT NULL AND \"AccountId\" = \"Id\" AND \"SpaceId\" IS NULL) OR (\"Kind\" = 2 AND \"SpaceId\" IS NOT NULL AND \"SpaceId\" = \"Id\" AND \"AccountId\" IS NULL)");
+
+                            t.HasCheckConstraint("CK_SyncStreams_NextSeq", "\"NextSeq\" >= 1");
+
+                            t.HasCheckConstraint("CK_SyncStreams_Prune", "\"ChangesPrunedThroughSeq\" >= 0");
                         });
                 });
 
@@ -665,7 +711,7 @@ namespace Chaos.Server.Data.Migrations
 
             modelBuilder.Entity("Chaos.Server.Data.SyncChangeRow", b =>
                 {
-                    b.HasOne("Chaos.Server.Data.Account", null)
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
                         .WithMany()
                         .HasForeignKey("AccountId")
                         .OnDelete(DeleteBehavior.Cascade)
@@ -674,11 +720,19 @@ namespace Chaos.Server.Data.Migrations
 
             modelBuilder.Entity("Chaos.Server.Data.SyncEntityRow", b =>
                 {
-                    b.HasOne("Chaos.Server.Data.Account", null)
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
                         .WithMany()
                         .HasForeignKey("AccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SyncStream", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade);
                 });
 
             modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", b =>

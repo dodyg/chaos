@@ -15,6 +15,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<EmailCode> EmailCodes => Set<EmailCode>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<SyncStream> SyncStreams => Set<SyncStream>();
     public DbSet<SyncEntityRow> SyncEntities => Set<SyncEntityRow>();
     public DbSet<SyncChangeRow> SyncChanges => Set<SyncChangeRow>();
     public DbSet<BlobRow> Blobs => Set<BlobRow>();
@@ -39,6 +40,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new DeviceConfiguration());
         modelBuilder.ApplyConfiguration(new EmailCodeConfiguration());
         modelBuilder.ApplyConfiguration(new AuditEventConfiguration());
+        modelBuilder.ApplyConfiguration(new SyncStreamConfiguration());
         modelBuilder.ApplyConfiguration(new SyncEntityConfiguration());
         modelBuilder.ApplyConfiguration(new SyncChangeConfiguration());
         modelBuilder.ApplyConfiguration(new BlobConfiguration());
@@ -55,16 +57,12 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.ToTable("Accounts", t =>
             {
                 t.HasCheckConstraint("CK_Accounts_PrimaryEmail_Lower", "\"PrimaryEmail\" = lower(\"PrimaryEmail\")");
-                t.HasCheckConstraint("CK_Accounts_NextSeq", "\"NextSeq\" >= 1");
                 t.HasCheckConstraint("CK_Accounts_StorageBytes", "\"StorageBytes\" >= 0");
-                t.HasCheckConstraint("CK_Accounts_ChangesPrunedThroughSeq", "\"ChangesPrunedThroughSeq\" >= 0");
             });
             e.HasKey(a => a.Id);
             e.Property(a => a.Id).ValueGeneratedNever();
             e.Property(a => a.PrimaryEmail).IsRequired();
-            e.Property(a => a.NextSeq).HasDefaultValue(1L);
             e.Property(a => a.StorageBytes).HasDefaultValue(0L);
-            e.Property(a => a.ChangesPrunedThroughSeq).HasDefaultValue(0L);
             e.HasIndex(a => a.PrimaryEmail).IsUnique().HasDatabaseName("UX_Accounts_PrimaryEmail");
 
             e.HasMany(a => a.Logins).WithOne().HasForeignKey(l => l.AccountId).OnDelete(DeleteBehavior.Cascade);
@@ -110,14 +108,34 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         }
     }
 
+    private sealed class SyncStreamConfiguration : IEntityTypeConfiguration<SyncStream>
+    {
+        public void Configure(EntityTypeBuilder<SyncStream> e)
+        {
+            e.ToTable("SyncStreams", t =>
+            {
+                t.HasCheckConstraint("CK_SyncStreams_Identity", "(\"Kind\" = 1 AND \"AccountId\" IS NOT NULL AND \"AccountId\" = \"Id\" AND \"SpaceId\" IS NULL) OR (\"Kind\" = 2 AND \"SpaceId\" IS NOT NULL AND \"SpaceId\" = \"Id\" AND \"AccountId\" IS NULL)");
+                t.HasCheckConstraint("CK_SyncStreams_NextSeq", "\"NextSeq\" >= 1");
+                t.HasCheckConstraint("CK_SyncStreams_Prune", "\"ChangesPrunedThroughSeq\" >= 0");
+            });
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.NextSeq).HasDefaultValue(1L);
+            e.Property(x => x.ChangesPrunedThroughSeq).HasDefaultValue(0L);
+            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
     private sealed class SyncEntityConfiguration : IEntityTypeConfiguration<SyncEntityRow>
     {
         public void Configure(EntityTypeBuilder<SyncEntityRow> e)
         {
             e.ToTable("SyncEntities", t => t.HasCheckConstraint("CK_SyncEntities_LastSeq", "\"LastSeq\" >= 0"));
             e.HasKey(x => new { x.AccountId, x.Kind, x.EntityKey });
+            e.Property(x => x.AccountId).HasColumnName("StreamId");
             e.Property(x => x.Groups).HasColumnType("jsonb");
-            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.Kind, x.EntityKey });
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 
@@ -131,11 +149,13 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
                 t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge')");
             });
             e.HasKey(x => new { x.AccountId, x.Seq });
+            e.Property(x => x.AccountId).HasColumnName("StreamId");
             e.Property(x => x.Seq).ValueGeneratedNever();
+            e.Property(x => x.PreviousGroups).HasColumnType("jsonb");
             e.Property(x => x.Groups).HasColumnType("jsonb");
             e.HasIndex(x => new { x.AccountId, x.ChangeId }).IsUnique().HasDatabaseName("UX_SyncChanges_ChangeId");
             e.HasIndex(x => new { x.AccountId, x.CreatedAt }).HasDatabaseName("IX_SyncChanges_CreatedAt");
-            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 

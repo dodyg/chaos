@@ -101,7 +101,7 @@ public sealed class SyncNotificationListener(IServiceScopeFactory scopes, SyncBr
 
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
-        var current = await db.Accounts.AsNoTracking().Where(a => subscribed.Contains(a.Id)).Select(a => new { a.Id, Seq = a.NextSeq - 1 }).ToListAsync(ct);
+        var current = await db.SyncStreams.AsNoTracking().Where(a => subscribed.Contains(a.Id)).Select(a => new { a.Id, Seq = a.NextSeq - 1 }).ToListAsync(ct);
         foreach (var account in current)
         {
             broadcaster.Publish(account.Id, account.Seq);

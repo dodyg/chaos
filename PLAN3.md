@@ -1382,10 +1382,16 @@ The complete `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PRO
 - The guard tests are green.
 - Behaviour is unchanged, apart from the new actor format in new history rows.
 
-### [ ] Q2: Server streams (account streams only, behaviour unchanged)
+### [x] Q2: Server streams (account streams only, behaviour unchanged)
 
 **Depends on:** Q1. **Server migration:** `S005_Streams` (EF Core; S004 stays reserved for PLAN2 P18).
 **Read:** 7.1, 7.2, 7.5.
+
+**Progress note 2026-11-20.** Reviewed Q2 and the existing PostgreSQL backfill spike. The production migration and service changes have not been implemented or tested; no test counts are claimed. In addition to the named Q2 files, account creation, sync and web event heads, notification recovery, the account usage query and the blob-reference query depend on the old account-scoped columns and must be updated together. Smallest next action: implement the stream entity and a data-preserving S005 migration, including account-stream creation for new accounts, then migrate these readers and writers before running the upgrade and full gate tests.
+
+**Q2 completion 2026-11-20.** Added S005 with an in-place key-column rename, account-stream backfill, preserved counters and horizons, new stream metadata and change fields. Reviewed the generated S003-to-S005 SQL. Account creation, push and ordered stream locking, routing, pull, snapshot, pruning, event heads, calendar cache, web reads and account deletion now use the account stream; blob storage remains account-keyed. The S003 upgrade test seeds two accounts, changes, entities and blobs, verifies the horizon and pull cursors, and pushes the next sequence for each account. The model drift guard and P13/P15 server tests passed. The temporary EF row property names and locking choice are recorded in `docs/decisions.md`.
+
+The final `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PROCESSOR_COUNT=2`. Both the solution run and fallback passed Domain 273/273, Application 116/116, Infrastructure 715/715, Sync 30/30 and Desktop 98/98. Server passed 146/147 in both; only the existing web contract snapshot failed, which the owner directed us to disregard in Q1. The gate exited 1 and therefore did not run its Slopwatch step; a separate strict run found 0 issues. The desktop frontend passed 293/293, web passed 16/16, and web lint exited 0 with the existing hook-dependency warning. An earlier parallel run also saw the previously recorded desktop scheduler timeout; its fallback and the final run passed. No shared-space routing is enabled in Q2. Smallest next action: Q3, including replacing the transitional EF property names as space streams are introduced.
 
 1. Add the `SyncStreams` entity and configuration. Migrate (7.2):
    - backfill one account stream per account

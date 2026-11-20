@@ -86,6 +86,11 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                 return (null, "account-unavailable");
             }
 
+            Guid[] streamIds = [accountId];
+            var streams = await db.SyncStreams
+                .FromSqlInterpolated($"""SELECT * FROM "SyncStreams" WHERE "Id" = ANY({streamIds}) ORDER BY "Id" FOR UPDATE""")
+                .ToDictionaryAsync(s => s.Id, ct);
+            var stream = streams[accountId];
             var prepared = await prepare(account, ct);
             if (prepared.Refusal is not null)
             {
@@ -131,7 +136,14 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                     continue;
                 }
 
-                var result = await MergeAsync(account, change, changeId, deviceId, now, ct);
+                var route = SyncRouter.Route(account, kinds.Find(change.Kind)!, change);
+                if (route.Rejection is { } routeRejection)
+                {
+                    rejected.Add(new PushRejection(entry.ChangeId, routeRejection));
+                    continue;
+                }
+
+                var result = await MergeAsync(streams[route.StreamId], change, changeId, deviceId, now, ct);
                 if (result is { } refusal)
                 {
                     rejected.Add(new PushRejection(entry.ChangeId, refusal));
@@ -152,15 +164,15 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             await db.SaveChangesAsync(ct);
             await db.Database.ExecuteSqlInterpolatedAsync($"""
                 DELETE FROM "SyncEntities" cache
-                WHERE cache."AccountId" = {accountId} AND cache."Kind" = 'calendar_cache'
+                WHERE cache."StreamId" = {accountId} AND cache."Kind" = 'calendar_cache'
                   AND NOT EXISTS (SELECT 1 FROM "SyncEntities" source
-                    WHERE source."AccountId" = cache."AccountId" AND source."Kind" = 'calendar_source'
+                    WHERE source."StreamId" = cache."StreamId" AND source."Kind" = 'calendar_source'
                       AND source."EntityKey" = cache."EntityKey" AND source."PurgedAt" IS NULL
                       AND source."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
                       AND source."Groups" -> 'enabled' -> 'values' ->> 'Enabled' = '1')
                 """, ct);
             await transaction.CommitAsync(ct);
-            return (new PushOutcome(accepted, rejected, highest?.Encode(), account.NextSeq - 1), null);
+            return (new PushOutcome(accepted, rejected, highest?.Encode(), stream.NextSeq - 1), null);
         });
 
         // §8.3 step 7: after the commit, tell this process's listeners and any other instance.
@@ -220,26 +232,13 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             }
         }
 
-        // The entity's create group places it in a space: it must be this account's own. Phase 3
-        // replaces this with space membership. Until a device binds the canonical IDs (P14) there is
-        // nothing to compare with, and the account scoping of every query still isolates accounts.
-        if (kind.HasSpace && account.PersonalSpaceId is { } space
-            && change.Groups.TryGetValue("create", out var create)
-            && create.Values.Values.TryGetValue("SpaceId", out var spaceValue))
-        {
-            if (spaceValue is not string spaceText || !Guid.TryParse(spaceText, out var entitySpace) || entitySpace != space)
-            {
-                return SyncRejection.NotOwner;
-            }
-        }
-
         return null;
     }
 
     /// <summary>Merges one validated change; returns a rejection reason, or null when it was accepted (whether or not any group won).</summary>
-    private async Task<string?> MergeAsync(Account account, SyncChange change, Guid changeId, Guid deviceId, DateTimeOffset now, CancellationToken ct)
+    private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId, DateTimeOffset now, CancellationToken ct)
     {
-        var entity = await db.SyncEntities.FindAsync([account.Id, change.Kind, change.EntityKey], ct);
+        var entity = await db.SyncEntities.FindAsync([stream.Id, change.Kind, change.EntityKey], ct);
         if (change.Op == SyncOp.Purge)
         {
             if (entity is { PurgedAt: not null })
@@ -247,10 +246,10 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                 return null; // Already purged: nothing to do.
             }
 
-            var seq = account.NextSeq++;
+            var seq = stream.NextSeq++;
             if (entity is null)
             {
-                entity = new SyncEntityRow { AccountId = account.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = "{}" };
+                entity = new SyncEntityRow { AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = "{}" };
                 db.SyncEntities.Add(entity);
             }
 
@@ -259,7 +258,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             entity.PurgedAt = now;
             entity.LastSeq = seq;
             entity.UpdatedAt = now;
-            Log(account.Id, seq, changeId, change, SyncOp.Purge, "{}", deviceId, now);
+            Log(stream.Id, seq, changeId, change, SyncOp.Purge, "{}", deviceId, now);
             return null;
         }
 
@@ -275,11 +274,11 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             return null;
         }
 
-        var next = account.NextSeq++;
+        var next = stream.NextSeq++;
         var groupsJson = SyncJson.WriteGroups(merge.Merged);
         if (entity is null)
         {
-            db.SyncEntities.Add(new SyncEntityRow { AccountId = account.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = groupsJson, LastSeq = next, UpdatedAt = now });
+            db.SyncEntities.Add(new SyncEntityRow { AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = groupsJson, LastSeq = next, UpdatedAt = now });
         }
         else
         {
@@ -288,7 +287,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             entity.UpdatedAt = now;
         }
 
-        Log(account.Id, next, changeId, change, SyncOp.Upsert, SyncJson.WriteGroups(merge.Winners), deviceId, now);
+        Log(stream.Id, next, changeId, change, SyncOp.Upsert, SyncJson.WriteGroups(merge.Winners), deviceId, now);
         return null;
     }
 
@@ -315,7 +314,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
     public async Task<PullPage> PullAsync(Guid accountId, int clientSchema, long after, int limit, CancellationToken ct)
     {
         limit = Math.Clamp(limit, 1, SyncProtocol.MaxPullChanges);
-        var pruned = await db.Accounts.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.ChangesPrunedThroughSeq).FirstOrDefaultAsync(ct);
+        var pruned = await db.SyncStreams.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.ChangesPrunedThroughSeq).FirstOrDefaultAsync(ct);
         using var stream = new MemoryStream();
         await using (var writer = new Utf8JsonWriter(stream))
         {
@@ -382,7 +381,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
 
         // Read before the entities: a change that lands meanwhile has a higher sequence than this cursor,
         // so the next pull brings it again, and applying it twice changes nothing.
-        var nextSeq = await db.Accounts.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.NextSeq).FirstOrDefaultAsync(ct);
+        var nextSeq = await db.SyncStreams.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.NextSeq).FirstOrDefaultAsync(ct);
         var query = db.SyncEntities.AsNoTracking().Where(e => e.AccountId == accountId && e.Kind == kind && e.PurgedAt == null);
         if (!string.IsNullOrEmpty(after))
         {
@@ -433,12 +432,12 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
         var cutoff = clock.GetUtcNow() - options.Value.ChangeLogHorizon;
         return await db.Database.ExecuteSqlInterpolatedAsync($"""
             WITH gone AS (
-                DELETE FROM "SyncChanges" WHERE "CreatedAt" < {cutoff} RETURNING "AccountId", "Seq"
+                DELETE FROM "SyncChanges" WHERE "CreatedAt" < {cutoff} RETURNING "StreamId", "Seq"
             ), top AS (
-                SELECT "AccountId", max("Seq") AS "Seq" FROM gone GROUP BY "AccountId"
+                SELECT "StreamId", max("Seq") AS "Seq" FROM gone GROUP BY "StreamId"
             )
-            UPDATE "Accounts" SET "ChangesPrunedThroughSeq" = GREATEST("ChangesPrunedThroughSeq", top."Seq")
-            FROM top WHERE "Accounts"."Id" = top."AccountId"
+            UPDATE "SyncStreams" SET "ChangesPrunedThroughSeq" = GREATEST("ChangesPrunedThroughSeq", top."Seq")
+            FROM top WHERE "SyncStreams"."Id" = top."StreamId"
             """, ct);
     }
 }
