@@ -361,4 +361,57 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
         await Assert.That(await a.Desktop.CountAsync("SELECT count(*) FROM Spaces WHERE Kind = 2;")).IsEqualTo(0L);
         await Assert.That(await a.Desktop.CountAsync("SELECT count(*) FROM SyncStreams WHERE Kind = 'space';")).IsEqualTo(0L);
     }
+
+    [Test]
+    public async Task A_protocol_1_desktop_on_the_same_account_stays_personal_only_and_is_told_to_update()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada", devices: 2);
+        var b = await world.AddPersonAsync("b@example.com", "Bo");
+        var (space, _, _) = await ShareAsync(world, a, b);
+        var personalSpace = await a.Desktop.TextAsync("SELECT Id FROM Spaces WHERE Kind = 1;");
+        var list = await CreateListAsync(a.Desktop, personalSpace!, "Garden");
+        var task = await CaptureAsync(a.Desktop, list, "Plant bulbs");
+        await world.SettleAsync();
+        var old = a.Devices[1];
+        await Assert.That(await old.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(1L);
+        var cursor = await old.CountAsync("SELECT Cursor FROM SyncStreams WHERE Kind = 'account';");
+
+        // From here A's second desktop behaves like the released build: protocol 1, account stream only.
+        await a.Spaces().MoveAsync(list, space);
+        var pulled = await old.Client.CallAsync(HttpMethod.Get, $"v1/sync/pull?after={cursor}&limit=1000", null, CancellationToken.None);
+        await Assert.That(pulled.Ok).IsTrue();
+        using var page = JsonDocument.Parse(pulled.Body);
+        var changes = page.RootElement.GetProperty("changes").EnumerateArray().Select(c => c.GetRawText()).ToList();
+        await Assert.That(changes.Count).IsGreaterThan(0);
+        // Every change parses with the released build's parser: moved work arrives as purges, never as "moved".
+        var parsed = changes.Select(Chaos.Sync.SyncJson.ParseChange).ToList();
+        await Assert.That(parsed.Any(c => c.Kind == "task" && c.EntityKey == task && c.Op == Chaos.Sync.SyncOp.Purge)).IsTrue();
+        await Assert.That(parsed.Any(c => c.Kind == "container" && c.EntityKey == list && c.Op == Chaos.Sync.SyncOp.Purge)).IsTrue();
+
+        // A child purge after its parent's purge finds nothing left and is skipped; nothing is unreadable.
+        await new SyncApplier(old.Store, old.Clock, old.Ids).ApplyAsync(changes);
+        await Assert.That(await old.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(0L);
+        await Assert.That(await old.CountAsync($"SELECT count(*) FROM Containers WHERE Id = '{list}';")).IsEqualTo(0L);
+        await Assert.That(await old.CountAsync("SELECT count(*) FROM SyncAttention WHERE Category = 'sync.unexpected';")).IsEqualTo(0L);
+
+        // An edit to the moved work, made before that pull landed, is refused as too old: the released build shows "Update Chaos".
+        var hlc = Chaos.Sync.Hlc.Create(old.Clock.Now.AddMinutes(5).ToUnixTimeMilliseconds(), 0, Guid.NewGuid()).Encode();
+        var edit = JsonSerializer.Serialize(new
+        {
+            changes = new[]
+            {
+                new { changeId = Guid.NewGuid().ToString("D"), kind = "task", key = task, op = "upsert",
+                    groups = new Dictionary<string, object> { ["title"] = new { hlc, values = new { Title = "Old desktop edit" } } } },
+            },
+        });
+        var pushed = await old.Client.CallAsync(HttpMethod.Post, "v1/sync/push", edit, CancellationToken.None);
+        await Assert.That(pushed.Ok).IsTrue();
+        using var answer = JsonDocument.Parse(pushed.Body);
+        await Assert.That(answer.RootElement.GetProperty("rejected")[0].GetProperty("reason").GetString()).IsEqualTo(Chaos.Sync.SyncRejection.SchemaTooOld);
+
+        // The shared copy is untouched, and B still sees it.
+        await world.SettleAsync();
+        await Assert.That(await b.Desktop.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Plant bulbs");
+    }
 }

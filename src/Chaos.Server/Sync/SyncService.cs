@@ -206,7 +206,10 @@ public sealed class SyncService(
                 var refusal = await MergeAsync(stream, change, changeId, deviceId, account.Id, account.ProfileId, now, ct);
                 if (refusal is not null)
                 {
-                    rejected.Add(new(entry.ChangeId, refusal));
+                    // A protocol 1 client cannot follow work that moved into a space: tell it to update.
+                    rejected.Add(new(entry.ChangeId, protocolVersion == SyncProtocol.Version1 && refusal == SyncRejection.Moved
+                        ? SyncRejection.SchemaTooOld
+                        : refusal));
                     continue;
                 }
 
@@ -725,7 +728,11 @@ public sealed class SyncService(
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({SyncNotificationListener.Channel}, {payload})", ct);
     }
 
-    public async Task<PullPage> PullAsync(Guid accountId, Guid streamId, int clientSchema, long after, int limit, CancellationToken ct)
+    public Task<PullPage> PullAsync(Guid accountId, Guid streamId, int clientSchema, long after, int limit, CancellationToken ct) =>
+        PullAsync(accountId, streamId, clientSchema, SyncProtocol.Version2, after, limit, ct);
+
+    private async Task<PullPage> PullAsync(Guid accountId, Guid streamId, int clientSchema, int protocolVersion, long after, int limit,
+        CancellationToken ct)
     {
         await EnsureReadableAsync(accountId, streamId, ct);
         limit = Math.Clamp(limit, 1, SyncProtocol.MaxPullChanges);
@@ -748,7 +755,7 @@ public sealed class SyncService(
                 foreach (var row in rows.Take(limit))
                 {
                     next = row.Seq;
-                    WriteRow(writer, row, clientSchema);
+                    WriteRow(writer, row, clientSchema, protocolVersion);
                 }
             }
             writer.WriteEndArray();
@@ -760,8 +767,9 @@ public sealed class SyncService(
         return new PullPage(Encoding.UTF8.GetString(bytes.ToArray()));
     }
 
+    /// <summary>The protocol 1 pull: the account stream only, with <c>moved</c> rows shown as purges (see <see cref="WriteRow"/>).</summary>
     public Task<PullPage> PullAsync(Guid accountId, int clientSchema, long after, int limit, CancellationToken ct) =>
-        PullAsync(accountId, accountId, clientSchema, after, limit, ct);
+        PullAsync(accountId, accountId, clientSchema, SyncProtocol.Version1, after, limit, ct);
 
     public async Task<PullPage?> SnapshotAsync(Guid accountId, Guid streamId, int clientSchema, string kind, string? after,
         int limit, CancellationToken ct)
@@ -824,8 +832,20 @@ public sealed class SyncService(
         }
     }
 
-    private void WriteRow(Utf8JsonWriter writer, SyncChangeRow row, int clientSchema)
+    /// <remarks>
+    /// A protocol 1 client predates sharing and cannot parse <c>moved</c>. It gets a purge with the same change ID instead,
+    /// so the moved work leaves that desktop and it stays personal-only; editing the work later is refused with
+    /// <c>schema-too-old</c>, which it shows as "Update Chaos" (PLAN3 Q4, option C in docs/decisions.md).
+    /// </remarks>
+    private void WriteRow(Utf8JsonWriter writer, SyncChangeRow row, int clientSchema, int protocolVersion = SyncProtocol.Version2)
     {
+        if (row.Op == "moved" && protocolVersion == SyncProtocol.Version1)
+        {
+            SyncJson.WriteChange(writer, row.ChangeId.ToString("D"), row.Kind, row.EntityKey, SyncOp.Purge,
+                new Dictionary<string, SyncGroupState>(), row.Seq);
+            return;
+        }
+
         if (row.Op == "moved")
         {
             writer.WriteStartObject();
