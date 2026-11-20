@@ -745,6 +745,12 @@ public sealed class SpaceService(
                 }
                 await changes.AppendAsync(spaceId, current.MemberId,
                     SyncChange.Upsert(Guid.NewGuid().ToString("D"), kind, key, groups), ct);
+                if (kind == "attachment" && groups.TryGetValue("file", out var file))
+                {
+                    // It comes from the mover's own stream, so the mover's blob holds its bytes.
+                    await SyncService.BindAttachmentAsync(db, spaceId, key, file, accountId, ct);
+                }
+
                 old.MovedTo = spaceId;
                 old.Groups = "{}";
                 old.LastSeq = accountStream.NextSeq;

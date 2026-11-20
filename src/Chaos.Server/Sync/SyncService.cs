@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Chaos.Server.Blobs;
 using Chaos.Server.Data;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -202,7 +203,7 @@ public sealed class SyncService(
                     continue;
                 }
 
-                var refusal = await MergeAsync(stream, change, changeId, deviceId, account.ProfileId, now, ct);
+                var refusal = await MergeAsync(stream, change, changeId, deviceId, account.Id, account.ProfileId, now, ct);
                 if (refusal is not null)
                 {
                     rejected.Add(new(entry.ChangeId, refusal));
@@ -550,7 +551,7 @@ public sealed class SyncService(
     }
 
     private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId,
-        Guid? actorId, DateTimeOffset now, CancellationToken ct)
+        Guid accountId, Guid? actorId, DateTimeOffset now, CancellationToken ct)
     {
         var entity = await db.SyncEntities.FindAsync([stream.Id, change.Kind, change.EntityKey], ct);
         if (entity?.MovedTo is not null)
@@ -577,6 +578,11 @@ public sealed class SyncService(
             entity.PurgedAt = now;
             entity.LastSeq = seq;
             entity.UpdatedAt = now;
+            if (change.Kind == "attachment" && await db.AttachmentBlobBindings.FindAsync([stream.Id, change.EntityKey], ct) is { } bound)
+            {
+                db.AttachmentBlobBindings.Remove(bound);
+            }
+
             Log(stream.Id, seq, changeId, change, "purge", "{}", deviceId, actorId, now);
             return null;
         }
@@ -609,9 +615,44 @@ public sealed class SyncService(
             entity.UpdatedAt = now;
         }
 
+        if (change.Kind == "attachment" && stream.Id != accountId && merge.Winners.TryGetValue("file", out var file))
+        {
+            await BindAttachmentAsync(db, stream.Id, change.EntityKey, file, accountId, ct);
+        }
+
         Log(stream.Id, next, changeId, change, "upsert", SyncJson.WriteGroups(merge.Winners),
             deviceId, actorId, now);
         return null;
+    }
+
+    /// <summary>
+    /// Records that <paramref name="custodian"/>'s blob holds the bytes of an attachment in a space stream, because that
+    /// account wrote its current <c>file</c> group. The account stream needs no binding: only the account's own devices write it.
+    /// </summary>
+    internal static async Task BindAttachmentAsync(ChaosDbContext db, Guid streamId, string attachmentId, SyncGroupState file,
+        Guid custodian, CancellationToken ct)
+    {
+        var binding = await db.AttachmentBlobBindings.FindAsync([streamId, attachmentId], ct);
+        var sha = file.Values.Values.GetValueOrDefault("Sha256") as string;
+        if (sha is null || !BlobService.IsHash(sha))
+        {
+            if (binding is not null)
+            {
+                db.AttachmentBlobBindings.Remove(binding);
+            }
+
+            return;
+        }
+
+        if (binding is null)
+        {
+            db.AttachmentBlobBindings.Add(new AttachmentBlobBinding { StreamId = streamId, AttachmentId = attachmentId, Sha256 = sha, CustodianAccountId = custodian });
+        }
+        else
+        {
+            binding.Sha256 = sha;
+            binding.CustodianAccountId = custodian;
+        }
     }
 
     private void Log(Guid streamId, long seq, Guid changeId, SyncChange change, string op, string groupsJson,

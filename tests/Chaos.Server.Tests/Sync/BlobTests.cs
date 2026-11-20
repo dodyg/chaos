@@ -503,6 +503,107 @@ public sealed class BlobTests(PostgresServer postgres)
         await Assert.That(await check.Blobs.AnyAsync(b => b.Sha256 == sha)).IsFalse();
     }
 
+    [Test]
+    public async Task An_attachment_naming_another_accounts_hash_in_a_personal_stream_does_not_unlock_that_blob()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var victim = await world.SignInAsync("hash-victim@example.com");
+        var attacker = await world.SignInAsync("hash-attacker@example.com");
+        var bytes = Random(3000);
+        var sha = Sha(bytes);
+        (await UploadAsync(rig.Server, new Caller(victim.Token, victim.DeviceId, victim.AccountId), bytes)).EnsureSuccessStatusCode();
+
+        var attachment = Guid.NewGuid().ToString("D");
+        var pushed = await world.PushAsync(attacker,
+            SharingHarness.Change("attachment", attachment, "create",
+                new { SpaceId = attacker.PersonalSpaceId.ToString("D"), OwnerKind = "task", OwnerId = Guid.NewGuid().ToString("D"), CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, bytes.Length));
+        await Assert.That(pushed.Rejections()).IsEmpty();
+
+        var thief = new Caller(attacker.Token, attacker.DeviceId, attacker.AccountId);
+        using var head = await SendAsync(rig.Server, thief, HttpMethod.Head, $"/v1/blobs/{sha}");
+        using var get = await SendAsync(rig.Server, thief, HttpMethod.Get, $"/v1/blobs/{sha}");
+        await Assert.That(head.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        await Assert.That(get.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task A_member_naming_another_members_private_hash_in_a_space_reads_nothing_until_it_uploads_the_bytes()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("hash-space-owner@example.com");
+        var attacker = await world.SignInAsync("hash-space-editor@example.com");
+        var reader = await world.SignInAsync("hash-space-viewer@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(attacker, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        await world.JoinAsync(reader, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+
+        // The owner's file is private: it is attached only in the owner's Personal space.
+        var bytes = Random(4000);
+        var sha = Sha(bytes);
+        (await UploadAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), bytes)).EnsureSuccessStatusCode();
+
+        var task = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var pushed = await world.PushAsync(attacker,
+            SharingHarness.Change("task", task, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachment, "create",
+                new { SpaceId = space.ToString("D"), OwnerKind = "task", OwnerId = task, CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, bytes.Length));
+        await Assert.That(pushed.Rejections()).IsEmpty();
+
+        var thief = new Caller(attacker.Token, attacker.DeviceId, attacker.AccountId);
+        var viewer = new Caller(reader.Token, reader.DeviceId, reader.AccountId);
+        using (var stolen = await SendAsync(rig.Server, thief, HttpMethod.Get, $"/v1/blobs/{sha}"))
+        using (var relayed = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}"))
+        {
+            await Assert.That(stolen.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+            await Assert.That(relayed.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        }
+
+        // Once the member who attached it uploads the bytes, the space reads that member's copy.
+        (await UploadAsync(rig.Server, thief, bytes)).EnsureSuccessStatusCode();
+        using var shared = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}");
+        await Assert.That(shared.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await shared.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+        await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
+        var binding = await db.AttachmentBlobBindings.SingleAsync(b => b.StreamId == space && b.AttachmentId == attachment);
+        await Assert.That(binding.CustodianAccountId).IsEqualTo(attacker.AccountId);
+        await Assert.That(binding.Sha256).IsEqualTo(sha);
+    }
+
+    [Test]
+    public async Task A_purged_space_attachment_releases_its_binding()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("hash-purge-owner@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        var task = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var sha = Sha(Random(100));
+        var pushed = await world.PushAsync(owner,
+            SharingHarness.Change("task", task, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachment, "create",
+                new { SpaceId = space.ToString("D"), OwnerKind = "task", OwnerId = task, CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, 100));
+        await Assert.That(pushed.Rejections()).IsEmpty();
+        await using (var db = ServerDatabase.Open(rig.Server.ConnectionString))
+        {
+            await Assert.That(await db.AttachmentBlobBindings.CountAsync(b => b.StreamId == space)).IsEqualTo(1);
+        }
+
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Purge("attachment", attachment))).Rejections()).IsEmpty();
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.AttachmentBlobBindings.CountAsync(b => b.StreamId == space)).IsEqualTo(0);
+    }
+
+    private static RawChange AttachmentFile(string attachment, string sha, long size) =>
+        SharingHarness.Change("attachment", attachment, "file",
+            new { MediaType = "application/octet-stream", ByteSize = size, Sha256 = sha, Width = (long?)null, Height = (long?)null, DurationMs = (long?)null });
+
     private static string Now() => DateTimeOffset.UtcNow.ToString("o");
 
     private static async Task ReferenceAsync(TestServer server, Guid account, string sha, bool deleted = false)

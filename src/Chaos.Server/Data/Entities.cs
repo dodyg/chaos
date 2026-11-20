@@ -247,6 +247,19 @@ public sealed class BlobRow
     public DateTimeOffset? UnreferencedSince { get; set; }
 }
 
+/// <summary>
+/// Which account's stored blob an attachment in a space stream reads from. The server records it when that account's
+/// push wins the attachment's <c>file</c> group, or when the account moves the attachment in from its own stream. A
+/// client never names the custodian, so naming a hash in an attachment cannot unlock another account's blob.
+/// </summary>
+public sealed class AttachmentBlobBinding
+{
+    public Guid StreamId { get; set; }
+    public required string AttachmentId { get; set; }
+    public required string Sha256 { get; set; }
+    public Guid CustodianAccountId { get; set; }
+}
+
 /// <summary>An upload that has started and not yet completed.</summary>
 public sealed class BlobUploadRow
 {

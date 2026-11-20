@@ -21,6 +21,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<SpaceMember> SpaceMembers => Set<SpaceMember>();
     public DbSet<SpaceInvite> SpaceInvites => Set<SpaceInvite>();
     public DbSet<BlobRow> Blobs => Set<BlobRow>();
+    public DbSet<AttachmentBlobBinding> AttachmentBlobBindings => Set<AttachmentBlobBinding>();
     public DbSet<BlobUploadRow> BlobUploads => Set<BlobUploadRow>();
     public DbSet<BlobPartRow> BlobParts => Set<BlobPartRow>();
 
@@ -48,6 +49,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new SpaceMemberConfiguration());
         modelBuilder.ApplyConfiguration(new SpaceInviteConfiguration());
         modelBuilder.ApplyConfiguration(new BlobConfiguration());
+        modelBuilder.ApplyConfiguration(new AttachmentBlobBindingConfiguration());
         modelBuilder.ApplyConfiguration(new BlobUploadConfiguration());
         modelBuilder.ApplyConfiguration(new BlobPartConfiguration());
     }
@@ -220,6 +222,20 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.HasIndex(i => i.TokenHash).IsUnique().HasDatabaseName("UX_SpaceInvites_TokenHash");
             e.HasIndex(i => i.SpaceId).HasDatabaseName("IX_SpaceInvites_SpaceId");
             e.HasOne<SyncStream>().WithMany().HasForeignKey(i => i.SpaceId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    private sealed class AttachmentBlobBindingConfiguration : IEntityTypeConfiguration<AttachmentBlobBinding>
+    {
+        public void Configure(EntityTypeBuilder<AttachmentBlobBinding> e)
+        {
+            e.ToTable("AttachmentBlobBindings", t =>
+                t.HasCheckConstraint("CK_AttachmentBlobBindings_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'"));
+            e.HasKey(x => new { x.StreamId, x.AttachmentId });
+            e.Property(x => x.AttachmentId).HasMaxLength(Chaos.Sync.SyncProtocol.MaxKeyLength);
+            e.HasIndex(x => new { x.CustodianAccountId, x.Sha256 }).HasDatabaseName("IX_AttachmentBlobBindings_Custodian");
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(x => x.StreamId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Account>().WithMany().HasForeignKey(x => x.CustodianAccountId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 
