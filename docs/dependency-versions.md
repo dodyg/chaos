@@ -170,3 +170,13 @@ Latest stable on NuGet when P12 started (queried 2026-11-18); all build on .NET 
 
 Container images: `postgres:18.7` (AppHost and Testcontainers), `axllent/mailpit:v1.34.0` (AppHost).
 Local tool: `dotnet-ef` 10.0.15 in `.config/dotnet-tools.json`, matching EF Core. All EF Core and OpenIddict pins move to the 11 line together once the Npgsql 11 provider is stable. `Aspire.Npgsql` and plain `Npgsql` were dropped when the server moved to EF Core.
+
+## Local MCP relay (Q0, 2026-11-20)
+
+`ModelContextProtocol` 2.4.0 (Apache-2.0) is pinned centrally for the desktop relay. It targets
+.NET 10 and is compatible with .NET 11. Q0's stdio and HTTP experiments also use 2.4.0; the
+HTTP experiment pins `ModelContextProtocol.AspNetCore` to the matching version. The
+[NuGet package](https://www.nuget.org/packages/ModelContextProtocol/) lists 2.4.0 as stable.
+Aspire's separate AppHost still resolves MCP 1.4.1 transitively from Aspire 17.0.0; the desktop
+pin is scoped to the desktop and its tests so it does not force a major SDK upgrade into the
+development host without a compatibility check.

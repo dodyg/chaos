@@ -5,6 +5,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Local MCP transport: Q0 relay; the tool dispatcher arrives in Q18. -->
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" Condition="'$(MSBuildProjectName)' == 'Chaos.Desktop' Or '$(MSBuildProjectName)' == 'Chaos.Desktop.Tests'" />
     <!-- Desktop framework: NeoAstra 1.12.0 (plan §1). Keep template/tool versions aligned. -->
     <PackageVersion Include="NeoAstra" Version="1.12.0" />
     <!-- Client persistence: SQLite via Microsoft.Data.Sqlite 11.0.0 (plan §1). EF Core is banned on the

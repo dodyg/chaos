@@ -1,0 +1,4 @@
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup><PackageVersion Include="ModelContextProtocol" Version="2.4.0" /></ItemGroup>
+</Project>

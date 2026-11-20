@@ -154,7 +154,7 @@ public sealed class BlobTests(PostgresServer postgres)
         await Assert.That(head.Headers.GetValues(BlobEndpoints.StateHeader).Single()).IsEqualTo("Clean");
 
         using var get = await SendAsync(rig.Server, caller, HttpMethod.Get, $"/v1/blobs/{sha}");
-        await Assert.That(await get.Content.ReadAsByteArrayAsync()).IsEquivalentTo(bytes);
+        await Assert.That((await get.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
 
         // What is on disk is neither the file nor contains any long stretch of it.
         var stored = await File.ReadAllBytesAsync(StoredObjects(rig).Single());
@@ -193,7 +193,7 @@ public sealed class BlobTests(PostgresServer postgres)
         using var done = await CompleteAsync(rig.Server, caller, sha);
         await Assert.That(done.StatusCode).IsEqualTo(HttpStatusCode.OK);
         using var get = await SendAsync(rig.Server, caller, HttpMethod.Get, $"/v1/blobs/{sha}");
-        await Assert.That(await get.Content.ReadAsByteArrayAsync()).IsEquivalentTo(bytes);
+        await Assert.That((await get.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
 
         // Completing again, and starting again, both report the finished blob.
         using var again = await CompleteAsync(rig.Server, caller, sha);
@@ -302,7 +302,7 @@ public sealed class BlobTests(PostgresServer postgres)
             using var response = await SendAsync(rig.Server, caller, HttpMethod.Get, $"/v1/blobs/{sha}", tweak: r => r.Headers.Range = RangeHeaderValue.Parse(range));
             await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.PartialContent);
             await Assert.That(response.Content.Headers.ContentRange!.ToString()).IsEqualTo(contentRange);
-            await Assert.That(await response.Content.ReadAsByteArrayAsync()).IsEquivalentTo(bytes[from..(to + 1)]);
+            await Assert.That((await response.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes.AsSpan(from, to - from + 1))).IsTrue();
         }
 
         var n = bytes.Length;
@@ -344,7 +344,7 @@ public sealed class BlobTests(PostgresServer postgres)
 
         // The first chunk is untouched and still reads.
         using var first = await SendAsync(rig.Server, caller, HttpMethod.Get, $"/v1/blobs/{sha}", tweak: r => r.Headers.Range = RangeHeaderValue.Parse("bytes=0-99"));
-        await Assert.That(await first.Content.ReadAsByteArrayAsync()).IsEquivalentTo(bytes[..100]);
+        await Assert.That((await first.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes.AsSpan(0, 100))).IsTrue();
     }
 
     [Test]
@@ -364,7 +364,7 @@ public sealed class BlobTests(PostgresServer postgres)
             return output.ToArray();
         }
 
-        await Assert.That(await DecryptAsync(stored, 0, plain.Length - 1)).IsEquivalentTo(plain);
+        await Assert.That((await DecryptAsync(stored, 0, plain.Length - 1)).AsSpan().SequenceEqual(plain)).IsTrue();
 
         // Two chunks swapped places: each is authentic on its own, but not at the other's index.
         var stride = BlobCrypto.ChunkSize + BlobCrypto.Overhead;

@@ -1108,7 +1108,7 @@ people without access to it on GitHub." The owner must confirm. Store nothing ne
 - **Scope.** Add `https://www.googleapis.com/auth/calendar.app.created` ("create secondary calendars and manage
   their events") only when the person turns time blocking on. That means an incremental consent: the existing
   sign-in flow with the extra scope. Never request `calendar` or `calendar.events`.
-  - Confirm in Q0's spike that `calendar.app.created` allows creating the calendar and inserting, patching and
+  - Confirm before relying on Q16 that `calendar.app.created` allows creating the calendar and inserting, patching and
     deleting events on it, and reading their changes.
   - Record the scope table check in `docs/decisions.md`. The Internal OAuth app (decisions 2026-11-15) needs no
     verification. A public release needs it, and this adds a scope to that submission.
@@ -1305,7 +1305,21 @@ The steps below add only what is specific to each package.
 
 ### [ ] Q0: Close phase 2 and prove the phase 3 integrations
 
-**Depends on:** nothing. **Migration:** none. **No product code changes.**
+**Depends on:** nothing. **Migration:** none. The owner authorized implementing the desktop MCP relay in Q0 on 2026-11-20.
+
+**Progress note 2026-11-20.** The owner confirmed E1: “Phase 2 has passed”; the exact question and clarification are in `docs/decisions.md`. Collected the baseline's open phase 2 packages and outstanding evidence in `docs/phase3-spikes.md`. Added a standalone MCP stdio spike pinned to SDK 1.4.1; a raw probe passed initialization, tool listing and tool invocation at protocol revision 2025-03-26 (3 protocol operations). Claude Code and Claude Desktop interoperability remain unverified. The HTTP/OAuth, named-pipe, Google, diff3 and PostgreSQL migration spikes remain to be done. No product code changed. Smallest next action: continue the remaining spikes and connect the stdio server from both Claude clients; do not tick Q0 until all six results are recorded.
+
+**Gate evidence.** Spike build passed with 0 warnings and errors; Slopwatch found 0 issues. Web tests passed 16/16; web lint exited 0 with one `react-hooks/exhaustive-deps` warning. The first full gate built successfully but server tests reported 134 failures, mostly because `CHAOS_TEST_PG` was unset; the web contract snapshot also failed. A second run used a disposable PostgreSQL 18.7 instance via `wslc`; both full runs and the desktop frontend tests were interrupted before completion under concurrent load, so no complete suite counts are available. The desktop frontend run had reported two failures before interruption. Re-run the gate and desktop tests without competing runs and investigate the failures. No `-NoServer` run was used.
+
+**Progress note 2026-11-20 (continued).** The owner removed the Claude client, Google account and installed-MSIX checks from Q0; the exact instruction is recorded in `docs/decisions.md`. The HTTP spike passed a local PKCE authorization and authenticated MCP tool call with a preconfigured test client; the diff3 spike passed 20/20 fixtures and merged 1 MiB in 7.0 ms, with limitations documented; and the section 7.2 SQL passed four assertions on a copy of a synthetic S003 database with two accounts. The isolated named-pipe echo and hidden-launch configuration work, but actual desktop integration, independent window-state observation and cross-user ACL denial remain unverified. See `docs/phase3-spikes.md` for each result and limitation. No product code changed. Smallest next action: complete the gate and verify the pipe with a second Windows user and the unpackaged desktop integration.
+
+**Gate update 2026-11-20.** `eng/verify.ps1 -NoServer` passed sequentially with TUnit parallelism limited to 2: Domain 273, Application 115, Infrastructure 713, Sync 28 and Desktop 97, all passed; Slopwatch found 0 issues. `-NoServer` was used because the solution runner starts the server and other test projects concurrently and exhausted the disposable PostgreSQL instance; the server suite was then run separately against PostgreSQL 18.7 through `wslc`. It finished 145/146: `The_snapshot_matches_the_server_records` fails because `src/Chaos.Web/contract/web-dto.json` differs from the server records. Correcting that product contract is outside Q0's no-product-code rule. Large blob tests previously spent minutes comparing byte arrays as unordered collections; their test-only assertions now compare exact byte order and the server run completed. The complete gate remains red. The desktop frontend and web checks are being rerun sequentially; record their final counts below.
+
+**Desktop relay and verification 2026-11-20.** The owner authorized desktop relay changes in Q0. `Chaos.Desktop.exe --mcp` relays stdio through an SDK-backed, per-user named pipe; the desktop listener and a windowless one-session fallback currently expose no tools or user data. The real unpackaged executable passed initialization and an empty tool-list probe, and a desktop test covered two successive pipe sessions. The fallback is not the fully initialized desktop, and cross-user ACL denial remains blocked at the owner's direction. The pinned SDK version and limitations are recorded in `docs/decisions.md` and `docs/phase3-spikes.md`. After the relay changes, `eng/verify.ps1 -NoServer` passed sequentially: Domain 273, Application 115, Infrastructure 713, Sync 28 and Desktop 98; Slopwatch 0 issues. The separately run server suite finished 145/146, with the same web-contract snapshot mismatch. Desktop frontend tests passed 292/292; web tests passed 16/16; web lint exited 0 with one existing hook-dependency warning. An earlier standalone desktop run had a GitHub scheduler timeout before the later gate passed; it is not treated as a clean initial run. Q0 remains open: resolve the snapshot mismatch under the appropriate scope, prove cross-user denial when an account is available, and decide how to deliver the fully initialized hidden desktop fallback.
+
+**MCP SDK update 2026-11-20.** At the owner's direction, the desktop and both MCP spikes now pin SDK 2.4.0. The desktop executable, stdio tool and authenticated HTTP probes passed again with the new version. The Q0 blockers above are unchanged.
+
+**MCP 2.4.0 gate 2026-11-20.** The solution restored and built. The sequential `eng/verify.ps1 -NoServer` run passed Domain 273, Application 115, Infrastructure 713 and Sync 28; Desktop passed 97/98, with the previously intermittent GitHub scheduler test timing out again. `-NoServer` was used to run projects sequentially; the server suite ran separately against PostgreSQL via `wslc` and passed 145/146, failing the previously recorded web-contract snapshot. Desktop frontend tests passed 292/292; web tests passed 16/16; web lint exited 0 with one existing hook-dependency warning. Slopwatch reported 0 issues. Aspire's separate AppHost retains its own transitive MCP 1.4.1; forcing a potentially incompatible major SDK update into Aspire is outside this desktop dependency change.
 
 1. Ask the owner E1. Collect PLAN2's open boxes (1.3), with what each still needs. Record the owner's answer and
    date in `docs/decisions.md`, along with any waiver, quoted with its date.
@@ -1313,35 +1327,25 @@ The steps below add only what is specific to each package.
    or blocked (exact reason):
    1. **MCP SDK, stdio.**
       - A console app using `ModelContextProtocol` that exposes one tool over stdio.
-      - Connect from Claude Code and Claude Desktop (E6).
       - Pin the version. Record the protocol revision it speaks.
    2. **MCP SDK, Streamable HTTP with OAuth.**
       - A minimal ASP.NET Core app with `ModelContextProtocol.AspNetCore` and OpenIddict as the authorization
         server.
-      - Record which client registration Claude's remote MCP needs: dynamic client registration, client ID
-        metadata documents, or pre-registered. Record whether OpenIddict 7.8 supports it (dynamic registration may
-        need a small custom endpoint).
+      - Exercise client registration with a test client. Record whether OpenIddict 7.8 supports the chosen
+        registration approach (dynamic registration may need a small custom endpoint).
       - Record the result and the chosen approach.
    3. **Named-pipe relay.**
       - `Chaos.Desktop.exe --mcp` started by an MCP client, connecting to a running instance over a per-user pipe.
       - Prove that the pipe ACL denies another user. Prove that the app starts hidden when it was not running.
-      - Check it from the installed MSIX too: the MCP client launches the app's execution alias.
-   4. **Google `calendar.app.created`.** With the Internal client:
-      - create a secondary calendar
-      - insert an event with a client-chosen ID
-      - get 409 on a repeat
-      - patch it
-      - list it with `syncToken`
-      - delete the calendar
-   5. **diff3.** A 150-line BCL-only line diff3 prototype against 20 fixture triples, including CRLF, a trailing
+   4. **diff3.** A 150-line BCL-only line diff3 prototype against 20 fixture triples, including CRLF, a trailing
       newline, RTL text and front matter. Measure it on a 1 MiB page.
-   6. **PostgreSQL migration rehearsal.** Run the 7.2 backfill on a copy of a development database with two
+   5. **PostgreSQL migration rehearsal.** Run the 7.2 backfill on a copy of a development database with two
       accounts.
 
 **Exit:**
 - E1 is answered.
 - Each spike has a recorded result.
-- No product code has changed.
+- The desktop relay is implemented and its scope and remaining limitations are recorded.
 
 ### [ ] Q1: Routing and permission metadata in Chaos.Sync
 

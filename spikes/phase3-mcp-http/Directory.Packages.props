@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageVersion Include="OpenIddict.AspNetCore" Version="7.8.0" />
+  </ItemGroup>
+</Project>

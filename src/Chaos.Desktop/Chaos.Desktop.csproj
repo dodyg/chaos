@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="NeoAstra" />
   </ItemGroup>
 

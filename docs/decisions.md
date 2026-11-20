@@ -1081,3 +1081,22 @@ plan provides one, and each blocking package stays unticked until the owner conf
   client is checked against a real daemon by `ClamAvLiveTests`, opt-in through `CHAOS_TEST_CLAM=host:port`.
 
 [Mobile web plan and deployment notes](mobile-web.md)
+
+## 2026-11-20 (PLAN3 E1)
+
+- Asked whether phase 2 had passed the installed phase 1 checklist (P0/D6) and phase 2 release gate (P20), or whether phase 3 could start before those were complete. The owner answered “yes”; on clarification, the owner selected **“Phase 2 has passed”**. This is the owner's confirmation, not an individual record of the checklist results. The existing acceptance document still contains unrun entries; no waiver was stated.
+
+## 2026-11-20 (PLAN3 Q0 live-check scope)
+
+- Asked whether Claude Code, Claude Desktop, the SilverKey Internal Google OAuth client and an installed Chaos MSIX were available for Q0's live checks. The owner replied: **“remove this part from the check. They are not relevant.”** Q0 no longer requires those Claude client checks, the Google account spike, or the installed-MSIX execution-alias check. The MCP SDK, test-client OAuth, unpackaged pipe relay, diff3 and PostgreSQL spikes remain in Q0. This decision is scoped to Q0; later package acceptance criteria are not asserted as passed.
+
+- For the Q0 HTTP spike, use a preconfigured public OAuth client with authorization code and PKCE. OpenIddict 7.8 in degraded mode can issue the tokens with custom client/redirect validation. This proves the local protocol path only; Q19 must implement persistent registration, consent, transport security and authorization rather than reuse the experiment's validation handler.
+
+- Q0 originally required both no product changes and a working desktop `--mcp` relay. Asked how to resolve that conflict, the owner chose **“Allow the desktop MCP relay to be implemented in Q0”** on 2026-11-20.
+
+- The Q0 relay uses MCP SDK 1.4.1 over a separate `CurrentUserOnly` named pipe per data root. The desktop `--mcp` shim relays stdio, and starts a windowless, one-session protocol host when no listener is available. The host advertises an empty tool list and reads or writes no Chaos data; agent identities, token authentication and actual tools remain Q17/Q18 work. The fallback is a headless protocol host, not a fully initialized desktop application; opening the desktop after a fallback does not reuse its application state. Cross-user denial still needs a native check under another Windows account.
+- Asked whether another signed-in Windows account was available for the cross-user ACL check, the owner answered **“No, leave the cross-user check blocked”** on 2026-11-20.
+
+## 2026-11-20 (MCP SDK update)
+
+- At the owner's direction, update `ModelContextProtocol` and the Q0 MCP experiments from 1.4.1 to 2.4.0. The ASP.NET Core experiment uses matching `ModelContextProtocol.AspNetCore` 2.4.0. This supersedes the 1.4.1 pin in the preceding Q0 entry; the relay's scope and remaining limitations are unchanged.

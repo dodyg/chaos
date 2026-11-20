@@ -164,7 +164,7 @@ public sealed class BlobSyncTests(PostgresServer postgres)
         await using var read = await b.Files.OpenReadAsync(record.Sha256, 0, CancellationToken.None);
         using var copy = new MemoryStream();
         await read!.CopyToAsync(copy);
-        await Assert.That(copy.ToArray()).IsEquivalentTo(bytes);
+        await Assert.That(copy.ToArray().AsSpan().SequenceEqual(bytes)).IsTrue();
 
         // The sender knows it is on the service; nothing is left to send.
         await Assert.That((await a.Commands.GetAsync(record.Id)).Transfer!.State).IsEqualTo(AttachmentSyncState.None);
@@ -216,11 +216,11 @@ public sealed class BlobSyncTests(PostgresServer postgres)
 
         // Reading the first slice opens the file, which fetches it.
         var first = await b.Commands.ReadAsync(record.Id, 0, 1024);
-        await Assert.That(first.Bytes).IsEquivalentTo(bytes[..1024]);
+        await Assert.That(first.Bytes.AsSpan().SequenceEqual(bytes.AsSpan(0, 1024))).IsTrue();
         await Assert.That(b.Transport.Downloads).IsEqualTo(1);
         await Assert.That((await b.Commands.GetAsync(record.Id)).Bytes).IsEqualTo(AttachmentBytesState.Present);
         var tail = await b.Commands.ReadAsync(record.Id, bytes.Length - 100, 100);
-        await Assert.That(tail.Bytes).IsEquivalentTo(bytes[^100..]);
+        await Assert.That(tail.Bytes.AsSpan().SequenceEqual(bytes.AsSpan(bytes.Length - 100))).IsTrue();
     }
 
     [Test]

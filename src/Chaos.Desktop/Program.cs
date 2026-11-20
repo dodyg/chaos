@@ -20,6 +20,17 @@ internal static class Program
         // without touching storage.
         var dataRoot = ResolveDataRoot(args);
         var instanceKey = SingleInstanceGuard.KeyFor(dataRoot);
+        if (args.Contains("--mcp", StringComparer.Ordinal))
+        {
+            return McpRelayHost.RelayAsync(instanceKey, dataRoot, Console.OpenStandardInput(), Console.OpenStandardOutput()).GetAwaiter().GetResult();
+        }
+        if (args.Contains("--mcp-host", StringComparer.Ordinal))
+        {
+            var host = McpRelayHost.Start(instanceKey, singleSession: true);
+            try { host.Completion.GetAwaiter().GetResult(); }
+            finally { host.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            return 0;
+        }
         using var instance = new SingleInstanceGuard(instanceKey);
         if (!instance.IsPrimaryInstance)
         {
@@ -28,6 +39,7 @@ internal static class Program
 
         // Storage, every service and every background worker (see DesktopComposition).
         using var composition = DesktopComposition.Create(dataRoot, AppVersion(), IsDevelopmentBuild);
+        var mcpRelay = McpRelayHost.Start(instanceKey);
 
         // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
         var activations = composition.Activations;
@@ -58,6 +70,7 @@ internal static class Program
         finally
         {
             router.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            mcpRelay.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
