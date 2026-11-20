@@ -8,6 +8,7 @@ using Chaos.Server.Sync;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Chaos.Server.Tests.Sharing;
 
@@ -817,5 +818,103 @@ public sealed class SharingServerTests(PostgresServer postgres)
         await Assert.That(lines.Any(line => line.Contains(owner.Email, StringComparison.Ordinal))).IsFalse();
         await Assert.That(lines.Any(line => line.Contains(member.Email, StringComparison.Ordinal))).IsFalse();
         await Assert.That(lines.Any(line => line.Contains(token, StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task Invite_links_use_the_configured_public_address_not_the_request_host()
+    {
+        await using var server = await TestServer.StartAsync(postgres, new Dictionary<string, string?>
+        {
+            ["Sharing:PublicBaseUrl"] = "https://chaos.example.test",
+        });
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("public-url-owner@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+
+        // The test client talks to http://localhost; the links must not come from that request.
+        await Assert.That(await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole))
+            .StartsWith("https://chaos.example.test/invite/");
+        var email = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{space:D}/invites",
+            new CreateInviteRequest("public-url-guest@example.com", SpaceMember.ViewerRole, null, null));
+        await Assert.That(email.Status).IsEqualTo(HttpStatusCode.OK);
+        var sent = server.Mail.Sent.Last(m => m.To == "public-url-guest@example.com");
+        await Assert.That(sent.Body).Contains("https://chaos.example.test/invite/");
+        await Assert.That(sent.Body).DoesNotContain("localhost");
+
+        var forged = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        forged.Request.Scheme = "https";
+        forged.Request.Host = new Microsoft.AspNetCore.Http.HostString("attacker.example");
+        var configured = new Chaos.Server.Auth.SharingOptions { PublicBaseUrl = "https://chaos.example.test" };
+        var unset = new Chaos.Server.Auth.SharingOptions();
+        await Assert.That(SpaceEndpoints.PublicBaseUrl(forged, configured, new HostEnvironment(Environments.Production)))
+            .IsEqualTo("https://chaos.example.test");
+        await Assert.That(SpaceEndpoints.PublicBaseUrl(forged, unset, new HostEnvironment(Environments.Production))).IsNull();
+        await Assert.That(SpaceEndpoints.PublicBaseUrl(forged, unset, new HostEnvironment(Environments.Development)))
+            .IsEqualTo("https://attacker.example");
+        foreach (var bad in new[] { "chaos.example.test", "ftp://chaos.example.test", "https://user:pw@chaos.example.test",
+            "https://chaos.example.test/?next=x" })
+        {
+            await Assert.That(Chaos.Server.Auth.SharingOptions.IsValidPublicBaseUrl(bad)).IsFalse();
+        }
+    }
+
+    private sealed class HostEnvironment(string name) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = name;
+        public string ApplicationName { get; set; } = "Chaos.Server";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
+    }
+
+    [Test]
+    public async Task Shared_task_history_names_its_writer_and_cannot_be_rewritten()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("history-owner@example.com");
+        var editor = await world.SignInAsync("history-editor@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var task = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("task", task, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }))).Rejections()).IsEmpty();
+
+        object Record(string actor, string kind = "task.updated") => new
+        {
+            TaskId = task, OperationId = "op", EffectiveAtUtc = "2026-11-20T00:00:00Z", Actor = actor, EventKind = kind,
+            ChangedFields = "Title", SnapshotBefore = "{}", SnapshotAfter = "{}", RecordedAtUtc = "2026-11-20T00:00:00Z",
+        };
+        RawChange History(string key, object record) => SharingHarness.Change("task_history", key, "record", record);
+
+        // Another member's name, the legacy local actor and an unparsable actor are all refused.
+        foreach (var forged in new[] { $"person:{owner.ProfileId:D}", "local", "sync", $"agent:{Guid.NewGuid():D}", "github:octocat" })
+        {
+            await Assert.That((await world.PushAsync(editor, History(Guid.NewGuid().ToString("D"), Record(forged))))
+                .Rejections()).Contains(SyncRejection.Forbidden);
+        }
+
+        var own = Guid.NewGuid().ToString("D");
+        var mine = $"person:{editor.ProfileId:D}";
+        await Assert.That((await world.PushAsync(editor, History(own, Record(mine)))).Rejections()).IsEmpty();
+        // An identical re-send is fine; changing a stored record is not, for its writer or for an owner.
+        await Assert.That((await world.PushAsync(editor, History(own, Record(mine)))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(editor, History(own, Record(mine, "task.rewritten"))))
+            .Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(owner, History(own, Record($"person:{owner.ProfileId:D}", "task.rewritten"))))
+            .Rejections()).Contains(SyncRejection.Forbidden);
+
+        // Only an owner, who manages the GitHub connection, records GitHub as the actor.
+        await Assert.That((await world.PushAsync(owner, History(Guid.NewGuid().ToString("D"), Record("github:octocat"))))
+            .Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(owner, History(Guid.NewGuid().ToString("D"), Record($"person:{owner.ProfileId:D}"))))
+            .Rejections()).IsEmpty();
+
+        // The editor's own Personal stream keeps its existing rules.
+        var personalTask = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(editor,
+            SharingHarness.Change("task", personalTask, "create", new { SpaceId = editor.PersonalSpaceId.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("task_history", Guid.NewGuid().ToString("D"), "record",
+                new { TaskId = personalTask, Actor = "local", EventKind = "test", RecordedAtUtc = Now() }))).Rejections()).IsEmpty();
     }
 }

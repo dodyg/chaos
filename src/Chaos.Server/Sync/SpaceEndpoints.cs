@@ -7,6 +7,7 @@ using Chaos.Sync;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -36,8 +37,16 @@ public static class SpaceEndpoints
             async (ClaimsPrincipal user, Guid spaceId, MemberProfileRequest request, SpaceService spaces, CancellationToken ct) =>
                 Http(await spaces.UpdateProfileAsync(Account(user), spaceId, request, ct)));
         v2.MapPost("/spaces/{spaceId:guid}/invites",
-            async (HttpContext http, ClaimsPrincipal user, Guid spaceId, CreateInviteRequest request, SpaceService spaces, CancellationToken ct) =>
-                Http(await spaces.CreateInviteAsync(Account(user), Device(user), spaceId, request, BaseUrl(http), ct)));
+            async (HttpContext http, ClaimsPrincipal user, Guid spaceId, CreateInviteRequest request, SpaceService spaces,
+                IOptions<SharingOptions> sharing, IHostEnvironment environment, CancellationToken ct) =>
+            {
+                if (PublicBaseUrl(http, sharing.Value, environment) is not { } baseUrl)
+                {
+                    return ApiErrors.Problem("invite-unavailable", "This service has no public address for invite links.",
+                        StatusCodes.Status503ServiceUnavailable);
+                }
+                return Http(await spaces.CreateInviteAsync(Account(user), Device(user), spaceId, request, baseUrl, ct));
+            });
         v2.MapGet("/spaces/{spaceId:guid}/invites", async (ClaimsPrincipal user, Guid spaceId, SpaceService spaces, CancellationToken ct) =>
             Http(await spaces.ListInvitesAsync(Account(user), spaceId, ct)));
         v2.MapDelete("/spaces/{spaceId:guid}/invites/{inviteId:guid}",
@@ -135,7 +144,17 @@ public static class SpaceEndpoints
 
     private static Guid Account(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(Claims.Subject)!.Value);
     private static Guid Device(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(DesktopClient.DeviceIdClaim)!.Value);
-    private static string BaseUrl(HttpContext http) => $"{http.Request.Scheme}://{http.Request.Host}{http.Request.PathBase}";
+    /// <summary>
+    /// The configured public address. Only a development host, which has none configured, falls back to the request:
+    /// the Host header is chosen by the caller, so in production it would let an owner mail a Chaos invite that links
+    /// to any site.
+    /// </summary>
+    internal static string? PublicBaseUrl(HttpContext http, SharingOptions sharing, IHostEnvironment environment) =>
+        sharing.PublicBaseUrl is { Length: > 0 } configured
+            ? configured
+            : environment.IsDevelopment()
+                ? $"{http.Request.Scheme}://{http.Request.Host}{http.Request.PathBase}"
+                : null;
     private static string SyncName(string json) => SyncJson.ReadGroups(json).GetValueOrDefault("name")?
         .Values.Values.GetValueOrDefault("Name")?.ToString() ?? "Shared space";
 

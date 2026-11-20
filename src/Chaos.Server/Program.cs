@@ -63,6 +63,12 @@ if (!app.Environment.IsDevelopment())
     {
         throw new InvalidOperationException("Set Proxy:KnownProxies or Proxy:KnownNetworks to the reverse proxies in front of this server, or Proxy:Direct=true when clients connect to it directly.");
     }
+
+    // Invite emails link to this address. Without it the link would come from the request's Host header, which the caller picks.
+    if (string.IsNullOrWhiteSpace(app.Configuration[$"{SharingOptions.Section}:{nameof(SharingOptions.PublicBaseUrl)}"]))
+    {
+        throw new InvalidOperationException("Set Sharing:PublicBaseUrl to this service's public address, such as https://chaos.example.com.");
+    }
 }
 
 app.UseExceptionHandler();

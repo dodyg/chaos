@@ -510,6 +510,10 @@ public sealed class SyncService(
                 return SyncRejection.Forbidden;
             }
         }
+        if (kind.Kind == "task_history" && await HistoryRefusalAsync(account, role, change, streamId, ct) is { } history)
+        {
+            return history;
+        }
         if (kind.Kind == "tag" && role == SpaceMember.EditorRole && await TagsOwnerOnlyAsync(streamId, ct))
         {
             return SyncRejection.Forbidden;
@@ -538,6 +542,45 @@ public sealed class SyncService(
                 .GetValueOrDefault("AuthorProfileId")?.ToString();
         return Guid.TryParse(stored, out var actor) ? actor : null;
     }
+
+    /// <summary>
+    /// History in a space is append-only and names its writer. The actor must be the pusher's own person ID; only an
+    /// owner, who alone manages the GitHub connection, may record a <c>github:</c> actor. A record already stored cannot
+    /// be rewritten, though an identical re-send is accepted.
+    /// </summary>
+    private async Task<string?> HistoryRefusalAsync(Account account, short role, SyncChange change, Guid streamId,
+        CancellationToken ct)
+    {
+        if (!change.Groups.TryGetValue("record", out var record))
+        {
+            return SyncRejection.Forbidden;
+        }
+
+        var actor = record.Values.Values.GetValueOrDefault("Actor") as string;
+        var allowed = ActorId.TryParse(actor, out var parsed)
+            ? parsed.Kind == ActorKind.Person && parsed.Id == account.ProfileId
+            : role == SpaceMember.OwnerRole && actor is { Length: > 7 } && actor.StartsWith("github:", StringComparison.Ordinal);
+        if (!allowed)
+        {
+            return SyncRejection.Forbidden;
+        }
+
+        // A record written earlier in this push is only in the tracker until the push saves.
+        var stored = (await db.SyncEntities.FindAsync([streamId, change.Kind, change.EntityKey], ct))?.Groups;
+        if (stored is null)
+        {
+            return null;
+        }
+
+        return SyncJson.ReadGroups(stored).GetValueOrDefault("record") is { } existing
+            && SameValues(existing.Values.Values, record.Values.Values)
+                ? null
+                : SyncRejection.Forbidden;
+    }
+
+    private static bool SameValues(IReadOnlyDictionary<string, object?> left, IReadOnlyDictionary<string, object?> right) =>
+        left.Count == right.Count
+        && left.All(pair => right.TryGetValue(pair.Key, out var other) && Equals(pair.Value, other));
 
     private async Task<bool> TagsOwnerOnlyAsync(Guid streamId, CancellationToken ct)
     {

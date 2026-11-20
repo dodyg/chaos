@@ -32,6 +32,8 @@ public static class SyncEndpoints
                 && o.MaxOpenInvitesPerSpace > 0 && o.MaxInviteEmailsPerAccountPerDay > 0
                 && o.InviteAcceptsPerAccountPerHour > 0 && o.InviteAcceptsPerIpPerHour > 0,
                 "Sharing limits must be greater than zero.")
+            .Validate(o => SharingOptions.IsValidPublicBaseUrl(o.PublicBaseUrl),
+                "Sharing:PublicBaseUrl must be an absolute http or https URL with no query, fragment or credentials.")
             .ValidateOnStart();
         services.AddSingleton<SpaceMembershipCache>();
         services.AddScoped<ServerChangeWriter>();

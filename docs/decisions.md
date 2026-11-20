@@ -1141,3 +1141,8 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - An attachment push is not refused because another account holds the same hash. Such a refusal would break the desktop, which pushes metadata before uploading the bytes, and it would tell any user whether a file exists on the server.
 - The migration binds an existing space-stream attachment only from the actor of its latest logged change that wrote the current hash. Where that change was pruned, the attachment stays unbound and unreadable to others until its `file` group is written again.
 - Moving custody when a member leaves or deletes their account, and the matching quota rules, belong to Q6 under E9. They are not decided here. PLAN3 Appendix A shifts Q6 to `S008` and Q17 to `S009`.
+
+## 2026-11-20 (PLAN3 Q3 security review fixes)
+
+- Invite links come from `Sharing:PublicBaseUrl`, never from the request's Host header, which the caller chooses. Outside development the server refuses to start without it. A development host without it still uses the request address. The value must be an absolute http or https URL with no query, fragment or credentials.
+- In a space stream, `task_history` is append-only and names its writer. `record.Actor` must be the pusher's own `person:<profileId>`. Only an owner may record a `github:<login>` actor, because only owners manage the GitHub connection. `local`, `sync` and `agent:` actors are refused until Q17 adds agent members. A stored record cannot be changed; an identical re-send is accepted. Account streams keep their existing rules.

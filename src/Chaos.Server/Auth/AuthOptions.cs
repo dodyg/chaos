@@ -53,6 +53,19 @@ public sealed class SharingOptions
     public int MaxInviteEmailsPerAccountPerDay { get; set; } = 20;
     public int InviteAcceptsPerAccountPerHour { get; set; } = 20;
     public int InviteAcceptsPerIpPerHour { get; set; } = 20;
+
+    /// <summary>
+    /// The service's public address, such as <c>https://chaos.example.com</c>. Invite links are built from it, never
+    /// from the request's Host header, which the caller controls. Required outside development.
+    /// </summary>
+    public string? PublicBaseUrl { get; set; }
+
+    public static bool IsValidPublicBaseUrl(string? value) =>
+        value is null
+        || (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+            && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment)
+            && string.IsNullOrEmpty(uri.UserInfo));
 }
 
 /// <summary>
