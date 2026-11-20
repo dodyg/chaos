@@ -3,11 +3,13 @@ import {
   diaryRpc,
   gitHubRpc,
   historyRpc,
+  peopleRpc,
   type DiaryEntryResponse,
   type HistoryAsOfResponse,
   type HistoryEntryResponse,
   type TaskResponse,
   type TimelineItemResponse,
+  type PersonResponse,
 } from "#neoastra";
 import { History, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -95,11 +97,12 @@ export function describeEvent(event: HistoryEntryResponse): string {
 
 export const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-export function actorLabel(actor: string): string {
+export function actorLabel(actor: string, people: readonly PersonResponse[] = []): string {
   if (actor === "local") return "You";
-  // Q1 only has the local profile; shared-member name lookup arrives with sharing.
-  if (actor.startsWith("person:")) return "You";
-  if (actor.startsWith("agent:")) return "Agent";
+  if (actor.startsWith("person:") || actor.startsWith("agent:")) {
+    const person = people.find((candidate) => candidate.actorId.toLowerCase() === actor.toLowerCase());
+    return person ? (person.isMe ? "You" : person.displayName) : "Unknown person";
+  }
   if (actor.startsWith("github:")) return `GitHub: ${actor.slice(7)}`;
   if (actor === "sync") return "Sync";
   return "Unknown person";
@@ -136,12 +139,21 @@ export function TaskJournal({
   onError: (message: string) => void;
 }) {
   const [items, setItems] = React.useState<TimelineItemResponse[]>([]);
+  const [people, setPeople] = React.useState<readonly PersonResponse[]>([]);
   const [deleted, setDeleted] = React.useState<DiaryEntryResponse[]>([]);
   const [draft, setDraft] = React.useState("");
   const [connected, setConnected] = React.useState(false);
   const [postToGitHub, setPostToGitHub] = React.useState(false);
   const [postDefault, setPostDefault] = React.useState(false);
   const postingContext = React.useRef({ taskId: "", initialized: false });
+  React.useEffect(() => {
+    let active = true;
+    setPeople([]);
+    void peopleRpc.list({ spaceId: task.spaceId })
+      .then((result) => { if (active && result.ok) setPeople(result.people); })
+      .catch(() => { if (active) setPeople([]); });
+    return () => { active = false; };
+  }, [task.spaceId, revision]);
   React.useEffect(() => {
     let active = true;
     if (postingContext.current.taskId !== task.id) {
@@ -493,7 +505,7 @@ export function TaskJournal({
               item.event && (
                 <li key={`e-${item.event.id}`} className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
                   <span>
-                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> · {actorLabel(item.event.actor)} · {when(item.event.effectiveAtUtc)}
+                    <span className="font-medium text-foreground">{describeEvent(item.event)}</span> · {actorLabel(item.event.actor, people)} · {when(item.event.effectiveAtUtc)}
                   </span>
                   <Button
                     type="button"

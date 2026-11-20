@@ -78,6 +78,8 @@ public static class ActivityActions
         "data.openFolder",
         "data.purge",
         "data.purgePreview",
+        "people.get",
+        "people.list",
         "data.reset",
         "data.restoreBackup",
         "data.status",

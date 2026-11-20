@@ -1,0 +1,364 @@
+using System.Diagnostics;
+using System.Text.Json;
+using Chaos.Application.Abstractions;
+using Chaos.Application.Containers;
+using Chaos.Application.Planning;
+using Chaos.Application.Spaces;
+using Chaos.Domain.Tasks;
+using Chaos.Infrastructure.Sync;
+using Chaos.Server.Tests.Sync;
+using Microsoft.EntityFrameworkCore;
+
+namespace Chaos.Server.Tests.Sharing;
+
+/// <summary>The seeded profile, Personal space and Inbox of one account; every later id is random.</summary>
+internal sealed class AccountSeedIds(int account) : IIdGenerator
+{
+    private int _seeded;
+
+    public Guid Profile => Seed(0);
+    public Guid Space => Seed(1);
+    public Guid Inbox => Seed(2);
+
+    private Guid Seed(int index) => new(index, (short)account, 0, [0xA, 0xC, 0, 0, 0, 0, 0, (byte)account]);
+
+    public Guid NewId() => _seeded < 3 ? Seed(_seeded++) : Guid.NewGuid();
+}
+
+/// <summary>One person with one or more desktops, and the space commands of each desktop.</summary>
+internal sealed class SharingPerson
+{
+    public required string Email { get; init; }
+    public required Guid AccountId { get; init; }
+    public required Guid ProfileId { get; init; }
+    public required List<SyncDevice> Devices { get; init; }
+    public SyncDevice Desktop => Devices[0];
+
+    public SpaceCommands Spaces(int device = 0) =>
+        new(Devices[device].Store, Devices[device].Client, new SyncSpaceStreams(Devices[device].Store, Devices[device].Engine), Devices[device].Ids);
+}
+
+/// <summary>A hosted service on real PostgreSQL with several people, each on real desktops (PLAN3 Q4 step 6).</summary>
+internal sealed class SharingWorld : IAsyncDisposable
+{
+    private readonly List<SyncDevice> _devices = [];
+    private int _accounts;
+
+    public required TestServer Server { get; init; }
+
+    public static async Task<SharingWorld> StartAsync(PostgresServer postgres) => new() { Server = await TestServer.StartAsync(postgres) };
+
+    public async Task<SharingPerson> AddPersonAsync(string email, string displayName, int devices = 1, SyncEngineOptions? options = null)
+    {
+        var account = ++_accounts;
+        var list = new List<SyncDevice>();
+        Guid profile = default;
+        for (var index = 0; index < devices; index++)
+        {
+            var seeds = new AccountSeedIds(account);
+            profile = seeds.Profile;
+            var device = await SyncDevice.StartAsync(Server, email, new DateTimeOffset(2026, 11, 20, 9, 0, 0, TimeSpan.Zero),
+                options ?? new SyncEngineOptions { Jitter = () => 0 }, joined: true, seedIds: seeds);
+            list.Add(device);
+            _devices.Add(device);
+            if (index == 0)
+            {
+                // The join flow binds the account's canonical ids on its first desktop; the tests do it directly.
+                await using var db = ServerDatabase.Open(Server.ConnectionString);
+                await db.Accounts.Where(a => a.PrimaryEmail == email).ExecuteUpdateAsync(s => s
+                    .SetProperty(a => a.ProfileId, seeds.Profile)
+                    .SetProperty(a => a.PersonalSpaceId, seeds.Space)
+                    .SetProperty(a => a.InboxId, seeds.Inbox)
+                    .SetProperty(a => a.DisplayName, displayName));
+            }
+        }
+
+        await using var read = ServerDatabase.Open(Server.ConnectionString);
+        var id = await read.Accounts.Where(a => a.PrimaryEmail == email).Select(a => a.Id).SingleAsync();
+        return new SharingPerson { Email = email, AccountId = id, ProfileId = profile, Devices = list };
+    }
+
+    /// <summary>Syncs every desktop in turn until a whole round pushes and pulls nothing.</summary>
+    public async Task SettleAsync()
+    {
+        for (var round = 0; round < 10; round++)
+        {
+            var busy = false;
+            foreach (var device in _devices)
+            {
+                var result = await device.SyncAsync();
+                if (result.Problem is not null)
+                {
+                    throw new InvalidOperationException("A sync cycle failed: " + result.Problem);
+                }
+
+                busy |= result.Pushed > 0 || result.Pulled > 0 || result.SnapshotUsed;
+            }
+
+            if (!busy)
+            {
+                return;
+            }
+        }
+
+        throw new InvalidOperationException("The desktops did not settle within ten rounds.");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var device in _devices)
+        {
+            await device.DisposeAsync();
+        }
+
+        await Server.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// PLAN3 Q4 exit: two people share a space end to end through real desktops (real SQLite, real
+/// <see cref="SyncEngine"/>, real <see cref="SpaceCommands"/>) against the in-process service on real PostgreSQL.
+/// </summary>
+[ClassDataSource<PostgresServer>(Shared = SharedType.PerTestSession)]
+public sealed class SharingDesktopTests(PostgresServer postgres)
+{
+    private static string Op() => Guid.NewGuid().ToString();
+
+    private static async Task<string> CreateListAsync(SyncDevice device, string spaceId, string name) =>
+        (await new ContainerCommands(device.Store, device.Ids, device.Clock).CreateAsync(new(Op(), name, ContainerKind.List, spaceId))).Container.Id;
+
+    private static async Task<string> CaptureAsync(SyncDevice device, string containerId, string title) =>
+        (await device.Tasks.CaptureAsync(new(Op(), containerId, title, null))).Task.Id;
+
+    private static async Task EditAsync(SyncDevice device, string taskId, string? title = null, string? notes = null)
+    {
+        var current = (await device.Tasks.GetAsync(taskId))!;
+        await device.Tasks.UpdateDetailsAsync(new(Op(), taskId, current.Version, title ?? current.Title, notes ?? current.Notes,
+            null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+    }
+
+    private static async Task<string> InviteAsync(SharingPerson owner, string spaceId)
+    {
+        var response = await owner.Desktop.Client.CallAsync(HttpMethod.Post, $"v2/spaces/{spaceId}/invites",
+            JsonSerializer.Serialize(new { role = 2, maxUses = 10 }), CancellationToken.None);
+        if (!response.Ok)
+        {
+            throw new InvalidOperationException($"Invite failed {response.Status}: {response.Body}");
+        }
+
+        using var json = JsonDocument.Parse(response.Body);
+        return json.RootElement.GetProperty("link").GetString()!;
+    }
+
+    /// <summary>A creates "Team", adds a list with a task, invites B, and B joins with the pasted link.</summary>
+    private static async Task<(string Space, string List, string Task)> ShareAsync(SharingWorld world, SharingPerson a, SharingPerson b)
+    {
+        var space = await a.Spaces().CreateAsync("Team");
+        var list = await CreateListAsync(a.Desktop, space.SpaceId, "Launch");
+        var task = await CaptureAsync(a.Desktop, list, "Write the plan");
+        await world.SettleAsync();
+        var joined = await b.Spaces().JoinWithLinkAsync(await InviteAsync(a, space.SpaceId));
+        await Assert.That(joined.SpaceId).IsEqualTo(space.SpaceId);
+        await Assert.That(joined.Role).IsEqualTo(2);
+        await world.SettleAsync();
+        return (space.SpaceId, list, task);
+    }
+
+    [Test]
+    public async Task A_creates_a_space_invites_B_and_B_gets_the_space_and_its_lists()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        var b = await world.AddPersonAsync("b@example.com", "Bo");
+        var (space, list, task) = await ShareAsync(world, a, b);
+
+        await Assert.That(await b.Desktop.TextAsync($"SELECT Name FROM Spaces WHERE Id = '{space}' AND Kind = 2;")).IsEqualTo("Team");
+        await Assert.That(await b.Desktop.TextAsync($"SELECT Name FROM Containers WHERE Id = '{list}' AND SpaceId = '{space}';")).IsEqualTo("Launch");
+        await Assert.That(await b.Desktop.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Write the plan");
+        await Assert.That(await b.Desktop.CountAsync($"SELECT count(*) FROM SyncStreams WHERE StreamId = '{space}' AND State = 'active';")).IsEqualTo(1L);
+
+        // The sidebar and the people directory see both members, with names, on both desktops.
+        var bSpaces = await new SpaceQueries(b.Desktop.Store).ListAsync();
+        var shared = bSpaces.Single(s => s.SpaceId == space);
+        await Assert.That(shared.Role).IsEqualTo(2);
+        await Assert.That(shared.MemberCount).IsEqualTo(2);
+        var aMembers = await new SpaceQueries(a.Desktop.Store).MembersAsync(space);
+        await Assert.That(aMembers.Select(m => m.DisplayName).Order().ToArray()).IsEquivalentTo(new[] { "Ada", "Bo" });
+        await Assert.That(aMembers.Single(m => m.IsMe).DisplayName).IsEqualTo("Ada");
+        // B's Personal data never reached A.
+        await Assert.That(await a.Desktop.CountAsync($"SELECT count(*) FROM Containers WHERE SpaceId <> '{space}' AND SpaceId <> (SELECT Id FROM Spaces WHERE Kind = 1 AND OwnerProfileId = '{a.ProfileId}');")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task An_edit_by_B_appears_on_A_within_three_seconds()
+    {
+        var realtime = new SyncEngineOptions { Jitter = () => 0, PollInterval = TimeSpan.FromHours(1), Debounce = TimeSpan.FromMilliseconds(100) };
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada", options: realtime);
+        var b = await world.AddPersonAsync("b@example.com", "Bo", options: realtime);
+        var (_, _, task) = await ShareAsync(world, a, b);
+        a.Desktop.Engine.Start();
+        b.Desktop.Engine.Start();
+        var engines = new[] { a.Desktop.Engine, b.Desktop.Engine };
+        await Assert.That(await SyncRealtimeTests.WaitForRuntimeAsync(engines,
+            () => a.Desktop.Engine.Runtime.Streaming && b.Desktop.Engine.Runtime.Streaming, TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(await SyncRealtimeTests.WaitForRuntimeAsync(engines,
+            () => a.Desktop.Engine.Runtime.LastSuccessAt is not null && b.Desktop.Engine.Runtime.LastSuccessAt is not null, TimeSpan.FromSeconds(10))).IsTrue();
+        var watch = Stopwatch.StartNew();
+        await EditAsync(b.Desktop, task, title: "Plan written by Bo");
+        var arrived = await SyncRealtimeTests.WaitForCycleAsync(a.Desktop.Engine,
+            async () => await a.Desktop.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';") == "Plan written by Bo", TimeSpan.FromSeconds(3));
+
+        await Assert.That(arrived).IsTrue();
+        await Assert.That(watch.Elapsed < TimeSpan.FromSeconds(3)).IsTrue();
+    }
+
+    [Test]
+    public async Task Offline_edits_on_both_sides_merge_by_field_group_with_history()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        var b = await world.AddPersonAsync("b@example.com", "Bo");
+        var (_, _, task) = await ShareAsync(world, a, b);
+        a.Desktop.Network.Offline = true;
+        b.Desktop.Network.Offline = true;
+        await EditAsync(a.Desktop, task, title: "Title from Ada");
+        b.Desktop.Clock.Now = b.Desktop.Clock.Now.AddMinutes(1);
+        await EditAsync(b.Desktop, task, notes: "Notes from Bo");
+        a.Desktop.Network.Offline = false;
+        b.Desktop.Network.Offline = false;
+        await world.SettleAsync();
+
+        foreach (var device in new[] { a.Desktop, b.Desktop })
+        {
+            await Assert.That(await device.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Title from Ada");
+            await Assert.That(await device.TextAsync($"SELECT Notes FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Notes from Bo");
+        }
+
+        // Each person's change is in the shared history under their own name.
+        var actors = await a.Desktop.RowsAsync($"SELECT DISTINCT Actor FROM TaskHistory WHERE TaskId = '{task}' AND EventKind <> 'sync.merged' ORDER BY Actor;");
+        await Assert.That(actors).Contains($"person:{a.ProfileId}");
+        await Assert.That(actors).Contains($"person:{b.ProfileId}");
+        await Assert.That((await b.Desktop.RowsAsync($"SELECT Id FROM TaskHistory WHERE TaskId = '{task}' AND EventKind <> 'sync.merged' ORDER BY Id;")))
+            .IsEquivalentTo(await a.Desktop.RowsAsync($"SELECT Id FROM TaskHistory WHERE TaskId = '{task}' AND EventKind <> 'sync.merged' ORDER BY Id;"));
+    }
+
+    [Test]
+    public async Task B_is_removed_and_evicts_counting_unsent_changes_and_B_My_Day_items_are_tombstoned_on_all_of_B_devices()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        var b = await world.AddPersonAsync("b@example.com", "Bo", devices: 2);
+        var (space, list, task) = await ShareAsync(world, a, b);
+        // B's other desktop learns of the join from the service's membership event; these desktops are driven by hand,
+        // without their event streams, so the test delivers it.
+        b.Devices[1].Engine.RequestDiscovery();
+        await world.SettleAsync();
+        await Assert.That(await b.Devices[1].CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(1L);
+
+        // B puts the shared task in My Day; it syncs to B's other desktop and never to A.
+        var myDay = new MyDayCommands(b.Desktop.Store, b.Desktop.Clock);
+        var today = (await myDay.ClockAsync()).Today;
+        await myDay.AddAsync(new DayItemCommand(Op(), today, task));
+        await world.SettleAsync();
+        var dayItem = $"SELECT count(*) FROM DayPlanItems WHERE TaskId = '{task}' AND RemovedAtUtc IS NULL;";
+        await Assert.That(await b.Devices[1].CountAsync(dayItem)).IsEqualTo(1L);
+        await Assert.That(await a.Desktop.CountAsync(dayItem)).IsEqualTo(0L);
+
+        // B edits while offline, then A removes B.
+        b.Desktop.Network.Offline = true;
+        await EditAsync(b.Desktop, task, title: "Never uploaded");
+        var removed = await a.Desktop.Client.CallAsync(HttpMethod.Delete, $"v2/spaces/{space}/members/{b.ProfileId:D}", null, CancellationToken.None);
+        await Assert.That(removed.Ok).IsTrue();
+        b.Desktop.Network.Offline = false;
+        b.Devices[1].Engine.RequestDiscovery(); // the membership event, as above
+        await world.SettleAsync();
+
+        foreach (var device in b.Devices)
+        {
+            await Assert.That(await device.CountAsync($"SELECT count(*) FROM Spaces WHERE Id = '{space}';")).IsEqualTo(0L);
+            await Assert.That(await device.CountAsync($"SELECT count(*) FROM Containers WHERE Id = '{list}';")).IsEqualTo(0L);
+            await Assert.That(await device.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(0L);
+            await Assert.That(await device.CountAsync($"SELECT count(*) FROM SyncStreams WHERE StreamId = '{space}';")).IsEqualTo(0L);
+            // The server tombstoned the overlay in B's account stream, so every desktop of B converges.
+            await Assert.That(await device.CountAsync(dayItem)).IsEqualTo(0L);
+        }
+
+        var attention = await b.Desktop.TextAsync("SELECT Message FROM SyncAttention WHERE Category = 'sync.evicted';");
+        await Assert.That(attention).StartsWith("You no longer have access to Team.");
+        await Assert.That(attention).Contains("discarded");
+        await Assert.That(await b.Devices[1].CountAsync("SELECT count(*) FROM SyncAttention WHERE Category = 'sync.evicted';")).IsEqualTo(0L);
+
+        // A is unaffected and still sees B's departure under B's name.
+        await Assert.That(await a.Desktop.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Write the plan");
+        var people = await new Chaos.Application.People.PeopleQueries(a.Desktop.Store).ListAsync(space);
+        var bo = people.Single(p => p.ActorId == $"person:{b.ProfileId:D}");
+        await Assert.That(bo.DisplayName).IsEqualTo("Bo");
+        await Assert.That(bo.Former).IsTrue();
+    }
+
+    [Test]
+    public async Task A_moves_a_Personal_list_in_and_B_sees_it_while_A_My_Day_stays()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        var b = await world.AddPersonAsync("b@example.com", "Bo");
+        var (space, _, _) = await ShareAsync(world, a, b);
+        var personalSpace = await a.Desktop.TextAsync("SELECT Id FROM Spaces WHERE Kind = 1;");
+        var list = await CreateListAsync(a.Desktop, personalSpace!, "Garden");
+        var task = await CaptureAsync(a.Desktop, list, "Plant bulbs");
+        var myDay = new MyDayCommands(a.Desktop.Store, a.Desktop.Clock);
+        await myDay.AddAsync(new DayItemCommand(Op(), (await myDay.ClockAsync()).Today, task));
+        await world.SettleAsync();
+        await Assert.That(await b.Desktop.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(0L);
+
+        var moved = await a.Spaces().MoveAsync(list, space);
+        await Assert.That(moved.EntityCount).IsGreaterThan(1);
+        await world.SettleAsync();
+
+        foreach (var device in new[] { a.Desktop, b.Desktop })
+        {
+            await Assert.That(await device.TextAsync($"SELECT SpaceId FROM Containers WHERE Id = '{list}';")).IsEqualTo(space);
+            await Assert.That(await device.TextAsync($"SELECT SpaceId FROM Tasks WHERE Id = '{task}';")).IsEqualTo(space);
+        }
+
+        // A's My Day item is a personal overlay: it stays in A's account stream and still names the moved task.
+        await Assert.That(await a.Desktop.CountAsync($"SELECT count(*) FROM DayPlanItems WHERE TaskId = '{task}' AND RemovedAtUtc IS NULL;")).IsEqualTo(1L);
+        await Assert.That(await b.Desktop.CountAsync($"SELECT count(*) FROM DayPlanItems WHERE TaskId = '{task}';")).IsEqualTo(0L);
+
+        // An edit by B on the moved task reaches A.
+        await EditAsync(b.Desktop, task, title: "Plant tulip bulbs");
+        await world.SettleAsync();
+        await Assert.That(await a.Desktop.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task}';")).IsEqualTo("Plant tulip bulbs");
+    }
+
+    [Test]
+    public async Task Leaving_a_space_evicts_it_from_the_leaver_only()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        var b = await world.AddPersonAsync("b@example.com", "Bo");
+        var (space, _, task) = await ShareAsync(world, a, b);
+
+        await b.Spaces().LeaveAsync(space);
+        await world.SettleAsync();
+
+        await Assert.That(await b.Desktop.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(0L);
+        await Assert.That(await b.Desktop.CountAsync($"SELECT count(*) FROM Spaces WHERE Id = '{space}';")).IsEqualTo(0L);
+        await Assert.That(await a.Desktop.CountAsync($"SELECT count(*) FROM Tasks WHERE Id = '{task}';")).IsEqualTo(1L);
+        // No unsent changes, so no attention item.
+        await Assert.That(await b.Desktop.CountAsync("SELECT count(*) FROM SyncAttention WHERE Category = 'sync.evicted';")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task Creating_a_space_offline_says_to_connect_and_changes_nothing()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("a@example.com", "Ada");
+        a.Desktop.Network.Offline = true;
+        var error = await Assert.That(async () => await a.Spaces().CreateAsync("Team")).Throws<AppException>();
+        await Assert.That(error!.Message).IsEqualTo("Connect to create a shared space.");
+        await Assert.That(await a.Desktop.CountAsync("SELECT count(*) FROM Spaces WHERE Kind = 2;")).IsEqualTo(0L);
+        await Assert.That(await a.Desktop.CountAsync("SELECT count(*) FROM SyncStreams WHERE Kind = 'space';")).IsEqualTo(0L);
+    }
+}

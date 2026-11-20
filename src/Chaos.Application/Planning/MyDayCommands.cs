@@ -174,7 +174,9 @@ public sealed class MyDayCommands(IApplicationStore store, TimeProvider clock)
         {
             var task = await session.Tasks.GetAsync(command.TaskId, token)
                 ?? throw AppException.NotFound("This task no longer exists. Refresh and choose another task.");
-            if (task.SpaceId != context.Space.Id)
+            // A shared task may go in My Day too: the item is a personal overlay in the account stream (PLAN3 §7.1).
+            if (task.SpaceId != context.Space.Id
+                && (await session.Spaces.GetAsync(task.SpaceId, token))?.Kind != Chaos.Domain.Tasks.SpaceKind.Shared)
             {
                 throw AppException.NotFound("This task no longer exists. Refresh and choose another task.");
             }

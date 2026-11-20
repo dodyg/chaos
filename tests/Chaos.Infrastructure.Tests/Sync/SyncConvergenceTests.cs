@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Capture;
 using Chaos.Application.Containers;
@@ -16,6 +18,7 @@ using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
+using Chaos.Sync;
 using Microsoft.Data.Sqlite;
 using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
@@ -503,6 +506,39 @@ public sealed class SyncConvergenceTests
     }
 
     [Test]
+    public async Task A_child_parked_from_one_stream_applies_when_its_parent_arrives_on_another()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "Parent on another stream");
+        var fromA = await OutboxAsync(a);
+        var account = Guid.NewGuid().ToString("D");
+        var space = Guid.NewGuid().ToString("D");
+        await b.Store.ExecuteAsync((session, _) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "INSERT INTO SyncStreams (StreamId,Kind,SpaceId,Role,Cursor,State) VALUES ($a,'account',NULL,NULL,0,'active'),($s,'space',$s,2,0,'active');";
+            command.Parameters.AddWithValue("$a", account);
+            command.Parameters.AddWithValue("$s", space);
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+
+        // The account stream is pulled first (§7.5) and brings the child; its parent is still on the space stream.
+        var child = await applier.ApplyAsync([fromA[1]], CancellationToken.None, 3, account);
+        await Assert.That(child.ParkedChangeIds.Count).IsEqualTo(1);
+        var parent = await applier.ApplyAsync([fromA[0]], CancellationToken.None, 8, space);
+
+        await Assert.That(parent.Applied).IsEqualTo(2L);
+        await Assert.That(await CountAsync(b, "SELECT count(*) FROM SyncInboxParked;")).IsEqualTo(0L);
+        await Assert.That(await CountAsync(b, $"SELECT count(*) FROM TaskHistory WHERE TaskId = '{task.Id}';")).IsEqualTo(1L);
+        // Each stream keeps its own cursor.
+        await Assert.That(await CountAsync(b, $"SELECT Cursor FROM SyncStreams WHERE StreamId = '{account}';")).IsEqualTo(3L);
+        await Assert.That(await CountAsync(b, $"SELECT Cursor FROM SyncStreams WHERE StreamId = '{space}';")).IsEqualTo(8L);
+    }
+
+    [Test]
     public async Task A_malformed_change_in_a_chunk_is_skipped_with_an_attention_item_and_the_rest_still_applies()
     {
         using var a = await StartAsync();
@@ -736,6 +772,65 @@ public sealed class SyncConvergenceTests
             await command.ExecuteNonQueryAsync(token);
             return 0;
         }, CancellationToken.None);
+
+    [Test]
+    public async Task ApplyAsync_MoveAndSpaceUpsertInEitherOrder_Converges()
+    {
+        using var source = await StartAsync();
+        using var first = await StartAsync();
+        using var second = await StartAsync();
+        var task = await CaptureTaskAsync(source, "Moved task");
+        var original = (await OutboxAsync(source)).Select(SyncJson.ParseChange).Single(c => c.Kind == "task" && c.EntityKey == task.Id);
+        var firstApplier = new SyncApplier(first.Store, first.Clock, first.Ids);
+        var secondApplier = new SyncApplier(second.Store, second.Clock, second.Ids);
+        await firstApplier.ApplyAsync(await OutboxAsync(source));
+        await secondApplier.ApplyAsync(await OutboxAsync(source));
+        var target = Guid.NewGuid();
+        foreach (var host in new[] { first, second })
+        {
+            await host.Store.ExecuteAsync((session, _) =>
+            {
+                using var command = session.Connection().CreateCommand();
+                command.CommandText = "INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($id,$owner,2,'Team','now','now'); INSERT INTO SyncStreams (StreamId,Kind,SpaceId,Role,Cursor,State) VALUES ($id,'space',$id,2,0,'active');";
+                command.Parameters.AddWithValue("$id", target.ToString("D"));
+                command.Parameters.AddWithValue("$owner", Guid.NewGuid().ToString("D"));
+                command.ExecuteNonQuery();
+                return Task.FromResult(0);
+            });
+        }
+        var create = original.Groups["create"];
+        var values = create.Values.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
+        values["SpaceId"] = target.ToString("D");
+        var newer = Hlc.Create(create.Hlc.WallMillis + 1, 0, Guid.NewGuid());
+        using var bytes = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(bytes))
+            SyncJson.WriteChange(writer, Guid.NewGuid().ToString("D"), "task", task.Id, SyncOp.Upsert,
+                new Dictionary<string, SyncGroupState> { ["create"] = new(newer, new SyncGroupValues(values)) });
+        var upsert = Encoding.UTF8.GetString(bytes.ToArray());
+        var moved = JsonSerializer.Serialize(new { changeId = Guid.NewGuid().ToString("D"), kind = "task", key = task.Id, op = "moved", to = target.ToString("D") });
+        await firstApplier.ApplyAsync([moved, upsert]);
+        await secondApplier.ApplyAsync([upsert, moved]);
+        foreach (var host in new[] { first, second })
+        {
+            await Assert.That(await TextAsync(host, $"SELECT SpaceId FROM Tasks WHERE Id='{task.Id}';")).IsEqualTo(target.ToString("D"));
+            await Assert.That(await TextAsync(host, $"SELECT Hlc FROM SyncClocks WHERE Kind='task' AND EntityKey='{task.Id}' AND GroupName='create';")).IsEqualTo(newer.Encode());
+        }
+    }
+
+    [Test]
+    public async Task ApplyAsync_RemoteChange_RecordsSyncActivityOnlyOnce()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "Remote activity");
+        var changes = await OutboxAsync(a);
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+        await applier.ApplyAsync(changes);
+        var query = $"SELECT count(*) FROM ActivityLog l JOIN ActivityLogEntities e ON e.Seq=l.Seq WHERE l.Source='sync' AND l.Action='sync.apply' AND e.Kind='task' AND e.EntityKey='{task.Id}';";
+        await Assert.That(await CountAsync(b, query)).IsEqualTo(1L);
+        await applier.ApplyAsync(changes);
+        await Assert.That(await CountAsync(b, query)).IsEqualTo(1L);
+    }
 
     [Test]
     public async Task A_stale_undo_is_refused_after_a_remote_change()

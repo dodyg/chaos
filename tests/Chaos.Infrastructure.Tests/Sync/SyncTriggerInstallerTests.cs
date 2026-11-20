@@ -4,24 +4,25 @@ using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
+using Chaos.Sync;
 using Microsoft.Data.Sqlite;
 using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
 
 namespace Chaos.Infrastructure.Tests.Sync;
 
 /// <summary>
-/// Change capture (PLAN2 §7.3): startup installs a trigger triple per synced table, edits pend
+/// Change capture (PLAN2 §7.3): startup installs a trigger triple per locally writable synced table, edits pend
 /// their changed field groups, deletes pend a purge, and a catalog change (or a file without
 /// the triggers, like a restored archive) recreates them — an unchanged catalog does no work.
 /// </summary>
 public sealed class SyncTriggerInstallerTests
 {
     [Test]
-    public async Task Startup_installs_a_trigger_triple_for_every_synced_table()
+    public async Task Startup_installs_a_trigger_triple_for_every_locally_writable_synced_table()
     {
         using var host = await DataHost.StartAsync();
 
-        var expected = SyncCatalog.Tables.Count(table => table.Mode != SyncMode.LocalOnly) * 3;
+        var expected = SyncCatalog.Tables.Count(table => table.Mode != SyncMode.LocalOnly && SyncKinds.Find(table.Kind)!.Route.Kind != SyncRouteKind.ServerOnly) * 3;
         var installed = await CountAsync(host, "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'TR_Sync_%';");
         var hash = await CountAsync(host, $"SELECT count(*) FROM SyncState WHERE TriggerHash = '{SyncTriggerInstaller.CatalogHash()}';");
 

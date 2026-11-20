@@ -87,12 +87,12 @@ internal sealed class SyncDevice : IAsyncDisposable
     /// <paramref name="joined"/> false makes a computer that is signed in but has not joined: sync is off and its profile, Personal space and
     /// Inbox IDs are its own random ones, as a computer with its own data would have (the account's join flow then takes over).
     /// </summary>
-    public static async Task<SyncDevice> StartAsync(TestServer server, string email, DateTimeOffset start, SyncEngineOptions? options = null, bool joined = true)
+    public static async Task<SyncDevice> StartAsync(TestServer server, string email, DateTimeOffset start, SyncEngineOptions? options = null, bool joined = true, IIdGenerator? seedIds = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "chaos-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var clock = new ManualClock(start);
-        IIdGenerator ids = joined ? new SharedSeedIds() : new GuidIdGenerator();
+        IIdGenerator ids = seedIds ?? (joined ? new SharedSeedIds() : new GuidIdGenerator());
         var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(root), "0.2.1", ids, clock, CancellationToken.None);
         var network = new FlakyNetwork(server.Factory.Server.CreateHandler());
         var secrets = new MemorySecretStore();
@@ -111,7 +111,10 @@ internal sealed class SyncDevice : IAsyncDisposable
         };
         if (joined)
         {
-            await device.ExecuteAsync("UPDATE SyncState SET Enabled = 1 WHERE Id = 1;");
+            // The join flow records the account; protocol 2 discovery checks the streams against it.
+            await using var db = ServerDatabase.Open(server.ConnectionString);
+            var account = await db.Accounts.Where(a => a.PrimaryEmail == email).Select(a => a.Id).SingleAsync();
+            await device.ExecuteAsync($"UPDATE SyncState SET Enabled = 1, AccountId = '{account:D}' WHERE Id = 1;");
         }
 
         return device;

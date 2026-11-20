@@ -108,6 +108,10 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
                     Run($"UPDATE {SyncSql.Quote(parent)} SET Id = $to WHERE Id = $from;", ("$to", to), ("$from", from));
                     if (parent == "Profiles")
                     {
+                        // Shared authors and owners need not have a local Profiles row, so
+                        // these references stopped being foreign keys in migration 038.
+                        Run("UPDATE Spaces SET OwnerProfileId = $to WHERE OwnerProfileId = $from;", ("$to", to), ("$from", from));
+                        Run("UPDATE DiaryEntries SET AuthorProfileId = $to WHERE AuthorProfileId = $from;", ("$to", to), ("$from", from));
                         // Offline history names the device's profile until it adopts the account's canonical identity.
                         Run("UPDATE TaskHistory SET Actor = $to WHERE Actor = $from;", ("$to", $"person:{to}"), ("$from", $"person:{from}"));
                     }
@@ -181,6 +185,8 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
             command.Parameters.AddWithValue("$account", accountId.ToString("D"));
             command.Parameters.AddWithValue("$profile", ids.ProfileId);
             command.ExecuteNonQuery();
+            // Stream cursors belong to the account being joined; the next discovery starts them over.
+            SyncSql.Execute(connection, "DELETE FROM SyncStreams;");
             ForgetRemoteAttachments(connection);
             return Task.FromResult(0);
         }, ct);
@@ -198,6 +204,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
             SyncSql.Execute(connection, "DELETE FROM SyncPending;");
             SyncSql.Execute(connection, "DELETE FROM SyncClocks;");
             SyncSql.Execute(connection, "DELETE FROM SyncInboxParked;");
+            SyncSql.Execute(connection, "DELETE FROM SyncStreams;");
             ForgetRemoteAttachments(connection);
             return Task.FromResult(0);
         }, ct);
@@ -226,14 +233,14 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     public async Task<long> BackfillAsync(CancellationToken ct)
     {
         long queued = 0;
-        foreach (var table in SyncCatalog.Ordered().Where(table => table.Mode != SyncMode.LocalOnly))
+        foreach (var table in SyncCatalog.Ordered().Where(SyncTriggerInstaller.CapturesLocalChanges))
         {
             queued += await store.ExecuteAsync((session, _) =>
             {
                 var connection = session.Connection();
                 long count = 0;
                 var key = string.Join(" || '|' || ", table.Key.Select(column => $"t.{SyncSql.Quote(column)}"));
-                foreach (var group in table.Groups)
+                foreach (var group in SyncTriggerInstaller.CapturedGroups(table))
                 {
                     using var command = connection.CreateCommand();
                     command.CommandText = $"""

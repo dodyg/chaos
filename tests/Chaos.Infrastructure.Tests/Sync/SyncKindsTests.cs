@@ -82,7 +82,8 @@ public sealed class SyncKindsTests
             await Assert.That(kind.ApplyOrder).IsEqualTo(table.ApplyOrder);
             await Assert.That(kind.Groups.Select(group => group.Name)).IsEquivalentTo(table.Groups.Select(group => group.Name));
             await Assert.That(kind.HasSpace).IsEqualTo(table.Groups.Any(group => group.Name == "create" && group.Columns.Contains("SpaceId")));
-            var route = parentKinds.Contains(table.Kind) ? SyncRouteKind.Parent
+            var route = table.Kind == "space_member" ? SyncRouteKind.ServerOnly
+                : parentKinds.Contains(table.Kind) ? SyncRouteKind.Parent
                 : tagLinks.Contains(table.Kind) ? SyncRouteKind.FollowsTag
                 : kind.HasSpace || table.Kind is "space" or "tag" ? SyncRouteKind.OwnSpace
                 : SyncRouteKind.Account;

@@ -82,12 +82,24 @@ public static class SyncCatalog
             [
                 new("create", ["OwnerProfileId", "Kind", "CreatedAtUtc"]),
                 new("name", ["Name"]),
+                new("look", ["ColorKey", "Icon"]),
+                new("settings", ["TagsOwnerOnly", "AgentsAllowed", "ClaimMinutes", "DefaultDeadlineReminderJson", "AllowAgentsToClose"]),
                 new("deleted", ["DeletedAtUtc"]),
             ],
             LocalColumns: ["Version"],
             UniqueRules: [new("UX_Spaces_PersonalPerOwner", SyncUniqueRuleKind.Adopt,
                 "The Personal space of an account is canonical; duplicates are settled by device join (§7.6, P14).")],
             ApplyOrder: 20),
+
+        new SyncTable("SpaceMembers", "space_member", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "MemberId", "MemberKind", "OwnerMemberId", "JoinedAtUtc"]),
+                new("profile", ["DisplayName", "GitHubLogin"]),
+                new("role", ["Role"]),
+                new("state", ["RemovedAtUtc"]),
+            ],
+            ApplyOrder: 21),
 
         new SyncTable("Containers", "container", SyncMode.Merge, ["Id"],
             Groups:
@@ -621,6 +633,7 @@ public static class SyncCatalog
         new SyncTable("SyncPending", "sync_pending", SyncMode.LocalOnly, ["Kind", "EntityKey", "GroupName"], ApplyOrder: 520), // capture queue (§7.3)
         new SyncTable("SyncApplyState", "sync_apply_state", SyncMode.LocalOnly, ["Id"], ApplyOrder: 521), // apply flag (§7.4)
         new SyncTable("SyncState", "sync_state", SyncMode.LocalOnly, ["Id"], ApplyOrder: 522), // account binding, cursor, trigger hash
+        new SyncTable("SyncStreams", "sync_stream", SyncMode.LocalOnly, ["StreamId"], ApplyOrder: 540),
         new SyncTable("SyncClocks", "sync_clock", SyncMode.LocalOnly, ["Kind", "EntityKey", "GroupName"], ApplyOrder: 523), // per-entity clocks
         new SyncTable("SyncOutbox", "sync_outbox", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 524), // outgoing queue
         new SyncTable("SyncInboxParked", "sync_inbox_parked", SyncMode.LocalOnly, ["ChangeId"], ApplyOrder: 525), // parked remote changes (§7.8)

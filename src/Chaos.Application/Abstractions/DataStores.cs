@@ -10,6 +10,7 @@ public interface IDataSession
 {
     IProfileStore Profiles { get; }
     ISpaceStore Spaces { get; }
+    IPeopleStore People { get; }
     IContainerStore Containers { get; }
     ISectionStore Sections { get; }
     ITaskStore Tasks { get; }
@@ -333,6 +334,12 @@ public interface ISpaceStore
     Task<SpaceRecord?> GetAsync(string spaceId, CancellationToken ct);
     Task<SpaceRecord?> GetPersonalByOwnerAsync(string ownerProfileId, CancellationToken ct);
     Task AddAsync(SpaceRecord space, CancellationToken ct);
+    Task<IReadOnlyList<SpaceRecord>> ListAsync(CancellationToken ct);
+}
+
+public interface IPeopleStore
+{
+    Task<IReadOnlyList<Chaos.Application.People.SpacePerson>> ListAsync(string spaceId, CancellationToken ct);
 }
 
 public interface IContainerStore

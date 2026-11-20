@@ -541,7 +541,8 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
 
             if (protocolFor is not null)
             {
-                request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.ProtocolHeader, Chaos.Sync.SyncProtocol.Version.ToString(CultureInfo.InvariantCulture));
+                var protocol = path.StartsWith("v2/", StringComparison.Ordinal) ? Chaos.Sync.SyncProtocol.Version2 : Chaos.Sync.SyncProtocol.Version1;
+                request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.ProtocolHeader, protocol.ToString(CultureInfo.InvariantCulture));
                 request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.SchemaHeader, protocolFor.ClientSchema.ToString(CultureInfo.InvariantCulture));
                 request.Headers.TryAddWithoutValidation(Chaos.Sync.SyncProtocol.DeviceHeader, protocolFor.Id.ToString("D"));
             }

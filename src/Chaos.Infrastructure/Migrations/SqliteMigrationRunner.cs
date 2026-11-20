@@ -13,7 +13,7 @@ namespace Chaos.Infrastructure.Migrations;
 public sealed class SqliteMigrationRunner
 {
     /// <summary>Highest schema version this build knows how to open.</summary>
-    public const int MaxKnownSchemaVersion = 37;
+    public const int MaxKnownSchemaVersion = 38;
 
     /// <param name="targetVersion">Stops after this version; null applies every pending migration. A JSON archive
     /// restore builds its staging database at the archive's version, loads the rows, then migrates the rest (PLAN §14).</param>
@@ -63,6 +63,35 @@ public sealed class SqliteMigrationRunner
 
     private static void Apply(SqliteConnection connection, EmbeddedMigration migration)
     {
+        // Rebuilding a referenced parent needs foreign keys disabled before BEGIN in SQLite.
+        // Check the complete graph before committing and restore the connection's setting.
+        var rebuildParents = migration.Version == 38;
+        var foreignKeysWereEnabled = false;
+        if (rebuildParents)
+        {
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText = "PRAGMA foreign_keys;";
+            foreignKeysWereEnabled = Convert.ToInt64(pragma.ExecuteScalar()) != 0;
+            pragma.CommandText = "PRAGMA foreign_keys=OFF;";
+            pragma.ExecuteNonQuery();
+        }
+        try
+        {
+            ApplyTransaction(connection, migration, rebuildParents);
+        }
+        finally
+        {
+            if (foreignKeysWereEnabled)
+            {
+                using var pragma = connection.CreateCommand();
+                pragma.CommandText = "PRAGMA foreign_keys=ON;";
+                pragma.ExecuteNonQuery();
+            }
+        }
+    }
+
+    private static void ApplyTransaction(SqliteConnection connection, EmbeddedMigration migration, bool checkForeignKeys)
+    {
         using var transaction = connection.BeginTransaction();
         try
         {
@@ -72,6 +101,16 @@ public sealed class SqliteMigrationRunner
                 command.Transaction = transaction;
                 command.CommandText = statement;
                 command.ExecuteNonQuery();
+            }
+
+            if (checkForeignKeys)
+            {
+                using var check = connection.CreateCommand();
+                check.Transaction = transaction;
+                check.CommandText = "PRAGMA foreign_key_check;";
+                using var violations = check.ExecuteReader();
+                if (violations.Read())
+                    throw new InvalidOperationException($"Migration {migration.Version:000} left a foreign-key violation in {violations.GetString(0)}.");
             }
 
             using var insert = connection.CreateCommand();

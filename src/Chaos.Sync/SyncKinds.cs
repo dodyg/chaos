@@ -32,7 +32,8 @@ public static class SyncKinds
     private static readonly IReadOnlyList<SyncKindInfo> Definitions =
     [
         new("profile", 1, 10, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("zone", 1), new("locale", 1), new("dates", 1), new("planning", 1), new("reminders", 1), new("quiet", 1), new("appearance", 2), new("day_background", 2), new("deleted", 1) }),
-        new("space", 1, 20, false, ["create", "name", "deleted"]),
+        new("space", 1, 20, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("look", 4), new("settings", 4), new("deleted", 1) }),
+        new("space_member", 1, 21, true, new SyncGroupInfo[] { new("create", 4), new("profile", 4), new("role", 4), new("state", 4) }),
         new("container", 1, 30, true, ["create", "name", "position", "deadline", "archived", "category", "deleted"]),
         new("task_template", 1, 35, true, ["create", "name", "payload", "deleted"]),
         new("section", 1, 40, false, ["create", "title", "position", "deleted"]),
@@ -91,6 +92,7 @@ public static class SyncKinds
         {
             "profile" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
+            "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
             "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"), // Q9 adds this nullable column.
             "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
             "section" => Parent("container", "ContainerId"),
@@ -126,6 +128,7 @@ public static class SyncKinds
     private static SyncWrite WriteFor(string kind, string group) => kind switch
     {
         "space" => SyncWrite.Owner,
+        "space_member" => SyncWrite.Server,
         "diary_entry" when group == "create" => SyncWrite.Commenter,
         "diary_entry" => SyncWrite.Author,
         _ when kind.StartsWith("github_", StringComparison.Ordinal) => SyncWrite.Owner,

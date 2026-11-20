@@ -61,6 +61,7 @@ public sealed class InMemoryStore : IApplicationStore
     {
         public IProfileStore Profiles { get; } = new FakeProfileStore(owner.Profiles);
         public ISpaceStore Spaces { get; } = new FakeSpaceStore(owner.Spaces);
+        public IPeopleStore People => throw new NotSupportedException("This test store does not implement people.");
         public IContainerStore Containers { get; } = new FakeContainerStore(owner.Containers, owner.Tasks);
         public ISectionStore Sections { get; } = new FakeSectionStore(owner.Sections);
         public ISubtaskStore Subtasks { get; } = new FakeSubtaskStore(owner.Subtasks);
@@ -352,6 +353,8 @@ public sealed class FakeSpaceStore(List<SpaceRecord> rows) : ISpaceStore
         rows.Add(space);
         return Task.CompletedTask;
     }
+    public Task<IReadOnlyList<SpaceRecord>> ListAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SpaceRecord>>([.. rows.Where(row => row.DeletedAtUtc is null)]);
 }
 
 public sealed class FakeContainerStore(List<ContainerRecord> rows, List<TaskRecord> tasks) : IContainerStore
