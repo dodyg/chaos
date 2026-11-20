@@ -13,7 +13,20 @@ import {
   type TaskOperationResponse,
   type TaskResponse,
 } from "#neoastra";
-import { Archive, ArchiveRestore, CalendarDays, ChevronRight, Clock, Eye, ListChecks, Search, Settings2, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  CalendarDays,
+  ChevronRight,
+  Clock,
+  Eye,
+  FolderInput,
+  ListChecks,
+  Search,
+  Settings2,
+  Share2,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,6 +105,9 @@ export function ListPage({
   containerApi,
   taskApi,
   tags,
+  readOnly = false,
+  onMoveToSpace,
+  onShareList,
 }: {
   tasks: TaskResponse[];
   deleted: TaskResponse[];
@@ -128,7 +144,14 @@ export function ListPage({
   containerApi: typeof ContainerRpc;
   taskApi: typeof TaskRpc;
   tags: TagResponse[];
+  /** A viewer of a shared space (PLAN3 §9.1): every control that writes is disabled; opening a task to view it still works. */
+  readOnly?: boolean;
+  /** Present for a Personal list or project: opens the Move to space… dialog (§9.2). */
+  onMoveToSpace?: () => void;
+  /** Present for a Personal list or project: opens the Share list… dialog (E7). */
+  onShareList?: () => void;
 }) {
+  const locked = busy || readOnly;
   const [completionFilter, setCompletionFilter] = React.useState<CompletionFilter>("all");
   // A device-local choice per container: switching never changes tasks (PLAN2 §11.1). Kept
   // with its container so a newly selected container never shows the previous one's layout.
@@ -265,7 +288,7 @@ export function ListPage({
     const key = sectionId ?? "";
     return {
       onDragOver: (event: React.DragEvent<HTMLElement>) => {
-        if (busy || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
+        if (locked || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         setSectionDrop(key);
@@ -276,7 +299,7 @@ export function ListPage({
       onDragEnd: () => setSectionDrop(null),
       onDrop: (event: React.DragEvent<HTMLElement>) => {
         setSectionDrop(null);
-        if (event.defaultPrevented || busy || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
+        if (event.defaultPrevented || locked || !containerId || !Array.from(event.dataTransfer.types ?? []).includes(taskDragType)) return;
         const task = tasks.find((item) => item.id === event.dataTransfer.getData(taskDragType));
         if (!task || task.containerId !== containerId || task.sectionId === sectionId) return;
         event.preventDefault();
@@ -356,7 +379,7 @@ export function ListPage({
                 <div
                   className={rowClass(editingId === task.id, task.status)}
                   onDragStart={(event) => event.dataTransfer?.setData?.(taskDragType, task.id)}
-                  {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, busy, (id, insertionIndex) =>
+                  {...drag.target(order, index, `${task.containerId}|${task.sectionId ?? ""}`, locked, (id, insertionIndex) =>
                     move(byId(id), insertionIndex),
                   )}
                 >
@@ -371,13 +394,14 @@ export function ListPage({
                       onChange={() => togglePicked(task.id)}
                     />
                   )}
-                  {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, busy)}
+                  {drag.handle(task.id, `${task.containerId}|${task.sectionId ?? ""}`, locked)}
                   <input
                     type="checkbox"
                     className="size-4 shrink-0 accent-primary"
                     aria-label={`Mark ${task.title} as done`}
                     checked={task.status === "Done"}
-                    disabled={busy}
+                    disabled={locked}
+                    title={readOnly ? "Viewers cannot change tasks" : undefined}
                     onChange={(e) => onSetStatus(task, e.target.checked ? "Done" : "NotStarted")}
                   />
                   <div className="grid min-w-0 flex-1 gap-0.5">
@@ -412,7 +436,7 @@ export function ListPage({
                       variant="ghost"
                       size="icon-sm"
                       className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      disabled={busy}
+                      disabled={locked}
                       aria-label={`Delete ${task.title}`}
                       title="Delete"
                       onClick={() => onDelete(task)}
@@ -431,7 +455,7 @@ export function ListPage({
                   {(isFinished(task.status) ? ["NotStarted"] : statuses.filter((status) => status !== "Done")).map((status) => (
                     <ContextMenu.Item
                       key={status}
-                      disabled={busy || status === task.status}
+                      disabled={locked || status === task.status}
                       className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50"
                       onSelect={() =>
                         void run(
@@ -453,7 +477,7 @@ export function ListPage({
                       {isFinished(task.status) ? "Reopen (previous status)" : label(status)}
                     </ContextMenu.Item>
                   ))}
-                  <CategoryMenuItems category={task.category} busy={busy} onSelect={(category) => onSetCategory(task, category)} />
+                  <CategoryMenuItems category={task.category} busy={locked} onSelect={(category) => onSetCategory(task, category)} />
                 </ContextMenu.Content>
               </ContextMenu.Portal>
             </ContextMenu.Root>
@@ -480,10 +504,23 @@ export function ListPage({
         actions={
           selected && (
             <>
+              {onShareList && (
+                <Button type="button" variant="outline" disabled={busy} onClick={onShareList}>
+                  <Share2 />
+                  Share list…
+                </Button>
+              )}
+              {onMoveToSpace && (
+                <Button type="button" variant="outline" disabled={busy} onClick={onMoveToSpace}>
+                  <FolderInput />
+                  Move to space…
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="outline"
-                disabled={busy}
+                disabled={locked}
+                title={readOnly ? "Viewers cannot archive lists" : undefined}
                 onClick={() => {
                   const request = {
                     operationId: operationId(),
@@ -505,6 +542,8 @@ export function ListPage({
                 variant={showSettings ? "secondary" : "outline"}
                 aria-expanded={showSettings}
                 aria-controls="list-settings"
+                disabled={readOnly}
+                title={readOnly ? "Viewers cannot change list settings" : undefined}
                 onClick={() => setShowSettings((v) => !v)}
               >
                 <Settings2 />
@@ -528,7 +567,7 @@ export function ListPage({
         </div>
       )}
 
-      {selected && showSettings && (
+      {selected && showSettings && !readOnly && (
         <div id="list-settings" className="rounded-xl border bg-muted/50 p-4">
           <ContainerManagement
             container={selected}
@@ -548,17 +587,24 @@ export function ListPage({
         </div>
       )}
 
-      <QuickAdd
-        key={`quick-add:${containerId}`}
-        api={captureApi}
-        containers={containers}
-        defaultContainerId={containerId}
-        label="Add a task"
-        inputRef={quickAddInput}
-        placeholder="Add a task — try “Call Sam tomorrow 3pm #home ~personal”"
-        onSubmit={onCapture}
-      />
-      {newTaskCategory && (
+      {readOnly && (
+        <p role="note" className="rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
+          You are a viewer of this space. You can read everything here; ask an owner for editor access to change tasks.
+        </p>
+      )}
+      {!readOnly && (
+        <QuickAdd
+          key={`quick-add:${containerId}`}
+          api={captureApi}
+          containers={containers}
+          defaultContainerId={containerId}
+          label="Add a task"
+          inputRef={quickAddInput}
+          placeholder="Add a task — try “Call Sam tomorrow 3pm #home ~personal”"
+          onSubmit={onCapture}
+        />
+      )}
+      {newTaskCategory && !readOnly && (
         <p className={cn("-mt-3 inline-flex items-center gap-1 px-1 text-xs [&_svg]:size-3.5", categoryTone[newTaskCategory].text)}>
           {categoryIcon[newTaskCategory]}New tasks here are {newTaskCategory}
           {listDefault ? " (list default)" : " (focus)"}
@@ -573,7 +619,7 @@ export function ListPage({
             variant={selecting ? "secondary" : "outline"}
             size="sm"
             aria-pressed={selecting}
-            disabled={busy}
+            disabled={locked}
             onClick={() => {
               setSelecting((value) => !value);
               setPicked(new Set());
@@ -679,7 +725,7 @@ export function ListPage({
           containerId={containerId}
           tags={tags}
           focus={focus}
-          busy={busy}
+          busy={locked}
           revision={revision}
           onOpen={onOpen}
           onChanged={() => {
@@ -743,7 +789,7 @@ export function ListPage({
             </details>
           )}
 
-          {containerId && (
+          {containerId && !readOnly && (
             <form className="flex gap-2" onSubmit={createSection}>
               <label htmlFor="new-section" className="sr-only">
                 New section

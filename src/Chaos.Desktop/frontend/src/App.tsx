@@ -30,6 +30,8 @@ import {
   viewRpc,
   dataRpc,
   calendarsRpc,
+  spaceRpc,
+  type SpaceResponse,
   type ViewDto,
   type ShellActivationDto,
   type CaptureDraftDto,
@@ -101,6 +103,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { SyncLogo } from "./SyncLogo";
+import {
+  InviteDialog,
+  JoinSpaceDialog,
+  MoveToSpaceDialog,
+  NewSpaceDialog,
+  ShareListDialog,
+  SpaceHome,
+  SpaceSidebarSection,
+  SpacesProvider,
+  accessIn,
+} from "./Sharing";
 import { useActivity } from "./activity";
 import { trackSync } from "./syncActivity";
 import { Banner, Count, DeletedItems, PageHeader, isFinished, label, priorities, statuses } from "@/components/common";
@@ -134,6 +147,7 @@ type Api = {
   summaryRpc?: typeof summaryRpc;
   shellRpc?: typeof shellRpc;
   viewRpc?: typeof viewRpc;
+  spaceRpc?: typeof spaceRpc;
 };
 type View =
   | "tasks"
@@ -150,7 +164,8 @@ type View =
   | "data"
   | "settings"
   | "help"
-  | "viewedit";
+  | "viewedit"
+  | "space";
 
 /** This computer's date (yyyy-MM-dd), used until the profile's day clock has loaded. */
 function localToday(): string {
@@ -172,6 +187,22 @@ function useAutoClear<T>(value: T, set: (empty: T) => void, ms: number, empty: T
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
+}
+
+function ViewAndSpacesProvider({
+  viewTask,
+  spaces,
+  children,
+}: {
+  viewTask: (task: TaskResponse | string) => void;
+  spaces: readonly SpaceResponse[];
+  children: React.ReactNode;
+}) {
+  return (
+    <SpacesProvider spaces={spaces}>
+      <TaskViewContext.Provider value={viewTask}>{children}</TaskViewContext.Provider>
+    </SpacesProvider>
+  );
 }
 
 /** The main window. A fresh launch opens My Day (PLAN §13); tests may start elsewhere. */
@@ -201,6 +232,7 @@ export function App({
   const summaryApi = api.summaryRpc ?? summaryRpc;
   const shellApi = api.shellRpc ?? shellRpc;
   const viewApi = api.viewRpc ?? viewRpc;
+  const spaceApi = api.spaceRpc ?? spaceRpc;
   useAppearanceSync();
   const dayBackground = useDayBackground();
   const dayClock = useDayClock(myDayApi);
@@ -233,6 +265,12 @@ export function App({
   const [containers, setContainers] = React.useState<ContainerResponse[]>([]);
   const [deletedContainers, setDeletedContainers] = React.useState<ContainerResponse[]>([]);
   const [containerId, setContainerId] = React.useState("");
+  const [spaces, setSpaces] = React.useState<SpaceResponse[]>([]);
+  const [spaceLists, setSpaceLists] = React.useState<ReadonlyMap<string, ContainerResponse[]>>(new Map());
+  const [spaceId, setSpaceId] = React.useState("");
+  const [sharingDialog, setSharingDialog] = React.useState<
+    "new" | "join" | { kind: "move" | "share"; list: ContainerResponse } | { kind: "invite"; space: SpaceResponse } | null
+  >(null);
   const [containerName, setContainerName] = React.useState("");
   const [containerKind, setContainerKind] = React.useState("List");
   const [addingContainer, setAddingContainer] = React.useState(false);
@@ -305,6 +343,24 @@ export function App({
     if (!removed.ok) throw new Error(removed.error?.message ?? "Could not load deleted lists.");
     setContainers([...response.containers]);
     setDeletedContainers([...removed.containers]);
+    await refreshSpaces();
+  }
+  /** Shared spaces this computer holds and the lists in each. Failing here (no host, not signed in) leaves Personal as it is. */
+  async function refreshSpaces() {
+    try {
+      const response = await spaceApi.list({});
+      if (!response.ok) return;
+      const shared = response.spaces.filter((space) => space.kind === "Shared");
+      const lists = new Map<string, ContainerResponse[]>();
+      for (const space of shared) {
+        const result = await containerRpc.listForSpace({ spaceId: space.spaceId });
+        if (result.ok) lists.set(space.spaceId, [...result.containers.filter((c) => c.kind !== "Inbox")]);
+      }
+      setSpaces([...response.spaces]);
+      setSpaceLists(lists);
+    } catch {
+      // Sharing is optional: keep what is shown.
+    }
   }
   /** Tags, deleted tags and sidebar counts; counts use the same query as each view (PLAN §10). */
   async function refreshMeta() {
@@ -872,6 +928,12 @@ export function App({
     setView("tasks");
     if (id !== containerId) selectContainer(id);
   }
+  function openSpace(id: string) {
+    setEditing(null);
+    setShowTagSettings(false);
+    setSpaceId(id);
+    setView("space");
+  }
   function openQuery(next: QueryState) {
     setEditing(null);
     setShowTagSettings(false);
@@ -996,7 +1058,11 @@ export function App({
       },
     );
   }
-  const selected = containers.find((c) => c.id === containerId);
+  const sharedListSpace = new Map<string, string>();
+  for (const [id, lists] of spaceLists) for (const list of lists) sharedListSpace.set(list.id, id);
+  const selected = containers.find((c) => c.id === containerId) ?? [...spaceLists.values()].flat().find((c) => c.id === containerId);
+  const selectedAccess = accessIn(spaces, sharedListSpace.get(containerId));
+  const currentSpace = spaces.find((space) => space.spaceId === spaceId);
   const listName = selected?.name ?? "Inbox";
   const userContainers = containers.filter((c) => c.kind !== "Inbox");
   const navItem =
@@ -1514,7 +1580,7 @@ export function App({
 
   return (
     <TodayContext.Provider value={dayClock?.today ?? null}>
-      <TaskViewContext.Provider value={viewTask}>
+      <ViewAndSpacesProvider viewTask={viewTask} spaces={spaces}>
         <div
           className={cn(
             "grid min-h-screen grid-cols-[15.5rem_minmax(0,1fr)] overflow-x-clip pt-[40px]",
@@ -1861,6 +1927,30 @@ export function App({
                 <p className="px-2 py-1 text-muted-foreground">No lists yet. Create one below.</p>
               )}
             </SidebarSection>
+            <section aria-label="Shared spaces" className="grid gap-px">
+              {spaces
+                .filter((space) => space.kind === "Shared")
+                .map((space) => (
+                  <SpaceSidebarSection
+                    key={space.spaceId}
+                    space={space}
+                    lists={spaceLists.get(space.spaceId) ?? []}
+                    activeListId={view === "tasks" ? containerId : null}
+                    homeActive={view === "space" && spaceId === space.spaceId}
+                    onOpenHome={() => openSpace(space.spaceId)}
+                    onOpenList={openContainer}
+                    navItem={navItem}
+                  />
+                ))}
+              <div className="flex flex-wrap gap-1 px-1 pt-2">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSharingDialog("new")}>
+                  New shared space…
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSharingDialog("join")}>
+                  Join with a link…
+                </Button>
+              </div>
+            </section>
             <SidebarSection
               id="tags"
               title="Tags"
@@ -2189,6 +2279,25 @@ export function App({
                     setView(next);
                   }}
                 />
+              ) : view === "space" ? (
+                currentSpace ? (
+                  <SpaceHome
+                    api={spaceApi}
+                    space={currentSpace}
+                    lists={spaceLists.get(currentSpace.spaceId) ?? []}
+                    onOpenList={openContainer}
+                    onChanged={() => void refreshContainers().catch((e: unknown) => setError(String(e)))}
+                    onLeft={() => {
+                      setSpaceId("");
+                      setView("myday");
+                      void refreshContainers().catch((e: unknown) => setError(String(e)));
+                    }}
+                  />
+                ) : (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    That space is no longer on this computer.
+                  </p>
+                )
               ) : view === "help" ? (
                 <Help
                   onNavigate={(next) => {
@@ -2273,8 +2382,19 @@ export function App({
                     isStillSelected={(id) => selectedContainer.current === id}
                     editingId={editing?.id ?? null}
                     setEditing={setEditing}
+                    readOnly={!selectedAccess.canEdit}
+                    onMoveToSpace={
+                      selected && selected.kind !== "Inbox" && !sharedListSpace.has(selected.id)
+                        ? () => setSharingDialog({ kind: "move", list: selected })
+                        : undefined
+                    }
+                    onShareList={
+                      selected && selected.kind !== "Inbox" && !sharedListSpace.has(selected.id)
+                        ? () => setSharingDialog({ kind: "share", list: selected })
+                        : undefined
+                    }
                     onOpen={(task, viewing) => {
-                      setViewingTask(viewing);
+                      setViewingTask(viewing || !selectedAccess.canEdit);
                       setEditing(task);
                     }}
                     onDelete={(task) => void requestTaskDeletion(task)}
@@ -2425,6 +2545,62 @@ export function App({
               </div>
             </div>
           )}
+          {sharingDialog === "new" && (
+            <NewSpaceDialog
+              api={spaceApi}
+              onClose={() => setSharingDialog(null)}
+              onCreated={(space) => {
+                setSharingDialog(null);
+                void refreshSpaces().then(() => openSpace(space.spaceId));
+              }}
+            />
+          )}
+          {sharingDialog === "join" && (
+            <JoinSpaceDialog
+              api={spaceApi}
+              onClose={() => setSharingDialog(null)}
+              onJoined={(space) => {
+                setSharingDialog(null);
+                void refreshSpaces().then(() => openSpace(space.spaceId));
+              }}
+            />
+          )}
+          {sharingDialog && typeof sharingDialog === "object" && sharingDialog.kind === "move" && (
+            <MoveToSpaceDialog
+              api={spaceApi}
+              list={sharingDialog.list}
+              spaces={spaces}
+              onClose={() => setSharingDialog(null)}
+              onMoved={(id) => {
+                setSharingDialog(null);
+                void refreshContainers()
+                  .then(() => {
+                    changed();
+                    openSpace(id);
+                  })
+                  .catch((e: unknown) => setError(String(e)));
+              }}
+            />
+          )}
+          {sharingDialog && typeof sharingDialog === "object" && sharingDialog.kind === "share" && (
+            <ShareListDialog
+              api={spaceApi}
+              list={sharingDialog.list}
+              onClose={() => setSharingDialog(null)}
+              onShared={(id, name) => {
+                void refreshContainers()
+                  .then(() => {
+                    changed();
+                    openSpace(id);
+                    setSharingDialog({ kind: "invite", space: { spaceId: id, name, kind: "Shared", role: 1, memberCount: 1 } });
+                  })
+                  .catch((e: unknown) => setError(String(e)));
+              }}
+            />
+          )}
+          {sharingDialog && typeof sharingDialog === "object" && sharingDialog.kind === "invite" && (
+            <InviteDialog api={spaceApi} space={sharingDialog.space} onClose={() => setSharingDialog(null)} />
+          )}
           <ViewAlertStack
             api={viewApi}
             onOpen={(viewId) => {
@@ -2466,7 +2642,7 @@ export function App({
             </div>
           )}
         </div>
-      </TaskViewContext.Provider>
+      </ViewAndSpacesProvider>
     </TodayContext.Provider>
   );
 }

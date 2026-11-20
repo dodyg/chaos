@@ -14,6 +14,7 @@ import {
   StickyNote,
   Sun,
   Bell,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/common";
@@ -498,6 +499,64 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
           <Go to="settings" onNavigate={onNavigate}>
             Open Settings
           </Go>
+        </>
+      ),
+    },
+    {
+      id: "sharing",
+      title: "Sharing",
+      icon: <Users />,
+      keywords: "share shared space invite member role owner editor viewer leave remove move list team collaborate link email offline",
+      body: (
+        <>
+          <p>
+            Everything is Personal until you share it. Sharing happens per space: a <strong>shared space</strong> holds lists and projects
+            that the people you invite can see and, depending on their role, change. Your Personal lists, My Day, reminders and personal
+            tags are never visible to anyone else.
+          </p>
+          <h3 className="font-semibold">Roles</h3>
+          <ul className="grid list-disc gap-1 pl-5">
+            <li>
+              <strong>Owner</strong>: everything, including inviting people, changing roles, removing people and deleting the space.
+            </li>
+            <li>
+              <strong>Editor</strong>: creates and changes tasks, lists, pages and notes, and adds comments.
+            </li>
+            <li>
+              <strong>Viewer</strong>: reads everything and adds comments. Controls that would change something are turned off, and a note
+              says you are a viewer.
+            </li>
+          </ul>
+          <h3 className="font-semibold">Start sharing</h3>
+          <ul className="grid list-disc gap-1 pl-5">
+            <li>
+              <strong>New shared space…</strong> in the sidebar creates a space. <strong>Share list…</strong> on a Personal list creates a
+              new space named after the list and moves the list into it. <strong>Move to space…</strong> moves a list or project into a
+              space you already belong to.
+            </li>
+            <li>
+              A move takes the list with all its tasks, subtasks, notes, updates and attachments. What stays yours: My Day, reminders and
+              personal tags on those tasks.
+            </li>
+          </ul>
+          <h3 className="font-semibold">Invites</h3>
+          <p>
+            An owner can invite by email or make a link. A link can expire (1, 7 or 30 days, or never) and can be limited to 1 or 10 uses.
+            The link is shown once when you create it, so copy it then; open invitations can be turned off at any time. The person opens the
+            link in a browser, signs in, and joins. On a computer that already has Chaos, choose <strong>Join with a link…</strong> and
+            paste it.
+          </p>
+          <h3 className="font-semibold">Leaving and removal</h3>
+          <p>
+            Anyone can leave a space from its Members tab, except the last owner. When you leave or are removed, the space’s lists leave
+            this computer, and your My Day entries and reminders for its tasks are cleared. Unsent changes are counted in a notice so
+            nothing vanishes silently. What you wrote stays in the space under your name.
+          </p>
+          <h3 className="font-semibold">Offline</h3>
+          <p>
+            Creating a space, inviting, joining, leaving and moving need a connection; Chaos says “Connect to …” when it cannot reach the
+            service. Editing a shared list offline works like editing a Personal one, and your changes merge when the connection returns.
+          </p>
         </>
       ),
     },

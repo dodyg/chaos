@@ -72,6 +72,8 @@ const containers: ContainerResponse[] = [
   { id: "chaos", name: "Chaos", kind: "Project", version: "1", archived: false, deadlineDate: null, defaultCategory: "Work" },
   { id: "social", name: "Social", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: "Personal" },
   { id: "home", name: "Home", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null },
+  { id: "roadmap", name: "Roadmap", kind: "Project", version: "1", archived: false, deadlineDate: null, defaultCategory: "Work" },
+  { id: "bins", name: "Bin days", kind: "List", version: "1", archived: false, deadlineDate: null, defaultCategory: null },
 ];
 const sections = new Map<string, SectionResponse[]>([["sprint", [{ id: "s-review", title: "In review", version: "1" }]]]);
 const tags: TagResponse[] = [
@@ -132,6 +134,56 @@ const tasks: TaskResponse[] = [
   task("task-8", "Write release notes", { containerId: "chaos", category: "Work", status: "Done" }),
 ];
 const deletedTasks: TaskResponse[] = [];
+
+/** Two shared spaces for the preview (PLAN3 Q5): one the sample person owns, one where they are only a viewer. */
+type PreviewSpace = { spaceId: string; name: string; kind: "Personal" | "Shared"; role: number | null };
+type PreviewMember = { memberId: string; name: string; role: number; kind: number; joinedAt: string; isMe: boolean };
+type PreviewInvite = {
+  id: string;
+  email: string | null;
+  role: number;
+  createdAt: string;
+  expiresAt: string | null;
+  maxUses: number | null;
+  uses: number;
+  revoked: boolean;
+};
+/** Which space a list lives in; a list not named here is Personal. */
+const containerSpace = new Map<string, string>([
+  ["roadmap", "11111111-1111-4111-8111-111111111111"],
+  ["bins", "22222222-2222-4222-8222-222222222222"],
+]);
+const designSpace = "11111111-1111-4111-8111-111111111111";
+const viewerSpace = "22222222-2222-4222-8222-222222222222";
+const spaces: PreviewSpace[] = [
+  { spaceId: "personal", name: "Personal", kind: "Personal", role: null },
+  { spaceId: designSpace, name: "Design team", kind: "Shared", role: 1 },
+  { spaceId: viewerSpace, name: "Neighbourhood association", kind: "Shared", role: 3 },
+];
+const spaceMembers = new Map<string, PreviewMember[]>([
+  [
+    designSpace,
+    [
+      { memberId: "m-me", name: "You", role: 1, kind: 1, joinedAt: "2026-05-01T09:00:00Z", isMe: true },
+      { memberId: "m-ana", name: "Ana Lopez", role: 2, kind: 1, joinedAt: "2026-05-02T09:00:00Z", isMe: false },
+      { memberId: "m-bo", name: "Bo Chen", role: 3, kind: 1, joinedAt: "2026-05-09T09:00:00Z", isMe: false },
+    ],
+  ],
+  [
+    viewerSpace,
+    [
+      { memberId: "m-me2", name: "You", role: 3, kind: 1, joinedAt: "2026-06-01T09:00:00Z", isMe: true },
+      { memberId: "m-cy", name: "Cy Okafor", role: 1, kind: 1, joinedAt: "2026-05-20T09:00:00Z", isMe: false },
+    ],
+  ],
+]);
+tasks.push(
+  task("shared-1", "Review the new navigation", { containerId: "roadmap", spaceId: designSpace, category: "Work" }),
+  task("shared-2", "Write the icon guidelines", { containerId: "roadmap", spaceId: designSpace, category: "Work" }),
+  task("shared-3", "Put the green bin out on Thursday", { containerId: "bins", spaceId: viewerSpace }),
+);
+const spaceInvites = new Map<string, PreviewInvite[]>([[designSpace, []]]);
+
 // Board settings per container (PLAN2 P2): version 0 means "defaults, no row yet".
 type PreviewBoardSettings = {
   groupBy: string;
@@ -1743,7 +1795,11 @@ const handlers: Record<string, Handler> = {
     return ok({ operationId: newId("op"), task: restored, warning: null });
   },
 
-  "containers.list": () => ok({ containers }),
+  "containers.list": () => ok({ containers: containers.filter((c) => !containerSpace.has(c.id)) }),
+  "containers.listForSpace": (r: { spaceId: string }) =>
+    ok({
+      containers: containers.filter((c) => (r.spaceId === "personal" ? !containerSpace.has(c.id) : containerSpace.get(c.id) === r.spaceId)),
+    }),
   "containers.listDeleted": () => ok({ containers: [] }),
   "containers.tasks": (r: { containerId: string }) => ok({ tasks: tasks.filter((t) => t.containerId === r.containerId) }),
   "containers.sections": (r: { containerId: string }) => ok({ sections: sections.get(r.containerId) ?? [] }),
@@ -1894,6 +1950,112 @@ const handlers: Record<string, Handler> = {
 
   "tags.list": () => ok({ tags }),
   "people.list": () => ok({ people: [] }),
+  "spaces.list": () =>
+    ok({
+      spaces: spaces.map((space) => ({
+        ...space,
+        memberCount: space.kind === "Personal" ? 1 : (spaceMembers.get(space.spaceId)?.length ?? 1),
+      })),
+    }),
+  "spaces.create": (r: { name: string }) => {
+    const name = r.name.trim();
+    if (!name) return fail("Give the space a name of 1 to 100 characters.");
+    const space: PreviewSpace = { spaceId: crypto.randomUUID(), name, kind: "Shared", role: 1 };
+    spaces.push(space);
+    spaceMembers.set(space.spaceId, [{ memberId: "m-me-" + space.spaceId, name: "You", role: 1, kind: 1, joinedAt: now(), isMe: true }]);
+    spaceInvites.set(space.spaceId, []);
+    return ok({ space: { ...space, memberCount: 1 } });
+  },
+  "spaces.join": (r: { link: string }) => {
+    if (!r.link.includes("/invite/")) return fail("Paste the whole invitation link.");
+    const space: PreviewSpace = { spaceId: crypto.randomUUID(), name: "Joined space", kind: "Shared", role: 2 };
+    spaces.push(space);
+    spaceMembers.set(space.spaceId, [{ memberId: "m-me-" + space.spaceId, name: "You", role: 2, kind: 1, joinedAt: now(), isMe: true }]);
+    return ok({ space: { ...space, memberCount: 1 } });
+  },
+  "spaces.leave": (r: { spaceId: string }) => {
+    const index = spaces.findIndex((s) => s.spaceId === r.spaceId);
+    if (index > 0) spaces.splice(index, 1);
+    return ok({});
+  },
+  "spaces.delete": (r: { spaceId: string; typedName: string }) => {
+    const index = spaces.findIndex((s) => s.spaceId === r.spaceId);
+    if (index < 1) return fail("That shared space is not on this computer.");
+    if (spaces[index].name !== r.typedName.trim()) return fail("Type the name of the space exactly to delete it.");
+    spaces.splice(index, 1);
+    return ok({});
+  },
+  "spaces.restore": () => ok({}),
+  "spaces.move": (r: { containerId: string; spaceId: string }) => {
+    const list = containers.find((c) => c.id === r.containerId);
+    if (!list) return fail("That list does not exist.");
+    containerSpace.set(list.id, r.spaceId);
+    const moved = tasks.filter((t) => t.containerId === list.id);
+    moved.forEach((t) => Object.assign(t, { spaceId: r.spaceId }));
+    return ok({ spaceId: r.spaceId, entityCount: 1 + moved.length });
+  },
+  "spaces.shareList": (r: { containerId: string; name: string }) => {
+    const list = containers.find((c) => c.id === r.containerId);
+    if (!list) return fail("That list does not exist.");
+    const space: PreviewSpace = { spaceId: crypto.randomUUID(), name: r.name.trim() || list.name, kind: "Shared", role: 1 };
+    spaces.push(space);
+    spaceMembers.set(space.spaceId, [{ memberId: "m-me-" + space.spaceId, name: "You", role: 1, kind: 1, joinedAt: now(), isMe: true }]);
+    spaceInvites.set(space.spaceId, []);
+    containerSpace.set(list.id, space.spaceId);
+    const moved = tasks.filter((t) => t.containerId === list.id);
+    moved.forEach((t) => Object.assign(t, { spaceId: space.spaceId }));
+    return ok({ spaceId: space.spaceId, entityCount: 1 + moved.length });
+  },
+  "spaces.members": (r: { spaceId: string }) => ok({ members: spaceMembers.get(r.spaceId) ?? [] }),
+  "spaces.changeRole": (r: { spaceId: string; memberId: string; role: number }) => {
+    const members = spaceMembers.get(r.spaceId) ?? [];
+    const member = members.find((m) => m.memberId === r.memberId);
+    if (!member) return fail("That person is not in this space.");
+    if (member.role === 1 && r.role !== 1 && members.filter((m) => m.role === 1).length === 1) {
+      return fail("A space needs at least one owner.");
+    }
+    member.role = r.role;
+    if (member.isMe) {
+      const space = spaces.find((s) => s.spaceId === r.spaceId);
+      if (space) space.role = r.role;
+    }
+    return ok({});
+  },
+  "spaces.removeMember": (r: { spaceId: string; memberId: string }) => {
+    const members = spaceMembers.get(r.spaceId) ?? [];
+    const member = members.find((m) => m.memberId === r.memberId);
+    if (member?.role === 1 && members.filter((m) => m.role === 1).length === 1) return fail("A space needs at least one owner.");
+    spaceMembers.set(
+      r.spaceId,
+      members.filter((m) => m.memberId !== r.memberId),
+    );
+    return ok({});
+  },
+  "spaces.setMyName": (r: { spaceId: string; displayName: string }) => {
+    const me = (spaceMembers.get(r.spaceId) ?? []).find((m) => m.isMe);
+    if (me) me.name = r.displayName.trim();
+    return ok({});
+  },
+  "spaces.invites": (r: { spaceId: string }) => ok({ invites: (spaceInvites.get(r.spaceId) ?? []).filter((i) => !i.revoked) }),
+  "spaces.invite": (r: { spaceId: string; email: string | null; role: number; expiresInDays: number | null; maxUses: number | null }) => {
+    const invite: PreviewInvite = {
+      id: crypto.randomUUID(),
+      email: r.email,
+      role: r.role,
+      createdAt: now(),
+      expiresAt: r.expiresInDays ? new Date(Date.now() + r.expiresInDays * 86400000).toISOString() : null,
+      maxUses: r.email ? 1 : r.maxUses,
+      uses: 0,
+      revoked: false,
+    };
+    spaceInvites.set(r.spaceId, [...(spaceInvites.get(r.spaceId) ?? []), invite]);
+    return ok({ invite, link: r.email ? null : `https://chaos.example/invite/${crypto.randomUUID().replaceAll("-", "")}` });
+  },
+  "spaces.revokeInvite": (r: { spaceId: string; inviteId: string }) => {
+    const invite = (spaceInvites.get(r.spaceId) ?? []).find((i) => i.id === r.inviteId);
+    if (invite) invite.revoked = true;
+    return ok({});
+  },
   "people.get": (r: { actorId: string }) =>
     ok({
       person: {

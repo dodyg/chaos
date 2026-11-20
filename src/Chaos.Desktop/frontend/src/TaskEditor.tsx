@@ -77,6 +77,7 @@ import { useDragReorder } from "./dragReorder";
 import { rowClass } from "./taskRow";
 import { useAutosave } from "./autosave";
 import type { PadFocus } from "./ScratchPad";
+import { useSpaceRole } from "./Sharing";
 
 const operationId = () => crypto.randomUUID();
 export type TaskEditorApi = {
@@ -100,7 +101,7 @@ export type TaskEditorApi = {
 export function TaskEditor({
   editing,
   setEditing,
-  viewingTask,
+  viewingTask: viewingRequested,
   setViewingTask,
   busy,
   setBusy,
@@ -155,6 +156,9 @@ export function TaskEditor({
   openPage?: (request: PageRequest) => void;
 }) {
   const { taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
+  // A viewer of a shared space only ever gets the read-only view (PLAN3 §9.1).
+  const canEdit = useSpaceRole(editing.spaceId).canEdit;
+  const viewingTask = viewingRequested || !canEdit;
   const drag = useDragReorder();
   const today = useToday();
   const nextMonday = addDays(today, (8 - new Date(`${today}T00:00:00Z`).getUTCDay()) % 7 || 7);
@@ -620,9 +624,15 @@ export function TaskEditor({
               </ol>
             </section>
           )}
-          <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>
-            Edit task
-          </Button>
+          {canEdit ? (
+            <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>
+              Edit task
+            </Button>
+          ) : (
+            <p role="note" className="mt-6 text-sm text-muted-foreground">
+              You are a viewer of this space, so this task is read-only.
+            </p>
+          )}
         </div>
       ) : (
         <>

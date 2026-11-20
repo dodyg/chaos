@@ -9,6 +9,7 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record ContainerListRequest();
+public sealed record ContainerSpaceRequest(string SpaceId);
 public sealed record ContainerResponse(string Id, string Name, string Kind, string Version, bool Archived, string? DeadlineDate, string? DefaultCategory = null);
 public sealed record ContainerListResponse(bool Ok, IReadOnlyList<ContainerResponse> Containers, TaskErrorResponse? Error);
 public sealed record ContainerCreateRequest(string OperationId, string Name, string Kind);
@@ -33,6 +34,11 @@ public sealed class ContainerRpcService(ContainerCommands containers, TaskComman
     [NeoRpcMethod("list")]
     public ValueTask<ContainerListResponse> ListAsync(ContainerListRequest request, CancellationToken ct) =>
         Rpc.Run<ContainerListResponse>("containers.list", async () => { return new(true, [.. (await containers.ListPersonalAsync(ct)).Select(Map)], null); },
+            error => new(false, [], error));
+    /// <summary>The lists and projects of one space, shared or Personal (the sidebar's section for that space).</summary>
+    [NeoRpcMethod("listForSpace")]
+    public ValueTask<ContainerListResponse> ListForSpaceAsync(ContainerSpaceRequest request, CancellationToken ct) =>
+        Rpc.Run<ContainerListResponse>("containers.listForSpace", async () => { return new(true, [.. (await containers.ListAsync(request.SpaceId, ct)).Select(Map)], null); },
             error => new(false, [], error));
     [NeoRpcMethod("listDeleted")]
     public ValueTask<ContainerListResponse> ListDeletedAsync(ContainerListRequest request, CancellationToken ct) =>
