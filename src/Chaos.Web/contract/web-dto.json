@@ -3,6 +3,10 @@
     "background": "string?",
     "theme": "string?"
   },
+  "WebAttachment": {
+    "mediaType": "string",
+    "sha256": "string"
+  },
   "WebCaptureRequest": {
     "listId": "guid?",
     "plannedDate": "date?",
