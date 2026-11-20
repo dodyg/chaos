@@ -1111,3 +1111,11 @@ plan provides one, and each blocking package stays unticked until the owner conf
 
 - S005 keeps the existing sync rows and keys by renaming their database `AccountId` column to `StreamId`, and copies each account's sequence and pruning horizon into a stream whose ID is the account ID. New accounts create their stream in the same save. The existing EF row property remains named `AccountId` for Q2's unchanged account-only callers and tests; it maps to the `StreamId` column and must be renamed when Q3 adds space streams.
 - Q2 routes every accepted change to the account stream and retains the existing Personal-space ownership check. Account rows remain locked as well as stream rows to preserve synchronization with account deletion and calendar cache writes. Blobs remain account-keyed until Q6.
+
+## 2026-11-20 (PLAN3 Q3 spaces on the server)
+
+- S006 adds a `MembershipVersion` counter to `Accounts` as the monotonic account-level version used by `/v2/streams` and membership SSE events. Canonical profile IDs are unique while non-null; a second account cannot bind an already-owned actor identity and an invite never reassigns an existing member row to another account.
+- `Chaos.Sync.SyncKinds.All` remains the client-catalog contract. Q3 adds the server-only `space_member` kind and the schema-4 `space` groups through the server's supplemental catalog, so Q3 can generate and serve membership data without declaring the Q4 client schema available.
+- PLAN3 E8 values are server configuration under `Sharing`: 50 people and 10 agents per space, 100 owned spaces per account, 50 open invites per space, 20 invite emails per account per day, and 20 invite accepts per hour per account and per IP.
+- Account deletion now scrubs every shared-space member row for that account, including rows already removed: the display name becomes “Former member” and the GitHub login is cleared. A member row keeps its actor and removed timestamp while `AccountId` becomes null. A last owner with other members must transfer ownership; a space with no peers is deleted with the account.
+- When an account has no display name, invitations and member rows use the neutral text “A member”; the person's email is never exposed to another member or placed in an invite body as a fallback.

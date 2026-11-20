@@ -42,6 +42,19 @@ public sealed class LimitsOptions
     public int RequestsPerMinutePerDevice { get; set; } = 600;
 }
 
+/// <summary>Sharing limits from PLAN3 E8. Hosts may lower or raise them without changing the permission rules.</summary>
+public sealed class SharingOptions
+{
+    public const string Section = "Sharing";
+    public int MaxPeoplePerSpace { get; set; } = 50;
+    public int MaxAgentsPerSpace { get; set; } = 10;
+    public int MaxSpacesPerAccount { get; set; } = 100;
+    public int MaxOpenInvitesPerSpace { get; set; } = 50;
+    public int MaxInviteEmailsPerAccountPerDay { get; set; } = 20;
+    public int InviteAcceptsPerAccountPerHour { get; set; } = 20;
+    public int InviteAcceptsPerIpPerHour { get; set; } = 20;
+}
+
 /// <summary>
 /// Token signing and encryption keys. Outside development both certificates must be configured
 /// (<c>Auth:SigningCertificatePath</c>, <c>Auth:EncryptionCertificatePath</c> and passwords); development

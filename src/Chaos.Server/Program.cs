@@ -108,6 +108,7 @@ app.UseAntiforgery();
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapServiceEndpoints();
+app.MapInvitePages();
 app.MapWebSessionEndpoints().MapWebReads().MapWebWrites();
 
 await app.RunAsync();

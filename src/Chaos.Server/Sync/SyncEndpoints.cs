@@ -27,6 +27,17 @@ public static class SyncEndpoints
         services.AddScoped<CalendarCacheService>();
         services.AddHostedService<SyncHorizonService>();
         services.AddHostedService<SyncNotificationListener>();
+        services.AddOptions<SharingOptions>().Bind(configuration.GetSection(SharingOptions.Section))
+            .Validate(o => o.MaxPeoplePerSpace > 0 && o.MaxAgentsPerSpace > 0 && o.MaxSpacesPerAccount > 0
+                && o.MaxOpenInvitesPerSpace > 0 && o.MaxInviteEmailsPerAccountPerDay > 0
+                && o.InviteAcceptsPerAccountPerHour > 0 && o.InviteAcceptsPerIpPerHour > 0,
+                "Sharing limits must be greater than zero.")
+            .ValidateOnStart();
+        services.AddSingleton<SpaceMembershipCache>();
+        services.AddScoped<ServerChangeWriter>();
+        services.AddSingleton<InviteAcceptanceLimiter>();
+        services.AddScoped<SpaceService>();
+        services.AddHostedService<SpacePurgeService>();
         return services;
     }
 
@@ -40,10 +51,26 @@ public static class SyncEndpoints
         sync.MapGet("/events", SyncEvents.StreamAsync);
     }
 
+    public static void MapV2SyncEndpoints(this RouteGroupBuilder v2)
+    {
+        v2.MapGet("/streams", Streams);
+        var sync = v2.MapGroup("/sync");
+        sync.MapPost("/push", PushV2);
+        sync.MapGet("/pull", PullV2);
+        sync.MapGet("/snapshot", SnapshotV2);
+        sync.MapGet("/events", SyncEvents.StreamV2Async);
+    }
+
     internal sealed record Caller(Guid AccountId, Guid DeviceId, int Schema);
 
     /// <summary>Checks the three protocol headers (§7.12) and the token; a failure is the answer to send.</summary>
     internal static IResult? Identify(HttpContext http, ClaimsPrincipal user, out Caller caller)
+        => Identify(http, user, SyncProtocol.Version1, out caller);
+
+    internal static IResult? IdentifyV2(HttpContext http, ClaimsPrincipal user, out Caller caller)
+        => Identify(http, user, SyncProtocol.Version2, out caller);
+
+    private static IResult? Identify(HttpContext http, ClaimsPrincipal user, int protocolVersion, out Caller caller)
     {
         caller = new Caller(Guid.Empty, Guid.Empty, 0);
         if (CallerIdentity.TryGet(user) is not (Guid account, Guid device))
@@ -51,7 +78,7 @@ public static class SyncEndpoints
             return Results.Unauthorized();
         }
 
-        if (!int.TryParse(http.Request.Headers[SyncProtocol.ProtocolHeader], out var protocol) || protocol != SyncProtocol.Version)
+        if (!int.TryParse(http.Request.Headers[SyncProtocol.ProtocolHeader], out var protocol) || protocol != protocolVersion)
         {
             return ApiErrors.Problem("protocol-unsupported", "This version of Chaos speaks a sync protocol the service does not.", StatusCodes.Status400BadRequest);
         }
@@ -70,6 +97,33 @@ public static class SyncEndpoints
         return null;
     }
 
+    private static Task<IResult> Streams(HttpContext http, ClaimsPrincipal user, ChaosDbContext db, SyncService sync,
+        SpaceMembershipCache memberships, CancellationToken ct)
+    {
+        if (IdentifyV2(http, user, out var caller) is { } refusal)
+        {
+            return Task.FromResult(refusal);
+        }
+
+        return StreamsAsync();
+        async Task<IResult> StreamsAsync()
+        {
+            var version = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId)
+                .Select(a => a.MembershipVersion).FirstAsync(ct);
+            var rows = await sync.StreamsAsync(caller.AccountId, ct);
+            memberships.Invalidate(caller.AccountId);
+            return Results.Ok(new
+            {
+                membershipVersion = version,
+                streams = rows.Select(row => new
+                {
+                    id = row.Id, kind = row.Kind, spaceId = row.SpaceId, role = row.Role,
+                    head = row.Head, pruned = row.Pruned,
+                }),
+            });
+        }
+    }
+
     private static async Task<IResult> UploadCalendarCache(HttpContext http, ClaimsPrincipal user, CalendarCacheSnapshot cache,
         CalendarCacheService service, CancellationToken ct)
     {
@@ -85,8 +139,17 @@ public static class SyncEndpoints
     }
 
     private static async Task<IResult> Push(HttpContext http, ClaimsPrincipal user, SyncService sync, CancellationToken ct)
+        => await PushVersionAsync(http, user, sync, SyncProtocol.Version1, ct);
+
+    private static async Task<IResult> PushV2(HttpContext http, ClaimsPrincipal user, SyncService sync, CancellationToken ct)
+        => await PushVersionAsync(http, user, sync, SyncProtocol.Version2, ct);
+
+    private static async Task<IResult> PushVersionAsync(HttpContext http, ClaimsPrincipal user, SyncService sync, int protocolVersion,
+        CancellationToken ct)
     {
-        if (Identify(http, user, out var caller) is { } refusal)
+        if ((protocolVersion == SyncProtocol.Version2
+                ? IdentifyV2(http, user, out var caller)
+                : Identify(http, user, out caller)) is { } refusal)
         {
             return refusal;
         }
@@ -123,7 +186,7 @@ public static class SyncEndpoints
         PushOutcome outcome;
         try
         {
-            outcome = await sync.PushAsync(caller.AccountId, caller.DeviceId, caller.Schema, changes, ct);
+            outcome = await sync.PushAsync(caller.AccountId, caller.DeviceId, caller.Schema, protocolVersion, changes, ct);
         }
         catch (AccountUnavailableException)
         {
@@ -132,7 +195,9 @@ public static class SyncEndpoints
 
         return Results.Ok(new
         {
-            accepted = outcome.Accepted,
+            accepted = protocolVersion == SyncProtocol.Version1
+                ? (object)outcome.Accepted
+                : outcome.Accepted.Select(id => new { changeId = id, stream = outcome.Streams!.GetValueOrDefault(id) }).ToArray(),
             rejected = outcome.Rejected.Select(r => new { changeId = r.ChangeId, reason = r.Reason }),
             serverHlc = outcome.ServerHlc,
         });
@@ -160,6 +225,42 @@ public static class SyncEndpoints
         return page is null
             ? ApiErrors.Problem("unknown-kind", "The snapshot needs a known kind.", StatusCodes.Status400BadRequest)
             : Results.Content(page.Json, "application/json", Encoding.UTF8);
+    }
+
+    private static async Task<IResult> PullV2(HttpContext http, ClaimsPrincipal user, SyncService sync, Guid? stream, long? after,
+        int? limit, CancellationToken ct)
+    {
+        if (IdentifyV2(http, user, out var caller) is { } refusal) return refusal;
+        if (stream is null) return ApiErrors.Problem("invalid-stream", "The stream is required.", StatusCodes.Status400BadRequest);
+        try
+        {
+            var page = await sync.PullAsync(caller.AccountId, stream.Value, caller.Schema, Math.Max(after ?? 0, 0),
+                limit ?? SyncProtocol.MaxPullChanges, ct);
+            return Results.Content(page.Json, "application/json", Encoding.UTF8);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ApiErrors.Problem(SyncRejection.NotMember, "You are not a member of this space.", StatusCodes.Status403Forbidden);
+        }
+    }
+
+    private static async Task<IResult> SnapshotV2(HttpContext http, ClaimsPrincipal user, SyncService sync, Guid? stream,
+        string? kind, string? after, int? limit, CancellationToken ct)
+    {
+        if (IdentifyV2(http, user, out var caller) is { } refusal) return refusal;
+        if (stream is null) return ApiErrors.Problem("invalid-stream", "The stream is required.", StatusCodes.Status400BadRequest);
+        try
+        {
+            var page = kind is null ? null : await sync.SnapshotAsync(caller.AccountId, stream.Value, caller.Schema, kind, after,
+                limit ?? SyncProtocol.MaxPullChanges, ct);
+            return page is null
+                ? ApiErrors.Problem("unknown-kind", "The snapshot needs a known kind.", StatusCodes.Status400BadRequest)
+                : Results.Content(page.Json, "application/json", Encoding.UTF8);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return ApiErrors.Problem(SyncRejection.NotMember, "You are not a member of this space.", StatusCodes.Status403Forbidden);
+        }
     }
 }
 

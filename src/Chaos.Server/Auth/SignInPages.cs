@@ -79,6 +79,26 @@ internal static class SignInPages
     public static IResult MessagePage(string title, string message, int status = 200) =>
         Render(title, $"<h1>{Encode(title)}</h1><p role=\"status\">{Encode(message)}</p>", status);
 
+    public static IResult InviteLanding(string returnUrl)
+    {
+        var body = "<h1>A Chaos invitation</h1><p>Sign in to see which space invited you.</p>"
+            + $"<a class=\"provider\" href=\"/signin?ReturnUrl={Uri.EscapeDataString(returnUrl)}\">Sign in</a>";
+        return Render("Chaos invitation", body, 200);
+    }
+
+    public static IResult InviteJoin(HttpContext http, Guid accountId, string token, string spaceName, string inviter)
+    {
+        var body = new StringBuilder();
+        body.Append($"<h1>Join {Encode(spaceName)}</h1>");
+        body.Append($"<p>{Encode(inviter)} invited you to this Chaos space.</p>");
+        body.Append($"<form method=\"post\" action=\"/invite/{Encode(token)}\">");
+        var antiforgery = http.RequestServices.GetRequiredService<Microsoft.AspNetCore.Antiforgery.IAntiforgery>();
+        var tokens = antiforgery.GetAndStoreTokens(http);
+        body.Append($"<input type=\"hidden\" name=\"{Encode(tokens.FormFieldName)}\" value=\"{Encode(tokens.RequestToken ?? string.Empty)}\">");
+        body.Append("<button class=\"primary\" type=\"submit\">Join space</button></form>");
+        return Render("Join " + spaceName, body.ToString(), 200);
+    }
+
     private static void AppendHidden(StringBuilder body, HttpContext http, IAntiforgery antiforgery, string? returnUrl)
     {
         var tokens = antiforgery.GetAndStoreTokens(http);

@@ -30,6 +30,12 @@ public static class SyncRejection
     public const string SchemaTooOld = "schema-too-old";
     public const string NotOwner = "not-owner";
     public const string Invalid = "invalid";
+    public const string NotMember = "not-member";
+    public const string Forbidden = "forbidden";
+    public const string ServerOnly = "server-only";
+    public const string ParentUnknown = "parent-unknown";
+    public const string Moved = "moved";
+    public const string RateLimited = "rate-limited";
 
     /// <summary>The entity was purged: a late edit to it has nothing to apply to (PLAN2 §8.3 step 6).</summary>
     public const string Purged = "purged";

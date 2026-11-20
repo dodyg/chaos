@@ -1420,10 +1420,31 @@ The final `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PROCES
 
 **Exit:** the service behaves exactly as before on top of streams, and the P13 and P15 end-to-end suites pass.
 
-### [ ] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
+### [x] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
 
 **Depends on:** Q2. **Server migration:** `S006_Spaces` (`SpaceMembers`, `SpaceInvites`, audit kinds).
 **Read:** 7, 8 (all), E7, E8, E10.
+
+**Progress note 2026-11-20.** Implemented S006 (`SpaceMembers`, `SpaceInvites`, audit kinds, `moved`,
+membership versions and canonical-profile uniqueness) and reviewed its S005-to-S006 SQL. Protocol v2 now
+lists streams, routes pushes through parent/space/tag metadata, checks every group and purge against the
+member's role, exposes per-stream pull/snapshot/events, and keeps v1 account-only with `schema-too-old` for
+shared-stream writes. Added fixed-device server HLC writes for spaces, members and PWA writes; server replay
+handling; stream and membership fan-out through PostgreSQL NOTIFY; invite email/link/page flows, limits,
+revocation, acceptance and account/IP throttling; closure moves; overlay tombstones; 30-day purge; and the
+E10 account-deletion rules. A live wslc Mailpit smoke check received an invite-shaped SMTP message.
+
+**Q3 evidence 2026-11-20.** The dedicated two-account/raw-client suite passed 13/13 on PostgreSQL 18.7
+through wslc. It covers the 8.4 owner/editor/viewer/non-member actions, every v2 rejection reason, replayed
+purges, profile-ID uniqueness, invite page/privacy/email/expiry/use/revoke/rate paths, role and last-owner
+rules, move closure/idempotency/personal overlays/Inbox refusal, removal tombstones, delete/restore/purge,
+account deletion and former-member scrubbing, and membership plus stream events within 3 seconds. The full
+server suite passed 159/160; the only failure is the owner's documented `web-dto.json` snapshot exception.
+The combined gate's solution run reported 1390/1392: the same snapshot plus the pre-existing GitHub scheduler
+timeout. Its direct fallback passed Domain 273, Application 116, Infrastructure 715, Sync 30 and Desktop 98;
+direct server was 159/160, again only the waived snapshot. A separate strict Slopwatch run reported 0 issues.
+Desktop frontend passed 293/293; web passed 16/16; web lint exited 0 with the one existing
+`react-hooks/exhaustive-deps` warning. Smallest next action: Q4, the client schema-38 sharing engine.
 
 1. **Endpoints:**
    - `/v2/streams`
