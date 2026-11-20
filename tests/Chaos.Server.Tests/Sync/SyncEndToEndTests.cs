@@ -94,7 +94,6 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         await RetitleAsync(a, task.Id, title: "A's title");
         await RetitleAsync(b, task.Id, notes: "B's notes");
         await world.SettleAsync();
-
         foreach (var device in new[] { a, b })
         {
             await Assert.That(await device.TextAsync($"SELECT Title FROM Tasks WHERE Id = '{task.Id}';")).IsEqualTo("A's title");
@@ -315,7 +314,6 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         var a = await world.AddDeviceAsync();
         var task = await CaptureAsync(a, "Written by an old client");
         await world.SettleAsync();
-
         // A newer client sets notes.
         var hlc = Hlc.Create(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, 0, Guid.NewGuid()).Encode();
         var notesChange = "{\"changes\":[{\"changeId\":\"" + Guid.NewGuid() + "\",\"kind\":\"task\",\"key\":\"" + task.Id + "\",\"op\":\"upsert\",\"groups\":{\"notes\":{\"hlc\":\"" + hlc + "\",\"values\":{\"Notes\":\"from a newer client\"}}}}]}";

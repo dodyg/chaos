@@ -19,7 +19,7 @@ internal enum WebTaskAction
     RemoveFromMyDay,
 }
 
-internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncService sync, TimeProvider time)
+internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncService sync, ServerChangeWriter changes, TimeProvider time)
 {
     public Task<IResult> CaptureAsync(WebCaller caller, WebCaptureRequest request, CancellationToken ct)
     {
@@ -41,7 +41,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             {
                 var entity = new WebEntity(existing);
                 return existing.PurgedAt is null && !entity.IsDeleted &&
-                    entity.Groups.GetValueOrDefault("create")?.Hlc.DeviceId == Hlc.ToDevice(caller.DeviceId)
+                    await db.SyncChanges.AnyAsync(row => row.AccountId == account.Id && row.ChangeId == Guid.Parse(changeId), token)
                     ? new PreparedPush([])
                     : Refuse("task-id-in-use");
             }
@@ -60,7 +60,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             var lastPosition = tasks.Select(task => task.Position).DefaultIfEmpty(-1024).Max();
             var position = lastPosition <= long.MaxValue - 1024 ? Math.Max(0, lastPosition + 1024) : lastPosition;
             var now = time.GetUtcNow();
-            var hlc = new HybridClock(caller.DeviceId, time).TickLocal();
+            var hlc = await changes.NextHlcAsync(account.Id, "task", key, token);
             return Change(changeId, id, new Dictionary<string, SyncGroupState>
             {
                 ["create"] = Group(hlc, ("SpaceId", space.ToString("D")), ("CreatedAtUtc", Instant(now)), ("RecurrenceOccurrenceKey", null)),
@@ -107,14 +107,13 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             }
 
             var now = time.GetUtcNow();
-            var clock = new HybridClock(caller.DeviceId, time);
+            var clock = new HybridClock(ServerChangeWriter.DeviceId, time);
             if (action is WebTaskAction.AddToMyDay or WebTaskAction.RemoveFromMyDay)
             {
                 return await ChangeMyDayAsync(account, id, action == WebTaskAction.AddToMyDay, clock, now, token);
             }
 
-            var last = entity.Groups.Values.MaxBy(group => group.Hlc)!.Hlc;
-            var hlc = clock.Receive(last).Clock;
+            var hlc = await changes.NextHlcAsync(account.Id, "task", id.ToString("D"), token);
             if (hlc.WallMillis > Hlc.MaxWallMillis)
             {
                 return Refuse("clock-limit");

@@ -39,7 +39,8 @@ public sealed class StreamMigrationTests(PostgresServer postgres)
         }
 
         await migrator.MigrateAsync();
-        var service = new SyncService(db, TimeProvider.System, Options.Create(new SyncOptions()), new SyncBroadcaster(), new SyncKindCatalog());
+        var service = new SyncService(db, TimeProvider.System, Options.Create(new SyncOptions()), new SyncBroadcaster(),
+            new SyncKindCatalog(), new SpaceMembershipCache());
         var beforeHorizon = await service.PullAsync(first, 3, 3, 100, CancellationToken.None);
         await Assert.That(JsonDocument.Parse(beforeHorizon.Json).RootElement.GetProperty("snapshotRequired").GetBoolean()).IsTrue();
         foreach (var (id, cursor, expected) in new[] { (first, 4L, 8L), (second, 0L, 2L) })

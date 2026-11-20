@@ -292,6 +292,8 @@ public static class AuthEndpoints
     /// <summary>Allow only the app or the desktop authorize endpoint.</summary>
     internal static string? SafeReturn(string? returnUrl) =>
         returnUrl == WebSession.AppPath ||
+        (returnUrl is not null && returnUrl.StartsWith("/invite/", StringComparison.Ordinal)
+            && returnUrl.Length < 4096 && Uri.TryCreate(returnUrl, UriKind.Relative, out _)) ||
         (returnUrl is not null && returnUrl.StartsWith(AuthorizePath + "?", StringComparison.Ordinal) && returnUrl.Length < 4096)
             ? returnUrl
             : null;

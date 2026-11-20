@@ -18,6 +18,8 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<SyncStream> SyncStreams => Set<SyncStream>();
     public DbSet<SyncEntityRow> SyncEntities => Set<SyncEntityRow>();
     public DbSet<SyncChangeRow> SyncChanges => Set<SyncChangeRow>();
+    public DbSet<SpaceMember> SpaceMembers => Set<SpaceMember>();
+    public DbSet<SpaceInvite> SpaceInvites => Set<SpaceInvite>();
     public DbSet<BlobRow> Blobs => Set<BlobRow>();
     public DbSet<BlobUploadRow> BlobUploads => Set<BlobUploadRow>();
     public DbSet<BlobPartRow> BlobParts => Set<BlobPartRow>();
@@ -43,6 +45,8 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new SyncStreamConfiguration());
         modelBuilder.ApplyConfiguration(new SyncEntityConfiguration());
         modelBuilder.ApplyConfiguration(new SyncChangeConfiguration());
+        modelBuilder.ApplyConfiguration(new SpaceMemberConfiguration());
+        modelBuilder.ApplyConfiguration(new SpaceInviteConfiguration());
         modelBuilder.ApplyConfiguration(new BlobConfiguration());
         modelBuilder.ApplyConfiguration(new BlobUploadConfiguration());
         modelBuilder.ApplyConfiguration(new BlobPartConfiguration());
@@ -63,7 +67,10 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.Property(a => a.Id).ValueGeneratedNever();
             e.Property(a => a.PrimaryEmail).IsRequired();
             e.Property(a => a.StorageBytes).HasDefaultValue(0L);
+            e.Property(a => a.MembershipVersion).HasDefaultValue(0L);
             e.HasIndex(a => a.PrimaryEmail).IsUnique().HasDatabaseName("UX_Accounts_PrimaryEmail");
+            e.HasIndex(a => a.ProfileId).IsUnique().HasFilter("\"ProfileId\" IS NOT NULL")
+                .HasDatabaseName("UX_Accounts_ProfileId");
 
             e.HasMany(a => a.Logins).WithOne().HasForeignKey(l => l.AccountId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(a => a.Devices).WithOne().HasForeignKey(d => d.AccountId).OnDelete(DeleteBehavior.Cascade);
@@ -146,7 +153,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.ToTable("SyncChanges", t =>
             {
                 t.HasCheckConstraint("CK_SyncChanges_Seq", "\"Seq\" >= 1");
-                t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge')");
+                t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge', 'moved')");
             });
             e.HasKey(x => new { x.AccountId, x.Seq });
             e.Property(x => x.AccountId).HasColumnName("StreamId");
@@ -172,6 +179,47 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.HasKey(x => new { x.AccountId, x.Sha256 });
             e.HasIndex(x => x.UnreferencedSince).HasDatabaseName("IX_Blobs_UnreferencedSince");
             e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        }
+
+    }
+
+    private sealed class SpaceMemberConfiguration : IEntityTypeConfiguration<SpaceMember>
+    {
+        public void Configure(EntityTypeBuilder<SpaceMember> e)
+        {
+            e.ToTable("SpaceMembers", t =>
+            {
+                t.HasCheckConstraint("CK_SpaceMembers_MemberKind", "\"MemberKind\" IN (1, 2)");
+                t.HasCheckConstraint("CK_SpaceMembers_Role", "\"Role\" IN (1, 2, 3, 4)");
+                t.HasCheckConstraint("CK_SpaceMembers_KindRole",
+                    "(\"MemberKind\" = 1 AND \"Role\" IN (1, 2, 3)) OR (\"MemberKind\" = 2 AND \"Role\" = 4)");
+            });
+            e.HasKey(m => new { m.SpaceId, m.MemberId });
+            e.Property(m => m.AllowedContainers).HasColumnType("jsonb");
+            e.HasIndex(m => m.AccountId).HasFilter("\"RemovedAt\" IS NULL")
+                .HasDatabaseName("IX_SpaceMembers_AccountId_Live");
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(m => m.SpaceId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Account>().WithMany().HasForeignKey(m => m.AccountId).OnDelete(DeleteBehavior.SetNull);
+        }
+    }
+
+    private sealed class SpaceInviteConfiguration : IEntityTypeConfiguration<SpaceInvite>
+    {
+        public void Configure(EntityTypeBuilder<SpaceInvite> e)
+        {
+            e.ToTable("SpaceInvites", t =>
+            {
+                t.HasCheckConstraint("CK_SpaceInvites_Email_Lower", "\"Email\" IS NULL OR \"Email\" = lower(\"Email\")");
+                t.HasCheckConstraint("CK_SpaceInvites_Role", "\"Role\" IN (2, 3)");
+                t.HasCheckConstraint("CK_SpaceInvites_Uses", "\"Uses\" >= 0");
+                t.HasCheckConstraint("CK_SpaceInvites_MaxUses", "\"MaxUses\" IS NULL OR \"MaxUses\" > 0");
+            });
+            e.HasKey(i => i.Id);
+            e.Property(i => i.Id).ValueGeneratedNever();
+            e.Property(i => i.Uses).HasDefaultValue(0);
+            e.HasIndex(i => i.TokenHash).IsUnique().HasDatabaseName("UX_SpaceInvites_TokenHash");
+            e.HasIndex(i => i.SpaceId).HasDatabaseName("IX_SpaceInvites_SpaceId");
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(i => i.SpaceId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 

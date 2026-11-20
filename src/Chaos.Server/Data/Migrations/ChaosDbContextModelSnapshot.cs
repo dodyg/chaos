@@ -39,6 +39,11 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<Guid?>("InboxId")
                         .HasColumnType("uuid");
 
+                    b.Property<long>("MembershipVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
+
                     b.Property<Guid?>("PersonalSpaceId")
                         .HasColumnType("uuid");
 
@@ -59,6 +64,11 @@ namespace Chaos.Server.Data.Migrations
                     b.HasIndex("PrimaryEmail")
                         .IsUnique()
                         .HasDatabaseName("UX_Accounts_PrimaryEmail");
+
+                    b.HasIndex("ProfileId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Accounts_ProfileId")
+                        .HasFilter("\"ProfileId\" IS NOT NULL");
 
                     b.ToTable("Accounts", null, t =>
                         {
@@ -124,7 +134,7 @@ namespace Chaos.Server.Data.Migrations
 
                     b.ToTable("AuditEvents", null, t =>
                         {
-                            t.HasCheckConstraint("CK_AuditEvents_Kind", "\"Kind\" IN ('sign-in', 'device-added', 'device-revoked', 'account-deleted', 'quota')");
+                            t.HasCheckConstraint("CK_AuditEvents_Kind", "\"Kind\" IN ('sign-in', 'device-added', 'device-revoked', 'account-deleted', 'quota', 'space-created', 'space-deleted', 'space-restored', 'member-added', 'member-removed', 'member-role', 'invite-created', 'invite-used', 'invite-revoked', 'agent-created', 'agent-paused', 'agent-removed', 'agent-reverted', 'move')");
                         });
                 });
 
@@ -314,6 +324,120 @@ namespace Chaos.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Chaos.Server.Data.SpaceInvite", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByMemberId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("MaxUses")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<short>("Role")
+                        .HasColumnType("smallint");
+
+                    b.Property<Guid>("SpaceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<int>("Uses")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SpaceId")
+                        .HasDatabaseName("IX_SpaceInvites_SpaceId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("UX_SpaceInvites_TokenHash");
+
+                    b.ToTable("SpaceInvites", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SpaceInvites_Email_Lower", "\"Email\" IS NULL OR \"Email\" = lower(\"Email\")");
+
+                            t.HasCheckConstraint("CK_SpaceInvites_MaxUses", "\"MaxUses\" IS NULL OR \"MaxUses\" > 0");
+
+                            t.HasCheckConstraint("CK_SpaceInvites_Role", "\"Role\" IN (2, 3)");
+
+                            t.HasCheckConstraint("CK_SpaceInvites_Uses", "\"Uses\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SpaceMember", b =>
+                {
+                    b.Property<Guid>("SpaceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MemberId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedContainers")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("GitHubLogin")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("InvitedByMemberId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("JoinedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<short>("MemberKind")
+                        .HasColumnType("smallint");
+
+                    b.Property<DateTimeOffset?>("RemovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<short>("Role")
+                        .HasColumnType("smallint");
+
+                    b.HasKey("SpaceId", "MemberId");
+
+                    b.HasIndex("AccountId")
+                        .HasDatabaseName("IX_SpaceMembers_AccountId_Live")
+                        .HasFilter("\"RemovedAt\" IS NULL");
+
+                    b.ToTable("SpaceMembers", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SpaceMembers_KindRole", "(\"MemberKind\" = 1 AND \"Role\" IN (1, 2, 3)) OR (\"MemberKind\" = 2 AND \"Role\" = 4)");
+
+                            t.HasCheckConstraint("CK_SpaceMembers_MemberKind", "\"MemberKind\" IN (1, 2)");
+
+                            t.HasCheckConstraint("CK_SpaceMembers_Role", "\"Role\" IN (1, 2, 3, 4)");
+                        });
+                });
+
             modelBuilder.Entity("Chaos.Server.Data.SyncChangeRow", b =>
                 {
                     b.Property<Guid>("AccountId")
@@ -365,7 +489,7 @@ namespace Chaos.Server.Data.Migrations
 
                     b.ToTable("SyncChanges", null, t =>
                         {
-                            t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge')");
+                            t.HasCheckConstraint("CK_SyncChanges_Op", "\"Op\" IN ('upsert', 'purge', 'moved')");
 
                             t.HasCheckConstraint("CK_SyncChanges_Seq", "\"Seq\" >= 1");
                         });
@@ -705,6 +829,29 @@ namespace Chaos.Server.Data.Migrations
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany("Devices")
                         .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SpaceInvite", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
+                        .WithMany()
+                        .HasForeignKey("SpaceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.SpaceMember", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
+                        .WithMany()
+                        .HasForeignKey("SpaceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Chaos.Application.Planning;
 using Chaos.Domain.Tasks;
 using Chaos.Server.Data;
+using Chaos.Server.Sync;
 using Chaos.Server.Tests.Sync;
 using Chaos.Server.Web;
 using Chaos.Sync;
@@ -127,7 +128,7 @@ public sealed class WebWriteTests(PostgresServer postgres)
             """);
         await Assert.That(history).IsNotNull();
         using var before = JsonDocument.Parse(history!);
-        await Assert.That(before.RootElement.GetProperty("device").GetString()).IsEqualTo(session.DeviceId.ToString("N"));
+        await Assert.That(before.RootElement.GetProperty("device").GetString()).IsEqualTo(ServerChangeWriter.DeviceId.ToString("N"));
         await world.AssertConvergedAsync();
     }
 }

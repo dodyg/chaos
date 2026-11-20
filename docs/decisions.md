@@ -1111,3 +1111,26 @@ plan provides one, and each blocking package stays unticked until the owner conf
 
 - S005 keeps the existing sync rows and keys by renaming their database `AccountId` column to `StreamId`, and copies each account's sequence and pruning horizon into a stream whose ID is the account ID. New accounts create their stream in the same save. The existing EF row property remains named `AccountId` for Q2's unchanged account-only callers and tests; it maps to the `StreamId` column and must be renamed when Q3 adds space streams.
 - Q2 routes every accepted change to the account stream and retains the existing Personal-space ownership check. Account rows remain locked as well as stream rows to preserve synchronization with account deletion and calendar cache writes. Blobs remain account-keyed until Q6.
+
+## 2026-11-20 (PLAN3 Q3 spaces on the server)
+
+- S006 adds a `MembershipVersion` counter to `Accounts` as the monotonic account-level version used by `/v2/streams` and membership SSE events. Canonical profile IDs are unique while non-null; a second account cannot bind an already-owned actor identity and an invite never reassigns an existing member row to another account.
+- `Chaos.Sync.SyncKinds.All` remains the client-catalog contract. Q3 adds the server-only `space_member` kind and the schema-4 `space` groups through the server's supplemental catalog, so Q3 can generate and serve membership data without declaring the Q4 client schema available.
+- PLAN3 E8 values are server configuration under `Sharing`: 50 people and 10 agents per space, 100 owned spaces per account, 50 open invites per space, 20 invite emails per account per day, and 20 invite accepts per hour per account and per IP.
+- Account deletion now scrubs every shared-space member row for that account, including rows already removed: the display name becomes “Former member” and the GitHub login is cleared. A member row keeps its actor and removed timestamp while `AccountId` becomes null. A last owner with other members must transfer ownership; a space with no peers is deleted with the account.
+- When an account has no display name, invitations and member rows use the neutral text “A member”; the person's email is never exposed to another member or placed in an invite body as a fallback.
+- Shared attachment bytes remain owned and quota-counted by the uploader, but Q3 authorizes a read by a live
+  reference in any readable account or space stream and treats references in every live stream as blob-sweep
+  references. Space purge immediately removes newly unreferenced blobs and objects while retaining blobs still
+  named elsewhere. This preserves P16 account storage keys without exposing another account's data.
+- Space membership mutation lock order is stream, then all members by member ID; account deletion uses
+  affected streams, all their members, then the account row. This serializes last-owner checks and prevents
+  concurrent demotion/removal or invite acceptance from producing an ownerless space.
+- For an existing `diary_entry`, stored authorship is authoritative; an incoming `create` group cannot rewrite
+  `AuthorProfileId`. A `HasSpace` entity's `create.SpaceId` must equal its current route and can change only
+  through the server move operation.
+
+## 2026-11-20 (PLAN3 E10 and Q3 matrix scope)
+
+- **E10 confirmed.** The owner confirmed the plan's default: a deleted account's contributions stay in each shared space, because they belong to the space. The member row's display name becomes "Former member", and the account's email and logins are deleted as before.
+- **Deferred 8.4 matrix evidence.** The owner directed that the 8.4 cells that need later packages are proven in those packages, not in Q3. The Agent column and the "Claim a task" row are proven in Q17–Q19, which add agent members, tokens and the claim operation. The "change ... states" part of the space-settings row is proven in Q9, which adds `space_state`. Until then the server refuses those kinds and groups from clients. Q3 is complete when every other cell passes, and each of those packages must add its rows to `PermissionMatrixTests` before it can be ticked.

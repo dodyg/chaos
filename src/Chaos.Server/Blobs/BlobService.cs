@@ -52,6 +52,22 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
     public Task<BlobRow?> FindAsync(Guid accountId, string sha256, CancellationToken ct) =>
         db.Blobs.AsNoTracking().FirstOrDefaultAsync(b => b.AccountId == accountId && b.Sha256 == sha256, ct);
 
+    /// <summary>Finds an account-owned blob, or a blob named by an attachment in a readable stream.</summary>
+    public async Task<BlobRow?> FindReadableAsync(Guid accountId, string sha256, CancellationToken ct)
+    {
+        var own = await FindAsync(accountId, sha256, ct);
+        if (own is not null)
+        {
+            return own;
+        }
+
+        if (!await HasReadableReferenceAsync(accountId, sha256, ct))
+        {
+            return null;
+        }
+        return await db.Blobs.AsNoTracking().FirstOrDefaultAsync(blob => blob.Sha256 == sha256, ct);
+    }
+
     /// <summary>Starts an upload, or resumes one, or says the blob is already there. Starting is idempotent.</summary>
     public async Task<BlobOutcome<UploadStatus>> StartAsync(Guid accountId, Guid deviceId, string sha256, long size, CancellationToken ct)
     {
@@ -337,11 +353,82 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
         return (expired.Count, uploads.Count);
     }
 
-    /// <summary>True for a blob some live (not purged, not deleted) attachment of the account names.</summary>
+    public async Task<int> PurgeUnreferencedAsync(IReadOnlyCollection<string> hashes, CancellationToken ct)
+    {
+        var removed = 0;
+        foreach (var hash in hashes.Distinct(StringComparer.Ordinal))
+        {
+            if (await HasLiveReferenceAsync(hash, ct))
+            {
+                continue;
+            }
+            foreach (var blob in await db.Blobs.Where(b => b.Sha256 == hash).ToListAsync(ct))
+            {
+                db.Blobs.Remove(blob);
+                if (blob.State == BlobStates.Clean)
+                {
+                    await db.Accounts.Where(a => a.Id == blob.AccountId)
+                        .ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - blob.ByteSize), ct);
+                }
+                await db.SaveChangesAsync(ct);
+                if (blob.StorageKey.Length > 0)
+                {
+                    await store.DeleteAsync(blob.StorageKey, ct);
+                }
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private async Task<bool> HasReadableReferenceAsync(Guid accountId, string sha256, CancellationToken ct)
+    {
+        var streams = await db.SpaceMembers.AsNoTracking()
+            .Where(m => m.AccountId == accountId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null
+                && db.SyncStreams.Any(s => s.Id == m.SpaceId && s.Kind == SyncStream.SpaceKind && s.DeletedAt == null))
+            .Select(m => m.SpaceId)
+            .ToListAsync(ct);
+        streams.Add(accountId);
+        var entities = await db.SyncEntities.AsNoTracking()
+            .Where(e => streams.Contains(e.AccountId) && e.Kind == "attachment" && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.Groups)
+            .ToListAsync(ct);
+        foreach (var json in entities)
+        {
+            var groups = Chaos.Sync.SyncJson.ReadGroups(json);
+            if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null)
+            {
+                continue;
+            }
+            if (string.Equals(groups.GetValueOrDefault("file")?.Values.Values.GetValueOrDefault("Sha256")?.ToString(),
+                sha256, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private async Task<bool> HasLiveReferenceAsync(string sha256, CancellationToken ct)
+    {
+        var entities = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.Kind == "attachment" && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.Groups)
+            .ToListAsync(ct);
+        return entities.Any(json =>
+        {
+            var groups = Chaos.Sync.SyncJson.ReadGroups(json);
+            return groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is null
+                && string.Equals(groups.GetValueOrDefault("file")?.Values.Values.GetValueOrDefault("Sha256")?.ToString(),
+                    sha256, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>True for a blob some live attachment in any account or space stream names.</summary>
     private const string ReferencedSql = """
         EXISTS (
             SELECT 1 FROM "SyncEntities" e
-            WHERE e."StreamId" = b."AccountId" AND e."Kind" = 'attachment' AND e."PurgedAt" IS NULL
+            WHERE e."Kind" = 'attachment' AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
               AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256")
         """;

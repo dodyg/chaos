@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Chaos.Server.Data;
@@ -8,30 +7,28 @@ using Microsoft.Extensions.Options;
 
 namespace Chaos.Server.Sync;
 
-/// <summary>One change of a push after parsing: the change, or why it could not be read.</summary>
 public sealed record IncomingChange(string ChangeId, SyncChange? Change, string? Rejection);
-
 public sealed record PushRejection(string ChangeId, string Reason);
-
-public sealed record PushOutcome(IReadOnlyList<string> Accepted, IReadOnlyList<PushRejection> Rejected, string? ServerHlc, long LastSeq);
+public sealed record PushOutcome(
+    IReadOnlyList<string> Accepted,
+    IReadOnlyList<PushRejection> Rejected,
+    string? ServerHlc,
+    long LastSeq,
+    IReadOnlyDictionary<string, Guid>? Streams = null);
 
 internal sealed record PreparedPush(IReadOnlyList<IncomingChange> Changes, string? Refusal = null);
-
-/// <summary>One page of the change log, already rendered as the wire JSON.</summary>
 public sealed record PullPage(string Json);
-
-/// <summary>
-/// The sync protocol on the service (PLAN2 §7.12, §8.3): push merges each change into the account's
-/// entities with the same <see cref="Merge"/> the desktop uses, assigns sequence numbers under a lock on
-/// the account row, and logs only the groups that won; pull and snapshot read them back. Every query is
-/// filtered by the account taken from the token. Nothing here logs content.
-/// </summary>
-/// <summary>The account was deleted (or never existed) while a push for it was in flight.</summary>
 public sealed class AccountUnavailableException() : InvalidOperationException("The account is gone.");
 
-public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<SyncOptions> options, SyncBroadcaster broadcaster, SyncKindCatalog kinds)
+/// <summary>Stream-aware merge service. Protocol v1 remains account-only; v2 enforces sharing roles.</summary>
+public sealed class SyncService(
+    ChaosDbContext db,
+    TimeProvider clock,
+    IOptions<SyncOptions> options,
+    SyncBroadcaster broadcaster,
+    SyncKindCatalog kinds,
+    SpaceMembershipCache memberships)
 {
-    /// <summary>Reads a push body into changes; one unreadable change is rejected on its own, a body that is not a push is an error.</summary>
     public static IReadOnlyList<IncomingChange> ParsePush(ReadOnlyMemory<byte> body)
     {
         using var document = JsonDocument.Parse(body);
@@ -44,9 +41,11 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
         var changes = new List<IncomingChange>();
         foreach (var element in array.EnumerateArray())
         {
-            var id = element.ValueKind == JsonValueKind.Object && element.TryGetProperty("changeId", out var idElement) && idElement.ValueKind == JsonValueKind.String
-                ? idElement.GetString() ?? string.Empty
-                : string.Empty;
+            var id = element.ValueKind == JsonValueKind.Object
+                && element.TryGetProperty("changeId", out var idElement)
+                && idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString() ?? string.Empty
+                    : string.Empty;
             try
             {
                 changes.Add(new IncomingChange(id, SyncJson.ParseChange(element), null));
@@ -60,24 +59,29 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
         return changes;
     }
 
-    public async Task<PushOutcome> PushAsync(Guid accountId, Guid deviceId, int clientSchema, IReadOnlyList<IncomingChange> incoming, CancellationToken ct)
+    public Task<PushOutcome> PushAsync(Guid accountId, Guid deviceId, int clientSchema, IReadOnlyList<IncomingChange> incoming, CancellationToken ct) =>
+        PushAsync(accountId, deviceId, clientSchema, SyncProtocol.Version1, incoming, ct);
+
+    public async Task<PushOutcome> PushAsync(Guid accountId, Guid deviceId, int clientSchema, int protocolVersion,
+        IReadOnlyList<IncomingChange> incoming, CancellationToken ct)
     {
-        var result = await PushPreparedAsync(accountId, deviceId, clientSchema, (_, _) => Task.FromResult(new PreparedPush(incoming)), ct);
+        var result = await PushPreparedAsync(accountId, deviceId, clientSchema, protocolVersion, (_, _) =>
+            Task.FromResult(new PreparedPush(incoming)), ct);
         return result.Outcome ?? throw new AccountUnavailableException();
     }
 
-    /// <summary>Prepares server-generated changes under the same account lock used to merge them.</summary>
+    internal Task<(PushOutcome? Outcome, string? Refusal)> PushPreparedAsync(Guid accountId, Guid deviceId, int clientSchema,
+        Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct) =>
+        PushPreparedAsync(accountId, deviceId, clientSchema, SyncProtocol.Version1, prepare, ct);
+
     internal async Task<(PushOutcome? Outcome, string? Refusal)> PushPreparedAsync(Guid accountId, Guid deviceId, int clientSchema,
-        Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
+        int protocolVersion, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
     {
         var strategy = db.Database.CreateExecutionStrategy();
         var result = await strategy.ExecuteAsync<(PushOutcome? Outcome, string? Refusal)>(async () =>
         {
-            // A retry replays the whole unit: nothing tracked by the failed attempt may survive it.
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
-
-            // §8.3 step 1: serialize sequence assignment per account.
             var account = await db.Accounts
                 .FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
                 .FirstOrDefaultAsync(ct);
@@ -86,72 +90,127 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                 return (null, "account-unavailable");
             }
 
-            Guid[] streamIds = [accountId];
+            var readable = await memberships.GetAsync(db, account.Id, ct);
+            var streamIds = readable.Roles.Keys.Append(accountId).Distinct().ToArray();
             var streams = await db.SyncStreams
                 .FromSqlInterpolated($"""SELECT * FROM "SyncStreams" WHERE "Id" = ANY({streamIds}) ORDER BY "Id" FOR UPDATE""")
                 .ToDictionaryAsync(s => s.Id, ct);
-            var stream = streams[accountId];
             var prepared = await prepare(account, ct);
             if (prepared.Refusal is not null)
             {
                 return (null, prepared.Refusal);
             }
 
-            var incoming = prepared.Changes;
             var accepted = new List<string>();
             var rejected = new List<PushRejection>();
+            var acceptedStreams = new Dictionary<string, Guid>(StringComparer.Ordinal);
             Hlc? highest = null;
             var now = clock.GetUtcNow();
             var tooOld = clientSchema < options.Value.MinClientSchema;
 
-            var ids = incoming.Select(c => Guid.TryParse(c.ChangeId, out var id) ? id : (Guid?)null).Where(id => id is not null).Select(id => id!.Value).Distinct().ToList();
-            var logged = (await db.SyncChanges.AsNoTracking()
-                .Where(c => c.AccountId == accountId && ids.Contains(c.ChangeId))
-                .Select(c => c.ChangeId)
-                .ToListAsync(ct)).ToHashSet();
-
-            foreach (var entry in incoming)
+            foreach (var entry in prepared.Changes.OrderBy(entry =>
+                entry.Change is { } change
+                    ? (change.Op == SyncOp.Purge ? 10_000 : 0)
+                        + (change.Op == SyncOp.Purge
+                            ? -(kinds.Find(change.Kind)?.ApplyOrder ?? 0)
+                            : kinds.Find(change.Kind)?.ApplyOrder ?? int.MaxValue)
+                    : int.MaxValue))
             {
                 if (entry.Change is not { } change || !Guid.TryParse(entry.ChangeId, out var changeId))
                 {
-                    rejected.Add(new PushRejection(entry.ChangeId, entry.Rejection ?? SyncRejection.Invalid));
+                    rejected.Add(new(entry.ChangeId, entry.Rejection ?? SyncRejection.Invalid));
                     continue;
                 }
 
                 if (tooOld)
                 {
-                    rejected.Add(new PushRejection(entry.ChangeId, SyncRejection.SchemaTooOld));
+                    rejected.Add(new(entry.ChangeId, SyncRejection.SchemaTooOld));
                     continue;
                 }
 
-                if (logged.Contains(changeId))
+                var replayStream = await db.SyncChanges.AsNoTracking()
+                    .Where(row => streamIds.Contains(row.AccountId) && row.ChangeId == changeId)
+                    .Select(row => (Guid?)row.AccountId)
+                    .FirstOrDefaultAsync(ct);
+                if (replayStream is { } replayed)
                 {
-                    accepted.Add(entry.ChangeId); // §8.3 step 2: a replay.
+                    if (protocolVersion == SyncProtocol.Version1 && replayed != accountId)
+                    {
+                        rejected.Add(new(entry.ChangeId, SyncRejection.SchemaTooOld));
+                    }
+                    else
+                    {
+                        accepted.Add(entry.ChangeId);
+                        acceptedStreams[entry.ChangeId] = replayed;
+                    }
                     continue;
                 }
 
-                if (Validate(change, clientSchema, account) is { } reason)
+                if (Validate(change, clientSchema) is { } validation)
                 {
-                    rejected.Add(new PushRejection(entry.ChangeId, reason));
+                    rejected.Add(new(entry.ChangeId, validation));
+                    continue;
+                }
+                change = change with
+                {
+                    Groups = change.Groups.Where(pair => kinds.Find(change.Kind)!.Group(pair.Key)!.Since <= clientSchema)
+                        .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
+                };
+                if (change.Op != SyncOp.Purge && change.Groups.Count == 0)
+                {
+                    rejected.Add(new(entry.ChangeId, SyncRejection.Invalid));
                     continue;
                 }
 
-                var route = SyncRouter.Route(account, kinds.Find(change.Kind)!, change);
+                var kind = kinds.Find(change.Kind)!;
+                var route = await RouteAsync(account, kind, change, streamIds, ct);
                 if (route.Rejection is { } routeRejection)
                 {
-                    rejected.Add(new PushRejection(entry.ChangeId, routeRejection));
+                    rejected.Add(new(entry.ChangeId,
+                        protocolVersion == SyncProtocol.Version1 && routeRejection == SyncRejection.NotMember
+                            ? SyncRejection.SchemaTooOld
+                            : routeRejection));
                     continue;
                 }
 
-                var result = await MergeAsync(streams[route.StreamId], change, changeId, deviceId, now, ct);
-                if (result is { } refusal)
+                if (protocolVersion == SyncProtocol.Version1 && route.StreamId != accountId)
                 {
-                    rejected.Add(new PushRejection(entry.ChangeId, refusal));
+                    rejected.Add(new(entry.ChangeId, SyncRejection.SchemaTooOld));
                     continue;
                 }
 
-                logged.Add(changeId);
+                var stream = streams.GetValueOrDefault(route.StreamId);
+                if (stream is null || stream.DeletedAt is not null)
+                {
+                    rejected.Add(new(entry.ChangeId, SyncRejection.NotMember));
+                    continue;
+                }
+
+                var alreadyLogged = await db.SyncChanges.AsNoTracking()
+                    .AnyAsync(c => c.AccountId == route.StreamId && c.ChangeId == changeId, ct);
+                if (alreadyLogged)
+                {
+                    accepted.Add(entry.ChangeId);
+                    acceptedStreams[entry.ChangeId] = route.StreamId;
+                    continue;
+                }
+
+                var permission = await PermissionAsync(account, kind, change, route.StreamId, readable.Roles, ct);
+                if (permission is not null)
+                {
+                    rejected.Add(new(entry.ChangeId, permission));
+                    continue;
+                }
+
+                var refusal = await MergeAsync(stream, change, changeId, deviceId, account.ProfileId, now, ct);
+                if (refusal is not null)
+                {
+                    rejected.Add(new(entry.ChangeId, refusal));
+                    continue;
+                }
+
                 accepted.Add(entry.ChangeId);
+                acceptedStreams[entry.ChangeId] = route.StreamId;
                 foreach (var group in change.Groups.Values)
                 {
                     if (highest is null || group.Hlc > highest)
@@ -162,39 +221,42 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             }
 
             await db.SaveChangesAsync(ct);
-            await db.Database.ExecuteSqlInterpolatedAsync($"""
-                DELETE FROM "SyncEntities" cache
-                WHERE cache."StreamId" = {accountId} AND cache."Kind" = 'calendar_cache'
-                  AND NOT EXISTS (SELECT 1 FROM "SyncEntities" source
-                    WHERE source."StreamId" = cache."StreamId" AND source."Kind" = 'calendar_source'
-                      AND source."EntityKey" = cache."EntityKey" AND source."PurgedAt" IS NULL
-                      AND source."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-                      AND source."Groups" -> 'enabled' -> 'values' ->> 'Enabled' = '1')
-                """, ct);
+            if (acceptedStreams.Values.Contains(accountId))
+            {
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    DELETE FROM "SyncEntities" cache
+                    WHERE cache."StreamId" = {accountId} AND cache."Kind" = 'calendar_cache'
+                      AND NOT EXISTS (SELECT 1 FROM "SyncEntities" source
+                        WHERE source."StreamId" = cache."StreamId" AND source."Kind" = 'calendar_source'
+                          AND source."EntityKey" = cache."EntityKey" AND source."PurgedAt" IS NULL
+                          AND source."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+                          AND source."Groups" -> 'enabled' -> 'values' ->> 'Enabled' = '1')
+                    """, ct);
+            }
+
             await transaction.CommitAsync(ct);
-            return (new PushOutcome(accepted, rejected, highest?.Encode(), stream.NextSeq - 1), null);
+            var outcome = new PushOutcome(accepted, rejected, highest?.Encode(),
+                streams.GetValueOrDefault(accountId)?.NextSeq - 1 ?? 0, acceptedStreams);
+            return (outcome, null);
         });
 
-        // §8.3 step 7: after the commit, tell this process's listeners and any other instance.
-        if (result.Outcome is { Accepted.Count: > 0 } outcome)
+        if (result.Outcome is { Streams: not null } outcome)
         {
-            // The push is committed: a cancelled request must not turn it into an error.
-            await NotifyAsync(accountId, outcome.LastSeq, CancellationToken.None);
+            var heads = outcome.Streams.Where(pair => outcome.Accepted.Contains(pair.Key))
+                .GroupBy(pair => pair.Value)
+                .Select(group => new { StreamId = group.Key });
+            foreach (var head in heads)
+            {
+                var seq = await db.SyncStreams.AsNoTracking().Where(s => s.Id == head.StreamId)
+                    .Select(s => s.NextSeq - 1).FirstAsync(CancellationToken.None);
+                await NotifyAsync(head.StreamId, seq, CancellationToken.None);
+            }
         }
 
         return result;
     }
 
-    private async Task NotifyAsync(Guid accountId, long seq, CancellationToken ct)
-    {
-        broadcaster.Publish(accountId, seq);
-        var channel = SyncNotificationListener.Channel;
-        var payload = SyncNotificationListener.Payload(accountId, seq);
-        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({channel}, {payload})", ct);
-    }
-
-    /// <summary>The reason a change is refused before it touches the entity, or null when it is well-formed and the person's own.</summary>
-    private string? Validate(SyncChange change, int clientSchema, Account account)
+    private string? Validate(SyncChange change, int clientSchema)
     {
         if (kinds.Find(change.Kind) is not { } kind)
         {
@@ -218,47 +280,304 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
 
         foreach (var (name, group) in change.Groups)
         {
-            if (kind.Group(name) is not { } info || info.Since > clientSchema)
+            if (kind.Group(name) is null)
             {
                 return SyncRejection.Invalid;
             }
 
-            foreach (var value in group.Values.Values.Values)
+            if (group.Values.Values.Values.Any(value => value is string text
+                && Encoding.UTF8.GetByteCount(text) > SyncProtocol.MaxTextBytes))
             {
-                if (value is string text && Encoding.UTF8.GetByteCount(text) > SyncProtocol.MaxTextBytes)
-                {
-                    return SyncRejection.TooLarge;
-                }
+                return SyncRejection.TooLarge;
             }
         }
 
         return null;
     }
 
-    /// <summary>Merges one validated change; returns a rejection reason, or null when it was accepted (whether or not any group won).</summary>
-    private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId, DateTimeOffset now, CancellationToken ct)
+    private async Task<(Guid StreamId, string? Rejection)> RouteAsync(Account account, SyncKindInfo kind, SyncChange change,
+        Guid[] readableStreams, CancellationToken ct)
     {
-        var entity = await db.SyncEntities.FindAsync([stream.Id, change.Kind, change.EntityKey], ct);
+        var existing = await db.SyncEntities.AsNoTracking()
+            .Where(e => readableStreams.Contains(e.AccountId) && e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.AccountId)
+            .Distinct()
+            .ToListAsync(ct);
+        existing.AddRange(db.SyncEntities.Local
+            .Where(e => readableStreams.Contains(e.AccountId) && e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.AccountId));
+        existing = existing.Distinct().ToList();
+        if (existing.Count > 1)
+        {
+            return (account.Id, SyncRejection.Invalid);
+        }
+        if (existing.Count == 1)
+        {
+            if (kind.HasSpace && change.Groups.TryGetValue("create", out var incomingCreate)
+                && incomingCreate.Values.Values.TryGetValue("SpaceId", out var incomingSpace))
+            {
+                var expected = existing[0] == account.Id
+                    ? account.PersonalSpaceId?.ToString("D")
+                    : existing[0].ToString("D");
+                if (!string.Equals(incomingSpace?.ToString(), expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (existing[0], SyncRejection.NotOwner);
+                }
+            }
+            return (existing[0], null);
+        }
+
+        var hidden = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null
+                && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind))
+            .Select(e => e.AccountId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (hidden.Count > 1)
+        {
+            return (account.Id, SyncRejection.Invalid);
+        }
+        if (hidden.Count == 1 && !readableStreams.Contains(hidden[0]))
+        {
+            return (account.Id, SyncRejection.NotMember);
+        }
+
+        return kind.Route.Kind switch
+        {
+            SyncRouteKind.Account => (account.Id, null),
+            SyncRouteKind.OwnSpace => await OwnSpaceAsync(account, kind, change, readableStreams, ct),
+            SyncRouteKind.Parent => await ParentAsync(account, kind, change, readableStreams, ct),
+            SyncRouteKind.FollowsTag => await FollowsAsync("tag", TagKey(change), readableStreams, ct),
+            SyncRouteKind.ServerOnly => (account.Id, SyncRejection.ServerOnly),
+            _ => (account.Id, SyncRejection.Invalid),
+        };
+    }
+
+    private async Task<(Guid StreamId, string? Rejection)> OwnSpaceAsync(Account account, SyncKindInfo kind, SyncChange change,
+        Guid[] readableStreams, CancellationToken ct)
+    {
+        var key = kind.Route.KeyPart is { } keyPart
+            ? change.EntityKey.Split('|').ElementAtOrDefault(keyPart)
+            : Value(change, kind.Route.Group ?? "create", kind.Route.Column ?? "SpaceId")?.ToString();
+        if (string.IsNullOrEmpty(key) && kind.Kind == "tag")
+        {
+            return (account.Id, null);
+        }
+        if (kind.Kind == "space")
+        {
+            key ??= change.EntityKey;
+        }
+        if (!Guid.TryParse(key, out var spaceId))
+        {
+            var global = await db.SyncEntities.AsNoTracking()
+                .Where(e => e.Kind == kind.Kind && e.EntityKey == change.EntityKey
+                    && e.PurgedAt == null && e.MovedTo == null
+                    && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind))
+                .Select(e => e.AccountId)
+                .Distinct()
+                .ToListAsync(ct);
+            if (global.Any(id => !readableStreams.Contains(id)))
+            {
+                return (account.Id, SyncRejection.NotMember);
+            }
+            return (account.Id, SyncRejection.Invalid);
+        }
+        if (spaceId == account.PersonalSpaceId)
+        {
+            return (account.Id, null);
+        }
+
+        if (!readableStreams.Contains(spaceId)
+            || !await db.SyncStreams.AsNoTracking().AnyAsync(s => s.Id == spaceId && s.Kind == SyncStream.SpaceKind && s.DeletedAt == null, ct))
+        {
+            return (account.Id, SyncRejection.NotMember);
+        }
+
+        return (spaceId, null);
+    }
+
+    private async Task<(Guid StreamId, string? Rejection)> ParentAsync(Account account, SyncKindInfo kind, SyncChange change,
+        Guid[] readableStreams, CancellationToken ct)
+    {
+        var route = kind.Route;
+        var parentKind = route.ParentKind;
+        if (route.DiscriminatorColumn is { } discriminator
+            && Value(change, route.Group ?? "create", discriminator) is { } target)
+        {
+            parentKind = target.ToString();
+        }
+
+        string? key = route.KeyPart is { } part
+            ? change.EntityKey.Split('|').ElementAtOrDefault(part)
+            : Value(change, route.Group ?? "create", route.Column ?? string.Empty)?.ToString();
+        if (parentKind is null || string.IsNullOrEmpty(key))
+        {
+            return (account.Id, SyncRejection.ParentUnknown);
+        }
+
+        return await FollowsAsync(parentKind, key, readableStreams, ct);
+    }
+
+    private async Task<(Guid StreamId, string? Rejection)> FollowsAsync(string parentKind, string? key, Guid[] readableStreams,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return (Guid.Empty, SyncRejection.ParentUnknown);
+        }
+
+        var locations = await db.SyncEntities.AsNoTracking()
+            .Where(e => readableStreams.Contains(e.AccountId) && e.Kind == parentKind && e.EntityKey == key
+                && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.AccountId)
+            .Distinct()
+            .ToListAsync(ct);
+        locations.AddRange(db.SyncEntities.Local
+            .Where(e => readableStreams.Contains(e.AccountId) && e.Kind == parentKind && e.EntityKey == key
+                && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.AccountId));
+        locations = locations.Distinct().ToList();
+        return locations.Count switch
+        {
+            1 => (locations[0], null),
+            0 => await db.SyncEntities.AsNoTracking().AnyAsync(e =>
+                    e.Kind == parentKind && e.EntityKey == key && e.PurgedAt == null && e.MovedTo == null
+                    && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind), ct)
+                ? (Guid.Empty, SyncRejection.NotMember)
+                : (Guid.Empty, SyncRejection.ParentUnknown),
+            _ => (Guid.Empty, SyncRejection.Invalid),
+        };
+    }
+
+    private static string? TagKey(SyncChange change) => change.EntityKey.Split('|').ElementAtOrDefault(1);
+    private static object? Value(SyncChange change, string groupName, string column) =>
+        change.Groups.GetValueOrDefault(groupName)?.Values.Values.GetValueOrDefault(column);
+
+    private async Task<string?> PermissionAsync(Account account, SyncKindInfo kind, SyncChange change, Guid streamId,
+        IReadOnlyDictionary<Guid, short> roles, CancellationToken ct)
+    {
+        if (streamId == account.Id)
+        {
+            return null;
+        }
+        if (!roles.TryGetValue(streamId, out var role))
+        {
+            return SyncRejection.NotMember;
+        }
         if (change.Op == SyncOp.Purge)
         {
+            return role == SpaceMember.OwnerRole ? null : SyncRejection.Forbidden;
+        }
+        if (change.Kind == "space" && change.Groups.ContainsKey("deleted"))
+        {
+            return SyncRejection.Forbidden;
+        }
+
+        foreach (var group in change.Groups.Keys)
+        {
+            var required = kind.Group(group)!.Write;
+            var allowed = required switch
+            {
+                SyncWrite.Owner => role == SpaceMember.OwnerRole,
+                SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole,
+                SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
+                SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
+                SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole)
+                    || await IsAuthorAsync(account, streamId, change, ct),
+                SyncWrite.Server => false,
+                _ => false,
+            };
+            if (!allowed)
+            {
+                return required == SyncWrite.Server ? SyncRejection.ServerOnly : SyncRejection.Forbidden;
+            }
+        }
+
+        if (kind.Kind == "diary_entry" && change.Groups.TryGetValue("create", out var create))
+        {
+            var author = create.Values.Values.GetValueOrDefault("AuthorProfileId")?.ToString();
+            if (!Guid.TryParse(author, out var id) || id != account.ProfileId)
+            {
+                return SyncRejection.Forbidden;
+            }
+            var stored = await StoredAuthorAsync(streamId, change, ct);
+            if (stored is not null && stored != id)
+            {
+                return SyncRejection.Forbidden;
+            }
+        }
+        if (kind.Kind == "tag" && role == SpaceMember.EditorRole && await TagsOwnerOnlyAsync(streamId, ct))
+        {
+            return SyncRejection.Forbidden;
+        }
+        return null;
+    }
+
+    private async Task<bool> IsAuthorAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
+    {
+        return await StoredAuthorAsync(streamId, change, ct) == account.ProfileId
+            || (await StoredAuthorAsync(streamId, change, ct) is null
+                && Value(change, "create", "AuthorProfileId")?.ToString() is { } incoming
+                && Guid.TryParse(incoming, out var actor) && actor == account.ProfileId);
+    }
+
+    private async Task<Guid?> StoredAuthorAsync(Guid streamId, SyncChange change, CancellationToken ct)
+    {
+        var author = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.AccountId == streamId && e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.Groups)
+            .FirstOrDefaultAsync(ct);
+        var stored = author is null
+            ? null
+            : SyncJson.ReadGroups(author).GetValueOrDefault("create")?.Values.Values
+                .GetValueOrDefault("AuthorProfileId")?.ToString();
+        return Guid.TryParse(stored, out var actor) ? actor : null;
+    }
+
+    private async Task<bool> TagsOwnerOnlyAsync(Guid streamId, CancellationToken ct)
+    {
+        var json = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.AccountId == streamId && e.Kind == "space" && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.Groups)
+            .FirstOrDefaultAsync(ct);
+        return json is not null
+            && SyncJson.ReadGroups(json).GetValueOrDefault("settings")?.Values.Values
+                .GetValueOrDefault("TagsOwnerOnly") is 1L;
+    }
+
+    private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId,
+        Guid? actorId, DateTimeOffset now, CancellationToken ct)
+    {
+        var entity = await db.SyncEntities.FindAsync([stream.Id, change.Kind, change.EntityKey], ct);
+        if (entity?.MovedTo is not null)
+        {
+            return SyncRejection.Moved;
+        }
+        if (change.Op == SyncOp.Purge)
+        {
+            var seq = stream.NextSeq++;
             if (entity is { PurgedAt: not null })
             {
-                return null; // Already purged: nothing to do.
+                return null;
             }
-
-            var seq = stream.NextSeq++;
             if (entity is null)
             {
-                entity = new SyncEntityRow { AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = "{}" };
+                entity = new SyncEntityRow
+                {
+                    AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = "{}",
+                };
                 db.SyncEntities.Add(entity);
             }
 
-            // The content goes; the row stays so that a late edit to this key is refused (§8.3 step 6).
             entity.Groups = "{}";
             entity.PurgedAt = now;
             entity.LastSeq = seq;
             entity.UpdatedAt = now;
-            Log(stream.Id, seq, changeId, change, SyncOp.Purge, "{}", deviceId, now);
+            Log(stream.Id, seq, changeId, change, "purge", "{}", deviceId, actorId, now);
             return null;
         }
 
@@ -267,8 +586,7 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             return SyncRejection.Purged;
         }
 
-        var stored = entity is null ? null : SyncJson.ReadGroups(entity.Groups);
-        var merge = Merge.Apply(stored, change);
+        var merge = Merge.Apply(entity is null ? null : SyncJson.ReadGroups(entity.Groups), change);
         if (merge.Winners.Count == 0)
         {
             return null;
@@ -278,7 +596,11 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
         var groupsJson = SyncJson.WriteGroups(merge.Merged);
         if (entity is null)
         {
-            db.SyncEntities.Add(new SyncEntityRow { AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey, Groups = groupsJson, LastSeq = next, UpdatedAt = now });
+            db.SyncEntities.Add(new SyncEntityRow
+            {
+                AccountId = stream.Id, Kind = change.Kind, EntityKey = change.EntityKey,
+                Groups = groupsJson, LastSeq = next, UpdatedAt = now,
+            });
         }
         else
         {
@@ -287,50 +609,57 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             entity.UpdatedAt = now;
         }
 
-        Log(stream.Id, next, changeId, change, SyncOp.Upsert, SyncJson.WriteGroups(merge.Winners), deviceId, now);
+        Log(stream.Id, next, changeId, change, "upsert", SyncJson.WriteGroups(merge.Winners),
+            deviceId, actorId, now);
         return null;
     }
 
-    private void Log(Guid accountId, long seq, Guid changeId, SyncChange change, SyncOp op, string groupsJson, Guid deviceId, DateTimeOffset now) =>
+    private void Log(Guid streamId, long seq, Guid changeId, SyncChange change, string op, string groupsJson,
+        Guid deviceId, Guid? actorId, DateTimeOffset now) =>
         db.SyncChanges.Add(new SyncChangeRow
         {
-            AccountId = accountId,
-            Seq = seq,
-            ChangeId = changeId,
-            Kind = change.Kind,
-            EntityKey = change.EntityKey,
-            Op = op == SyncOp.Purge ? "purge" : "upsert",
-            Groups = groupsJson,
-            OriginDevice = deviceId,
-            CreatedAt = now,
+            AccountId = streamId, Seq = seq, ChangeId = changeId, Kind = change.Kind, EntityKey = change.EntityKey,
+            Op = op, Groups = groupsJson, OriginDevice = deviceId, ActorId = actorId, CreatedAt = now,
         });
 
-    // ---- Pull and snapshot ---------------------------------------------------------------------------
-
-    /// <summary>
-    /// Changes after a cursor, in sequence order, carrying only the groups that won and that the client's
-    /// schema knows (§7.12 forward compatibility). A cursor below the pruned horizon needs the snapshot.
-    /// </summary>
-    public async Task<PullPage> PullAsync(Guid accountId, int clientSchema, long after, int limit, CancellationToken ct)
+    private async Task NotifyAsync(Guid streamId, long seq, CancellationToken ct)
     {
+        var members = await db.SpaceMembers.AsNoTracking()
+            .Where(m => m.SpaceId == streamId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null && m.AccountId != null)
+            .Select(m => m.AccountId!.Value)
+            .ToListAsync(ct);
+        if (members.Count == 0)
+        {
+            members.Add(streamId);
+        }
+        foreach (var accountId in members.Distinct())
+        {
+            broadcaster.PublishStream(accountId, streamId, seq);
+        }
+
+        var payload = SyncNotificationListener.Payload(streamId, seq);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({SyncNotificationListener.Channel}, {payload})", ct);
+    }
+
+    public async Task<PullPage> PullAsync(Guid accountId, Guid streamId, int clientSchema, long after, int limit, CancellationToken ct)
+    {
+        await EnsureReadableAsync(accountId, streamId, ct);
         limit = Math.Clamp(limit, 1, SyncProtocol.MaxPullChanges);
-        var pruned = await db.SyncStreams.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.ChangesPrunedThroughSeq).FirstOrDefaultAsync(ct);
-        using var stream = new MemoryStream();
-        await using (var writer = new Utf8JsonWriter(stream))
+        var pruned = await db.SyncStreams.AsNoTracking().Where(s => s.Id == streamId)
+            .Select(s => s.ChangesPrunedThroughSeq).FirstAsync(ct);
+        using var bytes = new MemoryStream();
+        await using (var writer = new Utf8JsonWriter(bytes))
         {
             writer.WriteStartObject();
             writer.WritePropertyName("changes");
             writer.WriteStartArray();
             long next = after;
-            var more = false;
             var snapshotRequired = after < pruned;
+            var more = false;
             if (!snapshotRequired)
             {
-                var rows = await db.SyncChanges.AsNoTracking()
-                    .Where(c => c.AccountId == accountId && c.Seq > after)
-                    .OrderBy(c => c.Seq)
-                    .Take(limit + 1)
-                    .ToListAsync(ct);
+                var rows = await db.SyncChanges.AsNoTracking().Where(c => c.AccountId == streamId && c.Seq > after)
+                    .OrderBy(c => c.Seq).Take(limit + 1).ToListAsync(ct);
                 more = rows.Count > limit;
                 foreach (var row in rows.Take(limit))
                 {
@@ -338,61 +667,39 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                     WriteRow(writer, row, clientSchema);
                 }
             }
-
             writer.WriteEndArray();
             writer.WriteNumber("next", next);
             writer.WriteBoolean("more", more);
             writer.WriteBoolean("snapshotRequired", snapshotRequired);
             writer.WriteEndObject();
         }
-
-        return new PullPage(Encoding.UTF8.GetString(stream.ToArray()));
+        return new PullPage(Encoding.UTF8.GetString(bytes.ToArray()));
     }
 
-    private void WriteRow(Utf8JsonWriter writer, SyncChangeRow row, int clientSchema)
-    {
-        var op = row.Op == "purge" ? SyncOp.Purge : SyncOp.Upsert;
-        var groups = op == SyncOp.Purge ? new Dictionary<string, SyncGroupState>() : KnownGroups(row.Kind, SyncJson.ReadGroups(row.Groups), clientSchema);
-        if (op == SyncOp.Upsert && groups.Count == 0)
-        {
-            return; // Everything this change carries is newer than the client understands.
-        }
+    public Task<PullPage> PullAsync(Guid accountId, int clientSchema, long after, int limit, CancellationToken ct) =>
+        PullAsync(accountId, accountId, clientSchema, after, limit, ct);
 
-        SyncJson.WriteChange(writer, row.ChangeId.ToString("D"), row.Kind, row.EntityKey, op, groups, row.Seq);
-    }
-
-    private Dictionary<string, SyncGroupState> KnownGroups(string kind, Dictionary<string, SyncGroupState> groups, int clientSchema)
+    public async Task<PullPage?> SnapshotAsync(Guid accountId, Guid streamId, int clientSchema, string kind, string? after,
+        int limit, CancellationToken ct)
     {
-        var info = kinds.Find(kind);
-        return info is null
-            ? []
-            : groups.Where(pair => info.Group(pair.Key) is { } group && group.Since <= clientSchema).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-    }
-
-    /// <summary>One page of the current state of one kind, in key order, for a device joining or catching up after the horizon.</summary>
-    public async Task<PullPage?> SnapshotAsync(Guid accountId, int clientSchema, string kind, string? after, int limit, CancellationToken ct)
-    {
+        await EnsureReadableAsync(accountId, streamId, ct);
         if (kinds.Find(kind) is null)
         {
             return null;
         }
 
         limit = Math.Clamp(limit, 1, SyncProtocol.MaxPullChanges);
-
-        // Read before the entities: a change that lands meanwhile has a higher sequence than this cursor,
-        // so the next pull brings it again, and applying it twice changes nothing.
-        var nextSeq = await db.SyncStreams.AsNoTracking().Where(a => a.Id == accountId).Select(a => a.NextSeq).FirstOrDefaultAsync(ct);
-        var query = db.SyncEntities.AsNoTracking().Where(e => e.AccountId == accountId && e.Kind == kind && e.PurgedAt == null);
+        var nextSeq = await db.SyncStreams.AsNoTracking().Where(s => s.Id == streamId).Select(s => s.NextSeq).FirstAsync(ct);
+        var query = db.SyncEntities.AsNoTracking()
+            .Where(e => e.AccountId == streamId && e.Kind == kind && e.PurgedAt == null && e.MovedTo == null);
         if (!string.IsNullOrEmpty(after))
         {
             query = query.Where(e => e.EntityKey.CompareTo(after) > 0);
         }
-
         var rows = await query.OrderBy(e => e.EntityKey).Take(limit + 1).ToListAsync(ct);
         var more = rows.Count > limit;
-
-        using var stream = new MemoryStream();
-        await using (var writer = new Utf8JsonWriter(stream))
+        using var bytes = new MemoryStream();
+        await using (var writer = new Utf8JsonWriter(bytes))
         {
             writer.WriteStartObject();
             writer.WritePropertyName("changes");
@@ -404,30 +711,81 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
                 var groups = KnownGroups(kind, SyncJson.ReadGroups(row.Groups), clientSchema);
                 if (groups.Count > 0)
                 {
-                    SyncJson.WriteChange(writer, $"snapshot:{kind}:{row.EntityKey}:{row.LastSeq}", kind, row.EntityKey, SyncOp.Upsert, groups, row.LastSeq);
+                    SyncJson.WriteChange(writer, $"snapshot:{kind}:{row.EntityKey}:{row.LastSeq}",
+                        kind, row.EntityKey, SyncOp.Upsert, groups, row.LastSeq);
                 }
             }
-
             writer.WriteEndArray();
-            if (last is null)
-            {
-                writer.WriteNull("next");
-            }
-            else
-            {
-                writer.WriteString("next", last);
-            }
-
+            writer.WriteStringOrNull("next", last);
             writer.WriteBoolean("more", more);
             writer.WriteNumber("cursor", nextSeq - 1);
             writer.WriteEndObject();
         }
-
-        return new PullPage(Encoding.UTF8.GetString(stream.ToArray()));
+        return new PullPage(Encoding.UTF8.GetString(bytes.ToArray()));
     }
 
-    /// <summary>Drops change-log rows older than the horizon and records how far each account was pruned (§7.12). Returns the accounts whose horizon moved.</summary>
-    public async Task<int> PruneAsync(CancellationToken ct)
+    public Task<PullPage?> SnapshotAsync(Guid accountId, int clientSchema, string kind, string? after, int limit, CancellationToken ct) =>
+        SnapshotAsync(accountId, accountId, clientSchema, kind, after, limit, ct);
+
+    private async Task EnsureReadableAsync(Guid accountId, Guid streamId, CancellationToken ct)
+    {
+        if (streamId == accountId)
+        {
+            return;
+        }
+        var membership = await memberships.GetAsync(db, accountId, ct);
+        if (!membership.Roles.ContainsKey(streamId))
+        {
+            throw new UnauthorizedAccessException("The account cannot read this stream.");
+        }
+    }
+
+    private void WriteRow(Utf8JsonWriter writer, SyncChangeRow row, int clientSchema)
+    {
+        if (row.Op == "moved")
+        {
+            writer.WriteStartObject();
+            writer.WriteString("changeId", row.ChangeId.ToString("D"));
+            writer.WriteString("kind", row.Kind);
+            writer.WriteString("key", row.EntityKey);
+            writer.WriteString("op", "moved");
+            writer.WriteNumber("seq", row.Seq);
+            using var moved = JsonDocument.Parse(row.Groups);
+            writer.WriteString("to", moved.RootElement.GetProperty("to").GetGuid());
+            writer.WriteEndObject();
+            return;
+        }
+
+        var op = row.Op == "purge" ? SyncOp.Purge : SyncOp.Upsert;
+        var groups = op == SyncOp.Purge ? new Dictionary<string, SyncGroupState>()
+            : KnownGroups(row.Kind, SyncJson.ReadGroups(row.Groups), clientSchema);
+        if (op == SyncOp.Upsert && groups.Count == 0)
+        {
+            return;
+        }
+        SyncJson.WriteChange(writer, row.ChangeId.ToString("D"), row.Kind, row.EntityKey, op, groups, row.Seq);
+    }
+
+    private Dictionary<string, SyncGroupState> KnownGroups(string kind, Dictionary<string, SyncGroupState> groups, int clientSchema)
+    {
+        var info = kinds.Find(kind);
+        return info is null ? [] : groups
+            .Where(pair => info.Group(pair.Key) is { } group && group.Since <= clientSchema)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    public async Task<IReadOnlyList<SyncStreamDto>> StreamsAsync(Guid accountId, CancellationToken ct)
+    {
+        var membership = await memberships.GetAsync(db, accountId, ct);
+        var ids = membership.Roles.Keys.Append(accountId).ToArray();
+        var rows = await db.SyncStreams.AsNoTracking().Where(s => ids.Contains(s.Id) && s.DeletedAt == null)
+            .Select(s => new { s.Id, s.Kind, s.SpaceId, s.NextSeq, s.ChangesPrunedThroughSeq })
+            .ToListAsync(ct);
+        return rows.Select(row => new SyncStreamDto(row.Id, row.Kind, row.SpaceId,
+            row.Id == accountId ? null : membership.Roles[row.Id], row.NextSeq - 1, row.ChangesPrunedThroughSeq)).ToList();
+    }
+
+    public async Task<long> PruneAsync(CancellationToken ct)
     {
         var cutoff = clock.GetUtcNow() - options.Value.ChangeLogHorizon;
         return await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -439,5 +797,22 @@ public sealed class SyncService(ChaosDbContext db, TimeProvider clock, IOptions<
             UPDATE "SyncStreams" SET "ChangesPrunedThroughSeq" = GREATEST("ChangesPrunedThroughSeq", top."Seq")
             FROM top WHERE "SyncStreams"."Id" = top."StreamId"
             """, ct);
+    }
+}
+
+public sealed record SyncStreamDto(Guid Id, short Kind, Guid? SpaceId, short? Role, long Head, long Pruned);
+
+file static class Utf8JsonWriterExtensions
+{
+    public static void WriteStringOrNull(this Utf8JsonWriter writer, string name, string? value)
+    {
+        if (value is null)
+        {
+            writer.WriteNull(name);
+        }
+        else
+        {
+            writer.WriteString(name, value);
+        }
     }
 }

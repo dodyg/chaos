@@ -61,6 +61,10 @@ public static class ServiceEndpoints
         v1.MapDelete("/devices/{id:guid}", RevokeDevice);
         v1.MapSyncEndpoints();
         v1.MapBlobEndpoints();
+        var v2 = app.MapGroup("/v2").RequireAuthorization().RequireRateLimiting(RateLimitPolicy)
+            .AddEndpointFilter<ActiveDeviceFilter>().AddEndpointFilter<SpaceEndpoints.V2ProtocolFilter>();
+        v2.MapV2SyncEndpoints();
+        v2.MapSpaceEndpoints();
     }
 
     private static async Task<IResult> RegisterDevice(ClaimsPrincipal user, RegisterDeviceRequest request, DeviceRegistration devices, CancellationToken ct)
@@ -145,9 +149,24 @@ public static class ServiceEndpoints
         }
 
         // One conditional UPDATE decides who binds, so two devices racing cannot both win.
-        var bound = await db.Accounts.Where(a => a.Id == caller.AccountId && a.ProfileId == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(a => a.ProfileId, request.ProfileId).SetProperty(a => a.PersonalSpaceId, request.PersonalSpaceId).SetProperty(a => a.InboxId, request.InboxId), ct) == 1;
+        bool bound;
+        try
+        {
+            bound = await db.Accounts.Where(a => a.Id == caller.AccountId && a.ProfileId == null
+                    && !db.Accounts.Any(other => other.Id != caller.AccountId && other.ProfileId == request.ProfileId))
+                .ExecuteUpdateAsync(s => s.SetProperty(a => a.ProfileId, request.ProfileId).SetProperty(a => a.PersonalSpaceId, request.PersonalSpaceId).SetProperty(a => a.InboxId, request.InboxId), ct) == 1;
+        }
+        catch (DbUpdateException error) when (error.InnerException is Npgsql.PostgresException
+            { SqlState: Npgsql.PostgresErrorCodes.UniqueViolation })
+        {
+            return ApiErrors.Problem("profile-in-use", "Those account IDs are already bound to another account.",
+                StatusCodes.Status409Conflict);
+        }
         var ids = await db.Accounts.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => new { a.ProfileId, a.PersonalSpaceId, a.InboxId }).FirstAsync(ct);
+        if (ids.ProfileId is null)
+        {
+            return ApiErrors.Problem("profile-in-use", "Those account IDs are already bound to another account.", StatusCodes.Status409Conflict);
+        }
         return Results.Ok(new BindAccountResponse(bound, new CanonicalIds(ids.ProfileId!.Value, ids.PersonalSpaceId!.Value, ids.InboxId!.Value)));
     }
 
@@ -177,7 +196,14 @@ public static class ServiceEndpoints
             return ApiErrors.Problem("confirmation-required", $"Type {DeleteConfirmation} to confirm.", StatusCodes.Status400BadRequest);
         }
 
-        return await deletion.DeleteAsync(caller.AccountId, caller.DeviceId, ct) ? Results.NoContent() : Results.Unauthorized();
+        var result = await deletion.DeleteAsync(caller.AccountId, caller.DeviceId, ct);
+        if (!result.Deleted && result.TransferFirst.Count > 0)
+        {
+            return ApiErrors.Problem("transfer-ownership-first",
+                "Transfer ownership of these spaces first: " + string.Join(", ", result.TransferFirst),
+                StatusCodes.Status409Conflict);
+        }
+        return result.Deleted ? Results.NoContent() : Results.Unauthorized();
     }
 
     private static async Task<IResult> RevokeDevice(ClaimsPrincipal user, Guid id, ChaosDbContext db, TimeProvider clock, CancellationToken ct)

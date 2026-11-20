@@ -164,7 +164,7 @@ public sealed class SyncProtocolTests(PostgresServer postgres)
         var reasons = document.RootElement.GetProperty("rejected").EnumerateArray().Select(r => r.GetProperty("reason").GetString()!).ToList();
         await Assert.That(reasons).IsEquivalentTo(new[]
         {
-            SyncRejection.UnknownKind, SyncRejection.Invalid, SyncRejection.Invalid, SyncRejection.TooLarge, SyncRejection.NotOwner, SyncRejection.Invalid,
+            SyncRejection.UnknownKind, SyncRejection.Invalid, SyncRejection.Invalid, SyncRejection.TooLarge, SyncRejection.SchemaTooOld, SyncRejection.Invalid,
         });
         await Assert.That(document.RootElement.GetProperty("accepted").GetArrayLength()).IsEqualTo(1);
     }

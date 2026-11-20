@@ -17,6 +17,7 @@ public sealed class Account
     public Guid? InboxId { get; set; }
 
     public long StorageBytes { get; set; }
+    public long MembershipVersion { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 
     public List<AccountLogin> Logins { get; } = [];
@@ -26,6 +27,9 @@ public sealed class Account
 /// <summary>An independently ordered account or space change stream.</summary>
 public sealed class SyncStream
 {
+    public const short AccountKind = 1;
+    public const short SpaceKind = 2;
+
     public Guid Id { get; set; }
     public short Kind { get; set; }
     public Guid? AccountId { get; set; }
@@ -111,8 +115,28 @@ public static class AuditKinds
     public const string DeviceRevoked = "device-revoked";
     public const string AccountDeleted = "account-deleted";
     public const string Quota = "quota";
+    public const string SpaceCreated = "space-created";
+    public const string SpaceDeleted = "space-deleted";
+    public const string SpaceRestored = "space-restored";
+    public const string MemberAdded = "member-added";
+    public const string MemberRemoved = "member-removed";
+    public const string MemberRole = "member-role";
+    public const string InviteCreated = "invite-created";
+    public const string InviteUsed = "invite-used";
+    public const string InviteRevoked = "invite-revoked";
+    public const string AgentCreated = "agent-created";
+    public const string AgentPaused = "agent-paused";
+    public const string AgentRemoved = "agent-removed";
+    public const string AgentReverted = "agent-reverted";
+    public const string Move = "move";
 
-    public static readonly IReadOnlyList<string> All = [SignIn, DeviceAdded, DeviceRevoked, AccountDeleted, Quota];
+    public static readonly IReadOnlyList<string> All =
+    [
+        SignIn, DeviceAdded, DeviceRevoked, AccountDeleted, Quota,
+        SpaceCreated, SpaceDeleted, SpaceRestored, MemberAdded, MemberRemoved, MemberRole,
+        InviteCreated, InviteUsed, InviteRevoked, AgentCreated, AgentPaused, AgentRemoved,
+        AgentReverted, Move,
+    ];
 }
 
 /// <summary>
@@ -148,6 +172,46 @@ public sealed class SyncChangeRow
     public Guid? ActorId { get; set; }
     public string? PreviousGroups { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>A person or agent currently or formerly in a shared space.</summary>
+public sealed class SpaceMember
+{
+    public const short PersonKind = 1;
+    public const short AgentKind = 2;
+    public const short OwnerRole = 1;
+    public const short EditorRole = 2;
+    public const short ViewerRole = 3;
+    public const short AgentRole = 4;
+
+    public Guid SpaceId { get; set; }
+    public Guid MemberId { get; set; }
+    public short MemberKind { get; set; }
+    public Guid? AccountId { get; set; }
+    public short Role { get; set; }
+    public required string DisplayName { get; set; }
+    public DateTimeOffset JoinedAt { get; set; }
+    public Guid? InvitedByMemberId { get; set; }
+    public DateTimeOffset? RemovedAt { get; set; }
+    public string? AllowedContainers { get; set; }
+    public string? GitHubLogin { get; set; }
+}
+
+/// <summary>A share invitation. The public token is never persisted; only its SHA-256 hash is stored.</summary>
+public sealed class SpaceInvite
+{
+    public Guid Id { get; set; }
+    public Guid SpaceId { get; set; }
+    public required byte[] TokenHash { get; set; }
+    public string? Email { get; set; }
+    public short Role { get; set; }
+    public Guid CreatedByMemberId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+    public int? MaxUses { get; set; }
+    public int Uses { get; set; }
+    public DateTimeOffset? LastUsedAt { get; set; }
 }
 
 /// <summary>The states of a stored blob (PLAN2 §9.2). A <c>Blocked</c> blob is never served.</summary>

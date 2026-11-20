@@ -110,7 +110,7 @@ public static class BlobEndpoints
             return Failure(BlobFailure.InvalidHash);
         }
 
-        if (await blobs.FindAsync(caller.AccountId, sha256, ct) is not { } blob)
+        if (await blobs.FindReadableAsync(caller.AccountId, sha256, ct) is not { } blob)
         {
             return Results.NotFound();
         }
@@ -169,7 +169,7 @@ public static class BlobEndpoints
             return Failure(BlobFailure.InvalidHash);
         }
 
-        if (await blobs.FindAsync(caller.AccountId, sha256, ct) is not { } blob)
+        if (await blobs.FindReadableAsync(caller.AccountId, sha256, ct) is not { } blob)
         {
             return Results.NotFound();
         }
