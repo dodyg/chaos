@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Activity;
 using Chaos.Infrastructure.Search;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync.UniqueRules;
@@ -38,7 +39,9 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
 
     private const string ChangeSavepoint = "sync_change";
 
-    public async Task<SyncApplyOutcome> ApplyAsync(IReadOnlyList<string> changePayloads, CancellationToken ct = default, long? throughSequence = null)
+    private sealed record MovedChange(string ChangeId, string Kind, string EntityKey, string Target);
+
+    public async Task<SyncApplyOutcome> ApplyAsync(IReadOnlyList<string> changePayloads, CancellationToken ct = default, long? throughSequence = null, string? streamId = null)
     {
         var parked = new List<string>();
         var applied = 0L;
@@ -47,22 +50,40 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
 
         // A payload that does not parse cannot be parked (it has no change id), so it is skipped with an attention item
         // instead of failing the whole chunk, which would leave the cursor behind it forever.
-        var changes = new List<(SyncChange Change, string Payload)>();
+        var changes = new List<(SyncChange? Change, MovedChange? Moved, string Payload)>();
         var malformed = new List<string>();
         foreach (var payload in changePayloads)
         {
+            var isMoved = false;
             try
             {
-                changes.Add((SyncChangeParser.Parse(payload), payload));
+                using var document = JsonDocument.Parse(payload);
+                var root = document.RootElement;
+                if (root.TryGetProperty("op", out var operation) && operation.GetString() == "moved")
+                {
+                    isMoved = true;
+                    var changeId = root.GetProperty("changeId").GetString();
+                    var kind = root.GetProperty("kind").GetString();
+                    var key = root.GetProperty("key").GetString();
+                    var target = root.GetProperty("to").GetString();
+                    if (string.IsNullOrWhiteSpace(changeId) || string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(key)
+                        || !Guid.TryParseExact(target, "D", out var targetId))
+                        throw new AppException(AppErrorKind.StorageUnavailable, "A moved change from the service is invalid.");
+                    changes.Add((null, new MovedChange(changeId, kind, key, targetId.ToString("D")), payload));
+                }
+                else
+                    changes.Add((SyncChangeParser.Parse(payload), null, payload));
             }
             catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException or OverflowException)
             {
+                if (isMoved) throw new AppException(AppErrorKind.StorageUnavailable, "A moved change from the service is invalid.");
                 malformed.Add(error.GetType().Name);
             }
         }
 
         skipped += malformed.Count;
 
+        using var activity = ActivityScope.Open(ActivitySources.Sync, ActivityActions.RemoteApply);
         await store.ExecuteAsync(async (session, token) =>
         {
             var connection = session.Connection();
@@ -79,9 +100,20 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                     Attention(connection, "sync.unexpected", null, null, $"A change from another device could not be read ({errorType}) and was ignored.");
                 }
 
-                foreach (var (change, payload) in changes)
+                foreach (var (change, moved, payload) in changes)
                 {
+                    if (moved is not null)
+                    {
+                        var result = ApplyMoved(connection, schema, moved);
+                        if (result == StepResult.Applied)
+                            session.Activity.Note(moved.Kind, moved.EntityKey, ActivityOp.Upsert);
+                        Count(result, moved.ChangeId, ref applied, ref purged, ref skipped, parked);
+                        continue;
+                    }
+                    if (change is null) throw new InvalidOperationException("A parsed sync change is missing.");
                     var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
+                    if (outcome is StepResult.Applied or StepResult.Purged)
+                        session.Activity.Note(change.Kind, change.EntityKey, outcome == StepResult.Purged ? ActivityOp.Delete : ActivityOp.Upsert);
                     Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
                     if (outcome is StepResult.Parked)
                     {
@@ -120,6 +152,8 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                     }
                     else
                     {
+                        if (outcome is StepResult.Applied or StepResult.Purged)
+                            session.Activity.Note(change.Kind, change.EntityKey, outcome == StepResult.Purged ? ActivityOp.Delete : ActivityOp.Upsert);
                         parked.Remove(changeId);
                         Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
                         DeleteParked(connection, changeId);
@@ -128,10 +162,22 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
 
                 if (throughSequence is { } sequence)
                 {
-                    SyncSql.Execute(connection, $"UPDATE SyncState SET Cursor = MAX(Cursor, {sequence.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
+                    if (streamId is null)
+                    {
+                        SyncSql.Execute(connection, $"UPDATE SyncState SET Cursor = MAX(Cursor, {sequence.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
+                    }
+                    else
+                    {
+                        using var advance = connection.CreateCommand();
+                        advance.CommandText = "UPDATE SyncStreams SET Cursor = MAX(Cursor, $sequence) WHERE StreamId = $stream AND State IN ('joining', 'active');";
+                        advance.Parameters.AddWithValue("$sequence", sequence);
+                        advance.Parameters.AddWithValue("$stream", streamId);
+                        if (advance.ExecuteNonQuery() != 1)
+                            throw new AppException(AppErrorKind.StorageUnavailable, "Cannot advance the cursor of a missing or evicting stream.");
+                    }
                 }
 
-                ReceiveClocks(connection, changes.Select(entry => entry.Change));
+                ReceiveClocks(connection, changes.Where(entry => entry.Change is not null).Select(entry => entry.Change!));
             }
             finally
             {
@@ -159,6 +205,32 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                 case StepResult.Skipped: skipped++; break;
             }
         }
+    }
+
+    private static StepResult ApplyMoved(SqliteConnection connection, SyncSchema schema, MovedChange moved)
+    {
+        using var access = connection.CreateCommand();
+        access.CommandText = "SELECT count(*) FROM SyncStreams WHERE StreamId=$target AND Kind='space' AND State IN ('joining','active');";
+        access.Parameters.AddWithValue("$target", moved.Target);
+        var readable = Convert.ToInt64(access.ExecuteScalar()) == 1;
+        if (!TablesByKind.TryGetValue(moved.Kind, out var table) || table.Mode == SyncMode.LocalOnly || SyncKinds.Find(moved.Kind) is not { } kind)
+            throw new AppException(AppErrorKind.StorageUnavailable, "A moved item has an unknown kind.");
+        var key = ParseKey(table, moved.EntityKey);
+        if (!readable)
+        {
+            // §7.6: the work went to a space this device cannot read, so it leaves the device. Overlays stay for the server's tombstones.
+            return SyncEviction.EvictEntities(connection, [(moved.Kind, moved.EntityKey)]) > 0 ? StepResult.Purged : StepResult.Skipped;
+        }
+
+        if (!kind.HasSpace || !RowExists(connection, table, key)) return StepResult.Skipped;
+        if (!schema.HasColumn(table.Table, "SpaceId"))
+            throw new AppException(AppErrorKind.StorageUnavailable, "A moved item has no space column.");
+        using var update = connection.CreateCommand();
+        var version = schema.HasColumn(table.Table, "Version") ? ", Version=Version+1" : string.Empty;
+        update.CommandText = $"UPDATE {SyncSql.Quote(table.Table)} SET SpaceId=$target{version} WHERE {Where(table, key)} AND SpaceId<>$target;";
+        BindKey(update, table, key);
+        update.Parameters.AddWithValue("$target", moved.Target);
+        return update.ExecuteNonQuery() == 0 ? StepResult.Skipped : StepResult.Applied;
     }
 
     /// <summary>

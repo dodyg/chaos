@@ -348,6 +348,7 @@ public sealed class TransferTests
         {
             public IProfileStore Profiles => inner.Profiles;
             public ISpaceStore Spaces => inner.Spaces;
+            public IPeopleStore People => inner.People;
             public IContainerStore Containers => inner.Containers;
             public ISectionStore Sections => inner.Sections;
             public ITaskStore Tasks { get; } = new FailingTasks(inner.Tasks);

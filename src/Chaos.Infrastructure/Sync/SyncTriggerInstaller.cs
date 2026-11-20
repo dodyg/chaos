@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Chaos.Infrastructure.Service;
+using Chaos.Sync;
 using Microsoft.Data.Sqlite;
 
 namespace Chaos.Infrastructure.Sync;
@@ -41,7 +43,7 @@ public static class SyncTriggerInstaller
             DropExisting(connection, transaction);
             foreach (var table in SyncCatalog.Ordered())
             {
-                if (table.Mode == SyncMode.LocalOnly)
+                if (!CapturesLocalChanges(table))
                 {
                     continue;
                 }
@@ -72,7 +74,7 @@ public static class SyncTriggerInstaller
     /// <summary>A stable hash over the catalog's meaning, so any change re-creates the triggers.</summary>
     public static string CatalogHash()
     {
-        var text = new StringBuilder();
+        var text = new StringBuilder().Append("client-schema|").Append(SqliteDeviceIdentity.ClientSchema).Append('\n');
         foreach (var table in SyncCatalog.Ordered())
         {
             text.Append(table.Table).Append('|').Append(table.Kind).Append('|').Append(table.Mode).Append('|')
@@ -100,9 +102,15 @@ public static class SyncTriggerInstaller
         command.CommandText = "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE $pattern;";
         command.Parameters.AddWithValue("$pattern", TriggerPrefix + "%");
         var present = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
-        var expected = SyncCatalog.Tables.Count(table => table.Mode != SyncMode.LocalOnly) * 3;
+        var expected = SyncCatalog.Tables.Count(CapturesLocalChanges) * 3;
         return present == expected;
     }
+
+    internal static bool CapturesLocalChanges(SyncTable table) =>
+        table.Mode != SyncMode.LocalOnly && SyncKinds.Find(table.Kind)?.Route.Kind != SyncRouteKind.ServerOnly;
+
+    internal static IEnumerable<SyncFieldGroup> CapturedGroups(SyncTable table) =>
+        table.Groups.Where(group => SyncKinds.Find(table.Kind)?.Group(group.Name)?.Since <= SqliteDeviceIdentity.ClientSchema);
 
     private static void DropExisting(SqliteConnection connection, SqliteTransaction transaction)
     {
@@ -133,7 +141,7 @@ public static class SyncTriggerInstaller
     // would override OR IGNORE and a repeated group would fail the SyncPending key.
     private static string CreateInsertTrigger(SyncTable table)
     {
-        var body = string.Join("\n  ", table.Groups.Select(group =>
+        var body = string.Join("\n  ", CapturedGroups(table).Select(group =>
         {
             return PendingInsert(table, Key("NEW", table.Key), group.Name, condition: null);
         }));
@@ -148,7 +156,7 @@ public static class SyncTriggerInstaller
 
     private static string CreateUpdateTrigger(SyncTable table)
     {
-        var body = string.Join("\n  ", table.Groups.Select(group =>
+        var body = string.Join("\n  ", CapturedGroups(table).Select(group =>
         {
             var changed = string.Join(" OR ", group.Columns.Select(column => $"OLD.{SyncSql.Quote(column)} IS NOT NEW.{SyncSql.Quote(column)}"));
             return PendingInsert(table, Key("NEW", table.Key), group.Name, condition: changed);

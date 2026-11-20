@@ -14,7 +14,7 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
     private static async Task<string> CaptureAsync(SyncDevice device, string title) =>
         (await device.Tasks.CaptureAsync(new(Op(), string.Empty, title, null))).Task.Id;
 
-    private static async Task<bool> WaitForRuntimeAsync(SyncEngine[] engines, Func<bool> condition, TimeSpan limit)
+    internal static async Task<bool> WaitForRuntimeAsync(SyncEngine[] engines, Func<bool> condition, TimeSpan limit)
     {
         var gate = new object();
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -65,7 +65,7 @@ public sealed class SyncRealtimeTests(PostgresServer postgres)
         }
     }
 
-    private static async Task<bool> WaitForCycleAsync(SyncEngine engine, Func<Task<bool>> condition, TimeSpan limit)
+    internal static async Task<bool> WaitForCycleAsync(SyncEngine engine, Func<Task<bool>> condition, TimeSpan limit)
     {
         var gate = new object();
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

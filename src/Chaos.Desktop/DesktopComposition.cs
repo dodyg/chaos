@@ -8,6 +8,7 @@ using Chaos.Application.GitHub;
 using Chaos.Application.History;
 using Chaos.Application.Pad;
 using Chaos.Application.Pages;
+using Chaos.Application.People;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
@@ -267,6 +268,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(store, ids, clock), _tasks));
         rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(store, ids, clock)));
         rpc.AddTagRpcService(new TagRpcService(new TagCommands(store, ids, clock), _githubEngine));
+        rpc.AddPeopleRpcService(new PeopleRpcService(new PeopleQueries(store)));
         rpc.AddQueryRpcService(new QueryRpcService(_taskQueries));
         rpc.AddViewRpcService(new ViewRpcService(_viewCommands, _viewQueries, _viewAlerts));
         rpc.AddBoardRpcService(new BoardRpcService(_boards, _boardQueries, _viewBoardQueries, _githubEngine));

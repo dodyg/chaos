@@ -188,6 +188,7 @@ public sealed class RecordingDataSession : IDataSession
     private IAttachmentStore? _attachments;
     public IProfileStore Profiles => _inner.Profiles;
     public ISpaceStore Spaces => _inner.Spaces;
+    public IPeopleStore People => _inner.People;
     public IContainerStore Containers { get; }
     public ISectionStore Sections { get; }
     public ITaskStore Tasks { get; }

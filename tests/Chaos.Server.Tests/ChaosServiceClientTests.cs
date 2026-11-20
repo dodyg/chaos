@@ -101,6 +101,16 @@ public sealed class ChaosServiceClientTests(PostgresServer postgres)
 {
     private const string Email = "person@example.com";
 
+    [Test]
+    public async Task CallAsync_VersionTwoStreams_SendsMatchingProtocolHeader()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        using var client = NewClient(server, FakeBrowser.Person(server, Email), new MemorySecretStore(), new FixedDeviceIdentity());
+        await client.SignInAsync(CancellationToken.None);
+        var response = await client.CallAsync(HttpMethod.Get, "v2/streams", null, CancellationToken.None);
+        await Assert.That(response.Status).IsEqualTo(200);
+    }
+
     private static ChaosServiceClient NewClient(TestServer server, FakeBrowser browser, MemorySecretStore secrets, FixedDeviceIdentity identity, HttpClient? http = null) =>
         new(ChaosServiceOptions.TryCreate("http://localhost/", allowLoopbackHttp: true), browser, secrets, identity, server.Clock, http ?? server.Factory.CreateClient())
         {

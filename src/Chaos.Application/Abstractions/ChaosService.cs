@@ -103,7 +103,7 @@ public interface IChaosServiceClient
     Task<string> GetAccessTokenAsync(CancellationToken ct);
 
     /// <summary>
-    /// One call to a <c>/v1</c> endpoint with the sync protocol headers (PLAN2 §7.12). Any answer, including a 4xx, comes back
+    /// One call to a versioned endpoint with the matching sync protocol headers (PLAN2 §7.12). Any answer, including a 4xx, comes back
     /// as a <see cref="ServiceResponse"/>; only a lost sign-in, an unreachable service or a cancellation throw.
     /// </summary>
     /// <exception cref="ChaosServiceException">Not signed in, the service no longer accepts the sign-in, or it could not be reached.</exception>

@@ -74,6 +74,16 @@ are reset. A restore schedules them again.
 Restoring an archive from an older version builds the database at the archive's version,
 loads the rows, then applies the newer migrations. Archives from a newer version are refused.
 
+**Shared spaces.** Backups and the archive hold shared spaces exactly as this computer has them.
+Restoring an archive turns each shared space into a **Personal copy**: its lists, tasks and
+everything in them get new IDs and move into the Personal space, and the space's membership is
+dropped. A list or template whose name is already used in the Personal space gets the space's
+name added, for example "Launch (Team)". Personal rows that pointed at the shared work (My Day,
+week plans, reminders, personal tags) point at the copies. The archive never makes this computer
+a member of anything; join the space again to see the shared original. Restoring a backup file
+(not an archive) puts the database back as it was, and sync then evicts any space this account
+can no longer read.
+
 **Merge** (Import → "Chaos archive: add its tasks") adds the archive's active tasks with their
 IDs, list, tags (by full path), subtasks and diary entries. If a task ID is already used by a
 different local task, it is a conflict: the preview names the local task and the local task

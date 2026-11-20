@@ -79,6 +79,7 @@ public static class JsonArchive
         ["SyncPending"] = "sync capture queue, rebuilt from triggers",
         ["SyncApplyState"] = "sync apply flag, device-local",
         ["SyncState"] = "sync account binding and state, device-local",
+        ["SyncStreams"] = "sync stream cursors and membership state, device-local",
         ["SyncClocks"] = "sync clocks, rebuilt on push",
         ["SyncOutbox"] = "outgoing sync queue, device-local",
         ["SyncInboxParked"] = "parked remote changes, device-local",
@@ -355,6 +356,7 @@ public static class JsonArchive
                 }
 
                 await SqliteMigrationRunner.MigrateAsync(connection, ct);
+                SharedSpaceCopies.Convert(connection);
                 await SearchIndexWriter.EnsureCurrentAsync(connection, now, ct);
             }
 

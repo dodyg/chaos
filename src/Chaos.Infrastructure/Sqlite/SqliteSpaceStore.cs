@@ -43,6 +43,20 @@ public sealed class SqliteSpaceStore(SqliteConnection connection) : ISpaceStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<IReadOnlyList<SpaceRecord>> ListAsync(CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Spaces WHERE DeletedAtUtc IS NULL ORDER BY Kind, Name COLLATE NOCASE, Id;";
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var spaces = new List<SpaceRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            spaces.Add(ReadSpace(reader));
+        }
+
+        return spaces;
+    }
+
     internal static SpaceRecord ReadSpace(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),

@@ -118,6 +118,7 @@ public sealed class SyncCatalogFlushCoverageTests
     {
         ["space"] = "No Application command writes Spaces: StorageBootstrap creates the personal space once at first start, "
             + "while sync is still disabled, and every later use only reads it (session.Spaces.Get*).",
+        ["space_member"] = "Membership is server-written and is never captured into the local outbox.",
     };
 
     public static IEnumerable<string> CoveredKinds() =>

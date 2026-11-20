@@ -1,4 +1,5 @@
 using Chaos.Application.Abstractions;
+using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using static Chaos.Infrastructure.Tests.Sync.SyncTestHelpers;
@@ -43,6 +44,16 @@ public sealed class SyncEngineResilienceTests
         }
     }
 
+    /// <summary>The join flow records the account; without it a cycle stops before calling the service.</summary>
+    private static Task BindAccountAsync(DataHost host) =>
+        host.Store.ExecuteAsync((session, _) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = $"UPDATE SyncState SET AccountId = '{Guid.NewGuid():D}' WHERE Id = 1;";
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+
     private static SyncEngineOptions Fast() => new()
     {
         Debounce = TimeSpan.FromMilliseconds(5),
@@ -57,6 +68,7 @@ public sealed class SyncEngineResilienceTests
     {
         using var host = await DataHost.StartAsync();
         await EnableSyncAsync(host);
+        await BindAccountAsync(host);
         var service = new BrokenService(() => new System.Text.Json.JsonException("not json"));
         using var engine = new SyncEngine(host.Store, new SyncApplier(host.Store, host.Clock, host.Ids), service, TimeProvider.System, Fast());
 
@@ -72,6 +84,7 @@ public sealed class SyncEngineResilienceTests
     {
         using var host = await DataHost.StartAsync();
         await EnableSyncAsync(host);
+        await BindAccountAsync(host);
         var service = new BrokenService(() => new KeyNotFoundException("missing"));
         using var engine = new SyncEngine(host.Store, new SyncApplier(host.Store, host.Clock, host.Ids), service, TimeProvider.System, Fast());
 

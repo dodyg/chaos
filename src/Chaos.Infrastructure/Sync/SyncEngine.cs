@@ -37,6 +37,12 @@ public sealed class SyncEngineOptions
     /// <summary>While sync is off the event listener looks again this often to see whether it was turned on.</summary>
     public TimeSpan EventIdleCheck { get; init; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>With no membership event, the readable stream set is asked for again this often (PLAN3 §7.7).</summary>
+    public TimeSpan DiscoveryInterval { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>A change refused with <c>parent-unknown</c> this many cycles in a row becomes an attention item (PLAN3 §7.9).</summary>
+    public int ParentUnknownAttentionCycles { get; init; } = 10;
+
     /// <summary>Jitter for the backoff, a fraction between 0 and 1. Tests fix it.</summary>
     public Func<double> Jitter { get; init; } = Random.Shared.NextDouble;
 }
@@ -48,9 +54,10 @@ public sealed record SyncRuntime(bool Syncing, ServiceFailure? Failure, bool Upd
 public sealed record SyncCycleResult(bool Ran, long Pushed, long Pulled, bool SnapshotUsed, string? Problem);
 
 /// <summary>
-/// The client sync loop (PLAN2 P13 item 2). It runs only while <c>SyncState.Enabled = 1</c>: push the
-/// outbox in batches, oldest first, and delete what the service acknowledged; pull until nothing is
-/// left and apply it through <see cref="SyncApplier"/> in small transactions; then wait for a local
+/// The client sync loop (PLAN2 P13 item 2, PLAN3 Q4). It runs only while <c>SyncState.Enabled = 1</c>: push the
+/// outbox in batches, oldest first, and delete what the service acknowledged (the service routes each change to its
+/// stream); refresh the readable streams when membership changed, evict the ones that went away, then pull every
+/// readable stream, the account stream first, through <see cref="SyncStreamPuller"/>; then wait for a local
 /// change (debounced), a wake from the service's event stream (P15), or the poll interval. A network
 /// error backs off from 2 s to 5 min with jitter and tries again at once when something wakes it. The
 /// loop never blocks the UI and never holds the writer while waiting on the network: every database
@@ -63,6 +70,13 @@ public sealed class SyncEngine : IDisposable
     private readonly SqliteApplicationStore _store;
     private readonly SyncApplier _applier;
     private readonly SyncAccountState _account;
+    private readonly SyncStreamDiscovery _discovery;
+    private readonly SyncStreamPuller _puller;
+    private readonly SyncEviction _eviction;
+    private readonly Dictionary<string, int> _parentUnknown = new(StringComparer.OrdinalIgnoreCase);
+    private bool _discoveryDue = true;
+    private long _membershipVersionSeen = -1;
+    private DateTimeOffset _lastDiscovery = DateTimeOffset.MinValue;
     private readonly IChaosServiceClient _service;
     private readonly TimeProvider _clock;
     private readonly SyncEngineOptions _options;
@@ -85,6 +99,9 @@ public sealed class SyncEngine : IDisposable
         _service = service;
         _clock = clock;
         _options = options ?? new SyncEngineOptions();
+        _discovery = new SyncStreamDiscovery(service, new SyncStreamRegistry(store));
+        _puller = new SyncStreamPuller(store, applier, service, _options.ApplyBatch);
+        _eviction = new SyncEviction(store, clock);
         if (_store.SyncFlush is { } flush)
         {
             flush.OutboxWritten += Wake;
@@ -157,6 +174,16 @@ public sealed class SyncEngine : IDisposable
     {
         lock (_wakeGate)
         {
+            _wake.TrySetResult();
+        }
+    }
+
+    /// <summary>The service says this account's readable streams or roles changed: discover again, then pull.</summary>
+    public void RequestDiscovery()
+    {
+        lock (_wakeGate)
+        {
+            _discoveryDue = true;
             _wake.TrySetResult();
         }
     }
@@ -278,6 +305,8 @@ public sealed class SyncEngine : IDisposable
         await _cycleGate.WaitAsync(ct);
         try
         {
+            // An eviction a crash interrupted is finished before anything else, whether or not sync is still on (§7.7 step 4).
+            await _eviction.EvictPendingAsync(ct);
             var state = await ReadStateAsync(ct);
             if (!state.Enabled)
             {
@@ -294,7 +323,7 @@ public sealed class SyncEngine : IDisposable
                     pushed = await PushAsync(ct);
                 }
 
-                (pulled, snapshot) = await PullAsync(state.Cursor, ct);
+                (pulled, snapshot) = await PullStreamsAsync(state.AccountId, ct);
                 await RaiseParkedAttentionAsync(ct);
 
                 // A device that just joined first took what the account has (above); only now does the rest of its data go up
@@ -364,14 +393,21 @@ public sealed class SyncEngine : IDisposable
 
                 using var silence = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 silence.CancelAfter(_options.EventSilenceLimit);
-                await foreach (var line in _service.StreamLinesAsync("v1/sync/events", silence.Token))
+                await foreach (var line in _service.StreamLinesAsync("v2/sync/events", silence.Token))
                 {
                     silence.CancelAfter(_options.EventSilenceLimit);
                     SetRuntime(r => r with { Streaming = true });
                     if (line.StartsWith("data:", StringComparison.Ordinal))
                     {
                         failures = 0;
-                        RequestPull();
+                        if (MembershipVersion(line) is { } version && version != Interlocked.Read(ref _membershipVersionSeen))
+                        {
+                            RequestDiscovery();
+                        }
+                        else
+                        {
+                            RequestPull();
+                        }
                     }
                 }
             }
@@ -412,6 +448,23 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
+    /// <summary>The version of a <c>{"membership":N}</c> event, or null for any other event (§7.8).</summary>
+    private static long? MembershipVersion(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line.AsMemory("data:".Length));
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("membership", out var membership)
+                && membership.TryGetInt64(out var version) ? version : null;
+        }
+        catch (JsonException error)
+        {
+            System.Diagnostics.Trace.TraceInformation("Sync event was not JSON: {0}", error.GetType().Name);
+            return null;
+        }
+    }
+
     private SyncCycleResult ReportUnexpected(Exception error, long pushed = 0, long pulled = 0, bool snapshot = false)
     {
         System.Diagnostics.Trace.TraceWarning("Sync cycle failed unexpectedly: {0}", error);
@@ -428,16 +481,18 @@ public sealed class SyncEngine : IDisposable
 
     // ---- State ---------------------------------------------------------------------------------------
 
-    private sealed record State(bool Enabled, long Cursor);
+    private sealed record State(bool Enabled, Guid? AccountId);
 
     private Task<State> ReadStateAsync(CancellationToken ct) =>
         _store.QueryAsync((session, _) =>
         {
             var connection = session.Connection();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT Enabled, Cursor FROM SyncState WHERE Id = 1;";
+            command.CommandText = "SELECT Enabled, AccountId FROM SyncState WHERE Id = 1;";
             using var reader = command.ExecuteReader();
-            return Task.FromResult(reader.Read() ? new State(reader.GetInt64(0) == 1, reader.GetInt64(1)) : new State(false, 0));
+            return Task.FromResult(reader.Read()
+                ? new State(reader.GetInt64(0) == 1, !reader.IsDBNull(1) && Guid.TryParse(reader.GetString(1), out var account) ? account : null)
+                : new State(false, null));
         }, ct);
 
     private Task RecordAsync(string? error, bool pushed, bool pulled, CancellationToken ct) =>
@@ -500,7 +555,7 @@ public sealed class SyncEngine : IDisposable
 
             body.Append("]}");
 
-            var response = await _service.CallAsync(HttpMethod.Post, "v1/sync/push", body.ToString(), ct);
+            var response = await _service.CallAsync(HttpMethod.Post, "v2/sync/push", body.ToString(), ct);
             if (!response.Ok)
             {
                 throw new ChaosServiceException(ServiceFailure.Refused, ProblemText(response));
@@ -509,21 +564,62 @@ public sealed class SyncEngine : IDisposable
             var (accepted, rejected) = ReadPushAnswer(response.Body);
             var byId = batch.ToDictionary(row => row.ChangeId, StringComparer.OrdinalIgnoreCase);
             var settled = new List<string>(accepted);
+            var retryLater = 0;
+            foreach (var changeId in accepted)
+            {
+                _parentUnknown.Remove(changeId);
+            }
+
             foreach (var (changeId, reason) in rejected)
             {
-                if (reason == SyncRejection.Purged)
+                byId.TryGetValue(changeId, out var row);
+                switch (reason)
                 {
-                    settled.Add(changeId); // The entity was purged elsewhere; the edit has nothing left to apply to.
-                    continue;
-                }
+                    case SyncRejection.Purged:
+                        settled.Add(changeId); // The entity was purged elsewhere; the edit has nothing left to apply to.
+                        continue;
+                    case SyncRejection.Forbidden or SyncRejection.ServerOnly:
+                        // The UI let through something this member may not change: drop it and say so (§7.9).
+                        settled.Add(changeId);
+                        _parentUnknown.Remove(changeId);
+                        await RaiseRejectionAsync(row, reason, ct);
+                        continue;
+                    case SyncRejection.NotMember:
+                        // The space went away: discovery evicts it, and with it every unsent change that would route there.
+                        lock (_wakeGate)
+                        {
+                            _discoveryDue = true;
+                        }
 
-                if (reason == SyncRejection.SchemaTooOld)
-                {
-                    _pushBlocked = true;
+                        _refused.Add(changeId);
+                        retryLater++;
+                        continue;
+                    case SyncRejection.ParentUnknown:
+                        // Outbox order puts parents first; the parent is pushed or pulled by a later cycle.
+                        var cycles = _parentUnknown[changeId] = _parentUnknown.GetValueOrDefault(changeId) + 1;
+                        if (cycles >= _options.ParentUnknownAttentionCycles)
+                        {
+                            await RaiseAttentionAsync("sync.parent-unknown", row?.Kind, row?.EntityKey,
+                                "Some changes are waiting for an item that has not reached the online service.", ct);
+                        }
+
+                        _refused.Add(changeId);
+                        retryLater++;
+                        continue;
+                    case SyncRejection.Moved:
+                        // The item moved to another stream; this cycle's pull of the account stream catches up, then the next one retries.
+                        _refused.Add(changeId);
+                        retryLater++;
+                        continue;
+                    case SyncRejection.RateLimited:
+                        await DeleteOutboxAsync(settled, ct);
+                        throw new ChaosServiceException(ServiceFailure.Refused, "The online service asked Chaos to slow down. Sync will try again shortly.");
+                    case SyncRejection.SchemaTooOld:
+                        _pushBlocked = true;
+                        break;
                 }
 
                 _refused.Add(changeId);
-                byId.TryGetValue(changeId, out var row);
                 await RaiseRejectionAsync(row, reason, ct);
             }
 
@@ -534,7 +630,7 @@ public sealed class SyncEngine : IDisposable
                 return total;
             }
 
-            if (accepted.Count == 0 && rejected.Count == 0)
+            if (accepted.Count == 0 && (rejected.Count == 0 || retryLater == rejected.Count))
             {
                 return total; // Nothing was settled; leave it for the next cycle rather than spin.
             }
@@ -601,7 +697,9 @@ public sealed class SyncEngine : IDisposable
     {
         using var document = JsonDocument.Parse(body);
         var root = document.RootElement;
-        var accepted = root.GetProperty("accepted").EnumerateArray().Select(item => item.GetString()!).ToList();
+        // Protocol 2 names the stream each change went to; the client needs only the id.
+        var accepted = root.GetProperty("accepted").EnumerateArray()
+            .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString()! : item.GetProperty("changeId").GetString()!).ToList();
         var rejected = root.GetProperty("rejected").EnumerateArray()
             .Select(item => (item.GetProperty("changeId").GetString()!, item.GetProperty("reason").GetString() ?? SyncRejection.Invalid))
             .ToList();
@@ -617,112 +715,112 @@ public sealed class SyncEngine : IDisposable
             SyncRejection.TooLarge => "A change was too large for the online service and was not uploaded.",
             SyncRejection.NotOwner => "The online service refused a change that is not in your account.",
             SyncRejection.UnknownKind => "The online service does not know a kind of change this version of Chaos made. Update Chaos.",
+            SyncRejection.Forbidden or SyncRejection.ServerOnly => "You can't change this in a shared space, so the change was not uploaded.",
             _ => "The online service rejected a change.",
         };
         return RaiseAttentionAsync("sync.rejected", row?.Kind, row?.EntityKey, message, ct);
     }
 
-    // ---- Pull ----------------------------------------------------------------------------------------
+    // ---- Streams and pull ---------------------------------------------------------------------------
 
-    private async Task<(long Pulled, bool Snapshot)> PullAsync(long cursor, CancellationToken ct)
+    /// <summary>
+    /// Asks for the readable streams when membership changed or the interval passed, evicts what went away, then pulls every
+    /// readable stream until it is quiet, the account stream first (§7.5). A stream the service no longer lets this device
+    /// read makes the cycle discover again at once, which evicts it.
+    /// </summary>
+    private async Task<(long Pulled, bool Snapshot)> PullStreamsAsync(Guid? accountId, CancellationToken ct)
     {
-        long pulled = 0;
-        while (true)
+        if (accountId is not { } account)
         {
-            var response = await _service.CallAsync(HttpMethod.Get, $"v1/sync/pull?after={cursor.ToString(CultureInfo.InvariantCulture)}&limit={SyncProtocol.MaxPullChanges}", null, ct);
-            if (!response.Ok)
+            throw new ChaosServiceException(ServiceFailure.Other, "This computer is not linked to an online account yet.");
+        }
+
+        long pulled = 0;
+        var snapshot = false;
+        for (var round = 0; round < 2; round++)
+        {
+            await DiscoverIfDueAsync(account, ct);
+            var lost = false;
+            foreach (var stream in await ReadableStreamsAsync(ct))
             {
-                throw new ChaosServiceException(ServiceFailure.Refused, ProblemText(response));
+                try
+                {
+                    var (count, snapshotted) = await _puller.PullAsync(stream, ct);
+                    pulled += count;
+                    snapshot |= snapshotted;
+                }
+                catch (SyncStreamUnreadableException)
+                {
+                    lost = true;
+                }
             }
 
-            using var document = JsonDocument.Parse(response.Body);
-            var root = document.RootElement;
-            if (root.GetProperty("snapshotRequired").GetBoolean())
+            if (!lost)
             {
-                await CatchUpFromSnapshotAsync(ct);
-                return (pulled, true);
+                break;
             }
 
-            var next = root.GetProperty("next").GetInt64();
-            var changes = root.GetProperty("changes").EnumerateArray().Select(element => (Payload: element.GetRawText(), Seq: element.GetProperty("seq").GetInt64())).ToList();
-            await ApplyInChunksAsync(changes, cursor, next, ct);
-            pulled += changes.Count;
-            cursor = Math.Max(cursor, next);
-            if (!root.GetProperty("more").GetBoolean())
+            lock (_wakeGate)
             {
-                return (pulled, false);
+                _discoveryDue = true;
             }
         }
+
+        return (pulled, snapshot);
     }
 
-    /// <summary>Applies in small transactions so a local write can interleave; the cursor moves with each chunk.</summary>
-    private async Task ApplyInChunksAsync(IReadOnlyList<(string Payload, long Seq)> changes, long cursor, long pageNext, CancellationToken ct)
+    private async Task DiscoverIfDueAsync(Guid accountId, CancellationToken ct)
     {
-        if (changes.Count == 0)
+        bool due;
+        lock (_wakeGate)
         {
-            // Rows the service filtered out (groups this client is too old to know) still advance the cursor.
-            // An idle poll writes nothing.
-            if (pageNext > cursor)
-            {
-                await _applier.ApplyAsync([], ct, pageNext);
-            }
+            due = _discoveryDue || _clock.GetUtcNow() - _lastDiscovery >= _options.DiscoveryInterval;
+            _discoveryDue = false;
+        }
 
+        if (!due && await _store.QueryAsync((session, _) => Task.FromResult(
+                SyncSql.Scalar(session.Connection(), "SELECT count(*) FROM SyncStreams WHERE Kind = 'account';") == 1), ct))
+        {
             return;
         }
 
-        for (var offset = 0; offset < changes.Count; offset += _options.ApplyBatch)
+        try
         {
-            var chunk = changes.Skip(offset).Take(_options.ApplyBatch).ToList();
-            var last = offset + chunk.Count >= changes.Count;
-            await _applier.ApplyAsync([.. chunk.Select(change => change.Payload)], ct, last ? pageNext : chunk[^1].Seq);
+            var version = await _discovery.RefreshAsync(accountId, ct);
+            Interlocked.Exchange(ref _membershipVersionSeen, version);
+            _lastDiscovery = _clock.GetUtcNow();
         }
-    }
-
-    /// <summary>
-    /// The cursor is older than the service's change log (or this device is new): read every kind's current state, parents
-    /// first, apply it, then continue from the cursor the first page reported, so a change that landed meanwhile is pulled.
-    /// </summary>
-    private async Task CatchUpFromSnapshotAsync(CancellationToken ct)
-    {
-        long? cursor = null;
-        foreach (var kind in SyncCatalog.Ordered().Where(table => table.Mode != SyncMode.LocalOnly).Select(table => table.Kind))
+        catch (Exception) when (!ct.IsCancellationRequested)
         {
-            string? after = null;
-            while (true)
+            lock (_wakeGate)
             {
-                var path = $"v1/sync/snapshot?kind={Uri.EscapeDataString(kind)}&limit={SyncProtocol.MaxPullChanges}" + (after is null ? string.Empty : $"&after={Uri.EscapeDataString(after)}");
-                var response = await _service.CallAsync(HttpMethod.Get, path, null, ct);
-                if (!response.Ok)
-                {
-                    throw new ChaosServiceException(ServiceFailure.Refused, ProblemText(response));
-                }
-
-                using var document = JsonDocument.Parse(response.Body);
-                var root = document.RootElement;
-                cursor ??= root.GetProperty("cursor").GetInt64();
-                var payloads = root.GetProperty("changes").EnumerateArray().Select(element => element.GetRawText()).ToList();
-                for (var offset = 0; offset < payloads.Count; offset += _options.ApplyBatch)
-                {
-                    await _applier.ApplyAsync([.. payloads.Skip(offset).Take(_options.ApplyBatch)], ct);
-                }
-
-                after = root.GetProperty("next").ValueKind == JsonValueKind.String ? root.GetProperty("next").GetString() : null;
-                if (!root.GetProperty("more").GetBoolean() || after is null)
-                {
-                    break;
-                }
+                _discoveryDue = true;
             }
+
+            throw;
         }
 
-        if (cursor is { } through)
+        if ((await _eviction.EvictPendingAsync(ct)).Count > 0)
         {
-            await _store.ExecuteAsync((session, _) =>
-            {
-                SyncSql.Execute(session.Connection(), $"UPDATE SyncState SET Cursor = MAX(Cursor, {through.ToString(CultureInfo.InvariantCulture)}) WHERE Id = 1;");
-                return Task.FromResult(0);
-            }, ct);
+            // The eviction removed the unsent changes that would have routed there; nothing refused needs remembering.
+            _refused.Clear();
         }
     }
+
+    private Task<List<Guid>> ReadableStreamsAsync(CancellationToken ct) =>
+        _store.QueryAsync((session, _) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "SELECT StreamId FROM SyncStreams WHERE State IN ('joining', 'active') ORDER BY Kind = 'account' DESC, StreamId;";
+            using var reader = command.ExecuteReader();
+            var streams = new List<Guid>();
+            while (reader.Read())
+            {
+                streams.Add(Guid.Parse(reader.GetString(0)));
+            }
+
+            return Task.FromResult(streams);
+        }, ct);
 
     // ---- Attention -----------------------------------------------------------------------------------
 

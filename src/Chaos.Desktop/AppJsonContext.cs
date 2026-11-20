@@ -33,6 +33,10 @@ using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(AppJsonContext))]
 
+[JsonSerializable(typeof(PeopleListRequest))]
+[JsonSerializable(typeof(PeopleListResponse))]
+[JsonSerializable(typeof(PeopleGetRequest))]
+[JsonSerializable(typeof(PeopleGetResponse))]
 [JsonSerializable(typeof(ActivityEntityDto))]
 [JsonSerializable(typeof(ActivityEntryDto))]
 [JsonSerializable(typeof(ActivitySinceRequest))]

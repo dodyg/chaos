@@ -358,7 +358,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             <strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed and Assigned to me.
           </p>
           <p>
-            Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. The history shows who made each change where that identity is available. Save task shapes
+            Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. The history names members whose identities are available, including people who have left a space. Save task shapes
             you reuse as <strong>templates</strong>.
           </p>
           <div className="flex flex-wrap gap-2">

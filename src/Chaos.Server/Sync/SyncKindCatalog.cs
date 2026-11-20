@@ -35,15 +35,6 @@ public sealed class SyncKindCatalog(IReadOnlyList<SyncKindInfo> kinds)
             kinds[serverKind.Kind] = serverKind;
         }
 
-        kinds["space"] = kinds["space"] with
-        {
-            Groups =
-            [
-                .. kinds["space"].Groups,
-                new("look", 4, SyncWrite.Owner),
-                new("settings", 4, SyncWrite.Owner),
-            ],
-        };
         return kinds;
     }
 }

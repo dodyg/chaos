@@ -19,17 +19,17 @@ public sealed class GitHubSchemaTests
         await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 13);
         await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, targetVersion);
         await Execute(connection, """
-            INSERT INTO Profiles(Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc) VALUES('p','Person','UTC','en','YMD',1,'now','now');
-            INSERT INTO Spaces(Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES('s','p',1,'Personal','now','now');
+            INSERT INTO Profiles(Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc) VALUES('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces(Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES('s','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',1,'Personal','now','now');
             INSERT INTO Containers(Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES('c','s',0,'Inbox','inbox',0,'now','now');
             INSERT INTO Tasks(Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES('t','s','c','Task',0,0,'now','now');
-            INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc) VALUES('g','s','p','https://github.com','https://api.github.com',1,'person','now','now');
+            INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc) VALUES('g','s','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','https://github.com','https://api.github.com',1,'person','now','now');
             INSERT INTO GitHubRepositories(Id,ConnectionId,RepositoryId,Owner,Name,FullName,HtmlUrl,IsPrivate,TargetContainerId,FilterJson,CreatedAtUtc,UpdatedAtUtc) VALUES('r','g',1,'person','repo','person/repo','https://github.com/person/repo',1,'c','{}','now','now');
             INSERT INTO GitHubIssueLinks(Id,RepositorySubscriptionId,ConnectionId,TaskId,IssueId,IssueNodeId,IssueNumber,HtmlUrl,BaseJson,BaseRemoteUpdatedUtc,CreatedAtUtc,UpdatedAtUtc) VALUES('l','r','g','t',1,'node',1,'https://github.com/person/repo/issues/1','{}','now','now','now');
             INSERT INTO Subtasks(Id,TaskId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES('st','t','Subtask',0,0,'now','now');
-            INSERT INTO Tags(Id,OwnerProfileId,DisplayName,NormalizedName,CreatedAtUtc,UpdatedAtUtc) VALUES('tag','p','bug','bug','now','now');
+            INSERT INTO Tags(Id,OwnerProfileId,DisplayName,NormalizedName,CreatedAtUtc,UpdatedAtUtc) VALUES('tag','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','bug','bug','now','now');
             INSERT INTO TaskTags(TaskId,TagId) VALUES('t','tag');
-            INSERT INTO DiaryEntries(Id,TaskId,AuthorProfileId,EntryAtUtc,RawMarkdown,CreatedAtUtc,UpdatedAtUtc) VALUES('d','t','p','now','body','now','now');
+            INSERT INTO DiaryEntries(Id,TaskId,AuthorProfileId,EntryAtUtc,RawMarkdown,CreatedAtUtc,UpdatedAtUtc) VALUES('d','t','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','now','body','now','now');
             INSERT INTO GitHubCommentLinks(DiaryEntryId,IssueLinkId,Origin,State) VALUES('d','l',1,0);
             UPDATE GitHubIssueLinks SET LocalDirty=0,LocalDirtySinceUtc=NULL;
             """);
@@ -120,7 +120,7 @@ public sealed class GitHubSchemaTests
     public async Task Connection_OneActivePerSpace_AllowsReplacementAfterSoftDelete()
     {
         using var connection = await OpenAsync();
-        const string insert = "INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc) VALUES('other','s','p','https://github.com','https://api.github.com',2,'other','now','now');";
+        const string insert = "INSERT INTO GitHubConnections(Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc) VALUES('other','s','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','https://github.com','https://api.github.com',2,'other','now','now');";
         await Assert.That(async () => await Execute(connection, insert)).Throws<SqliteException>();
         await Execute(connection, "UPDATE GitHubConnections SET DeletedAtUtc='later';" + insert);
         await Assert.That(await Scalar(connection, "SELECT count(*) FROM GitHubConnections;")).IsEqualTo(2L);

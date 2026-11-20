@@ -27,4 +27,5 @@ public enum ContainerKind
 public enum SpaceKind
 {
     Personal = 1,
+    Shared = 2,
 }

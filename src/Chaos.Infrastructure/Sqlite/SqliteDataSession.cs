@@ -15,6 +15,7 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     // Stores are created on first use: most reads touch two or three of them.
     private IProfileStore? _profiles;
     private ISpaceStore? _spaces;
+    private IPeopleStore? _people;
     private IContainerStore? _containers;
     private ISectionStore? _sections;
     private ITaskStore? _tasks;
@@ -49,6 +50,7 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
 
     public IProfileStore Profiles => _profiles ??= new SqliteProfileStore(connection);
     public ISpaceStore Spaces => _spaces ??= new SqliteSpaceStore(connection);
+    public IPeopleStore People => _people ??= new SqlitePeopleStore(connection);
     public IContainerStore Containers => _containers ??= new SqliteContainerStore(connection);
     public ISectionStore Sections => _sections ??= new SqliteSectionStore(connection);
     public ITaskStore Tasks => _tasks ??= new SqliteTaskStore(connection);
