@@ -1420,7 +1420,7 @@ The final `eng/verify.ps1` run used PostgreSQL through `wslc` and `DOTNET_PROCES
 
 **Exit:** the service behaves exactly as before on top of streams, and the P13 and P15 end-to-end suites pass.
 
-### [x] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
+### [ ] Q3: Spaces, membership, invites, permissions and protocol v2 on the server
 
 **Depends on:** Q2. **Server migration:** `S006_Spaces` (`SpaceMembers`, `SpaceInvites`, audit kinds).
 **Read:** 7, 8 (all), E7, E8, E10.
@@ -1434,17 +1434,37 @@ handling; stream and membership fan-out through PostgreSQL NOTIFY; invite email/
 revocation, acceptance and account/IP throttling; closure moves; overlay tombstones; 30-day purge; and the
 E10 account-deletion rules. A live wslc Mailpit smoke check received an invite-shaped SMTP message.
 
-**Q3 evidence 2026-11-20.** The dedicated two-account/raw-client suite passed 13/13 on PostgreSQL 18.7
-through wslc. It covers the 8.4 owner/editor/viewer/non-member actions, every v2 rejection reason, replayed
-purges, profile-ID uniqueness, invite page/privacy/email/expiry/use/revoke/rate paths, role and last-owner
-rules, move closure/idempotency/personal overlays/Inbox refusal, removal tombstones, delete/restore/purge,
-account deletion and former-member scrubbing, and membership plus stream events within 3 seconds. The full
-server suite passed 159/160; the only failure is the owner's documented `web-dto.json` snapshot exception.
-The combined gate's solution run reported 1390/1392: the same snapshot plus the pre-existing GitHub scheduler
-timeout. Its direct fallback passed Domain 273, Application 116, Infrastructure 715, Sync 30 and Desktop 98;
-direct server was 159/160, again only the waived snapshot. A separate strict Slopwatch run reported 0 issues.
-Desktop frontend passed 293/293; web passed 16/16; web lint exited 0 with the one existing
-`react-hooks/exhaustive-deps` warning. Smallest next action: Q4, the client schema-38 sharing engine.
+**Q3 evidence 2026-11-20.** The dedicated lifecycle suite passed 20/20 and the named permission matrix
+2/2 on PostgreSQL 18.7 through wslc; the shared-attachment server test passed as part of BlobTests 17/17.
+Together they cover every Q3-representable 8.4 owner/editor/viewer/non-member row, every 7.9 rejection,
+profile-ID and stored-author protection, immutable `SpaceId`, every invite lifecycle/limit/rate path, role and
+last-owner serialization, move closure/idempotency/personal overlays/Inbox refusal, deletion/restore/purge,
+shared blob read and purge, account deletion/former-member scrubbing, PostgreSQL membership/stream fan-out,
+PII-safe logs and v1 isolation. The complete server suite passed 170/171; the only failure is the owner's
+documented `web-dto.json` snapshot exception. `eng/verify.ps1` with PostgreSQL supplied built successfully and
+reported 1402/1403 in the combined run, again only that snapshot; its direct fallback passed Domain 273,
+Application 116, Infrastructure 715, Sync 30, Server 170/171 and Desktop 98. A separate strict Slopwatch run
+reported 0 issues. Desktop frontend passed 293/293; web passed 16/16; web lint exited 0 with the one existing
+`react-hooks/exhaustive-deps` warning. Smallest next action: resolve the remaining package-boundary permission
+rows below before ticking Q3.
+
+**Audit continuation 2026-11-20.** Re-opened Q3 after a requirement-by-requirement review. The server path
+and 13-test suite do not yet explicitly demonstrate every row of 8.4 or every invite limit/accept edge. The
+review also identified Q3 authorization details to cover: v2 header enforcement on REST endpoints, locked
+membership authorization during moves/mutations, author checks scoped to the target stream, restoring by the
+deleting owner, and the `TagsOwnerOnly` permission. Q3 stays unticked. Smallest next action: add the named,
+table-driven permission-matrix coverage and fix any production paths it exposes, then rerun all gates.
+
+**Final audit 2026-11-20.** All Q3-runnable cells and exit tests pass. Two 8.4 categories cannot be executed
+inside Q3's ordered dependency boundary: agent authorization/claims require the agent member, token and claim
+model from Q17–Q19, and custom space-state authorization requires `space_state` from Q9. The server now
+refuses those client-only kinds/groups rather than exposing a working-looking path, but the plan's literal
+"every cell" exit cannot be demonstrated by Q3 alone. Q3 remains unticked. The gate's only failure is the
+owner's recorded web-contract snapshot exception; there are no in-scope failing tests.
+
+Exact blocker: owner decision or plan amendment to mark the Q17/Q19 agent/claim rows and Q9 `space_state` row
+as deferred matrix evidence for Q3, or move to those packages and return to tick Q3. No other Q3 behavior is
+known to be missing.
 
 1. **Endpoints:**
    - `/v2/streams`

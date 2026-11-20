@@ -146,12 +146,19 @@ public sealed class SpaceService(
 
         return await strategy(async tx =>
         {
-            var current = await OwnerAsync(accountId, spaceId, ct);
+            var stream = await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
+            var current = await CurrentMemberAsync(accountId, spaceId, ct);
             if (current is null)
+            {
+                return SpaceOperation<MemberDto>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+            }
+            if (current.Role != SpaceMember.OwnerRole)
             {
                 return SpaceOperation<MemberDto>.Refuse(SyncRejection.Forbidden, "Only an owner can change roles.");
             }
-            var target = await MemberForUpdateAsync(spaceId, memberId, ct);
+            var target = await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId
+                && m.MemberId == memberId && m.RemovedAt == null, ct);
             if (target is null)
             {
                 return SpaceOperation<MemberDto>.Refuse("member-not-found", "That member is not in this space.");
@@ -167,7 +174,6 @@ public sealed class SpaceService(
             }
 
             target.Role = role;
-            var stream = await db.SyncStreams.SingleAsync(s => s.Id == spaceId, ct);
             await AppendMemberGroupAsync(stream, current.MemberId, target, "role", new() { ["Role"] = (long)role }, ct);
             db.AuditEvents.Add(new AuditEvent { AccountId = accountId, DeviceId = deviceId, Kind = AuditKinds.MemberRole, At = clock.GetUtcNow() });
             if (target.AccountId is { } affected)
@@ -190,10 +196,13 @@ public sealed class SpaceService(
     {
         return await strategy(async tx =>
         {
+            var stream = await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
             var current = await CurrentMemberAsync(accountId, spaceId, ct);
             var target = current is not null && current.MemberId == memberId
                 ? current
-                : await MemberForUpdateAsync(spaceId, memberId, ct);
+                : await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId
+                    && m.MemberId == memberId && m.RemovedAt == null, ct);
             if (current is null || (current.MemberId != memberId && current.Role != SpaceMember.OwnerRole) || target is null)
             {
                 return SpaceOperation<MemberDto>.Refuse(current is null ? SyncRejection.NotMember : SyncRejection.Forbidden,
@@ -207,7 +216,6 @@ public sealed class SpaceService(
 
             var now = clock.GetUtcNow();
             target.RemovedAt = now;
-            var stream = await db.SyncStreams.SingleAsync(s => s.Id == spaceId, ct);
             await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
             if (target.AccountId is { } affected)
             {
@@ -243,6 +251,8 @@ public sealed class SpaceService(
 
         return await strategy(async tx =>
         {
+            var stream = await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
             var member = await CurrentMemberAsync(accountId, spaceId, ct);
             if (member is null)
             {
@@ -256,7 +266,6 @@ public sealed class SpaceService(
             {
                 member.GitHubLogin = githubLogin;
             }
-            var stream = await db.SyncStreams.SingleAsync(s => s.Id == spaceId, ct);
             await AppendMemberGroupAsync(stream, member.MemberId, member, "profile",
                 new() { ["DisplayName"] = member.DisplayName, ["GitHubLogin"] = member.GitHubLogin }, ct);
             await db.SaveChangesAsync(ct);
@@ -303,8 +312,14 @@ public sealed class SpaceService(
         string spaceName = "Shared space";
         var result = await strategy(async tx =>
         {
-            var owner = await OwnerAsync(accountId, spaceId, ct);
+            var stream = await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
+            var owner = await CurrentMemberAsync(accountId, spaceId, ct);
             if (owner is null)
+            {
+                return SpaceOperation<CreatedInviteDto>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+            }
+            if (owner.Role != SpaceMember.OwnerRole)
             {
                 return SpaceOperation<CreatedInviteDto>.Refuse(SyncRejection.Forbidden, "Only an owner can invite people.");
             }
@@ -318,8 +333,8 @@ public sealed class SpaceService(
             if (email is not null)
             {
                 var recent = await db.SpaceInvites.CountAsync(i => i.Email != null
-                    && db.SpaceMembers.Any(m => m.SpaceId == i.SpaceId && m.MemberId == owner.MemberId
-                        && m.AccountId == accountId && m.Role == SpaceMember.OwnerRole)
+                    && db.SpaceMembers.Any(m => m.SpaceId == i.SpaceId && m.MemberId == i.CreatedByMemberId
+                        && m.AccountId == accountId)
                     && i.CreatedAt >= clock.GetUtcNow().AddDays(-1), ct);
                 if (recent >= options.Value.MaxInviteEmailsPerAccountPerDay)
                 {
@@ -361,14 +376,19 @@ public sealed class SpaceService(
         {
             await db.SpaceInvites.Where(i => i.Id == result.Value!.Invite.Id)
                 .ExecuteUpdateAsync(s => s.SetProperty(i => i.RevokedAt, clock.GetUtcNow()), CancellationToken.None);
-            log.LogWarning(error, "An invite email could not be sent");
+            log.LogWarning("An invite email could not be sent ({ErrorType})", error.GetType().Name);
             return SpaceOperation<CreatedInviteDto>.Refuse("email-unavailable", "The invite email could not be sent.");
         }
     }
 
     public async Task<SpaceOperation<IReadOnlyList<InviteDto>>> ListInvitesAsync(Guid accountId, Guid spaceId, CancellationToken ct)
     {
-        if (await OwnerAsync(accountId, spaceId, ct) is null)
+        var current = await CurrentMemberAsync(accountId, spaceId, ct);
+        if (current is null)
+        {
+            return SpaceOperation<IReadOnlyList<InviteDto>>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+        }
+        if (current.Role != SpaceMember.OwnerRole)
         {
             return SpaceOperation<IReadOnlyList<InviteDto>>.Refuse(SyncRejection.Forbidden, "Only an owner can list invites.");
         }
@@ -383,7 +403,14 @@ public sealed class SpaceService(
     {
         return await strategy(async tx =>
         {
-            if (await OwnerAsync(accountId, spaceId, ct) is null)
+            await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
+            var current = await CurrentMemberAsync(accountId, spaceId, ct);
+            if (current is null)
+            {
+                return SpaceOperation<bool>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+            }
+            if (current.Role != SpaceMember.OwnerRole)
             {
                 return SpaceOperation<bool>.Refuse(SyncRejection.Forbidden, "Only an owner can revoke invites.");
             }
@@ -405,12 +432,6 @@ public sealed class SpaceService(
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return await strategy(async tx =>
         {
-            var account = await db.Accounts.FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
-                .SingleOrDefaultAsync(ct);
-            if (account?.ProfileId is not { } profile || account.DeletedAt is not null)
-            {
-                return SpaceOperation<SpaceDto>.Refuse("setup-required", "Connect and bind this account on a desktop first.");
-            }
             var invite = await db.SpaceInvites.FromSqlInterpolated(
                 $"""SELECT * FROM "SpaceInvites" WHERE "TokenHash" = {hash} FOR UPDATE""").SingleOrDefaultAsync(ct);
             if (invite is null)
@@ -430,14 +451,21 @@ public sealed class SpaceService(
             {
                 return SpaceOperation<SpaceDto>.Refuse("invite-used", "That invitation has already been used.");
             }
-            if (invite.Email is not null && !await HasVerifiedEmailAsync(account, invite.Email, ct))
-            {
-                return SpaceOperation<SpaceDto>.Refuse("invite-email-mismatch", "Sign in with the email address named by this invitation.");
-            }
-            var stream = await db.SyncStreams.SingleOrDefaultAsync(s => s.Id == invite.SpaceId && s.DeletedAt == null, ct);
+            var stream = await SpaceStreamForUpdateAsync(invite.SpaceId, requireDeleted: false, ct);
             if (stream is null)
             {
                 return SpaceOperation<SpaceDto>.Refuse("invite-invalid", "That space is no longer available.");
+            }
+            await LockSpaceMembersAsync(invite.SpaceId, ct);
+            var account = await db.Accounts.FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
+                .SingleOrDefaultAsync(ct);
+            if (account?.ProfileId is not { } profile || account.DeletedAt is not null)
+            {
+                return SpaceOperation<SpaceDto>.Refuse("setup-required", "Connect and bind this account on a desktop first.");
+            }
+            if (invite.Email is not null && !await HasVerifiedEmailAsync(account, invite.Email, ct))
+            {
+                return SpaceOperation<SpaceDto>.Refuse("invite-email-mismatch", "Sign in with the email address named by this invitation.");
             }
 
             var member = await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == invite.SpaceId && m.MemberId == profile, ct);
@@ -446,8 +474,11 @@ public sealed class SpaceService(
                 return SpaceOperation<SpaceDto>.Refuse("member-account-mismatch",
                     "This member identity cannot be attached to this account.");
             }
-            var higher = member is null ? invite.Role : HigherRole(member.Role, invite.Role);
-            if (member is null)
+            var reactivating = member is { RemovedAt: not null };
+            var higher = member is null || reactivating
+                ? invite.Role
+                : HigherRole(member.Role, invite.Role);
+            if (member is null || reactivating)
             {
                 var people = await db.SpaceMembers.CountAsync(m => m.SpaceId == invite.SpaceId
                     && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null, ct);
@@ -455,15 +486,33 @@ public sealed class SpaceService(
                 {
                     return SpaceOperation<SpaceDto>.Refuse("member-limit", "This space has reached its people limit.");
                 }
-                member = new SpaceMember
+                member ??= new SpaceMember
                 {
                     SpaceId = invite.SpaceId, MemberId = profile, MemberKind = SpaceMember.PersonKind, AccountId = accountId,
                     Role = invite.Role, DisplayName = account.DisplayName ?? "A member",
                     JoinedAt = now, InvitedByMemberId = invite.CreatedByMemberId,
                 };
-                db.SpaceMembers.Add(member);
-                await db.SaveChangesAsync(ct);
-                await AppendMemberAsync(stream, profile, invite.CreatedByMemberId, account, invite.Role, now, ct);
+                if (reactivating)
+                {
+                    member.Role = invite.Role;
+                    member.AccountId = accountId;
+                    member.DisplayName = account.DisplayName ?? "A member";
+                    member.JoinedAt = now;
+                    member.InvitedByMemberId = invite.CreatedByMemberId;
+                    member.RemovedAt = null;
+                    await AppendMemberGroupAsync(stream, profile, member, "profile",
+                        new() { ["DisplayName"] = member.DisplayName, ["GitHubLogin"] = member.GitHubLogin }, ct);
+                    await AppendMemberGroupAsync(stream, profile, member, "role",
+                        new() { ["Role"] = (long)member.Role }, ct);
+                    await AppendMemberGroupAsync(stream, profile, member, "state",
+                        new() { ["RemovedAtUtc"] = null }, ct);
+                }
+                else
+                {
+                    db.SpaceMembers.Add(member);
+                    await db.SaveChangesAsync(ct);
+                    await AppendMemberAsync(stream, profile, invite.CreatedByMemberId, account, invite.Role, now, ct);
+                }
                 account.MembershipVersion++;
             }
             else
@@ -494,11 +543,18 @@ public sealed class SpaceService(
     {
         return await strategy(async tx =>
         {
-            if (await OwnerAsync(accountId, spaceId, ct) is null)
+            var stream = await SpaceStreamForUpdateAsync(spaceId, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
+            var current = await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId
+                && m.AccountId == accountId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null, ct);
+            if (current is null)
+            {
+                return SpaceOperation<bool>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+            }
+            if (current.Role != SpaceMember.OwnerRole)
             {
                 return SpaceOperation<bool>.Refuse(SyncRejection.Forbidden, "Only an owner can delete this space.");
             }
-            var stream = await db.SyncStreams.SingleAsync(s => s.Id == spaceId, ct);
             if (stream.DeletedAt is not null)
             {
                 return SpaceOperation<bool>.Success(true);
@@ -506,7 +562,7 @@ public sealed class SpaceService(
             var now = clock.GetUtcNow();
             stream.DeletedAt = now;
             stream.PurgeAfter = now.AddDays(30);
-            var owner = (await CurrentMemberAsync(accountId, spaceId, ct))!;
+            var owner = current;
             var hlc = await changes.NextHlcAsync(spaceId, "space", spaceId.ToString("D"), ct);
             await changes.AppendAsync(spaceId, owner.MemberId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "space",
                 spaceId.ToString("D"), new Dictionary<string, SyncGroupState>
@@ -536,13 +592,32 @@ public sealed class SpaceService(
     {
         return await strategy(async tx =>
         {
+            var stream = await SpaceStreamForUpdateAsync(spaceId, requireDeleted: true, ct);
+            await LockSpaceMembersAsync(spaceId, ct);
             var account = await db.Accounts.SingleOrDefaultAsync(a => a.Id == accountId, ct);
             var member = await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId && m.AccountId == accountId
-                && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null, ct);
-            var stream = await db.SyncStreams.SingleOrDefaultAsync(s => s.Id == spaceId && s.DeletedAt != null, ct);
-            if (account is null || member is null || stream?.PurgeAfter is null)
+                && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null, ct);
+            if (member is null)
+            {
+                return SpaceOperation<bool>.Refuse(SyncRejection.NotMember, "You are not a member of this space.");
+            }
+            if (member.Role != SpaceMember.OwnerRole || account is null || stream?.PurgeAfter is null)
             {
                 return SpaceOperation<bool>.Refuse(SyncRejection.Forbidden, "Only an owner can restore this space.");
+            }
+            var writes = await db.SyncChanges.AsNoTracking()
+                .Where(c => c.AccountId == spaceId && c.Kind == "space" && c.EntityKey == spaceId.ToString("D")
+                    && c.Op == "upsert")
+                .OrderByDescending(c => c.Seq)
+                .Select(c => new { c.ActorId, c.Groups })
+                .ToListAsync(ct);
+            var lastDeletion = writes.FirstOrDefault(write =>
+                SyncJson.ReadGroups(write.Groups).GetValueOrDefault("deleted")?.Values.Values
+                    .GetValueOrDefault("DeletedAtUtc") is not null);
+            if (lastDeletion?.ActorId != member.MemberId)
+            {
+                return SpaceOperation<bool>.Refuse(SyncRejection.Forbidden,
+                    "Only the owner who deleted this space can restore it.");
             }
             if (stream.PurgeAfter <= clock.GetUtcNow())
             {
@@ -579,15 +654,16 @@ public sealed class SpaceService(
     {
         return await strategy(async tx =>
         {
+            var streamIds = new[] { accountId, spaceId }.Order().ToArray();
+            var locked = await db.SyncStreams.FromSqlInterpolated(
+                $"""SELECT * FROM "SyncStreams" WHERE "Id" = ANY({streamIds}) ORDER BY "Id" FOR UPDATE""").ToListAsync(ct);
+            await LockSpaceMembersAsync(spaceId, ct);
             var current = await CurrentMemberAsync(accountId, spaceId, ct);
             if (current?.Role is not (SpaceMember.OwnerRole or SpaceMember.EditorRole))
             {
                 return SpaceOperation<MoveDto>.Refuse(current is null ? SyncRejection.NotMember : SyncRejection.Forbidden,
                     "Only an owner or editor can move a list into this space.");
             }
-            var streamIds = new[] { accountId, spaceId }.Order().ToArray();
-            var locked = await db.SyncStreams.FromSqlInterpolated(
-                $"""SELECT * FROM "SyncStreams" WHERE "Id" = ANY({streamIds}) ORDER BY "Id" FOR UPDATE""").ToListAsync(ct);
             var accountStream = locked.SingleOrDefault(s => s.Id == accountId);
             var targetStream = locked.SingleOrDefault(s => s.Id == spaceId && s.DeletedAt == null);
             if (accountStream is null || targetStream is null)
@@ -702,21 +778,33 @@ public sealed class SpaceService(
         });
     }
 
-    private async Task<SpaceMember?> OwnerAsync(Guid accountId, Guid spaceId, CancellationToken ct) =>
-        await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId && m.AccountId == accountId
-            && m.MemberKind == SpaceMember.PersonKind && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null, ct);
-
     private async Task<SpaceMember?> CurrentMemberAsync(Guid accountId, Guid spaceId, CancellationToken ct) =>
         await db.SpaceMembers.SingleOrDefaultAsync(m => m.SpaceId == spaceId && m.AccountId == accountId
             && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null
             && db.SyncStreams.Any(s => s.Id == spaceId && s.DeletedAt == null), ct);
 
-    private async Task<SpaceMember?> MemberForUpdateAsync(Guid spaceId, Guid memberId, CancellationToken ct) =>
-        (await db.SpaceMembers.FromSqlInterpolated($"""
-            SELECT * FROM "SpaceMembers"
-            WHERE "SpaceId" = {spaceId} AND "MemberId" = {memberId} AND "RemovedAt" IS NULL
-            FOR UPDATE
-            """).ToListAsync(ct)).SingleOrDefault();
+    private async Task LockSpaceMembersAsync(Guid spaceId, CancellationToken ct) =>
+        await db.SpaceMembers.FromSqlInterpolated($"""
+            SELECT * FROM "SpaceMembers" WHERE "SpaceId" = {spaceId}
+            ORDER BY "MemberId" FOR UPDATE
+            """).ToListAsync(ct);
+
+    private async Task<SyncStream> SpaceStreamForUpdateAsync(Guid spaceId, CancellationToken ct) =>
+        (await db.SyncStreams.FromSqlInterpolated($"""
+            SELECT * FROM "SyncStreams" WHERE "Id" = {spaceId} FOR UPDATE
+            """).ToListAsync(ct)).Single();
+
+    private async Task<SyncStream?> SpaceStreamForUpdateAsync(Guid spaceId, bool requireDeleted, CancellationToken ct)
+    {
+        var rows = requireDeleted
+            ? await db.SyncStreams.FromSqlInterpolated($"""
+                SELECT * FROM "SyncStreams" WHERE "Id" = {spaceId} AND "DeletedAt" IS NOT NULL FOR UPDATE
+                """).ToListAsync(ct)
+            : await db.SyncStreams.FromSqlInterpolated($"""
+                SELECT * FROM "SyncStreams" WHERE "Id" = {spaceId} AND "DeletedAt" IS NULL FOR UPDATE
+                """).ToListAsync(ct);
+        return rows.SingleOrDefault();
+    }
 
     private async Task AppendMemberAsync(SyncStream stream, Guid actor, Guid? invitedBy, Account account, short role,
         DateTimeOffset now, CancellationToken ct)
@@ -795,9 +883,8 @@ public sealed class SpaceService(
 
     private async Task BumpMembershipAsync(Guid accountId, CancellationToken ct)
     {
-        var account = await db.Accounts.FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
-            .SingleAsync(ct);
-        account.MembershipVersion++;
+        await db.Accounts.Where(a => a.Id == accountId)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.MembershipVersion, a => a.MembershipVersion + 1), ct);
         memberships.Invalidate(accountId);
     }
 

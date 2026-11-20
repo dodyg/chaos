@@ -27,30 +27,23 @@ public sealed class AccountDeletion(
             return new(false, []);
         }
 
-        var memberStreams = await db.SpaceMembers.Where(m => m.AccountId == accountId && m.RemovedAt == null)
-            .Select(m => m.SpaceId).Distinct().ToListAsync(ct);
-        var transferFirst = new List<string>();
-        foreach (var spaceId in memberStreams)
-        {
-            var live = await db.SpaceMembers.Where(m => m.SpaceId == spaceId && m.RemovedAt == null).ToListAsync(ct);
-            var departing = live.Single(m => m.AccountId == accountId);
-            var others = live.Where(m => m.AccountId != accountId).ToList();
-            if (departing.Role == SpaceMember.OwnerRole && others.Count > 0
-                && !others.Any(m => m.Role == SpaceMember.OwnerRole))
-            {
-                transferFirst.Add(SpaceName(spaceId));
-            }
-        }
-        if (transferFirst.Count > 0)
-        {
-            return new(false, transferFirst.Distinct(StringComparer.Ordinal).Order().ToList());
-        }
-
         var strategy = db.Database.CreateExecutionStrategy();
         var transactionBlock = await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var memberSpaceIds = await db.SpaceMembers.AsNoTracking().Where(m => m.AccountId == accountId)
+                .Select(m => m.SpaceId).Distinct().Order().ToListAsync(ct);
+            if (memberSpaceIds.Count > 0)
+            {
+                await db.SyncStreams.FromSqlInterpolated($"""
+                    SELECT * FROM "SyncStreams" WHERE "Id" = ANY({memberSpaceIds}) ORDER BY "Id" FOR UPDATE
+                    """).ToListAsync(ct);
+                await db.SpaceMembers.FromSqlInterpolated($"""
+                    SELECT * FROM "SpaceMembers" WHERE "SpaceId" = ANY({memberSpaceIds})
+                    ORDER BY "SpaceId", "MemberId" FOR UPDATE
+                    """).ToListAsync(ct);
+            }
             var locked = await db.Accounts
                 .FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
                 .SingleOrDefaultAsync(ct);
@@ -58,18 +51,22 @@ public sealed class AccountDeletion(
             {
                 return new List<string>();
             }
-
             var allMembers = await db.SpaceMembers
-                .FromSqlInterpolated($"""SELECT * FROM "SpaceMembers" WHERE "AccountId" = {accountId} ORDER BY "SpaceId", "MemberId" FOR UPDATE""")
+                .Where(m => m.AccountId == accountId).OrderBy(m => m.SpaceId).ThenBy(m => m.MemberId)
                 .ToListAsync(ct);
+            var blocked = new List<string>();
             foreach (var ownedSpace in allMembers.Where(m => m.RemovedAt == null && m.Role == SpaceMember.OwnerRole))
             {
                 var peers = await db.SpaceMembers.Where(m => m.SpaceId == ownedSpace.SpaceId && m.RemovedAt == null
                     && m.AccountId != accountId).ToListAsync(ct);
                 if (peers.Count > 0 && !peers.Any(p => p.Role == SpaceMember.OwnerRole))
                 {
-                    return new List<string> { SpaceName(ownedSpace.SpaceId) };
+                    blocked.Add(SpaceName(ownedSpace.SpaceId));
                 }
+            }
+            if (blocked.Count > 0)
+            {
+                return blocked;
             }
 
             var fanOut = new HashSet<(Guid SpaceId, long Seq)>();

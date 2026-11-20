@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using Chaos.Server.Blobs;
 using Chaos.Server.Data;
+using Chaos.Server.Sync;
+using Chaos.Server.Tests.Sharing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -440,6 +442,68 @@ public sealed class BlobTests(PostgresServer postgres)
         using var anonymous = await rig.Server.Factory.CreateClient().GetAsync($"/v1/blobs/{sha}");
         await Assert.That(anonymous.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
     }
+
+    [Test]
+    public async Task Shared_attachment_bytes_follow_the_space_and_are_purged_when_it_is_gone()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("blob-space-owner@example.com");
+        var member = await world.SignInAsync("blob-space-member@example.com");
+        var outsider = await world.SignInAsync("blob-space-outsider@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(member, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+
+        var bytes = Random(5000);
+        var sha = Sha(bytes);
+        (await UploadAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), bytes)).EnsureSuccessStatusCode();
+        var container = Guid.NewGuid().ToString("D");
+        var task = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var pushed = await world.PushAsync(owner,
+            SharingHarness.Change("container", container, "create",
+                new { SpaceId = owner.PersonalSpaceId.ToString("D"), Kind = 2L, IsInbox = 0L, CreatedAtUtc = Now() }),
+            SharingHarness.Change("task", task, "create",
+                new { SpaceId = owner.PersonalSpaceId.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("task", task, "place",
+                new { ContainerId = container, SectionId = (string?)null }),
+            SharingHarness.Change("attachment", attachment, "create",
+                new { SpaceId = owner.PersonalSpaceId.ToString("D"), OwnerKind = "task", OwnerId = task, CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachment, "file",
+                new { MediaType = "application/octet-stream", ByteSize = (long)bytes.Length, Sha256 = sha, Width = (long?)null, Height = (long?)null, DurationMs = (long?)null }));
+        await Assert.That(pushed.Rejections()).IsEmpty();
+        await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{space:D}/moves",
+            new MoveRequest(Guid.NewGuid(), Guid.Parse(container)));
+
+        using var memberGet = await SendAsync(rig.Server,
+            new Caller(member.Token, member.DeviceId, member.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}");
+        await Assert.That(memberGet.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await memberGet.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+        using var strangerGet = await SendAsync(rig.Server,
+            new Caller(outsider.Token, outsider.DeviceId, outsider.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}");
+        await Assert.That(strangerGet.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        rig.Server.Clock.Advance(TimeSpan.FromDays(8));
+        await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
+        {
+            await Assert.That((await scope.ServiceProvider.GetRequiredService<BlobService>()
+                .SweepAsync(CancellationToken.None)).Blobs).IsEqualTo(0);
+        }
+        owner = await world.SignInAsync(owner.Email);
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}")).Status)
+            .IsEqualTo(HttpStatusCode.OK);
+        rig.Server.Clock.Advance(TimeSpan.FromDays(31));
+        await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+            var blobs = scope.ServiceProvider.GetRequiredService<BlobService>();
+            await SpacePurgeService.PurgeDueAsync(db, rig.Server.Clock.GetUtcNow(), CancellationToken.None, blobs);
+        }
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.Blobs.AnyAsync(b => b.Sha256 == sha)).IsFalse();
+    }
+
+    private static string Now() => DateTimeOffset.UtcNow.ToString("o");
 
     private static async Task ReferenceAsync(TestServer server, Guid account, string sha, bool deleted = false)
     {

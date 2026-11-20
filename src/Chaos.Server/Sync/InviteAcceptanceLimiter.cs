@@ -13,7 +13,7 @@ public sealed class InviteAcceptanceLimiter(IOptions<SharingOptions> options, Ti
     {
         var now = clock.GetUtcNow();
         var perAccount = Account(accountId);
-        var perIp = ip is null ? true : Count("ip:" + ip, options.Value.InviteAcceptsPerIpPerHour, now);
+        var perIp = Count("ip:" + (ip ?? "unknown"), options.Value.InviteAcceptsPerIpPerHour, now);
         return perAccount && perIp;
     }
 

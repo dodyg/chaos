@@ -61,7 +61,8 @@ public static class ServiceEndpoints
         v1.MapDelete("/devices/{id:guid}", RevokeDevice);
         v1.MapSyncEndpoints();
         v1.MapBlobEndpoints();
-        var v2 = app.MapGroup("/v2").RequireAuthorization().RequireRateLimiting(RateLimitPolicy).AddEndpointFilter<ActiveDeviceFilter>();
+        var v2 = app.MapGroup("/v2").RequireAuthorization().RequireRateLimiting(RateLimitPolicy)
+            .AddEndpointFilter<ActiveDeviceFilter>().AddEndpointFilter<SpaceEndpoints.V2ProtocolFilter>();
         v2.MapV2SyncEndpoints();
         v2.MapSpaceEndpoints();
     }

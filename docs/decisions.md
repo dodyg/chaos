@@ -1119,3 +1119,13 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - PLAN3 E8 values are server configuration under `Sharing`: 50 people and 10 agents per space, 100 owned spaces per account, 50 open invites per space, 20 invite emails per account per day, and 20 invite accepts per hour per account and per IP.
 - Account deletion now scrubs every shared-space member row for that account, including rows already removed: the display name becomes “Former member” and the GitHub login is cleared. A member row keeps its actor and removed timestamp while `AccountId` becomes null. A last owner with other members must transfer ownership; a space with no peers is deleted with the account.
 - When an account has no display name, invitations and member rows use the neutral text “A member”; the person's email is never exposed to another member or placed in an invite body as a fallback.
+- Shared attachment bytes remain owned and quota-counted by the uploader, but Q3 authorizes a read by a live
+  reference in any readable account or space stream and treats references in every live stream as blob-sweep
+  references. Space purge immediately removes newly unreferenced blobs and objects while retaining blobs still
+  named elsewhere. This preserves P16 account storage keys without exposing another account's data.
+- Space membership mutation lock order is stream, then all members by member ID; account deletion uses
+  affected streams, all their members, then the account row. This serializes last-owner checks and prevents
+  concurrent demotion/removal or invite acceptance from producing an ownerless space.
+- For an existing `diary_entry`, stored authorship is authoritative; an incoming `create` group cannot rewrite
+  `AuthorProfileId`. A `HasSpace` entity's `create.SpaceId` must equal its current route and can change only
+  through the server move operation.

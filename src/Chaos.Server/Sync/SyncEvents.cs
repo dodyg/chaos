@@ -3,6 +3,8 @@ using System.Security.Claims;
 using System.Text;
 using System.Threading.Channels;
 using Chaos.Server.Data;
+using Chaos.Server.Api;
+using Chaos.Sync;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -68,7 +70,8 @@ public static class SyncEvents
     }
 
     public static async Task StreamV2Async(HttpContext http, ClaimsPrincipal user, ChaosDbContext db,
-        SyncBroadcaster broadcaster, SpaceMembershipCache memberships, IOptions<SyncOptions> options, CancellationToken ct)
+        SyncBroadcaster broadcaster, SpaceMembershipCache memberships, IOptions<SyncOptions> options, Guid? stream,
+        CancellationToken ct)
     {
         if (SyncEndpoints.IdentifyV2(http, user, out var caller) is { } refusal)
         {
@@ -76,13 +79,19 @@ public static class SyncEvents
             return;
         }
 
+        var membership = await memberships.GetAsync(db, caller.AccountId, ct);
+        if (stream is { } requested && requested != caller.AccountId && !membership.Roles.ContainsKey(requested))
+        {
+            await ApiErrors.Problem(SyncRejection.NotMember, "You are not a member of this space.",
+                StatusCodes.Status403Forbidden).ExecuteAsync(http);
+            return;
+        }
         var response = Start(http);
         var queue = Channel.CreateUnbounded<(Guid? Stream, long? Seq, long? Membership)>();
         using var streamSubscription = broadcaster.SubscribeStreams(caller.AccountId,
             (stream, seq) => queue.Writer.TryWrite((stream, seq, null)));
         using var membershipSubscription = broadcaster.SubscribeMembership(caller.AccountId,
             version => queue.Writer.TryWrite((null, null, version)));
-        var membership = await memberships.GetAsync(db, caller.AccountId, ct);
         var ids = membership.Roles.Keys.Append(caller.AccountId).ToArray();
         var heads = await db.SyncStreams.AsNoTracking().Where(s => ids.Contains(s.Id))
             .Select(s => new { s.Id, Seq = s.NextSeq - 1 }).ToListAsync(ct);

@@ -169,6 +169,76 @@ public sealed class SharingServerTests(PostgresServer postgres)
         var wrongSpace = await world.PushAsync(outsider, SharingHarness.Change("task", Guid.NewGuid().ToString("D"), "create",
             new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }));
         await Assert.That(wrongSpace.Rejections()).Contains(SyncRejection.NotMember);
+        var sharedTask = Guid.NewGuid().ToString("D");
+        var shared = await world.PushAsync(alice, SharingHarness.Change("task", sharedTask, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }));
+        await Assert.That(shared.Rejections()).IsEmpty();
+        await Assert.That((await world.CallAsync(alice, HttpMethod.Get, "/v1/sync/pull?after=0",
+            version: 1)).Body).DoesNotContain(sharedTask);
+        await Assert.That((await world.CallAsync(alice, HttpMethod.Get, "/v1/sync/snapshot?kind=task",
+            version: 1)).Body).DoesNotContain(sharedTask);
+    }
+
+    [Test]
+    public async Task V2_REST_requests_require_protocol_two_and_space_id_is_immutable()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("protocol-two-owner@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        using var http = server.Factory.CreateClient();
+        using var missing = new HttpRequestMessage(HttpMethod.Get, "/v2/streams");
+        missing.Headers.Authorization = new("Bearer", owner.Token);
+        missing.Headers.Add(SyncProtocol.DeviceHeader, owner.DeviceId.ToString());
+        using var missingResponse = await http.SendAsync(missing);
+        await Assert.That(missingResponse.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        var task = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("task", task, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }))).Rejections()).IsEmpty();
+        var movedSpace = Guid.NewGuid();
+        var change = new RawChange(Guid.NewGuid().ToString("D"), "task", task, "upsert",
+            new Dictionary<string, RawGroup>
+            {
+                ["create"] = new(Hlc.Create(DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(), 0,
+                    Guid.NewGuid()).Encode(), new
+                    {
+                        SpaceId = movedSpace.ToString("D"), CreatedAtUtc = Now(),
+                    }),
+            });
+        await Assert.That((await world.PushAsync(owner, change)).Rejections()).Contains(SyncRejection.NotOwner);
+    }
+
+    [Test]
+    public async Task Existing_diary_authorship_cannot_be_replaced_by_a_forged_create_group()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("author-owner@example.com");
+        var author = await world.SignInAsync("author-member@example.com");
+        var attacker = await world.SignInAsync("author-attacker@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(author, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        await world.JoinAsync(attacker, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var task = Guid.NewGuid().ToString("D");
+        await world.PushAsync(owner, SharingHarness.Change("task", task, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }));
+        var comment = Guid.NewGuid().ToString("D");
+        await world.PushAsync(author, SharingHarness.Change("diary_entry", comment, "create",
+            new { TaskId = task, AuthorProfileId = author.ProfileId.ToString("D"), EntryAtUtc = Now(), CreatedAtUtc = Now() }));
+        var forged = new RawChange(Guid.NewGuid().ToString("D"), "diary_entry", comment, "upsert",
+            new Dictionary<string, RawGroup>
+            {
+                ["create"] = new(Hlc.Create(DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(), 0,
+                    Guid.NewGuid()).Encode(), new
+                    {
+                        TaskId = task, AuthorProfileId = attacker.ProfileId.ToString("D"),
+                        EntryAtUtc = Now(), CreatedAtUtc = Now(),
+                    }),
+                ["entry"] = new(Hlc.Create(DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(), 1,
+                    Guid.NewGuid()).Encode(), new { RawMarkdown = "forged", EditedAtUtc = Now() }),
+            });
+        await Assert.That((await world.PushAsync(attacker, forged)).Rejections()).Contains(SyncRejection.Forbidden);
     }
 
     [Test]
@@ -228,6 +298,169 @@ public sealed class SharingServerTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task Invites_cover_idempotency_higher_role_rejoin_limits_email_limits_and_send_failure()
+    {
+        await using var server = await TestServer.StartAsync(postgres, new()
+        {
+            ["Sharing:MaxPeoplePerSpace"] = "2",
+            ["Sharing:MaxSpacesPerAccount"] = "1",
+            ["Sharing:MaxOpenInvitesPerSpace"] = "2",
+            ["Sharing:MaxInviteEmailsPerAccountPerDay"] = "1",
+            ["Sharing:InviteAcceptsPerAccountPerHour"] = "10",
+            ["Sharing:InviteAcceptsPerIpPerHour"] = "20",
+        });
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("invite-edge-owner@example.com");
+        var first = await world.SignInAsync("invite-edge-first@example.com");
+        var second = await world.SignInAsync("invite-edge-second@example.com");
+        var spaceId = Guid.NewGuid();
+        var firstCreate = await world.CallAsync(owner, HttpMethod.Post, "/v2/spaces",
+            new CreateSpaceRequest(spaceId, "Idempotent", null, null));
+        await Assert.That(firstCreate.Status).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Post, "/v2/spaces",
+            new CreateSpaceRequest(spaceId, "Idempotent repeat", null, null))).Status).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await world.CallAsync(first, HttpMethod.Post, "/v2/spaces",
+            new CreateSpaceRequest(spaceId, "Collision", null, null))).Status).IsEqualTo(HttpStatusCode.Conflict);
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Post, "/v2/spaces",
+            new CreateSpaceRequest(Guid.NewGuid(), "Too many spaces", null, null))).Body).Contains("space-limit");
+
+        await world.InviteLinkAsync(owner, spaceId, SpaceMember.ViewerRole, uses: 1);
+        await world.InviteLinkAsync(owner, spaceId, SpaceMember.ViewerRole, uses: 1);
+        var inviteLimit = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{spaceId:D}/invites",
+            new CreateInviteRequest(null, SpaceMember.ViewerRole, null, 1));
+        await Assert.That(inviteLimit.Body).Contains("invite-limit");
+        using (var initial = (await world.CallAsync(owner, HttpMethod.Get, $"/v2/spaces/{spaceId:D}/invites")).Json())
+        {
+            foreach (var invite in initial.RootElement.EnumerateArray())
+            {
+                await world.CallAsync(owner, HttpMethod.Delete,
+                    $"/v2/spaces/{spaceId:D}/invites/{invite.GetProperty("id").GetGuid():D}");
+            }
+        }
+
+        var editorLink = await world.InviteLinkAsync(owner, spaceId, SpaceMember.EditorRole, uses: 2);
+        await world.JoinAsync(first, editorLink);
+        await world.JoinAsync(first, editorLink);
+        await world.CallAsync(owner, HttpMethod.Patch, $"/v2/spaces/{spaceId:D}/members/{first.ProfileId:D}",
+            new MemberRoleRequest(SpaceMember.ViewerRole));
+        await world.JoinAsync(first, await world.InviteLinkAsync(owner, spaceId, SpaceMember.EditorRole, uses: 1));
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            await Assert.That(db.SpaceMembers.Single(m => m.SpaceId == spaceId && m.MemberId == first.ProfileId).Role)
+                .IsEqualTo(SpaceMember.EditorRole);
+            await Assert.That(db.AuditEvents.Count(a => a.AccountId == first.AccountId && a.Kind == AuditKinds.InviteUsed))
+                .IsEqualTo(3);
+        }
+
+        await world.CallAsync(owner, HttpMethod.Delete,
+            $"/v2/spaces/{spaceId:D}/members/{first.ProfileId:D}");
+        var rejoin = await world.InviteLinkAsync(owner, spaceId, SpaceMember.ViewerRole, uses: 1);
+        await world.JoinAsync(first, rejoin);
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            await Assert.That(db.SpaceMembers.Single(m => m.SpaceId == spaceId && m.MemberId == first.ProfileId).Role)
+                .IsEqualTo(SpaceMember.ViewerRole);
+        }
+        await world.CallAsync(owner, HttpMethod.Delete,
+            $"/v2/spaces/{spaceId:D}/members/{first.ProfileId:D}");
+        await world.JoinAsync(second, await world.InviteLinkAsync(owner, spaceId, SpaceMember.EditorRole, uses: 1));
+        var overCapacity = await world.CallAsync(first, HttpMethod.Post, "/v2/invites/accept",
+            new AcceptInviteRequest(new Uri(await world.InviteLinkAsync(owner, spaceId, SpaceMember.ViewerRole, uses: 1)).Segments.Last()));
+        await Assert.That(overCapacity.Body).Contains("member-limit");
+        using (var active = (await world.CallAsync(owner, HttpMethod.Get, $"/v2/spaces/{spaceId:D}/invites")).Json())
+        {
+            foreach (var invite in active.RootElement.EnumerateArray()
+                .Where(invite => invite.GetProperty("email").ValueKind == JsonValueKind.Null
+                    && invite.GetProperty("uses").GetInt32() == 0
+                    && invite.GetProperty("revokedAt").ValueKind == JsonValueKind.Null))
+            {
+                await world.CallAsync(owner, HttpMethod.Delete,
+                    $"/v2/spaces/{spaceId:D}/invites/{invite.GetProperty("id").GetGuid():D}");
+            }
+        }
+
+        var email = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{spaceId:D}/invites",
+            new CreateInviteRequest("one@example.com", SpaceMember.ViewerRole, null, null));
+        await Assert.That(email.Status).IsEqualTo(HttpStatusCode.OK);
+        var emailLimit = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{spaceId:D}/invites",
+            new CreateInviteRequest("two@example.com", SpaceMember.ViewerRole, null, null));
+        await Assert.That(emailLimit.Body).Contains("invite-email-limit");
+
+        using (var listed = (await world.CallAsync(owner, HttpMethod.Get, $"/v2/spaces/{spaceId:D}/invites")).Json())
+        {
+            foreach (var invite in listed.RootElement.EnumerateArray())
+            {
+                if (invite.GetProperty("revokedAt").ValueKind == JsonValueKind.Null)
+                {
+                    await world.CallAsync(owner, HttpMethod.Delete,
+                        $"/v2/spaces/{spaceId:D}/invites/{invite.GetProperty("id").GetGuid():D}");
+                }
+            }
+        }
+        server.Clock.Advance(TimeSpan.FromHours(25));
+        owner = await world.SignInAsync(owner.Email);
+        server.Mail.Fail = true;
+        var sendFailure = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{spaceId:D}/invites",
+            new CreateInviteRequest("failure@example.com", SpaceMember.ViewerRole, null, null));
+        await Assert.That(sendFailure.Status).IsEqualTo(HttpStatusCode.ServiceUnavailable);
+        server.Mail.Fail = false;
+        string[] logs;
+        lock (server.Logs.Lines)
+        {
+            logs = [.. server.Logs.Lines];
+        }
+        await Assert.That(logs.Any(line => line.Contains("failure@example.com", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task Wrong_invite_tokens_count_against_the_ip_limit()
+    {
+        await using var server = await TestServer.StartAsync(postgres, new()
+        {
+            ["Sharing:InviteAcceptsPerAccountPerHour"] = "20",
+            ["Sharing:InviteAcceptsPerIpPerHour"] = "2",
+        });
+        var world = new SharingHarness(server);
+        var first = await world.SignInAsync("wrong-token-a@example.com");
+        var second = await world.SignInAsync("wrong-token-b@example.com");
+        await world.CallAsync(first, HttpMethod.Post, "/v2/invites/accept", new AcceptInviteRequest("wrong-one"));
+        await world.CallAsync(second, HttpMethod.Post, "/v2/invites/accept", new AcceptInviteRequest("wrong-two"));
+        var limited = await world.CallAsync(first, HttpMethod.Post, "/v2/invites/accept", new AcceptInviteRequest("wrong-three"));
+        await Assert.That(limited.Status).IsEqualTo(HttpStatusCode.TooManyRequests);
+        await Assert.That(limited.Body).Contains(SyncRejection.RateLimited);
+    }
+
+    [Test]
+    public async Task Email_invites_accept_a_verified_linked_login_email()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("linked-invite-owner@example.com");
+        var member = await world.SignInAsync("linked-invite-primary@example.com");
+        var linkedEmail = "linked-invite-provider@example.com";
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            db.AccountLogins.Add(new AccountLogin
+            {
+                AccountId = member.AccountId,
+                Provider = LoginProviders.Google,
+                Subject = "linked-subject",
+                Email = linkedEmail,
+                LinkedAt = server.Clock.GetUtcNow(),
+            });
+            await db.SaveChangesAsync();
+        }
+        var space = await world.CreateSpaceAsync(owner);
+        var response = await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{space:D}/invites",
+            new CreateInviteRequest(linkedEmail, SpaceMember.ViewerRole, null, null));
+        await Assert.That(response.Status).IsEqualTo(HttpStatusCode.OK);
+        var token = Regex.Match(server.Mail.Sent.Last(m => m.To == linkedEmail).Body,
+            @"/invite/([A-Za-z0-9_-]+)").Groups[1].Value;
+        await Assert.That((await world.CallAsync(member, HttpMethod.Post, "/v2/invites/accept",
+            new AcceptInviteRequest(token))).Status).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
     public async Task Role_changes_leave_and_last_owner_are_server_authoritative()
     {
         await using var server = await TestServer.StartAsync(postgres);
@@ -251,6 +484,61 @@ public sealed class SharingServerTests(PostgresServer postgres)
         await world.CallAsync(bob, HttpMethod.Delete, $"/v2/spaces/{space:D}");
         var removedRestore = await world.CallAsync(alice, HttpMethod.Post, $"/v2/spaces/{space:D}/restore");
         await Assert.That(removedRestore.Status).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task Concurrent_owner_changes_cannot_leave_a_space_without_an_owner()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var alice = await world.SignInAsync("concurrent-owner-a@example.com");
+        var bob = await world.SignInAsync("concurrent-owner-b@example.com");
+        var space = await world.CreateSpaceAsync(alice);
+        await world.JoinAsync(bob, await world.InviteLinkAsync(alice, space, SpaceMember.EditorRole));
+        await world.CallAsync(alice, HttpMethod.Patch, $"/v2/spaces/{space:D}/members/{bob.ProfileId:D}",
+            new MemberRoleRequest(SpaceMember.OwnerRole));
+
+        var demoteAlice = world.CallAsync(bob, HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/{alice.ProfileId:D}", new MemberRoleRequest(SpaceMember.EditorRole));
+        var demoteBob = world.CallAsync(alice, HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/{bob.ProfileId:D}", new MemberRoleRequest(SpaceMember.EditorRole));
+        var results = await Task.WhenAll(demoteAlice, demoteBob);
+        await Assert.That(results.Count(r => r.Status == HttpStatusCode.OK)).IsEqualTo(1);
+        await using var db = ServerDatabase.Open(server.ConnectionString);
+        await Assert.That(db.SpaceMembers.Count(m => m.SpaceId == space && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null))
+            .IsEqualTo(1);
+
+        var secondSpace = await world.CreateSpaceAsync(alice);
+        await world.JoinAsync(bob, await world.InviteLinkAsync(alice, secondSpace, SpaceMember.EditorRole));
+        await world.CallAsync(alice, HttpMethod.Patch, $"/v2/spaces/{secondSpace:D}/members/{bob.ProfileId:D}",
+            new MemberRoleRequest(SpaceMember.OwnerRole));
+        var removeAlice = world.CallAsync(bob, HttpMethod.Delete,
+            $"/v2/spaces/{secondSpace:D}/members/{alice.ProfileId:D}");
+        var removeBob = world.CallAsync(alice, HttpMethod.Delete,
+            $"/v2/spaces/{secondSpace:D}/members/{bob.ProfileId:D}");
+        var removals = await Task.WhenAll(removeAlice, removeBob);
+        await Assert.That(removals.Count(r => r.Status == HttpStatusCode.OK)).IsEqualTo(1);
+        await using var check = ServerDatabase.Open(server.ConnectionString);
+        await Assert.That(check.SpaceMembers.Count(m =>
+            m.SpaceId == secondSpace && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Only_the_deleting_owner_can_restore_a_space()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var alice = await world.SignInAsync("restore-owner-a@example.com");
+        var bob = await world.SignInAsync("restore-owner-b@example.com");
+        var space = await world.CreateSpaceAsync(alice);
+        await world.JoinAsync(bob, await world.InviteLinkAsync(alice, space, SpaceMember.EditorRole));
+        await world.CallAsync(alice, HttpMethod.Patch, $"/v2/spaces/{space:D}/members/{bob.ProfileId:D}",
+            new MemberRoleRequest(SpaceMember.OwnerRole));
+        await world.CallAsync(bob, HttpMethod.Delete, $"/v2/spaces/{space:D}");
+        await Assert.That((await world.CallAsync(alice, HttpMethod.Post, $"/v2/spaces/{space:D}/restore")).Status)
+            .IsEqualTo(HttpStatusCode.Forbidden);
+        await Assert.That((await world.CallAsync(bob, HttpMethod.Post, $"/v2/spaces/{space:D}/restore")).Status)
+            .IsEqualTo(HttpStatusCode.OK);
     }
 
     [Test]
@@ -452,6 +740,31 @@ public sealed class SharingServerTests(PostgresServer postgres)
         while (line is not null && !line.Contains($"\"stream\":\"{space:D}\"", StringComparison.Ordinal));
         await Assert.That(line).IsNotNull();
         await Assert.That(line!).Contains($"\"stream\":\"{space:D}\"");
+    }
+
+    [Test]
+    public async Task PostgreSQL_notifications_expand_space_streams_to_member_accounts()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("notify-space-owner@example.com");
+        var member = await world.SignInAsync("notify-space-member@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(member, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var heard = new TaskCompletionSource<(Guid Stream, long Seq)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var broadcaster = server.Factory.Services.GetRequiredService<SyncBroadcaster>();
+        using var subscription = broadcaster.SubscribeStreams(member.AccountId,
+            (stream, seq) => heard.TrySetResult((stream, seq)));
+        await using (var db = ServerDatabase.Open(server.ConnectionString))
+        {
+            var payload = SyncNotificationListener.Payload(space, 77);
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_notify({SyncNotificationListener.Channel}, {payload})");
+        }
+        var result = await heard.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.That(result.Stream).IsEqualTo(space);
+        await Assert.That(result.Seq).IsEqualTo(77);
     }
 
     [Test]

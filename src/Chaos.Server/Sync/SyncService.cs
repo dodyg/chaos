@@ -315,7 +315,34 @@ public sealed class SyncService(
         }
         if (existing.Count == 1)
         {
+            if (kind.HasSpace && change.Groups.TryGetValue("create", out var incomingCreate)
+                && incomingCreate.Values.Values.TryGetValue("SpaceId", out var incomingSpace))
+            {
+                var expected = existing[0] == account.Id
+                    ? account.PersonalSpaceId?.ToString("D")
+                    : existing[0].ToString("D");
+                if (!string.Equals(incomingSpace?.ToString(), expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (existing[0], SyncRejection.NotOwner);
+                }
+            }
             return (existing[0], null);
+        }
+
+        var hidden = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null
+                && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind))
+            .Select(e => e.AccountId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (hidden.Count > 1)
+        {
+            return (account.Id, SyncRejection.Invalid);
+        }
+        if (hidden.Count == 1 && !readableStreams.Contains(hidden[0]))
+        {
+            return (account.Id, SyncRejection.NotMember);
         }
 
         return kind.Route.Kind switch
@@ -345,6 +372,17 @@ public sealed class SyncService(
         }
         if (!Guid.TryParse(key, out var spaceId))
         {
+            var global = await db.SyncEntities.AsNoTracking()
+                .Where(e => e.Kind == kind.Kind && e.EntityKey == change.EntityKey
+                    && e.PurgedAt == null && e.MovedTo == null
+                    && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind))
+                .Select(e => e.AccountId)
+                .Distinct()
+                .ToListAsync(ct);
+            if (global.Any(id => !readableStreams.Contains(id)))
+            {
+                return (account.Id, SyncRejection.NotMember);
+            }
             return (account.Id, SyncRejection.Invalid);
         }
         if (spaceId == account.PersonalSpaceId)
@@ -405,7 +443,11 @@ public sealed class SyncService(
         return locations.Count switch
         {
             1 => (locations[0], null),
-            0 => (Guid.Empty, SyncRejection.ParentUnknown),
+            0 => await db.SyncEntities.AsNoTracking().AnyAsync(e =>
+                    e.Kind == parentKind && e.EntityKey == key && e.PurgedAt == null && e.MovedTo == null
+                    && db.SyncStreams.Any(s => s.Id == e.AccountId && s.Kind == SyncStream.SpaceKind), ct)
+                ? (Guid.Empty, SyncRejection.NotMember)
+                : (Guid.Empty, SyncRejection.ParentUnknown),
             _ => (Guid.Empty, SyncRejection.Invalid),
         };
     }
@@ -444,7 +486,7 @@ public sealed class SyncService(
                 SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
                 SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
                 SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole)
-                    || await IsAuthorAsync(account, change, ct),
+                    || await IsAuthorAsync(account, streamId, change, ct),
                 SyncWrite.Server => false,
                 _ => false,
             };
@@ -461,25 +503,50 @@ public sealed class SyncService(
             {
                 return SyncRejection.Forbidden;
             }
+            var stored = await StoredAuthorAsync(streamId, change, ct);
+            if (stored is not null && stored != id)
+            {
+                return SyncRejection.Forbidden;
+            }
+        }
+        if (kind.Kind == "tag" && role == SpaceMember.EditorRole && await TagsOwnerOnlyAsync(streamId, ct))
+        {
+            return SyncRejection.Forbidden;
         }
         return null;
     }
 
-    private async Task<bool> IsAuthorAsync(Account account, SyncChange change, CancellationToken ct)
+    private async Task<bool> IsAuthorAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
     {
-        var incoming = Value(change, "create", "AuthorProfileId")?.ToString();
-        if (incoming is not null)
-        {
-            return Guid.TryParse(incoming, out var value) && value == account.ProfileId;
-        }
+        return await StoredAuthorAsync(streamId, change, ct) == account.ProfileId
+            || (await StoredAuthorAsync(streamId, change, ct) is null
+                && Value(change, "create", "AuthorProfileId")?.ToString() is { } incoming
+                && Guid.TryParse(incoming, out var actor) && actor == account.ProfileId);
+    }
 
+    private async Task<Guid?> StoredAuthorAsync(Guid streamId, SyncChange change, CancellationToken ct)
+    {
         var author = await db.SyncEntities.AsNoTracking()
-            .Where(e => e.Kind == change.Kind && e.EntityKey == change.EntityKey && e.PurgedAt == null && e.MovedTo == null)
+            .Where(e => e.AccountId == streamId && e.Kind == change.Kind && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null)
             .Select(e => e.Groups)
             .FirstOrDefaultAsync(ct);
-        return author is not null
-            && SyncJson.ReadGroups(author).GetValueOrDefault("create")?.Values.Values
-                .GetValueOrDefault("AuthorProfileId")?.ToString() == account.ProfileId?.ToString("D");
+        var stored = author is null
+            ? null
+            : SyncJson.ReadGroups(author).GetValueOrDefault("create")?.Values.Values
+                .GetValueOrDefault("AuthorProfileId")?.ToString();
+        return Guid.TryParse(stored, out var actor) ? actor : null;
+    }
+
+    private async Task<bool> TagsOwnerOnlyAsync(Guid streamId, CancellationToken ct)
+    {
+        var json = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.AccountId == streamId && e.Kind == "space" && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => e.Groups)
+            .FirstOrDefaultAsync(ct);
+        return json is not null
+            && SyncJson.ReadGroups(json).GetValueOrDefault("settings")?.Values.Values
+                .GetValueOrDefault("TagsOwnerOnly") is 1L;
     }
 
     private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId,

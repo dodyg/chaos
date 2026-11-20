@@ -49,6 +49,22 @@ public static class SpaceEndpoints
                 Http(await spaces.MoveAsync(Account(user), Device(user), spaceId, request, ct)));
     }
 
+    /// <summary>All v2 REST endpoints require the v2 protocol marker, just like the sync endpoints.</summary>
+    public sealed class V2ProtocolFilter : IEndpointFilter
+    {
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            if (!int.TryParse(context.HttpContext.Request.Headers[SyncProtocol.ProtocolHeader], out var protocol)
+                || protocol != SyncProtocol.Version2)
+            {
+                return ApiErrors.Problem("protocol-unsupported",
+                    "This version of Chaos speaks a sync protocol the service does not.",
+                    StatusCodes.Status400BadRequest);
+            }
+            return await next(context);
+        }
+    }
+
     public static void MapInvitePages(this WebApplication app)
     {
         app.MapGet("/invite/{token}", ShowInvite);

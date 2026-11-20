@@ -1,4 +1,5 @@
 using Chaos.Server.Data;
+using Chaos.Server.Blobs;
 using Microsoft.EntityFrameworkCore;
 
 namespace Chaos.Server.Sync;
@@ -16,7 +17,8 @@ public sealed class SpacePurgeService(IServiceScopeFactory scopes, TimeProvider 
                 try
                 {
                     await using var scope = scopes.CreateAsyncScope();
-                    await PurgeDueAsync(scope.ServiceProvider.GetRequiredService<ChaosDbContext>(), clock.GetUtcNow(), stoppingToken);
+                    await PurgeDueAsync(scope.ServiceProvider.GetRequiredService<ChaosDbContext>(), clock.GetUtcNow(),
+                        stoppingToken, scope.ServiceProvider.GetRequiredService<BlobService>());
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
@@ -31,7 +33,8 @@ public sealed class SpacePurgeService(IServiceScopeFactory scopes, TimeProvider 
         }
     }
 
-    public static async Task<int> PurgeDueAsync(ChaosDbContext db, DateTimeOffset now, CancellationToken ct)
+    public static async Task<int> PurgeDueAsync(ChaosDbContext db, DateTimeOffset now, CancellationToken ct,
+        BlobService? blobs = null)
     {
         var due = await db.SyncStreams.Where(s => s.Kind == SyncStream.SpaceKind && s.DeletedAt != null
             && s.PurgeAfter != null && s.PurgeAfter <= now).Select(s => s.Id).ToListAsync(ct);
@@ -39,6 +42,21 @@ public sealed class SpacePurgeService(IServiceScopeFactory scopes, TimeProvider 
         {
             return 0;
         }
-        return await db.SyncStreams.Where(s => due.Contains(s.Id)).ExecuteDeleteAsync(ct);
+        var attachments = await db.SyncEntities.AsNoTracking()
+            .Where(e => due.Contains(e.AccountId) && e.Kind == "attachment" && e.PurgedAt == null)
+            .Select(e => e.Groups)
+            .ToListAsync(ct);
+        var hashes = attachments
+            .Select(Chaos.Sync.SyncJson.ReadGroups)
+            .Select(groups => groups.GetValueOrDefault("file")?.Values.Values.GetValueOrDefault("Sha256")?.ToString())
+            .Where(hash => hash is not null)
+            .Select(hash => hash!)
+            .ToList();
+        var count = await db.SyncStreams.Where(s => due.Contains(s.Id)).ExecuteDeleteAsync(ct);
+        if (blobs is not null && hashes.Count > 0)
+        {
+            await blobs.PurgeUnreferencedAsync(hashes, ct);
+        }
+        return count;
     }
 }

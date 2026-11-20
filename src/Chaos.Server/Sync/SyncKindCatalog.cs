@@ -25,6 +25,7 @@ public sealed class SyncKindCatalog(IReadOnlyList<SyncKindInfo> kinds)
     }
 
     public SyncKindInfo? Find(string kind) => _byKind.GetValueOrDefault(kind);
+    public IReadOnlyList<SyncKindInfo> All => [.. _byKind.Values.OrderBy(kind => kind.ApplyOrder)];
 
     private static Dictionary<string, SyncKindInfo> Build(IReadOnlyList<SyncKindInfo> clientKinds)
     {
