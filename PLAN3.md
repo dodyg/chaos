@@ -1478,6 +1478,22 @@ exited 0 with the existing `react-hooks/exhaustive-deps` warning. The separate u
 work in the `dodyg-fix-plan3-q3-blockers` worktree is not part of Q3 and was not merged. Smallest next
 action: Q4.
 
+**Q3 security fix 2026-11-20.** A review of the blob-custody worktree found that the merged Q3 read path served
+any account's blob whose hash a live attachment in a readable stream named. A member could therefore push an
+attachment into their own Personal stream naming another account's hash and download that file. `S007_AttachmentBlobBindings`
+adds a server-recorded custodian per attachment in a space stream. The custodian is the account whose push wins the
+`file` group, or the account that moves the attachment in from its own stream. Reads outside the caller's own blobs,
+the sweep's references and the space purge go through the binding. Personal streams keep the existing rules. The
+worktree itself was not merged: it moved custody to other members after every upload, refused an attachment whose
+hash another account held (which also revealed that the file existed on the server), and took Q6's migration
+number. New tests cover a forged reference in a Personal stream, a forged reference to a member's private file
+inside a space, a legitimate shared read after the attaching member uploads, and a purge releasing the binding.
+What happens to a leaver's or a deleted account's attachments stays with Q6 (E9). Q6 is now S008 and Q17 S009. The gate used
+PostgreSQL 18.7 through `wslc`. The solution run reported 1405/1406, and the direct fallback passed Domain 273,
+Application 116, Infrastructure 715, Sync 30 and Desktop 98, with Server at 173/174. The only failure in both
+runs is the web-contract snapshot that the owner told us to disregard. A separate strict Slopwatch run found 0
+issues. The frontend suites were not re-run, because this change is server-only.
+
 1. **Endpoints:**
    - `/v2/streams`
    - `/v2/sync/push|pull|snapshot|events` (7.9)
@@ -1601,7 +1617,7 @@ see and edit the shared list according to their role. Native check: two installe
 
 ### [ ] Q6: Shared attachments
 
-**Depends on:** Q4. **Server migration:** `S007_StreamBlobs`. **Read:** PLAN2 §9.2, E9.
+**Depends on:** Q4. **Server migration:** `S008_StreamBlobs`. **Read:** PLAN2 §9.2, E9.
 
 1. **Re-key `Blobs`** and upload sessions by `(StreamId, Sha256)`. Backfill `StreamId = AccountId`. Keep the
    uploader's `AccountId` for quota (E9).
@@ -1840,7 +1856,7 @@ the task.
 
 ### [ ] Q17: Agent foundation (identity, claims, Ready for agent, limits, revert)
 
-**Depends on:** Q8. **Server migration:** `S008_Agents`. **Client migration:** `049_agents.sql` (task `claim` and
+**Depends on:** Q8. **Server migration:** `S009_Agents`. **Client migration:** `049_agents.sql` (task `claim` and
 `agent` groups, `LocalAgents`, `LocalAgentAccess`, `LocalAgentTokens`, `TaskProposals`, and a rebuild of
 `ActivityLog` that adds `'agent'` to its `Source` CHECK from `030_activity_log.sql`). **Read:** section 12, E5, E8.
 
@@ -2103,8 +2119,9 @@ If a number is taken when you start, use the next free number and update this ta
 | S004 | (PLAN2 P18) | Reserved: calendar feed tokens |
 | S005 | Q2 | Streams |
 | S006 | Q3 | Spaces, members, invites |
-| S007 | Q6 | Stream blobs |
-| S008 | Q17 | Agents |
+| S007 | Q3 | Attachment blob bindings (custody fix, decision 2026-11-20) |
+| S008 | Q6 | Stream blobs |
+| S009 | Q17 | Agents |
 
 ## Appendix B: Dependencies to resolve and pin
 

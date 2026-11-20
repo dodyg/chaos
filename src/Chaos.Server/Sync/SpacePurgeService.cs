@@ -42,21 +42,18 @@ public sealed class SpacePurgeService(IServiceScopeFactory scopes, TimeProvider 
         {
             return 0;
         }
-        var attachments = await db.SyncEntities.AsNoTracking()
-            .Where(e => due.Contains(e.AccountId) && e.Kind == "attachment" && e.PurgedAt == null)
-            .Select(e => e.Groups)
+        // Read before the delete: the bindings go with their stream.
+        var bound = await db.AttachmentBlobBindings.AsNoTracking()
+            .Where(b => due.Contains(b.StreamId))
+            .Select(b => new { b.CustodianAccountId, b.Sha256 })
+            .Distinct()
             .ToListAsync(ct);
-        var hashes = attachments
-            .Select(Chaos.Sync.SyncJson.ReadGroups)
-            .Select(groups => groups.GetValueOrDefault("file")?.Values.Values.GetValueOrDefault("Sha256")?.ToString())
-            .Where(hash => hash is not null)
-            .Select(hash => hash!)
-            .ToList();
         var count = await db.SyncStreams.Where(s => due.Contains(s.Id)).ExecuteDeleteAsync(ct);
-        if (blobs is not null && hashes.Count > 0)
+        if (blobs is not null && bound.Count > 0)
         {
-            await blobs.PurgeUnreferencedAsync(hashes, ct);
+            await blobs.PurgeUnreferencedAsync([.. bound.Select(b => (b.CustodianAccountId, b.Sha256))], ct);
         }
+
         return count;
     }
 }

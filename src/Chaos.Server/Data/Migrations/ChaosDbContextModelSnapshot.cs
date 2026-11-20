@@ -106,6 +106,33 @@ namespace Chaos.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Chaos.Server.Data.AttachmentBlobBinding", b =>
+                {
+                    b.Property<Guid>("StreamId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AttachmentId")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<Guid>("CustodianAccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("StreamId", "AttachmentId");
+
+                    b.HasIndex("CustodianAccountId", "Sha256")
+                        .HasDatabaseName("IX_AttachmentBlobBindings_Custodian");
+
+                    b.ToTable("AttachmentBlobBindings", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_AttachmentBlobBindings_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
+                        });
+                });
+
             modelBuilder.Entity("Chaos.Server.Data.AuditEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -793,6 +820,21 @@ namespace Chaos.Server.Data.Migrations
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany("Logins")
                         .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.AttachmentBlobBinding", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("CustodianAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
+                        .WithMany()
+                        .HasForeignKey("StreamId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
