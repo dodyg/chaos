@@ -33,6 +33,9 @@ public sealed record SetTaskStatusCommand(
     TaskItemStatus Status,
     OpenSubtaskChoice? OpenSubtaskChoice);
 
+public sealed record ChangeAssigneeCommand(string OperationId, string TaskId, long ExpectedVersion, string MemberId, bool Assigned);
+public sealed record SetAssignModeCommand(string OperationId, string TaskId, long ExpectedVersion, TaskAssignMode Mode);
+
 /// <summary>
 /// The explicit choice PLAN §6 requires when completing a parent that still has open
 /// subtasks: complete them together, or keep them open. Never a silent child change.
@@ -53,6 +56,8 @@ public sealed record DeleteTaskCommand(string OperationId, string TaskId, long E
 public sealed record TaskMutationResult(TaskRecord Task, bool Replayed, string? Warning);
 
 public sealed record TaskDetail(TaskRecord? Task, IReadOnlyList<SubtaskRecord> Subtasks);
+public sealed record TaskAssignments(TaskAssignMode Mode, IReadOnlyList<TaskAssigneeRecord> Assignees);
+public sealed record TaskAssignmentSummary(string TaskId, string SpaceId, IReadOnlyList<TaskAssigneeRecord> Assignees);
 
 /// <summary>
 /// Task lifecycle commands (PLAN §15 WP2) over one store: capture (WP1), the full editor,
@@ -63,6 +68,85 @@ public sealed record TaskDetail(TaskRecord? Task, IReadOnlyList<SubtaskRecord> S
 /// </summary>
 public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
+    public async Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct = default) =>
+        await store.QueryAsync((session, token) => session.Tasks.ListAssigneesAsync(taskId, token), ct);
+
+    public async Task<TaskAssignments> GetAssignmentsAsync(string taskId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var task = await RequireTaskAsync(session, taskId, token);
+            return new TaskAssignments(task.AssignMode, await session.Tasks.ListAssigneesAsync(taskId, token));
+        }, ct);
+
+    public async Task<IReadOnlyList<TaskAssignmentSummary>> GetAssignmentSummariesAsync(IReadOnlyList<string> taskIds, CancellationToken ct = default)
+    {
+        if (taskIds.Count > 500) throw AppException.Validation("taskIds", "Choose at most 500 tasks.");
+        return await store.QueryAsync<IReadOnlyList<TaskAssignmentSummary>>(async (session, token) =>
+        {
+            var result = new List<TaskAssignmentSummary>();
+            foreach (var id in taskIds.Distinct(StringComparer.Ordinal))
+            {
+                var task = await session.Tasks.GetAsync(id, token);
+                if (task is null) continue;
+                var assignments = (await session.Tasks.ListAssigneesAsync(id, token)).Where(row => row.DeletedAtUtc is null).ToList();
+                if (assignments.Count > 0) result.Add(new(task.Id, task.SpaceId, assignments));
+            }
+            return result;
+        }, ct);
+    }
+
+    public async Task<TaskMutationResult> ChangeAssigneeAsync(ChangeAssigneeCommand command, CancellationToken ct = default) =>
+        await InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId,
+                "task.assignee", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var space = await session.Spaces.GetAsync(task.SpaceId, inner);
+                    if (space?.Kind != SpaceKind.Shared)
+                        throw AppException.Validation("taskId", "Assignments are available in shared spaces.");
+                    var people = await session.People.ListAsync(task.SpaceId, inner);
+                    if (!people.Any(p => p.ActorId == "person:" + profile.Id && !p.Former && p.Role is 1 or 2))
+                        throw AppException.Validation("taskId", "Only owners and editors can change assignments.");
+                    if (command.Assigned && !people.Any(p => p.ActorId == "person:" + command.MemberId && !p.Former && p.Role is 1 or 2))
+                        throw AppException.Validation("memberId", "Choose a current owner or editor.");
+                    var rows = await session.Tasks.ListAssigneesAsync(task.Id, inner);
+                    var existing = rows.FirstOrDefault(row => row.MemberId == command.MemberId);
+                    if ((existing is { DeletedAtUtc: null }) == command.Assigned)
+                        return new TaskMutationResult(task, false, null);
+                    var row = command.Assigned
+                        ? new TaskAssigneeRecord(task.Id, command.MemberId, now, null, null)
+                        : existing! with { DeletedAtUtc = now };
+                    await session.Tasks.SaveAssigneeAsync(row, inner);
+                    var applied = await ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, inner);
+                    applied = await CompleteEachIfReadyAsync(session, ids, applied, now, inner);
+                    return new TaskMutationResult(applied, false, null);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+
+    public async Task<TaskMutationResult> SetAssignModeAsync(SetAssignModeCommand command, CancellationToken ct = default) =>
+        await InWriteAsync(async (session, profile, now, token) =>
+        {
+            if (!Enum.IsDefined(command.Mode)) throw AppException.Validation("mode", "Choose an assignment mode.");
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId,
+                "task.assignment-mode", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var space = await session.Spaces.GetAsync(task.SpaceId, inner);
+                    var people = await session.People.ListAsync(task.SpaceId, inner);
+                    if (space?.Kind != SpaceKind.Shared || !people.Any(p => p.ActorId == "person:" + profile.Id && !p.Former && p.Role is 1 or 2))
+                        throw AppException.Validation("taskId", "Only owners and editors can change shared assignments.");
+                    if (task.AssignMode == command.Mode) return new TaskMutationResult(task, false, null);
+                    var updated = task with { AssignMode = command.Mode, Version = task.Version + 1, UpdatedAtUtc = now };
+                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, inner);
+                    applied = await CompleteEachIfReadyAsync(session, ids, applied, now, inner);
+                    return new TaskMutationResult(applied, false, null);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
     public async Task<CaptureTaskResult> CaptureAsync(CaptureTaskCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -547,6 +631,18 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         CancellationToken ct) =>
         await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, body, ct);
 
+    internal static async Task<TaskRecord> CompleteEachIfReadyAsync(IDataSession session, IIdGenerator ids, TaskRecord task, DateTimeOffset now, CancellationToken token)
+    {
+        if (task.AssignMode != TaskAssignMode.Each || task.IsTerminal) return task;
+        var rows = await session.Tasks.ListAssigneesAsync(task.Id, token);
+        var completed = TaskAssignment.EachCompletion(rows.Select(row => new AssignmentCompletion(row.CompletedAtUtc, row.DeletedAtUtc)));
+        if (completed is not { } at) return task;
+        var subtasks = await session.Subtasks.ListByTaskAsync(task.Id, token);
+        var applied = await ApplyStatusAsync(session, ids, task, TaskItemStatus.Done, OpenSubtaskChoice.KeepOpen, now, subtasks, token, recordOwnCompletion: false);
+        return applied.CompletedAtUtc == at ? applied : await ApplyTaskUpdateAsync(session,
+            applied with { CompletedAtUtc = at, Version = applied.Version + 1 }, applied.Version, token);
+    }
+
     private static async Task<TaskRecord> RequireTaskAsync(IDataSession session, string taskId, CancellationToken token) =>
         await session.Tasks.GetAsync(taskId, token)
         ?? throw AppException.NotFound("That task no longer exists. Refresh and try again.");
@@ -635,10 +731,26 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         DateTimeOffset now,
         IReadOnlyList<SubtaskRecord> subtasks,
         CancellationToken token,
-        bool restorePreviousStatus = true)
+        bool restorePreviousStatus = true,
+        bool recordOwnCompletion = true)
     {
         if (task.RecurrenceOccurrenceKey is not null && (task.IsTerminal || status == TaskItemStatus.Cancelled))
             throw AppException.Validation("status", "Use the recurrence controls to reconcile or end this series.");
+
+        DateTimeOffset? eachCompletedAt = null;
+        if (recordOwnCompletion && status == TaskItemStatus.Done && task.AssignMode == TaskAssignMode.Each && !task.IsTerminal)
+        {
+            var profile = await RequirePrimaryProfile(session, token);
+            var rows = await session.Tasks.ListAssigneesAsync(task.Id, token);
+            var mine = rows.FirstOrDefault(row => row.MemberId == profile.Id && row.DeletedAtUtc is null)
+                ?? throw AppException.Validation("status", "Only an assignee can complete their part of this task.");
+            if (mine.CompletedAtUtc is not null) return task;
+            await session.Tasks.SaveAssigneeAsync(mine with { CompletedAtUtc = now }, token);
+            eachCompletedAt = TaskAssignment.EachCompletion(rows.Select(row => new AssignmentCompletion(
+                row.MemberId == profile.Id ? now : row.CompletedAtUtc, row.DeletedAtUtc)));
+            if (eachCompletedAt is null)
+                return await ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token);
+        }
 
         // Reopening restores the previous nonterminal status when history knows it (PLAN §6).
         var targetStatus = restorePreviousStatus && TaskItemStatusRules.IsTerminal(task.Status) && !TaskItemStatusRules.IsTerminal(status)
@@ -653,7 +765,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         var updated = task with
         {
             Status = targetStatus,
-            CompletedAtUtc = targetStatus == TaskItemStatus.Done ? now : null,
+            CompletedAtUtc = targetStatus == TaskItemStatus.Done ? eachCompletedAt ?? now : null,
             CancelledAtUtc = targetStatus == TaskItemStatus.Cancelled ? now : null,
             Version = task.Version + 1,
             UpdatedAtUtc = now,

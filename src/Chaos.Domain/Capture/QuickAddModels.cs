@@ -44,7 +44,9 @@ public sealed record CaptureToken(CaptureTokenKind Kind, int Start, int End, str
 
 public sealed record CaptureWarning(string Code, string Message, int? Start = null, int? End = null);
 
-public sealed record KnownContainer(string Id, string Name);
+public sealed record KnownContainer(string Id, string Name, string? SpaceId = null);
+public sealed record KnownSpace(string Id, string Name, bool Personal);
+public sealed record KnownPerson(string SpaceId, string MemberId, string DisplayName);
 
 public enum CaptureReminderAnchor
 {
@@ -71,7 +73,12 @@ public sealed record QuickAddContext(
     TimeOnly DefaultReminderTime,
     IReadOnlyList<KnownContainer> Containers,
     IReadOnlyList<string> TagPaths,
-    IReadOnlyList<CaptureSpan> ExcludedSpans);
+    IReadOnlyList<CaptureSpan> ExcludedSpans)
+{
+    public string? DefaultContainerId { get; init; }
+    public IReadOnlyList<KnownSpace> Spaces { get; init; } = [];
+    public IReadOnlyList<KnownPerson> People { get; init; } = [];
+}
 
 /// <summary>The task fields the preview proposes; every field stays editable before saving.</summary>
 public sealed record QuickAddDraft
@@ -91,6 +98,7 @@ public sealed record QuickAddDraft
     public IReadOnlyList<CaptureReminder> Reminders { get; init; } = [];
     public IReadOnlyList<CaptureTag> Tags { get; init; } = [];
     public string? ContainerId { get; init; }
+    public IReadOnlyList<string> AssigneeIds { get; init; } = [];
     /// <summary>More than one list or project matched the name: the user picks one.</summary>
     public IReadOnlyList<KnownContainer> ContainerCandidates { get; init; } = [];
     public string? WaitingOn { get; init; }

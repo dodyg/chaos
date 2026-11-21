@@ -61,6 +61,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["subtask_tag"] = Structure,
 
         ["task"] = Work,
+        ["task_assignee"] = "assignment",
         ["subtask"] = Work,
         ["task_tag"] = Work,
         ["task_history"] = Work,
@@ -172,6 +173,30 @@ public sealed class SyncCatalogFlushCoverageTests
         var expected = new Dictionary<string, string>(StringComparer.Ordinal);
         switch (group)
         {
+            case "assignment":
+                var profile = await host.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token));
+                var space = Guid.NewGuid().ToString("D");
+                var container = Guid.NewGuid().ToString("D");
+                await host.Store.ExecuteAsync(async (session, token) =>
+                {
+                    using var command = session.Connection().CreateCommand();
+                    command.CommandText = """
+                        INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',$now,$now);
+                        INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($memberRow,$space,$profile,1,'Me',1,$now);
+                        INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ($container,$space,1,'Team','team',0,$now,$now);
+                        """;
+                    command.Parameters.AddWithValue("$space", space);
+                    command.Parameters.AddWithValue("$profile", profile!.Id);
+                    command.Parameters.AddWithValue("$memberRow", Guid.NewGuid().ToString("D"));
+                    command.Parameters.AddWithValue("$container", container);
+                    command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
+                    await command.ExecuteNonQueryAsync(token);
+                    return 0;
+                });
+                var assignedTask = (await host.Tasks.CaptureAsync(new(Op(), container, "Assign", null))).Task;
+                await host.Tasks.ChangeAssigneeAsync(new(Op(), assignedTask.Id, assignedTask.Version, profile!.Id, true));
+                expected["task_assignee"] = $"{assignedTask.Id}|{profile.Id}";
+                break;
             case "reminder_ack":
                 var task = await SyncTestHelpers.CaptureTaskAsync(host);
                 var reminders = new ReminderCommands(host.Store, host.Ids, host.Clock, host.Tasks, new CoveragePresenter());

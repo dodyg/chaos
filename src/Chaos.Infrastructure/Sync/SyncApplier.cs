@@ -5,6 +5,7 @@ using Chaos.Application.Activity;
 using Chaos.Infrastructure.Search;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Sync.UniqueRules;
+using Chaos.Domain.Tasks;
 using Chaos.Sync;
 using Microsoft.Data.Sqlite;
 using static Chaos.Infrastructure.Sync.SyncRows;
@@ -88,6 +89,7 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
         {
             var connection = session.Connection();
             var schema = new SyncSchema(connection);
+            var assignmentTasks = new HashSet<string>(StringComparer.Ordinal);
             SyncSql.Execute(connection, "UPDATE SyncApplyState SET Applying = 1 WHERE Id = 1;");
             SyncSql.Execute(connection, "PRAGMA defer_foreign_keys = ON;");
             try
@@ -114,6 +116,8 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                     var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
                     if (outcome is StepResult.Applied or StepResult.Purged)
                         session.Activity.Note(change.Kind, change.EntityKey, outcome == StepResult.Purged ? ActivityOp.Delete : ActivityOp.Upsert);
+                    if (outcome == StepResult.Applied && change.Kind is "task_assignee" or "task")
+                        assignmentTasks.Add(change.EntityKey.Split('|')[0]);
                     Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
                     if (outcome is StepResult.Parked)
                     {
@@ -154,6 +158,8 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                     {
                         if (outcome is StepResult.Applied or StepResult.Purged)
                             session.Activity.Note(change.Kind, change.EntityKey, outcome == StepResult.Purged ? ActivityOp.Delete : ActivityOp.Upsert);
+                        if (outcome == StepResult.Applied && change.Kind is "task_assignee" or "task")
+                            assignmentTasks.Add(change.EntityKey.Split('|')[0]);
                         parked.Remove(changeId);
                         Count(outcome, change.ChangeId, ref applied, ref purged, ref skipped, parked);
                         DeleteParked(connection, changeId);
@@ -182,6 +188,19 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
             finally
             {
                 SyncSql.Execute(connection, "UPDATE SyncApplyState SET Applying = 0 WHERE Id = 1;");
+            }
+
+            foreach (var taskId in assignmentTasks)
+            {
+                var task = await session.Tasks.GetAsync(taskId, token);
+                if (task is null || task.AssignMode != TaskAssignMode.Each || task.Status == TaskItemStatus.Cancelled) continue;
+                var rows = await session.Tasks.ListAssigneesAsync(taskId, token);
+                var completed = TaskAssignment.EachCompletion(rows.Select(row => new AssignmentCompletion(row.CompletedAtUtc, row.DeletedAtUtc)));
+                if (completed is not { } at || (task.Status == TaskItemStatus.Done && task.CompletedAtUtc == at)) continue;
+                var updated = task with { Status = TaskItemStatus.Done, CompletedAtUtc = at, CancelledAtUtc = null,
+                    UpdatedAtUtc = clock.GetUtcNow(), Version = task.Version + 1 };
+                if (await session.Tasks.UpdateAsync(updated, task.Version, token) is not null)
+                    session.Activity.Note("task", taskId, ActivityOp.Upsert);
             }
 
             return 0;

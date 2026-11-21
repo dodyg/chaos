@@ -15,8 +15,14 @@ namespace Chaos.Infrastructure.Search;
 /// Every value is a bound parameter; free text only reaches FTS through
 /// <see cref="SearchText.ToMatchExpression"/>.
 /// </summary>
-public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQueryStore
+public sealed class SqliteTaskQueryStore : ITaskQueryStore
 {
+    private readonly SqliteConnection connection;
+    public SqliteTaskQueryStore(SqliteConnection connection)
+    {
+        this.connection = connection;
+        connection.CreateFunction<string?, string>("chaos_normalize", value => SearchText.Normalize(value).ToLowerInvariant(), isDeterministic: true);
+    }
     private const int MaxTagDepth = 16;
 
     public async Task<TaskQueryPage> QueryAsync(TaskQueryCriteria criteria, CancellationToken ct)
@@ -229,7 +235,11 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
             var builder = new PlanBuilder();
             var where = new List<string>
             {
-                $"t.SpaceId = {builder.P(criteria.SpaceId)}",
+                criteria.View == TaskView.AssignedToMe
+                    ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM TaskAssignees a JOIN SpaceMembers m ON m.SpaceId = t.SpaceId AND m.MemberId = a.MemberId JOIN Spaces s ON s.Id=m.SpaceId WHERE a.TaskId = t.Id AND a.MemberId = {builder.P(criteria.ProfileId)} AND a.DeletedAtUtc IS NULL AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
+                    : criteria.View is TaskView.Custom or TaskView.Search or TaskView.MyDay
+                    ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM SpaceMembers m JOIN Spaces s ON s.Id=m.SpaceId WHERE m.SpaceId=t.SpaceId AND m.MemberId={builder.P(criteria.ProfileId)} AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
+                    : $"t.SpaceId = {builder.P(criteria.SpaceId)}",
                 "t.DeletedAtUtc IS NULL",
                 "c.DeletedAtUtc IS NULL",
             };
@@ -257,6 +267,9 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                 var personMatch = terms.Count == 0
                     ? "0"
                     : string.Join(" AND ", terms.Select(term => $"instr(w.PersonNormalized, {builder.P(term)}) > 0"));
+                var assigneeMatch = terms.Count == 0
+                    ? "0"
+                    : string.Join(" AND ", terms.Select(term => $"instr(chaos_normalize(m.DisplayName), {builder.P(term)}) > 0"));
                 ctes.Add($"""
                     Hits AS (
                         SELECT TaskId, MIN(Rank) AS Rank, group_concat(DISTINCT Kind) AS Kinds FROM (
@@ -269,7 +282,11 @@ public sealed class SqliteTaskQueryStore(SqliteConnection connection) : ITaskQue
                               AND (d.TargetKind <> 2 OR s.DeletedAtUtc IS NULL)
                               AND (d.TargetKind <> 3 OR e.DeletedAtUtc IS NULL)
                             UNION ALL
-                            SELECT w.TaskId, -1000.0, 5 FROM WaitingDetails w WHERE w.DeletedAtUtc IS NULL AND {personMatch})
+                            SELECT w.TaskId, -1000.0, 5 FROM WaitingDetails w WHERE w.DeletedAtUtc IS NULL AND {personMatch}
+                            UNION ALL
+                            SELECT a.TaskId, -1000.0, 6 FROM TaskAssignees a JOIN Tasks assignedTask ON assignedTask.Id=a.TaskId
+                            JOIN SpaceMembers m ON m.SpaceId=assignedTask.SpaceId AND m.MemberId=a.MemberId
+                            WHERE a.DeletedAtUtc IS NULL AND m.RemovedAtUtc IS NULL AND {assigneeMatch})
                         GROUP BY TaskId)
                     """);
                 join = "JOIN Hits h ON h.TaskId = t.Id";

@@ -161,6 +161,7 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
                         BoardGrouping.Section => await MoveToSectionColumnAsync(session, task, normalized.ToColumn, now, inner),
                         BoardGrouping.Priority => await MoveToPriorityColumnAsync(session, task, normalized.ToColumn, now, inner),
                         BoardGrouping.TagGroup => await MoveToTagColumnAsync(session, task, normalized.ToColumn, now, inner),
+                        BoardGrouping.Assignee => await MoveToAssigneeColumnAsync(session, ids, task, profile.Id, normalized.FromColumn, normalized.ToColumn, now, inner),
                         _ => throw AppException.Validation("groupBy", "Choose how the board groups its columns."),
                     };
                     var current = change.Task;
@@ -401,6 +402,31 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
         return priority == task.Priority
             ? ColumnChange.None(task)
             : new(await ApplyAsync(session, now, task with { Priority = priority }, token), null, "Priority");
+    }
+
+    private static async Task<ColumnChange> MoveToAssigneeColumnAsync(IDataSession session, IIdGenerator ids, TaskRecord task, string profileId,
+        string? fromMember, string? toMember, DateTimeOffset now, CancellationToken token)
+    {
+        if (fromMember == toMember) return ColumnChange.None(task);
+        if ((await session.Spaces.GetAsync(task.SpaceId, token))?.Kind != SpaceKind.Shared)
+            throw AppException.Validation("toColumn", "Assignments are available in shared spaces.");
+        var people = await session.People.ListAsync(task.SpaceId, token);
+        if (!people.Any(person => person.ActorId == "person:" + profileId && !person.Former && person.Role is 1 or 2))
+            throw AppException.Validation("toColumn", "Only owners and editors can change assignments.");
+        if (toMember is not null && !people.Any(person => person.ActorId == "person:" + toMember && !person.Former && person.Role is 1 or 2))
+            throw AppException.Validation("toColumn", "Choose a current owner or editor.");
+        var rows = await session.Tasks.ListAssigneesAsync(task.Id, token);
+        if (fromMember is null && rows.Any(row => row.DeletedAtUtc is null))
+            throw AppException.VersionConflict("This assignment changed elsewhere. Refresh the board and try again.");
+        var source = rows.FirstOrDefault(row => row.MemberId == fromMember && row.DeletedAtUtc is null);
+        if (fromMember is not null && source is null)
+            throw AppException.VersionConflict("This assignment changed elsewhere. Refresh the board and try again.");
+        if (source is not null) await session.Tasks.SaveAssigneeAsync(source with { DeletedAtUtc = now }, token);
+        if (toMember is not null && !rows.Any(row => row.MemberId == toMember && row.DeletedAtUtc is null))
+            await session.Tasks.SaveAssigneeAsync(new TaskAssigneeRecord(task.Id, toMember, now, null, null), token);
+        var updated = await ApplyAsync(session, now, task, token);
+        updated = await TaskCommands.CompleteEachIfReadyAsync(session, ids, updated, now, token);
+        return new(updated, "task.updated", "Assignees");
     }
 
     /// <summary>

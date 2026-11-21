@@ -1,5 +1,5 @@
 import React from "react";
-import { viewRpc, type ContainerResponse, type TagResponse, type ViewDto } from "#neoastra";
+import { peopleRpc, viewRpc, type ContainerResponse, type PersonResponse, type TagResponse, type ViewDto } from "#neoastra";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Field, InlineError, label, priorities, statuses } from "@/components/common";
 import { createLatestRequest } from "./latestRequest";
 import { tagColors } from "./tags";
+import { useSpaces } from "./Sharing";
 import {
   defaultLayout,
   fromDefinitionJson,
@@ -442,7 +443,7 @@ function ConditionRow({
 }) {
   const github = React.useContext(GitHubOptions);
   const info = viewField(condition.field) ?? viewFields[0];
-  const noValue = condition.op === "isEmpty" || condition.op === "isNotEmpty";
+  const noValue = condition.op === "isEmpty" || condition.op === "isNotEmpty" || condition.op === "isMe";
   const set = (patch: Partial<ConditionNode>) => onChange({ ...condition, ...patch });
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`Condition on ${info.label}`}>
@@ -510,6 +511,8 @@ function ValueEditor({
     set({ values: condition.values.includes(value) ? condition.values.filter((item) => item !== value) : [...condition.values, value] });
   switch (info.type) {
     case "id": {
+      if (condition.field === "space") return <SpaceConditionValue condition={condition} onChange={onChange} />;
+      if (condition.field === "assignee") return <AssigneeConditionValue condition={condition} onChange={onChange} />;
       if (condition.field === "githubRepository") return <GitHubRepositoryPicker condition={condition} onChange={onChange} />;
       const many = condition.op === "in";
       return many ? (
@@ -615,6 +618,7 @@ function ValueEditor({
         >
           <NativeSelectOption value="App">Created in Chaos</NativeSelectOption>
           <NativeSelectOption value="GitHub">From GitHub</NativeSelectOption>
+          <NativeSelectOption value="Agent">Created by an agent</NativeSelectOption>
         </NativeSelect>
       );
     case "flag":
@@ -658,6 +662,58 @@ function ValueEditor({
     case "date":
       return <DateEditor condition={condition} date={condition.date} onChange={(date) => set({ date })} />;
   }
+}
+
+function SpaceConditionValue({ condition, onChange }: { condition: ConditionNode; onChange: (condition: ConditionNode) => void }) {
+  const { spaces } = useSpaces();
+  if (condition.op === "in") return <div role="group" aria-label="Spaces" className="flex flex-wrap gap-2">
+    {spaces.map((space) => <label key={space.spaceId} className="flex items-center gap-1 text-sm">
+      <input type="checkbox" checked={condition.values.includes(space.spaceId)} onChange={() => onChange({ ...condition,
+        values: condition.values.includes(space.spaceId) ? condition.values.filter((id) => id !== space.spaceId) : [...condition.values, space.spaceId] })} />
+      {space.name}
+    </label>)}
+  </div>;
+  return <NativeSelect aria-label="Space" className="w-48" value={condition.values[0] ?? ""}
+    onChange={(event) => onChange({ ...condition, values: event.target.value ? [event.target.value] : [] })}>
+    <NativeSelectOption value="">Choose…</NativeSelectOption>
+    {spaces.map((space) => <NativeSelectOption key={space.spaceId} value={space.spaceId}>{space.name}</NativeSelectOption>)}
+  </NativeSelect>;
+}
+
+function AssigneeConditionValue({ condition, onChange }: { condition: ConditionNode; onChange: (condition: ConditionNode) => void }) {
+  const { spaces } = useSpaces();
+  const [people, setPeople] = React.useState<readonly PersonResponse[]>([]);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    let active = true;
+    void Promise.all(spaces.filter((space) => space.kind === "Shared").map((space) => peopleRpc.list({ spaceId: space.spaceId })))
+      .then((results) => {
+        if (!active) return;
+        if (results.some((result) => !result.ok)) { setFailed(true); return; }
+        setFailed(false);
+        const unique = new Map<string, PersonResponse>();
+        for (const result of results) if (result.ok) for (const person of result.people)
+          if (person.kind === "person" && !person.former && (person.role === 1 || person.role === 2)) unique.set(person.actorId, person);
+        setPeople([...unique.values()]);
+      }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [spaces]);
+  if (failed) return <span role="alert">Could not load people.</span>;
+  if (condition.op === "in") return <div role="group" aria-label="Assignees" className="flex flex-wrap gap-2">
+    {people.map((person) => {
+      const id = person.actorId.slice("person:".length);
+      return <label key={person.actorId} className="flex items-center gap-1 text-sm">
+        <input type="checkbox" checked={condition.values.includes(id)} onChange={() => onChange({ ...condition,
+          values: condition.values.includes(id) ? condition.values.filter((value) => value !== id) : [...condition.values, id] })} />
+        {person.displayName}
+      </label>;
+    })}
+  </div>;
+  return <NativeSelect aria-label="Assignee" className="w-48" value={condition.values[0] ?? ""}
+    onChange={(event) => onChange({ ...condition, values: event.target.value ? [event.target.value] : [] })}>
+    <NativeSelectOption value="">Choose…</NativeSelectOption>
+    {people.map((person) => <NativeSelectOption key={person.actorId} value={person.actorId.slice("person:".length)}>{person.displayName}</NativeSelectOption>)}
+  </NativeSelect>;
 }
 
 function DateEditor({ condition, date, onChange }: { condition: ConditionNode; date: DateValue; onChange: (date: DateValue) => void }) {

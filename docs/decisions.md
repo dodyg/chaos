@@ -1188,3 +1188,11 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - S008 keys upload sessions and parts by stream and hash, retaining the uploader for ownership and quota. S009 keys blob references by stream and hash and introduces separately owned objects. The migration retains Personal objects and copies shared references only when recorded live custody identifies them. Moving a blob adds a reference to the same object; its uploader is charged once. Shared references survive the uploader's account deletion.
 - S010 and S011 add a durable deletion queue with a deadline. Removing the final reference releases quota and queues the object in the same transaction; failed object-store deletions are retried. A staged write is queued before storage begins and removed from the queue when its blob is committed. Sweep and purge serialize reference removal with stream changes.
 - Desktop uploads select the attachment's stream and keep remote upload status per stream and hash. Viewer uploads require the Viewer's own live diary attachment; the service checks membership again when committing an upload. New attachments inherit their parent entity's space. Q17's provisional server migration moves to S012.
+
+## 2026-11-21 (Q7 assignment eligibility)
+
+- Shared task assignments are restricted to live human Owners and Editors. Viewers cannot be assigned work; agent assignment remains Q17. The service rejects attempts to create or restore an ineligible assignment.
+
+## 2026-11-21 (Q7 delegation sequencing)
+
+- The owner chose to leave shared-space quick-add `+name` combined with `follow up` as text until Q13 supplies delegation. Q7 may implement ordinary member assignment and Personal waiting without advancing Q13.

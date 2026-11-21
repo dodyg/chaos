@@ -45,6 +45,7 @@ const blank: CaptureDraftDto = {
   reminders: [],
   tagIds: [],
   tagPaths: [],
+  assigneeIds: [],
   waitingOn: null,
   followUpDate: null,
   followUpTime: null,

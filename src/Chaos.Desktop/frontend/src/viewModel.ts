@@ -24,6 +24,12 @@ const dateOps = [
 ] as const;
 
 export const viewFields: readonly ViewFieldInfo[] = [
+  { name: "space", label: "Space", type: "id", operators: [
+    { op: "is", label: "is" }, { op: "isNot", label: "is not" }, { op: "in", label: "is one of" },
+  ] },
+  { name: "assignee", label: "Assignee", type: "id", operators: [
+    { op: "isMe", label: "is me" }, { op: "is", label: "is" }, { op: "in", label: "is one of" }, { op: "isEmpty", label: "is none" },
+  ] },
   {
     name: "container",
     label: "List or project",
@@ -234,7 +240,7 @@ function dateToJson(date: DateValue): unknown {
 function conditionToJson(node: ConditionNode): Record<string, unknown> {
   const info = viewField(node.field)!;
   const out: Record<string, unknown> = { field: node.field, op: node.op };
-  const empty = node.op === "isEmpty" || node.op === "isNotEmpty";
+  const empty = node.op === "isEmpty" || node.op === "isNotEmpty" || node.op === "isMe";
   if (!empty) {
     switch (info.type) {
       case "id":
@@ -327,7 +333,7 @@ export function fromDefinitionJson(json: string): GroupNode {
 export function isComplete(node: Node): boolean {
   if (node.kind === "group") return node.items.every(isComplete);
   const info = viewField(node.field)!;
-  if (node.op === "isEmpty" || node.op === "isNotEmpty") return true;
+  if (node.op === "isEmpty" || node.op === "isNotEmpty" || node.op === "isMe") return true;
   switch (info.type) {
     case "id":
     case "status":

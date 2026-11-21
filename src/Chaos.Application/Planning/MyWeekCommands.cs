@@ -709,9 +709,11 @@ public sealed partial class MyWeekCommands(IApplicationStore store, IIdGenerator
         async Task<TaskRecord> TaskAsync(string? taskId, string field)
         {
             var task = string.IsNullOrWhiteSpace(taskId) ? null : await session.Tasks.GetAsync(taskId, token);
-            return task is not null && task.SpaceId == context.Space.Id
-                ? task
-                : throw AppException.Validation(field, "One of the chosen tasks no longer exists. Refresh My Week and review the plan.");
+            if (task is not null && task.SpaceId == context.Space.Id) return task;
+            if (task is not null && (await session.Spaces.GetAsync(task.SpaceId, token)) is { Kind: SpaceKind.Shared, DeletedAtUtc: null }
+                && (await session.People.ListAsync(task.SpaceId, token)).Any(person => person.ActorId == "person:" + context.Profile.Id && !person.Former))
+                return task;
+            throw AppException.Validation(field, "One of the chosen tasks no longer exists. Refresh My Week and review the plan.");
         }
 
         var confirmedDays = new Dictionary<string, DateOnly?>(StringComparer.Ordinal);

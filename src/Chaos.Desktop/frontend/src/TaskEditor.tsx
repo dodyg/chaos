@@ -4,6 +4,7 @@ import { addDays } from "./MyDay";
 import type { PageRequest } from "./Pages";
 import {
   gitHubRpc,
+  peopleRpc,
   subtaskRpc,
   type taskRpc as TaskRpc,
   type containerRpc as ContainerRpc,
@@ -28,6 +29,8 @@ import {
   type TagResponse,
   type TaskOperationResponse,
   type TaskResponse,
+  type PersonResponse,
+  type TaskAssignmentsResponse,
 } from "#neoastra";
 import {
   ArrowDown,
@@ -78,6 +81,7 @@ import { rowClass } from "./taskRow";
 import { useAutosave } from "./autosave";
 import type { PadFocus } from "./ScratchPad";
 import { useSpaceRole } from "./Sharing";
+import { avatarClass } from "./assignees";
 
 const operationId = () => crypto.randomUUID();
 export type TaskEditorApi = {
@@ -157,7 +161,8 @@ export function TaskEditor({
 }) {
   const { taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
   // A viewer of a shared space only ever gets the read-only view (PLAN3 §9.1).
-  const canEdit = useSpaceRole(editing.spaceId).canEdit;
+  const spaceAccess = useSpaceRole(editing.spaceId);
+  const canEdit = spaceAccess.canEdit;
   const viewingTask = viewingRequested || !canEdit;
   const drag = useDragReorder();
   const today = useToday();
@@ -568,6 +573,7 @@ export function TaskEditor({
             <span>{editing.category}</span>
             {editing.estimateMinutes != null && <span>{editing.estimateMinutes} min</span>}
           </div>
+          {spaceAccess.shared && <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={false} run={run} onSaved={setEditing} setError={setError} />}
           {(editing.plannedDate || editing.dueDate) && (
             <div className="mt-3 grid gap-1 text-sm text-muted-foreground">
               {editing.plannedDate && (
@@ -781,6 +787,7 @@ export function TaskEditor({
                 )}
               </TabsContent>
               <TabsContent value="details" className="grid grid-cols-[minmax(0,1fr)] gap-4">
+                {spaceAccess.shared && <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={canEdit} run={run} onSaved={setEditing} setError={setError} />}
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Status">
                     <NativeSelect
@@ -1297,5 +1304,62 @@ export function TaskEditor({
         </>
       )}
     </aside>
+  );
+}
+
+export function AssignmentPicker({ task, taskApi, canEdit, run, onSaved, setError, directoryApi = peopleRpc }: {
+  task: TaskResponse;
+  taskApi: typeof TaskRpc;
+  canEdit: boolean;
+  run: (action: () => Promise<TaskOperationResponse>, after?: (task: TaskResponse) => void) => Promise<void>;
+  onSaved: React.Dispatch<React.SetStateAction<TaskResponse | null>>;
+  setError: (message: string | null) => void;
+  directoryApi?: Pick<typeof peopleRpc, "list">;
+}) {
+  const [people, setPeople] = React.useState<readonly PersonResponse[]>([]);
+  const [assignments, setAssignments] = React.useState<TaskAssignmentsResponse | null>(null);
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  React.useEffect(() => {
+    let active = true;
+    setAssignments(null);
+    setLoadFailed(false);
+    void Promise.all([directoryApi.list({ spaceId: task.spaceId }), taskApi.assignments({ taskId: task.id })])
+      .then(([directory, current]) => {
+        if (!active) return;
+        if (!directory.ok || !current.ok) throw new Error(directory.error?.message ?? current.error?.message ?? "Could not load assignees.");
+        setPeople(directory.people.filter((person) => person.kind === "person" && !person.former && (person.role === 1 || person.role === 2)));
+        setAssignments(current);
+      })
+      .catch((error: unknown) => { if (active) { setLoadFailed(true); setError(error instanceof Error ? error.message : String(error)); } });
+    return () => { active = false; };
+  }, [task.id, task.spaceId, task.version, taskApi, setError, directoryApi]);
+
+  const saved = (updated: TaskResponse) => onSaved((current) => current?.id === updated.id
+    ? { ...current, status: updated.status, version: updated.version, updatedAtUtc: updated.updatedAtUtc }
+    : current);
+  if (!assignments) return <p className="text-sm text-muted-foreground">{loadFailed ? "Assignees could not be loaded." : "Loading assignees…"}</p>;
+  return (
+    <fieldset className="grid gap-2 rounded-lg border p-3" disabled={!canEdit}>
+      <legend className="px-1 text-sm font-medium">Assignees</legend>
+      {people.map((person) => {
+        const memberId = person.actorId.slice("person:".length);
+        const assignment = assignments.assignees.find((entry) => entry.memberId === memberId);
+        return <label key={person.actorId} className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={!!assignment} onChange={(event) => void run(() => taskApi.changeAssignee({
+            operationId: operationId(), taskId: task.id, expectedVersion: task.version, memberId, assigned: event.target.checked,
+          }), saved)} />
+          <span aria-hidden="true" className={`grid size-7 place-items-center rounded-full text-xs ${avatarClass(person.colorIndex)}`}>{person.initials}</span>
+          <span>{person.displayName}</span>
+          {assignment?.completedAtUtc && <span className="text-xs text-muted-foreground">Completed</span>}
+        </label>;
+      })}
+      {people.length === 0 && <p className="text-sm text-muted-foreground">No eligible members.</p>}
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={assignments.mode === "Each"} onChange={(event) => void run(() => taskApi.setAssignmentMode({
+          operationId: operationId(), taskId: task.id, expectedVersion: task.version, mode: event.target.checked ? "Each" : "Anyone",
+        }), saved)} />
+        Each assignee must complete
+      </label>
+    </fieldset>
   );
 }

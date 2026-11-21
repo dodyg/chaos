@@ -18,6 +18,7 @@ namespace Chaos.Domain.Capture;
 /// </summary>
 public static class QuickAddParser
 {
+    private sealed record SpaceToken(string Name, bool PersonalAlias);
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(500);
     private static readonly Regex TagSigil = new(@"(?<!\S)#(?<v>[\p{L}\p{M}\p{N}_\-]+(?:/[\p{L}\p{M}\p{N}_\-]+)*)", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
     private static readonly Regex PrioritySigil = new(@"(?<!\S)!(?<v>[\p{L}\p{M}]+)(?![\p{L}\p{N}])", RegexOptions.ExplicitCapture | RegexOptions.CultureInvariant, MatchTimeout);
@@ -256,6 +257,32 @@ public static class QuickAddParser
             summaries[candidate] = existing ? $"Tag #{path}" : $"New tag #{path}";
         }
 
+        var defaultContainer = context.Containers.FirstOrDefault(container => container.Id == context.DefaultContainerId);
+        var selectedSpace = context.Spaces.FirstOrDefault(space => space.Id == defaultContainer?.SpaceId)
+            ?? context.Spaces.FirstOrDefault(space => space.Personal);
+        var spaceChosen = false;
+        foreach (var candidate in Of(CaptureTokenKind.Space))
+        {
+            if (spaceChosen) { Keep(candidate, "conflict", $"There is already a space, so “{Text(candidate)}” stays in the title."); continue; }
+            var token = (SpaceToken)candidate.Payload;
+            var matches = token.PersonalAlias ? context.Spaces.Where(space => space.Personal).ToList()
+                : context.Spaces.Where(space => FoldedText.FoldWord(space.Name).StartsWith(FoldedText.FoldWord(token.Name), StringComparison.Ordinal)).ToList();
+            if (token.PersonalAlias && context.Spaces.Count == 0) { summaries[candidate] = "Personal space"; spaceChosen = true; continue; }
+            if (matches.Count != 1)
+            {
+                Keep(candidate, matches.Count == 0 ? "unknownSpace" : "ambiguousSpace", $"Choose a unique space for “{Text(candidate)}”.");
+                continue;
+            }
+            if (!matches[0].Personal && !context.Containers.Any(container => container.SpaceId == matches[0].Id))
+            {
+                Keep(candidate, "spaceHasNoLists", $"Add a list to {matches[0].Name} before capturing a task there.");
+                continue;
+            }
+            selectedSpace = matches[0];
+            spaceChosen = true;
+            summaries[candidate] = $"In {selectedSpace.Name}";
+        }
+
         string? containerId = null;
         IReadOnlyList<KnownContainer> containerCandidates = [];
         var containerChosen = false;
@@ -264,7 +291,8 @@ public static class QuickAddParser
             if (containerChosen) { Keep(candidate, "conflict", $"There is already a list or project, so “{Text(candidate)}” stays in the title."); continue; }
             var name = (string)candidate.Payload;
             var key = FoldedText.FoldWord(name.Trim());
-            var matches = context.Containers.Where(container => FoldedText.FoldWord(container.Name.Trim()) == key).ToList();
+            var matches = context.Containers.Where(container => (selectedSpace is null || container.SpaceId is null || container.SpaceId == selectedSpace.Id)
+                && FoldedText.FoldWord(container.Name.Trim()) == key).ToList();
             if (matches.Count == 0)
             {
                 Keep(candidate, "unknownContainer", $"There is no list or project named “{name}”, so “{Text(candidate)}” stays in the title. Create it first or pick one in the preview.");
@@ -275,6 +303,7 @@ public static class QuickAddParser
             if (matches.Count == 1)
             {
                 containerId = matches[0].Id;
+                if (selectedSpace is { Personal: false }) containerCandidates = matches;
                 summaries[candidate] = $"In {matches[0].Name}";
             }
             else
@@ -285,15 +314,16 @@ public static class QuickAddParser
             }
         }
 
-        foreach (var candidate in Of(CaptureTokenKind.Space))
+        if (!containerChosen && defaultContainer is not null && selectedSpace?.Id == defaultContainer.SpaceId)
         {
-            if ((bool)candidate.Payload) summaries[candidate] = "Personal space";
-            else Keep(candidate, "unknownSpace", $"Only your Personal space exists for now, so “{Text(candidate)}” stays in the title. Shared spaces arrive later.");
+            containerId = defaultContainer.Id;
         }
-
-        foreach (var candidate in Of(CaptureTokenKind.Delegation))
+        else if (!containerChosen && selectedSpace is not null && (!selectedSpace.Personal || spaceChosen && defaultContainer is not null))
         {
-            Keep(candidate, "delegationLater", $"Assigning “{Text(candidate)}” to a member arrives with shared spaces, so it stays in the title. For someone outside the app, write “waiting on” and their name.");
+            var lists = context.Containers.Where(container => container.SpaceId == selectedSpace.Id).ToList();
+            containerCandidates = lists;
+            if (lists.Count == 1) containerId = lists[0].Id;
+            else warnings.Add(new CaptureWarning("chooseContainer", $"Choose a list in {selectedSpace.Name}."));
         }
 
         CapacityCategory? category = null;
@@ -313,10 +343,35 @@ public static class QuickAddParser
             summaries[candidate] = $"Waiting on {waitingOn}";
         }
 
+        var assignees = new List<string>();
+        foreach (var candidate in Of(CaptureTokenKind.Delegation))
+        {
+            var name = (string)candidate.Payload;
+            if (selectedSpace is null || selectedSpace.Personal)
+            {
+                if (waitingOn is not null) { Keep(candidate, "conflict", "There is already a waiting person."); continue; }
+                waitingOn = name;
+                summaries[candidate] = $"Waiting on {name}";
+                continue;
+            }
+            if (Of(CaptureTokenKind.FollowUp).Any()) { Keep(candidate, "delegationLater", "Delegating with a follow-up is not available yet."); continue; }
+            var key = FoldedText.FoldWord(name);
+            var matches = context.People.Where(person => person.SpaceId == selectedSpace.Id
+                && FoldedText.FoldWord(person.DisplayName).StartsWith(key, StringComparison.Ordinal)).ToList();
+            if (matches.Count != 1) { Keep(candidate, matches.Count == 0 ? "unknownPerson" : "ambiguousPerson", $"Choose a unique member for “{Text(candidate)}”."); continue; }
+            if (!assignees.Contains(matches[0].MemberId)) assignees.Add(matches[0].MemberId);
+            summaries[candidate] = $"Assigned to {matches[0].DisplayName}";
+        }
+
         DateOnly? followUpDate = null;
         TimeOnly? followUpTime = null;
         foreach (var candidate in Of(CaptureTokenKind.FollowUp))
         {
+            if (selectedSpace is { Personal: false } && Of(CaptureTokenKind.Delegation).Any())
+            {
+                Keep(candidate, "delegationLater", "Delegating with a follow-up is not available yet.");
+                continue;
+            }
             if (followUpDate is not null) { Keep(candidate, "conflict", $"There is already a follow-up, so “{Text(candidate)}” stays in the title."); continue; }
             var moment = (Moment)candidate.Payload;
             followUpTime = moment.Time;
@@ -345,6 +400,7 @@ public static class QuickAddParser
             Reminders = reminders,
             Tags = tags,
             ContainerId = containerId,
+            AssigneeIds = assignees,
             ContainerCandidates = containerCandidates,
             WaitingOn = waitingOn,
             FollowUpDate = followUpDate,
@@ -438,7 +494,7 @@ public static class QuickAddParser
         {
             var word = FoldedText.FoldWord(match.Groups["v"].Value);
             var personal = Packs.FirstOrDefault(pack => pack.PersonalSpace.Contains(word));
-            Add(new Candidate(CaptureTokenKind.Space, match.Index, match.Index + match.Length, personal?.Code, personal is not null));
+            Add(new Candidate(CaptureTokenKind.Space, match.Index, match.Index + match.Length, personal?.Code, new SpaceToken(match.Groups["v"].Value, personal is not null)));
         }
 
         foreach (Match match in DelegationSigil.Matches(input))

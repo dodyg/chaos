@@ -247,6 +247,7 @@ public sealed class DataPurge(SqliteApplicationStore store, Chaos.Application.At
             DELETE FROM DiaryRevisions WHERE EntryId IN (SELECT Id FROM temp.PurgeDiary);
             DELETE FROM DiaryEntries WHERE Id IN (SELECT Id FROM temp.PurgeDiary);
             DELETE FROM TaskTags WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
+            DELETE FROM TaskAssignees WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM TaskHistory WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks);
             DELETE FROM ScratchTaskLinks WHERE TaskId IN (SELECT Id FROM temp.PurgeTasks) OR PadItemId IN (SELECT Id FROM temp.PurgePad);
             DELETE FROM PadDrawings WHERE PadItemId IN (SELECT Id FROM temp.PurgePad);

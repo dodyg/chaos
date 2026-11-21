@@ -70,6 +70,7 @@ public sealed record TaskRecord : AggregateRecord
     public required string Title { get; init; }
     public string Notes { get; init; } = string.Empty;
     public required TaskItemStatus Status { get; init; }
+    public TaskAssignMode AssignMode { get; init; }
     public TaskPriority Priority { get; init; } = TaskPriority.Normal;
     public int? EstimateMinutes { get; init; }
     public CapacityCategory CapacityCategory { get; init; } = CapacityCategory.Personal;
@@ -90,6 +91,9 @@ public sealed record TaskRecord : AggregateRecord
     [JsonIgnore]
     public bool IsCompleted => TaskItemStatusRules.IsCompleted(Status);
 }
+
+public sealed record TaskAssigneeRecord(string TaskId, string MemberId, DateTimeOffset AddedAtUtc,
+    DateTimeOffset? CompletedAtUtc, DateTimeOffset? DeletedAtUtc);
 
 public sealed record TaskHistoryRecord
 {

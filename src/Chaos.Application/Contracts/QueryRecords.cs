@@ -119,6 +119,7 @@ public enum SearchMatchKind
     Diary = 3,
     /// <summary>The name of the outside person the task waits on.</summary>
     WaitingPerson = 5,
+    Assignee = 6,
 }
 
 /// <summary>One result row: a top-level task with the context a list needs to show it.</summary>

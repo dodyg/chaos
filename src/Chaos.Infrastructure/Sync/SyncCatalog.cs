@@ -235,6 +235,7 @@ public static class SyncCatalog
                 new("title", ["Title"]),
                 new("notes", ["Notes"]),
                 new("status", ["Status", "CompletedAtUtc", "CancelledAtUtc"]),
+                new("assignment", ["AssignMode"]),
                 new("place", ["ContainerId", "SectionId"]),
                 new("position", ["Position"]),
                 new("priority", ["Priority"]),
@@ -246,6 +247,10 @@ public static class SyncCatalog
             ],
             LocalColumns: ["Version"],
             ApplyOrder: 60),
+
+        new SyncTable("TaskAssignees", "task_assignee", SyncMode.Merge, ["TaskId", "MemberId"],
+            Groups: [new("create", ["AddedAtUtc"]), new("done", ["CompletedAtUtc"]), new("deleted", ["DeletedAtUtc"])],
+            ApplyOrder: 61),
 
         new SyncTable("Subtasks", "subtask", SyncMode.Merge, ["Id"],
             Groups:

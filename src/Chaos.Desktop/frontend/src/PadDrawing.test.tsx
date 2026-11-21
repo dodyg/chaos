@@ -97,6 +97,7 @@ const captureApi = {
       reminders: [],
       tagIds: [],
       tagPaths: [],
+      assigneeIds: [],
       waitingOn: null,
       followUpDate: null,
       followUpTime: null,

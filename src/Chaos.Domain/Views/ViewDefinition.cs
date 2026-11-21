@@ -25,6 +25,8 @@ public static class ViewFieldCatalog
 
     public static readonly IReadOnlyList<ViewFieldInfo> All =
     [
+        new("space", ViewFieldType.Id, ["is", "isNot", "in"]),
+        new("assignee", ViewFieldType.Id, ["isMe", "is", "in", "isEmpty"]),
         new("container", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("section", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("status", ViewFieldType.StatusSet, ["in", "notIn"]),
@@ -231,7 +233,7 @@ public sealed record ViewDefinition(ViewGroup Root)
             throw new DomainValidationException("Only tag conditions can include descendants.");
         }
 
-        var emptyOp = op is "isEmpty" or "isNotEmpty";
+        var emptyOp = op is "isEmpty" or "isNotEmpty" or "isMe";
         if (emptyOp)
         {
             return new ViewCondition(fieldName, op, []);
@@ -244,7 +246,7 @@ public sealed record ViewDefinition(ViewGroup Root)
             ViewFieldType.Ordinal => new ViewCondition(fieldName, op, Names<TaskPriority>(fieldName, value, many: false)),
             ViewFieldType.TagSet => new ViewCondition(fieldName, op, Strings(fieldName, value, many: true, ids: true), Descendants: descendants),
             ViewFieldType.Category => new ViewCondition(fieldName, op, Names<CapacityCategory>(fieldName, value, many: false)),
-            ViewFieldType.Source => new ViewCondition(fieldName, op, OneOf(fieldName, value, "App", "GitHub")),
+            ViewFieldType.Source => new ViewCondition(fieldName, op, OneOf(fieldName, value, "App", "GitHub", "Agent")),
             ViewFieldType.Choice => new ViewCondition(fieldName, op, OneOf(fieldName, value, [.. field.Choices!])),
             ViewFieldType.Date or ViewFieldType.Instant => new ViewCondition(fieldName, op, [], Date: ParseDate(field, op, value)),
             ViewFieldType.Minutes => new ViewCondition(fieldName, op, [], Number: ParseMinutes(fieldName, value)),
@@ -426,7 +428,7 @@ public sealed record ViewDefinition(ViewGroup Root)
     {
         var node = new JsonObject { ["field"] = condition.Field, ["op"] = condition.Operator };
         var info = ViewFieldCatalog.Find(condition.Field)!;
-        JsonNode? value = condition.Operator is "isEmpty" or "isNotEmpty"
+        JsonNode? value = condition.Operator is "isEmpty" or "isNotEmpty" or "isMe"
             ? null
             : info.Type switch
             {

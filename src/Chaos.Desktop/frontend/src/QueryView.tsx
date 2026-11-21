@@ -32,6 +32,7 @@ import { ViewTable, type TableTaskApi } from "./ViewTable";
 import { Board } from "./Board";
 import { Calendar } from "./Calendar";
 import { defaultLayout, layoutFromJson, type Layout } from "./viewModel";
+import { AssigneeChips, useAssigneeChips } from "./assignees";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
 export type QueryState = { view: string; tagId?: string; text?: string; day?: string; viewId?: string };
@@ -46,7 +47,7 @@ export const builtInViews = [
   },
   { view: "Waiting", title: "Waiting", hint: "Tasks waiting on someone outside the app." },
   { view: "RecentlyCompleted", title: "Recently completed", hint: "Done in the last 30 days, newest first." },
-  { view: "AssignedToMe", title: "Assigned to me", hint: "Every open task in Personal is yours; shared spaces arrive later." },
+  { view: "AssignedToMe", title: "Assigned to me", hint: "Open tasks in Personal and shared tasks assigned to you." },
 ] as const;
 
 type Filters = { status: string; priority: string; includeCompleted: boolean; includeArchived: boolean; dueFrom: string; dueTo: string };
@@ -128,6 +129,7 @@ export function QueryView({
 }) {
   const [filters, setFilters] = React.useState<Filters>(noFilters);
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
+  const assignmentInfo = useAssigneeChips(rows.map((row) => row.task), revision);
   const [total, setTotal] = React.useState(0);
   const [cursor, setCursor] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -471,12 +473,16 @@ export function QueryView({
                             <StatusBadge status={task.status} />
                             <TaskStaleness task={task} lastActivityAtUtc={row.lastActivityAtUtc} revision={revision} />
                             <PriorityBadge priority={task.priority} />
+                            <AssigneeChips people={assignmentInfo.chips[task.id]} />
+                            {assignmentInfo.error && <span>Assignees unavailable</span>}
                             {row.matches
                               .filter((match) => match !== "Task")
                               .map((match) => (
                                 <Badge key={match} variant="outline">
                                   {match === "WaitingPerson"
                                     ? "Matched the waiting person"
+                                    : match === "Assignee"
+                                      ? "Matched an assignee"
                                     : `Matched in ${match === "Subtask" ? "a subtask" : "the diary"}`}
                                 </Badge>
                               ))}

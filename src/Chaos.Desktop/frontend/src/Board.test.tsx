@@ -235,6 +235,19 @@ test("dragging a card into another column calls board.move with the columns and 
   assert.equal(request.expectedVersion, "1");
 });
 
+test("a duplicated card moves from the specific column that was dragged", async () => {
+  const item = task("a", "Shared work");
+  const { api, calls } = fakes({ cards: [card(item, { columnKey: "NotStarted" }), card(item, { columnKey: "InProgress" })] });
+  mount(api);
+  const copies = await screen.findAllByLabelText("Shared work");
+  assert.equal(copies.filter((copy) => copy.getAttribute("tabindex") === "0").length, 1);
+  fireEvent.dragStart(copies[1], { dataTransfer: dataTransfer() });
+  dropAt(screen.getByRole("region", { name: /Done column/ }), 0);
+  await waitFor(() => assert.equal(calls.length, 1));
+  assert.equal(calls[0].request.fromColumn, "InProgress");
+  assert.equal(calls[0].request.toColumn, "Done");
+});
+
 test("after a move the board reads itself again, so the next move sends the new version", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   let version = 1;

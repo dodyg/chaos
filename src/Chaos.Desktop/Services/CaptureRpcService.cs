@@ -9,7 +9,7 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record CaptureSpanDto(int Start, int End);
-public sealed record CapturePreviewRequest(string Text, IReadOnlyList<CaptureSpanDto>? Excluded);
+public sealed record CapturePreviewRequest(string Text, IReadOnlyList<CaptureSpanDto>? Excluded, string? DefaultContainerId = null);
 public sealed record CaptureTokenDto(string Kind, int Start, int End, string Text, string? Language, string State, string Summary);
 public sealed record CaptureWarningDto(string Code, string Message, int? Start, int? End);
 public sealed record CaptureReminderDto(string Anchor, int? OffsetMinutes, string? AtUtc);
@@ -37,7 +37,8 @@ public sealed record CaptureDraftDto(
     string? FollowUpDate,
     string? FollowUpTime,
     IReadOnlyList<CaptureSubtaskDto> Subtasks,
-    string? Category = null);
+    string? Category = null,
+    IReadOnlyList<string>? AssigneeIds = null);
 
 /// <summary>One task line of the preview. Token offsets are relative to <see cref="Text"/>, which starts at <see cref="SourceStart"/> in the typed input.</summary>
 public sealed record CaptureItemDto(
@@ -69,7 +70,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
     public ValueTask<CapturePreviewResponse> PreviewAsync(CapturePreviewRequest request, CancellationToken ct) =>
         Rpc.Run<CapturePreviewResponse>("capture.preview", async () => {
             var excluded = (request.Excluded ?? []).Take(200).Select(span => new CaptureSpan(span.Start, span.End)).ToList();
-            var preview = await capture.PreviewAsync(request.Text ?? string.Empty, excluded, ct);
+            var preview = await capture.PreviewAsync(request.Text ?? string.Empty, excluded, request.DefaultContainerId, ct);
             return new(true, preview.IsBatch, [.. preview.Items.Select(Map)], [.. preview.Errors.Select(error => new CaptureBatchErrorDto(error.LineNumber, error.Message))],
                 StorageFormats.Instant(preview.CapturedAtUtc), null);
         },
@@ -104,13 +105,15 @@ public sealed class CaptureRpcService(CaptureCommands capture)
         draft.FollowUpDate is { } follow ? StorageFormats.Date(follow) : null,
         draft.FollowUpTime?.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
         [.. subtasks.Select(subtask => new CaptureSubtaskDto(subtask.Title, subtask.Done))],
-        draft.Category?.ToString());
+        draft.Category?.ToString(),
+        draft.AssigneeIds);
 
     internal static CaptureTaskDraft ToDraft(CaptureDraftDto dto, string path) => new()
     {
         Title = dto.Title,
         Notes = dto.Notes,
         ContainerId = string.IsNullOrWhiteSpace(dto.ContainerId) ? null : dto.ContainerId,
+        AssigneeIds = dto.AssigneeIds ?? [],
         Priority = Enum.TryParse<TaskPriority>(dto.Priority, out var priority) && Enum.IsDefined(priority) ? priority : throw AppException.Validation($"{path}.priority", "Choose a valid priority."),
         EstimateMinutes = dto.EstimateMinutes,
         PlannedDate = Date(dto.PlannedDate, $"{path}.plannedDate"),

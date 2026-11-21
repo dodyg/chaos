@@ -370,6 +370,8 @@ public interface ISectionStore
 
 public interface ITaskStore
 {
+    Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct);
+    Task SaveAssigneeAsync(TaskAssigneeRecord assignee, CancellationToken ct);
     Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct);
     /// <summary>The row even when tombstoned; restore and history need the deleted record.</summary>
     Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct);

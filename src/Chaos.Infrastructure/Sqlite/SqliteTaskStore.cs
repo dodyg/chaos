@@ -7,6 +7,34 @@ namespace Chaos.Infrastructure.Sqlite;
 
 public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
 {
+    public async Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM TaskAssignees WHERE TaskId=$task ORDER BY MemberId;";
+        command.Parameters.AddWithValue("$task", taskId);
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<TaskAssigneeRecord>();
+        while (await reader.ReadAsync(ct))
+            rows.Add(new(reader.S("TaskId"), reader.S("MemberId"), reader.I("AddedAtUtc"), reader.In("CompletedAtUtc"), reader.In("DeletedAtUtc")));
+        return rows;
+    }
+
+    public async Task SaveAssigneeAsync(TaskAssigneeRecord assignee, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc,CompletedAtUtc,DeletedAtUtc)
+            VALUES ($task,$member,$added,$completed,$deleted)
+            ON CONFLICT(TaskId,MemberId) DO UPDATE SET AddedAtUtc=excluded.AddedAtUtc,
+                CompletedAtUtc=excluded.CompletedAtUtc, DeletedAtUtc=excluded.DeletedAtUtc;
+            """;
+        command.Parameters.AddWithValue("$task", assignee.TaskId);
+        command.Parameters.AddWithValue("$member", assignee.MemberId);
+        command.Parameters.AddWithValue("$added", StorageFormats.Instant(assignee.AddedAtUtc));
+        command.Parameters.AddWithValue("$completed", SqliteProfileStore.OptionalInstant(assignee.CompletedAtUtc));
+        command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(assignee.DeletedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
     public async Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -57,11 +85,11 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
             INSERT INTO Tasks (Id, SpaceId, ContainerId, SectionId, Title, Notes, Status, Priority,
                 EstimateMinutes, CapacityCategory, PlannedDate, PlannedTime, PlannedZoneId,
                 DueDate, DueTime, DueZoneId, CompletedAtUtc, CancelledAtUtc, Position,
-                RecurrenceOccurrenceKey, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+                RecurrenceOccurrenceKey, AssignMode, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
             VALUES ($id, $space, $container, $section, $title, $notes, $status, $priority,
                 $estimate, $category, $plannedDate, $plannedTime, $plannedZone,
                 $dueDate, $dueTime, $dueZone, $completed, $cancelled, $position,
-                $occurrenceKey, $version, $created, $updated, $deleted);
+                $occurrenceKey, $assignMode, $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", task.Id);
         command.Parameters.AddWithValue("$space", task.SpaceId);
@@ -83,6 +111,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$cancelled", SqliteProfileStore.OptionalInstant(task.CancelledAtUtc));
         command.Parameters.AddWithValue("$position", task.Position);
         command.Parameters.AddWithValue("$occurrenceKey", SqliteProfileStore.OptionalValue(task.RecurrenceOccurrenceKey));
+        command.Parameters.AddWithValue("$assignMode", (long)task.AssignMode);
         command.Parameters.AddWithValue("$version", task.Version);
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(task.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(task.UpdatedAtUtc));
@@ -106,7 +135,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
                 PlannedDate = $plannedDate, PlannedTime = $plannedTime, PlannedZoneId = $plannedZone,
                 DueDate = $dueDate, DueTime = $dueTime, DueZoneId = $dueZone,
                 CompletedAtUtc = $completed, CancelledAtUtc = $cancelled,
-                RecurrenceOccurrenceKey = $occurrenceKey,
+                RecurrenceOccurrenceKey = $occurrenceKey, AssignMode = $assignMode,
                 Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
             WHERE Id = $id AND Version = $expectedVersion;
             """;
@@ -128,6 +157,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$completed", SqliteProfileStore.OptionalInstant(updated.CompletedAtUtc));
         command.Parameters.AddWithValue("$cancelled", SqliteProfileStore.OptionalInstant(updated.CancelledAtUtc));
         command.Parameters.AddWithValue("$occurrenceKey", SqliteProfileStore.OptionalValue(updated.RecurrenceOccurrenceKey));
+        command.Parameters.AddWithValue("$assignMode", (long)updated.AssignMode);
         command.Parameters.AddWithValue("$newVersion", updated.Version);
         command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
@@ -162,6 +192,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         Title = r.S("Title"),
         Notes = r.S("Notes"),
         Status = (TaskItemStatus)(int)r.L("Status"),
+        AssignMode = (TaskAssignMode)(int)r.L("AssignMode"),
         Priority = (TaskPriority)(int)r.L("Priority"),
         EstimateMinutes = r.Ln("EstimateMinutes") is { } minutes ? (int)minutes : null,
         CapacityCategory = (CapacityCategory)(int)r.L("CapacityCategory"),

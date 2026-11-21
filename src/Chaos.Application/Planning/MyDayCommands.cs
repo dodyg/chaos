@@ -139,6 +139,24 @@ public sealed class MyDayCommands(IApplicationStore store, TimeProvider clock)
                 Offer(row.Task, row.ContainerName, row.Task.DueDate == today ? DaySuggestionReason.DueToday : DaySuggestionReason.PlannedToday);
             }
 
+            // The date views above are Personal-scoped. AssignedToMe also reaches shared work.
+            foreach (var row in await RowsAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, Due = new LocalDateRange(null, today.AddDays(2)) }))
+            {
+                var task = row.Task;
+                var overdue = task.DueDate < today;
+                if (task.DueTime is { } dueTime)
+                {
+                    var zone = TaskQueries.FindZone(task.DueZoneId ?? string.Empty) ?? context.Zone;
+                    var local = TimeZoneInfo.ConvertTime(context.Now, zone);
+                    var localDate = DateOnly.FromDateTime(local.DateTime);
+                    overdue = task.DueDate < localDate || (task.DueDate == localDate && dueTime < TimeOnly.FromDateTime(local.DateTime));
+                }
+                if (!overdue && task.DueDate != today) continue;
+                Offer(task, row.ContainerName, overdue ? DaySuggestionReason.Overdue : DaySuggestionReason.DueToday);
+            }
+            foreach (var row in await RowsAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, Planned = new LocalDateRange(today, today) }))
+                Offer(row.Task, row.ContainerName, DaySuggestionReason.PlannedToday);
+
             foreach (var row in await RowsAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, Due = new LocalDateRange(today.AddDays(1), today.AddDays(2)) }))
             {
                 Offer(row.Task, row.ContainerName, DaySuggestionReason.DueSoon);

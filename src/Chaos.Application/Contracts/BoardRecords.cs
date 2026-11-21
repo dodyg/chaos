@@ -16,6 +16,7 @@ public enum BoardGrouping
     Section = 1,
     Priority = 2,
     TagGroup = 3,
+    Assignee = 4,
 }
 
 /// <summary>How the swimlanes of a board are chosen (PLAN2 §11.1).</summary>
@@ -26,6 +27,7 @@ public enum BoardSwimlane
     TagGroup = 2,
     Category = 3,
     Container = 4,
+    Assignee = 5,
 }
 
 /// <summary>

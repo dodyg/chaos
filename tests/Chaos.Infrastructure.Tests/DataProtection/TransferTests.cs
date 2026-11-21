@@ -382,6 +382,8 @@ public sealed class TransferTests
 
         private sealed class FailingTasks(ITaskStore inner) : ITaskStore
         {
+            public Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct) => inner.ListAssigneesAsync(taskId, ct);
+            public Task SaveAssigneeAsync(TaskAssigneeRecord assignee, CancellationToken ct) => inner.SaveAssigneeAsync(assignee, ct);
             private int _adds;
             public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) => inner.GetAsync(taskId, ct);
             public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => inner.GetIncludingDeletedAsync(taskId, ct);

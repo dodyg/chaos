@@ -17,7 +17,8 @@ public sealed record TaskAggregateSnapshot(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? SubtaskTagIds = null,
     IReadOnlyList<ReminderRuleRecord>? ReminderRules = null,
     WaitingDetailRecord? Waiting = null,
-    FollowUpRecord? FollowUp = null);
+    FollowUpRecord? FollowUp = null,
+    IReadOnlyList<TaskAssigneeRecord>? Assignees = null);
 
 /// <summary>Envelope for stored operation results; the replay flag is composed at the caller, never stored.</summary>
 public sealed record StoredResultEnvelope<T>(T Result);
@@ -203,6 +204,7 @@ internal static class TaskMutationSupport
         When("Title", before.Title, after.Title);
         When("Notes", before.Notes, after.Notes);
         When("Status", before.Status, after.Status);
+        When("AssignMode", before.AssignMode, after.AssignMode);
         When("Priority", before.Priority, after.Priority);
         When("EstimateMinutes", before.EstimateMinutes, after.EstimateMinutes);
         When("CapacityCategory", before.CapacityCategory, after.CapacityCategory);

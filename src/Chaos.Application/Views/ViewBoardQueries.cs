@@ -4,6 +4,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Views;
+using Chaos.Application.People;
 
 namespace Chaos.Application.Views;
 
@@ -71,16 +72,28 @@ public sealed class ViewBoardQueries(IApplicationStore store, TaskQueries querie
                 .OrderBy(container => container.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var columns = BoardQueries.ColumnsFor(settings, [], columnTags, showCancelled);
-            var lanes = BoardQueries.LanesFor(settings, laneTags, containerLanes);
-            var cards = shown.Select(row =>
+            var people = new List<SpacePerson>();
+            var peopleBySpace = new Dictionary<string, IReadOnlyList<SpacePerson>>(StringComparer.Ordinal);
+            if (settings.GroupBy == BoardGrouping.Assignee || settings.SwimlaneBy == BoardSwimlane.Assignee)
+            {
+                foreach (var spaceId in shown.Select(row => row.Task.SpaceId).Distinct(StringComparer.Ordinal))
+                {
+                    var members = await session.People.ListAsync(spaceId, token);
+                    peopleBySpace[spaceId] = members;
+                    people.AddRange(members);
+                }
+            }
+            var columns = BoardQueries.ColumnsFor(settings, [], columnTags, showCancelled, people);
+            var lanes = BoardQueries.LanesFor(settings, laneTags, containerLanes, people);
+            var cards = new List<BoardCardDto>();
+            foreach (var row in shown)
             {
                 var extra = extras.GetValueOrDefault(row.Task.Id) ?? new BoardCardExtras(0, 0, false);
-                return new BoardCardDto(
-                    row.Task, row.TagIds, extra.SubtasksTotal, extra.SubtasksDone, extra.HasIssueLink,
-                    BoardQueries.ColumnKeyFor(settings, [], columnTags, row.Task, row.TagIds),
-                    BoardQueries.LaneKeyFor(settings, laneTags, row.Task, row.TagIds, containerLanes: true));
-            }).ToList();
+                var assignments = settings.GroupBy == BoardGrouping.Assignee || settings.SwimlaneBy == BoardSwimlane.Assignee
+                    ? await session.Tasks.ListAssigneesAsync(row.Task.Id, token) : [];
+                cards.AddRange(BoardQueries.PlaceCards(settings, [], columnTags, laneTags, row.Task, row.TagIds,
+                    extra.SubtasksTotal, extra.SubtasksDone, extra.HasIssueLink, assignments, peopleBySpace.GetValueOrDefault(row.Task.SpaceId) ?? [], containerLanes: true));
+            }
 
             // With every row read the board counts exactly what it can show; past the cap the query's total stands in.
             var shownTotal = cursor is null ? visible.Count : (int)Math.Min(total, int.MaxValue);

@@ -29,6 +29,7 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<SpaceRecord> Spaces = [];
     public readonly List<ContainerRecord> Containers = [];
     public readonly List<TaskRecord> Tasks = [];
+    public readonly List<TaskAssigneeRecord> TaskAssignees = [];
     public readonly List<SectionRecord> Sections = [];
     public readonly List<SubtaskRecord> Subtasks = [];
     public readonly List<TemplateRecord> Templates = [];
@@ -68,7 +69,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ITemplateStore Templates { get; } = new FakeTemplateStore(owner.Templates);
         public ITagStore Tags { get; } = new FakeTagStore(owner.Tags, owner.TaskTags, owner.SubtaskTags, owner.PadTags);
         public ITaskQueryStore Queries { get; } = new UnsupportedQueryStore();
-        public ITaskStore Tasks { get; } = new FakeTaskStore(owner.Tasks);
+        public ITaskStore Tasks { get; } = new FakeTaskStore(owner.Tasks, owner.TaskAssignees);
         public ITaskHistoryStore History { get; } = new FakeTaskHistoryStore(owner.History);
         public IOperationReceiptStore Receipts { get; } = new FakeReceiptStore(owner.Receipts);
         public IBackupCatalogStore Backups { get; } = new FakeBackupCatalogStore(owner.Backups);
@@ -378,8 +379,15 @@ public sealed class FakeContainerStore(List<ContainerRecord> rows, List<TaskReco
     }
 }
 
-public sealed class FakeTaskStore(List<TaskRecord> rows) : ITaskStore
+public sealed class FakeTaskStore(List<TaskRecord> rows, List<TaskAssigneeRecord> assignees) : ITaskStore
 {
+    public Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskAssigneeRecord>>(assignees.Where(a => a.TaskId == taskId).ToList());
+    public Task SaveAssigneeAsync(TaskAssigneeRecord assignee, CancellationToken ct)
+    {
+        assignees.RemoveAll(a => a.TaskId == assignee.TaskId && a.MemberId == assignee.MemberId);
+        assignees.Add(assignee);
+        return Task.CompletedTask;
+    }
     public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == id && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == taskId));
     public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == containerId && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());

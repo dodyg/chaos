@@ -22,6 +22,7 @@ public sealed record CaptureTaskDraft
     public required string Title { get; init; }
     public string? Notes { get; init; }
     public string? ContainerId { get; init; }
+    public IReadOnlyList<string> AssigneeIds { get; init; } = [];
     public TaskPriority Priority { get; init; } = TaskPriority.Normal;
     public int? EstimateMinutes { get; init; }
     public DateOnly? PlannedDate { get; init; }
@@ -62,7 +63,10 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
     public const int MaxInputLength = 200_000;
     private const int MaxWaitingLength = 200;
 
-    public async Task<CapturePreview> PreviewAsync(string text, IReadOnlyList<CaptureSpan> excluded, CancellationToken ct = default)
+    public Task<CapturePreview> PreviewAsync(string text, IReadOnlyList<CaptureSpan> excluded, CancellationToken ct = default) =>
+        PreviewAsync(text, excluded, null, ct);
+
+    public async Task<CapturePreview> PreviewAsync(string text, IReadOnlyList<CaptureSpan> excluded, string? defaultContainerId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         if (text.Length > MaxInputLength)
@@ -74,10 +78,22 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         {
             var profile = await RequireProfileAsync(session, token);
             var space = await RequireSpaceAsync(session, profile, token);
-            var containers = await session.Containers.ListBySpaceAsync(space.Id, token);
+            var spaces = await session.Spaces.ListAsync(token);
+            var containers = new List<KnownContainer>();
+            var knownSpaces = new List<KnownSpace>();
+            var knownPeople = new List<KnownPerson>();
+            foreach (var candidate in spaces)
+            {
+                var members = candidate.Kind == SpaceKind.Shared ? await session.People.ListAsync(candidate.Id, token) : [];
+                if (candidate.Kind == SpaceKind.Shared && !members.Any(member => member.ActorId == "person:" + profile.Id && !member.Former && member.Role is 1 or 2)) continue;
+                knownSpaces.Add(new(candidate.Id, candidate.Name, candidate.Id == space.Id));
+                containers.AddRange((await session.Containers.ListBySpaceAsync(candidate.Id, token)).Select(container => new KnownContainer(container.Id, container.Name, candidate.Id)));
+                knownPeople.AddRange(members.Where(member => member.ActorId.StartsWith("person:", StringComparison.Ordinal) && !member.Former && member.Role is 1 or 2)
+                    .Select(member => new KnownPerson(candidate.Id, member.ActorId[7..], member.DisplayName)));
+            }
             var tags = TagCommands.TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, token));
             return new QuickAddContext(clock.GetUtcNow(), profile.ZoneId, profile.DateFormat, profile.FirstWeekday, profile.DefaultReminderTime,
-                [.. containers.Select(container => new KnownContainer(container.Id, container.Name))], [.. tags.Select(tag => tag.Path)], []);
+                containers, [.. tags.Select(tag => tag.Path)], []) { Spaces = knownSpaces, People = knownPeople, DefaultContainerId = defaultContainerId };
         }, ct);
 
         var split = BatchCapture.Split(text);
@@ -182,6 +198,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             Title = TaskFieldValidation.Title(draft.Title, $"{path}.title"),
             Notes = TaskFieldValidation.Notes(draft.Notes, $"{path}.notes"),
             ContainerId = string.IsNullOrWhiteSpace(draft.ContainerId) ? null : draft.ContainerId,
+            AssigneeIds = [.. draft.AssigneeIds.Distinct(StringComparer.Ordinal)],
             Priority = TaskFieldValidation.Priority(draft.Priority, $"{path}.priority"),
             EstimateMinutes = TaskFieldValidation.Estimate(draft.EstimateMinutes, $"{path}.estimateMinutes"),
             Category = draft.Category is { } category ? TaskFieldValidation.Category(category, $"{path}.category") : null,
@@ -206,6 +223,14 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         string operationId, DateTimeOffset now, IReadOnlyList<string> extraHistoryFields, CancellationToken ct)
     {
         var container = await ResolveContainerAsync(session, profile, draft.ContainerId, ct);
+        if (draft.AssigneeIds.Count > 0)
+        {
+            if ((await session.Spaces.GetAsync(container.SpaceId, ct))?.Kind != SpaceKind.Shared)
+                throw AppException.Validation("assignees", "Assignments are available in shared spaces.");
+            var people = await session.People.ListAsync(container.SpaceId, ct);
+            if (draft.AssigneeIds.Any(id => !people.Any(person => person.ActorId == "person:" + id && !person.Former && person.Role is 1 or 2)))
+                throw AppException.Validation("assignees", "Choose current owners or editors in this space.");
+        }
         var task = new TaskRecord
         {
             Id = ids.NewId().ToString(),
@@ -229,6 +254,8 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             UpdatedAtUtc = now,
         };
         await session.Tasks.AddAsync(task, ct);
+        foreach (var memberId in draft.AssigneeIds)
+            await session.Tasks.SaveAssigneeAsync(new TaskAssigneeRecord(task.Id, memberId, now, null, null), ct);
 
         var subtasks = new List<SubtaskRecord>(draft.Subtasks.Count);
         for (var index = 0; index < draft.Subtasks.Count; index++)
@@ -351,8 +378,10 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
 
         var container = await session.Containers.GetAsync(containerId, token)
             ?? throw AppException.NotFound("That list or project no longer exists. Refresh and try again.");
-        return container.SpaceId == space.Id
-            ? container
-            : throw AppException.Validation("containerId", "That list or project belongs to a different space. Choose one from your Personal space.");
+        if (container.SpaceId == space.Id) return container;
+        var shared = await session.Spaces.GetAsync(container.SpaceId, token);
+        var people = await session.People.ListAsync(container.SpaceId, token);
+        return shared?.Kind == SpaceKind.Shared && people.Any(person => person.ActorId == "person:" + profile.Id && !person.Former && person.Role is 1 or 2)
+            ? container : throw AppException.Validation("containerId", "Choose a list in a space where you can edit tasks.");
     }
 }

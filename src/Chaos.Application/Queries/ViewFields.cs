@@ -57,7 +57,7 @@ internal static class ViewFields
         {
             var field = ViewFieldCatalog.Find(condition.Field) ?? throw AppException.Validation("definition", $"\"{condition.Field}\" is not a field a view can use.");
             var op = condition.Operator;
-            if (op is "isEmpty" or "isNotEmpty")
+            if (op is "isEmpty" or "isNotEmpty" or "isMe")
             {
                 return new ResolvedViewCondition(field.Name, op);
             }

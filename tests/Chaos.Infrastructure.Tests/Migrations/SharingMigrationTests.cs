@@ -41,6 +41,26 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate040_PreservesBoardSettingsAndCapturesAssignments()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 39);
+        Execute(connection, """
+            INSERT INTO Spaces (Id, OwnerProfileId, Kind, Name, CreatedAtUtc, UpdatedAtUtc) VALUES ('space','owner',2,'Shared','now','now');
+            INSERT INTO Containers (Id, SpaceId, Kind, Name, NormalizedName, Position, CreatedAtUtc, UpdatedAtUtc) VALUES ('container','space',1,'List','list',0,'now','now');
+            INSERT INTO Tasks (Id, SpaceId, ContainerId, Title, Status, Position, CreatedAtUtc, UpdatedAtUtc) VALUES ('task','space','container','Task',0,0,'now','now');
+            INSERT INTO BoardSettings (Id,TargetKind,TargetId,GroupBy,SwimlaneBy,CreatedAtUtc,UpdatedAtUtc) VALUES ('board',1,'container',2,4,'now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT AssignMode FROM Tasks WHERE Id='task';"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM BoardSettings WHERE Id='board' AND GroupBy=2 AND SwimlaneBy=4;"))).IsEqualTo(1L);
+        Execute(connection, "UPDATE BoardSettings SET GroupBy=4, SwimlaneBy=5 WHERE Id='board'; INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc) VALUES ('task','person','now'); UPDATE Tasks SET AssignMode=1 WHERE Id='task';");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='task_assignee';"))).IsGreaterThan(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='task' AND GroupName='assignment';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+    }
+    [Test]
     public async Task Migrate039_ExistingRemoteState_SeedsOnlyAccountStreamAndRetainsBytes()
     {
         using var connection = Open();

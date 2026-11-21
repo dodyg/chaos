@@ -52,6 +52,8 @@ import { Board, LayoutSwitch, loadLayout, saveLayout, type BoardLayout } from ".
 import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { rowClass } from "./taskRow";
+import { useSpaceRole } from "./Sharing";
+import { AssigneeChips, useAssigneeChips } from "./assignees";
 import { BulkBar } from "./BulkBar";
 import { CategoryEdge, CategoryMenuItems, asCategory, categoryIcon, categoryTone, type Category, type Focus } from "./category";
 
@@ -152,6 +154,8 @@ export function ListPage({
   onShareList?: () => void;
 }) {
   const locked = busy || readOnly;
+  const shared = useSpaceRole(tasks[0]?.spaceId).shared;
+  const assignmentInfo = useAssigneeChips(shared ? tasks : [], revision, taskApi);
   const [completionFilter, setCompletionFilter] = React.useState<CompletionFilter>("all");
   // A device-local choice per container: switching never changes tasks (PLAN2 §11.1). Kept
   // with its container so a newly selected container never shows the previous one's layout.
@@ -334,6 +338,8 @@ export function ListPage({
   }
   function taskMeta(task: TaskResponse) {
     const parts: React.ReactNode[] = [];
+    if (assignmentInfo.chips[task.id]?.length) parts.push(<AssigneeChips key="assignees" people={assignmentInfo.chips[task.id]} />);
+    else if (assignmentInfo.error) parts.push(<span key="assignees-error">Assignees unavailable</span>);
     if (task.status !== "NotStarted") parts.push(<StatusBadge key="status" status={task.status} />);
     if (task.status === "InProgress") parts.push(<TaskStaleness key="staleness" task={task} revision={revision} />);
     if (task.dueDate)

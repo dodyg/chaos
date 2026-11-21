@@ -67,6 +67,8 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
 
         return c.Field switch
         {
+            "space" => List("t.SpaceId", c, nullable: false),
+            "assignee" => Assignee(c),
             "container" => List("t.ContainerId", c, nullable: false),
             "section" => List("t.SectionId", c, nullable: true),
             "status" => List("t.Status", c, nullable: false),
@@ -91,12 +93,36 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
             },
             "text" => Text(c.Text!),
             "waiting" => Waiting(c),
-            "source" => Flag("EXISTS (SELECT 1 FROM GitHubIssueLinks gl WHERE gl.TaskId = t.Id)", c.Ids[0] == "GitHub"),
+            "source" => Source(c),
             "hasPadLink" => Flag("EXISTS (SELECT 1 FROM ScratchTaskLinks sl WHERE sl.TaskId = t.Id)", c.Numbers[0] == 1),
             "hasPageMention" => Flag("EXISTS (SELECT 1 FROM PageTaskLinks pl WHERE pl.TaskId = t.Id)", c.Numbers[0] == 1),
             "recurring" => Flag("EXISTS (SELECT 1 FROM RecurrenceOccurrences rc WHERE rc.TaskId = t.Id AND rc.DeletedAtUtc IS NULL)", c.Numbers[0] == 1),
             "githubRepository" or "githubState" or "githubLabel" or "githubMilestone" or "githubAssignee" => GitHub(c),
             _ => throw new InvalidOperationException($"No SQL for view field {c.Field}."),
+        };
+    }
+
+    private string Assignee(ResolvedViewCondition c)
+    {
+        var personal = $"EXISTS (SELECT 1 FROM Spaces own WHERE own.Id=t.SpaceId AND own.Kind=1 AND own.OwnerProfileId={p(profileId)})";
+        var assigned = "SELECT 1 FROM TaskAssignees a JOIN SpaceMembers m ON m.SpaceId=t.SpaceId AND m.MemberId=a.MemberId WHERE a.TaskId=t.Id AND a.DeletedAtUtc IS NULL AND m.RemovedAtUtc IS NULL";
+        return c.Operator switch
+        {
+            "isMe" => $"({personal} OR EXISTS ({assigned} AND a.MemberId={p(profileId)}))",
+            "isEmpty" => $"(NOT {personal} AND NOT EXISTS ({assigned}))",
+            _ => $"EXISTS ({assigned} AND a.MemberId IN ({string.Join(", ", c.Ids.Select(id => p(id)))}))",
+        };
+    }
+
+    private static string Source(ResolvedViewCondition c)
+    {
+        const string github = "EXISTS (SELECT 1 FROM GitHubIssueLinks gl WHERE gl.TaskId = t.Id)";
+        const string agent = "EXISTS (SELECT 1 FROM TaskHistory ah WHERE ah.TaskId = t.Id AND ah.EventKind = 'task.created' AND ah.Actor LIKE 'agent:%')";
+        return c.Ids[0] switch
+        {
+            "GitHub" => github,
+            "Agent" => agent,
+            _ => $"(NOT {github} AND NOT {agent})",
         };
     }
 

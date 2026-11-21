@@ -21,6 +21,61 @@ public sealed class QuickAddParserTests
     private static QuickAddResult Parse(string text, QuickAddContext? context = null) => QuickAddParser.Parse(text, context ?? Context());
 
     [Test]
+    [Arguments("Read chapter @team +ana", "Read chapter")]
+    [Arguments("Lire chapitre @team +ana", "Lire chapitre")]
+    [Arguments("Leggere capitolo @team +ana", "Leggere capitolo")]
+    [Arguments("Leer capítulo @team +ana", "Leer capítulo")]
+    [Arguments("Baca bab @team +ana", "Baca bab")]
+    [Arguments("اقرأ الفصل @team +ana", "اقرأ الفصل")]
+    public async Task Parse_SharedSpaceAndPerson_AppliesSigilsInEveryLanguage(string text, string title)
+    {
+        var context = Context() with
+        {
+            Spaces = [new("personal", "Personal", true), new("team", "Teamwork", false)],
+            Containers = [new("reading", "Reading", "team")],
+            People = [new("team", "ana-id", "Ana Lopez")],
+        };
+        var result = Parse(text, context);
+        await Assert.That(result.Draft.Title).IsEqualTo(title);
+        await Assert.That(result.Draft.ContainerId).IsEqualTo("reading");
+        await Assert.That(result.Draft.AssigneeIds).IsEquivalentTo(["ana-id"]);
+        await Assert.That(result.Tokens.Where(token => token.Kind is CaptureTokenKind.Space or CaptureTokenKind.Delegation).All(token => token.State == CaptureTokenState.Applied)).IsTrue();
+    }
+
+    [Test]
+    public async Task Parse_AmbiguousSpaceAndPerson_KeepTokensInTitle()
+    {
+        var context = Context() with
+        {
+            Spaces = [new("personal", "Personal", true), new("one", "Team-one", false), new("two", "Team-two", false)],
+            Containers = [new("l1", "One", "one"), new("l2", "Two", "two")],
+            People = [new("one", "a", "Ana"), new("one", "b", "Anabel")],
+        };
+        var space = Parse("Read @team", context);
+        await Assert.That(space.Draft.Title).IsEqualTo("Read @team");
+        await Assert.That(space.Warnings.Select(warning => warning.Code)).Contains("ambiguousSpace");
+        var person = Parse("Read @team-one +an", context);
+        await Assert.That(person.Draft.Title).Contains("+an");
+        await Assert.That(person.Warnings.Select(warning => warning.Code)).Contains("ambiguousPerson");
+    }
+
+    [Test]
+    public async Task Parse_SharedDelegationAndFollowUp_KeepBothUntilDelegationExists()
+    {
+        var context = Context() with
+        {
+            Spaces = [new("personal", "Personal", true), new("team", "Team", false)],
+            Containers = [new("reading", "Reading", "team")],
+            People = [new("team", "ana-id", "Ana")],
+        };
+        var result = Parse("Send quote @team +ana follow up Friday", context);
+        await Assert.That(result.Draft.Title).IsEqualTo("Send quote +ana follow up Friday");
+        await Assert.That(result.Draft.AssigneeIds).IsEmpty();
+        await Assert.That(result.Draft.FollowUpDate).IsNull();
+        await Assert.That(result.Warnings.Select(warning => warning.Code)).Contains("delegationLater");
+    }
+
+    [Test]
     public async Task Parse_CategorySigil_SetsWorkOrPersonalAndLeavesTheTitle()
     {
         var work = Parse("Ship release ~work tomorrow");
@@ -108,12 +163,12 @@ public sealed class QuickAddParserTests
     }
 
     [Test]
-    public async Task Parse_SpecDelegationAndFollowUp_KeepsMemberAndSetsFollowUp()
+    public async Task Parse_PersonalPersonAndFollowUp_SetsWaitingAndFollowUp()
     {
         var result = Parse("Send venue quote +Omar follow up Friday");
-        await Assert.That(result.Draft.Title).IsEqualTo("Send venue quote +Omar");
+        await Assert.That(result.Draft.Title).IsEqualTo("Send venue quote");
+        await Assert.That(result.Draft.WaitingOn).IsEqualTo("Omar");
         await Assert.That(result.Draft.FollowUpDate).IsEqualTo(new DateOnly(2026, 11, 13));
-        await Assert.That(result.Warnings.Select(warning => warning.Code)).Contains("delegationLater");
     }
 
     // ------------------------------------------------------------ every language: planned, due, relative, repeat, reminder, estimate

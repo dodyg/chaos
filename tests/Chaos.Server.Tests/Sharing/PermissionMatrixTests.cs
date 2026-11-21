@@ -20,7 +20,8 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         board_setting=create,grouping,limits,deleted
         saved_view=create,name,look,pinned,position,definition,layout,alerts,deleted
         calendar_source=create,name,look,busy,enabled,owner,position,deleted
-        task=create,title,notes,status,place,position,priority,estimate,category,planned,due,deleted
+        task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted
+        task_assignee=create,done,deleted
         calendar_event_link=create,deleted
         subtask=create,title,notes,status,position,deleted
         task_tag=deleted
@@ -72,6 +73,33 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
             await Assert.That(actual[kind].Groups.Select(group => group.Name)).IsEquivalentTo(groups);
             await Assert.That(actual[kind].Groups.All(group => Enum.IsDefined(group.Write))).IsTrue();
         }
+    }
+
+    [Test]
+    public async Task Assignments_OnlyAcceptLiveEditorsAndAreTombstonedOnRemoval()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        await using var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("assignment-owner@example.com");
+        var editor = await world.SignInAsync("assignment-editor@example.com");
+        var viewer = await world.SignInAsync("assignment-viewer@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        await world.JoinAsync(viewer, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        var task = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("task", task, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Instant() }))).Rejections()).IsEmpty();
+        async Task<RawResponse> Assign(SharingCaller actor, Guid member) => await world.CallAsync(actor, HttpMethod.Post,
+            "/v2/sync/push", new { changes = new[] { SharingHarness.Change("task_assignee", $"{task}|{member:D}", "create", new { AddedAtUtc = Instant() }) } }, schema: 5);
+        await Assert.That((await Assign(owner, editor.ProfileId)).Rejections()).IsEmpty();
+        await Assert.That((await Assign(owner, viewer.ProfileId)).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await Assign(viewer, owner.ProfileId)).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}/members/{editor.ProfileId:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        await using var db = ServerDatabase.Open(server.ConnectionString);
+        var row = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.SingleAsync(db.SyncEntities,
+            e => e.AccountId == space && e.Kind == "task_assignee" && e.EntityKey == $"{task}|{editor.ProfileId:D}");
+        await Assert.That(SyncJson.ReadGroups(row.Groups)["deleted"].Values.Values["DeletedAtUtc"]).IsNotNull();
+        await Assert.That((await Assign(owner, editor.ProfileId)).Rejections()).Contains(SyncRejection.Forbidden);
     }
 
     [Test]

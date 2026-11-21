@@ -138,11 +138,13 @@ public sealed record EntityChange(ChangeKind Kind, string Id, string? Before, lo
 
 /// <summary>The net change of one tag link: whether the link exists after the operation.</summary>
 public sealed record LinkChange(LinkKind Kind, string TargetId, string TagId, bool PresentAfter);
+public sealed record AssigneeChange(TaskAssigneeRecord? Before, TaskAssigneeRecord After);
 
 /// <summary>Everything one operation changed, in first-touch order; the inverse payload of its undo entry.</summary>
 public sealed record ChangeSet(IReadOnlyList<EntityChange> Entities, IReadOnlyList<LinkChange> Links)
 {
-    public bool IsEmpty => Entities.Count == 0 && Links.Count == 0;
+    public IReadOnlyList<AssigneeChange> Assignees { get; init; } = [];
+    public bool IsEmpty => Entities.Count == 0 && Links.Count == 0 && Assignees.Count == 0;
 }
 
 /// <summary>
@@ -167,6 +169,7 @@ public sealed class RecordingDataSession : IDataSession
     private readonly Dictionary<string, TaskAggregateSnapshot?> _taskBefore = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string EventKind, List<string> Fields)> _registered = new(StringComparer.Ordinal);
     private readonly HashSet<string> _diaryTasks = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string TaskId, string MemberId), AssigneeChange> _assignees = [];
 
     public RecordingDataSession(IDataSession inner)
     {
@@ -233,7 +236,14 @@ public sealed class RecordingDataSession : IDataSession
     public ChangeSet Changes => new(
         [.. _entityOrder.Select(key => new EntityChange(key.Kind, key.Id, _entities[key].Before, _entities[key].AfterVersion))],
         [.. _linkOrder.Where(key => _links[key].PresentBefore != _links[key].PresentAfter)
-            .Select(key => new LinkChange(key.Kind, key.TargetId, key.TagId, _links[key].PresentAfter))]);
+            .Select(key => new LinkChange(key.Kind, key.TargetId, key.TagId, _links[key].PresentAfter))])
+        { Assignees = [.. _assignees.Values.Where(change => change.Before != change.After)] };
+
+    internal void RecordAssignee(TaskAssigneeRecord? before, TaskAssigneeRecord after)
+    {
+        var key = (after.TaskId, after.MemberId);
+        _assignees[key] = _assignees.TryGetValue(key, out var previous) ? previous with { After = after } : new(before, after);
+    }
 
     /// <summary>Every task this operation reached, in first-touch order.</summary>
     public IReadOnlyList<string> TouchedTaskIds => _taskOrder;
@@ -327,7 +337,7 @@ public sealed class RecordingDataSession : IDataSession
         return new TaskAggregateSnapshot(task, subtasks, await session.Tags.ListTaskTagIdsAsync(taskId, ct), subtaskTags,
             await session.ReminderRules.ListByTaskAsync(taskId, ct),
             await session.Waiting.FindActiveAsync(taskId, ct),
-            await session.Waiting.FindActiveFollowUpAsync(taskId, ct));
+            await session.Waiting.FindActiveFollowUpAsync(taskId, ct), await session.Tasks.ListAssigneesAsync(taskId, ct));
     }
 
     /// <summary>
@@ -504,6 +514,7 @@ public sealed class RecordingDataSession : IDataSession
         else
         {
             fields.AddRange(TaskMutationSupport.ChangedTaskFields(before.Task, after.Task));
+            if (Json(before.Assignees) != Json(after.Assignees)) fields.Add("Assignees");
             if (Json(before.Subtasks) != Json(after.Subtasks) || Json(before.SubtaskTagIds) != Json(after.SubtaskTagIds))
             {
                 fields.Add("Subtasks");
@@ -666,6 +677,14 @@ internal static class UndoLabels
 
 internal sealed class RecordingTaskStore(RecordingDataSession recorder, ITaskStore inner) : ITaskStore
 {
+    public Task<IReadOnlyList<TaskAssigneeRecord>> ListAssigneesAsync(string taskId, CancellationToken ct) => inner.ListAssigneesAsync(taskId, ct);
+    public async Task SaveAssigneeAsync(TaskAssigneeRecord assignee, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(assignee.TaskId, ct);
+        var before = (await inner.ListAssigneesAsync(assignee.TaskId, ct)).FirstOrDefault(row => row.MemberId == assignee.MemberId);
+        await inner.SaveAssigneeAsync(assignee, ct);
+        recorder.RecordAssignee(before, assignee);
+    }
     public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) => inner.GetAsync(taskId, ct);
     public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => inner.GetIncludingDeletedAsync(taskId, ct);
     public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => inner.ListByContainerAsync(containerId, ct);

@@ -117,6 +117,7 @@ public sealed class AccountDeletion(
                                 ["RemovedAtUtc"] = member.RemovedAt.Value.UtcDateTime.ToString("o"),
                             })),
                         }), ct);
+                await changes.TombstoneAssignmentsAsync(member.SpaceId, member.MemberId, member.MemberId, now, ct);
                 fanOut.Add((member.SpaceId, stream.NextSeq - 1));
             }
 

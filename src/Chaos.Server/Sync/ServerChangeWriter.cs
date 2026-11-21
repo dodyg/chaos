@@ -1,5 +1,6 @@
 using Chaos.Server.Data;
 using Chaos.Sync;
+using Microsoft.EntityFrameworkCore;
 
 namespace Chaos.Server.Sync;
 
@@ -7,6 +8,22 @@ namespace Chaos.Server.Sync;
 public sealed class ServerChangeWriter(ChaosDbContext db, TimeProvider clock, SyncKindCatalog kinds)
 {
     public static readonly Guid DeviceId = new("00000000-0000-0000-0000-000000000007");
+
+    public async Task TombstoneAssignmentsAsync(Guid spaceId, Guid memberId, Guid actorId, DateTimeOffset now, CancellationToken ct)
+    {
+        var suffix = "|" + memberId.ToString("D");
+        var rows = await db.SyncEntities.Where(e => e.AccountId == spaceId && e.Kind == "task_assignee"
+            && e.PurgedAt == null && e.MovedTo == null && e.EntityKey.EndsWith(suffix)).ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            var groups = SyncJson.ReadGroups(row.Groups);
+            if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null)
+                continue;
+            var hlc = await NextHlcAsync(spaceId, row.Kind, row.EntityKey, ct);
+            await AppendAsync(spaceId, actorId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), row.Kind, row.EntityKey,
+                new Dictionary<string, SyncGroupState> { ["deleted"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?> { ["DeletedAtUtc"] = now.UtcDateTime.ToString("o") })) }), ct);
+        }
+    }
 
     /// <summary>Creates a fresh server clock newer than every stored group of the entity.</summary>
     public async Task<Hlc> NextHlcAsync(Guid streamId, string kind, string key, CancellationToken ct)

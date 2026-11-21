@@ -134,6 +134,7 @@ const tasks: TaskResponse[] = [
   task("task-8", "Write release notes", { containerId: "chaos", category: "Work", status: "Done" }),
 ];
 const deletedTasks: TaskResponse[] = [];
+const taskAssignments = new Map<string, { mode: string; assignees: { memberId: string; completedAtUtc: string | null }[] }>();
 
 /** Two shared spaces for the preview (PLAN3 Q5): one the sample person owns, one where they are only a viewer. */
 type PreviewSpace = { spaceId: string; name: string; kind: "Personal" | "Shared"; role: number | null };
@@ -1387,6 +1388,7 @@ function previewDraft(text: string, containerId: string | null): CaptureDraftDto
     reminders: [],
     tagIds: [],
     tagPaths,
+    assigneeIds: [],
     waitingOn: null,
     followUpDate: null,
     followUpTime: null,
@@ -1777,7 +1779,47 @@ const handlers: Record<string, Handler> = {
     const { operationId: _o, taskId: _t, expectedVersion: _v, ...fields } = r;
     return update(r.taskId, fields as Partial<TaskResponse>, "Edit");
   },
-  "tasks.setStatus": (r: { taskId: string; status: string }) => update(r.taskId, { status: r.status }, "Change status of"),
+  "tasks.assignments": (r: { taskId: string }) => ok(taskAssignments.get(r.taskId) ?? { mode: "Anyone", assignees: [] }),
+  "tasks.assignmentSummaries": (r: { taskIds: string[] }) => ok({ tasks: r.taskIds.flatMap((taskId) => {
+    const task = find(taskId);
+    const state = taskAssignments.get(taskId);
+    return task && state?.assignees.length ? [{ taskId, spaceId: task.spaceId, assignees: state.assignees }] : [];
+  }) }),
+  "tasks.changeAssignee": (r: { taskId: string; memberId: string; assigned: boolean; expectedVersion: string }) => {
+    const t = find(r.taskId);
+    const members = t ? spaceMembers.get(t.spaceId) ?? [] : [];
+    const me = members.find((member) => member.isMe);
+    const person = members.find((member) => member.memberId === r.memberId && (member.role === 1 || member.role === 2));
+    if (!t || t.version !== r.expectedVersion || !me || me.role > 2 || (r.assigned && !person))
+      return { ...fail("This assignment could not be changed."), operationId: "x", task: null, warning: null };
+    const state = taskAssignments.get(t.id) ?? { mode: "Anyone", assignees: [] };
+    state.assignees = state.assignees.filter((entry) => entry.memberId !== r.memberId);
+    if (r.assigned) state.assignees.push({ memberId: r.memberId, completedAtUtc: null });
+    taskAssignments.set(t.id, state);
+    return update(t.id, {}, "Change assignees of");
+  },
+  "tasks.setAssignmentMode": (r: { taskId: string; mode: string; expectedVersion: string }) => {
+    const t = find(r.taskId);
+    const me = t && (spaceMembers.get(t.spaceId) ?? []).find((member) => member.isMe);
+    if (!t || t.version !== r.expectedVersion || !me || me.role > 2 || !["Anyone", "Each"].includes(r.mode))
+      return { ...fail("This assignment mode could not be changed."), operationId: "x", task: null, warning: null };
+    const state = taskAssignments.get(t.id) ?? { mode: "Anyone", assignees: [] };
+    state.mode = r.mode;
+    taskAssignments.set(t.id, state);
+    return update(t.id, {}, "Change assignment mode of");
+  },
+  "tasks.setStatus": (r: { taskId: string; status: string }) => {
+    const t = find(r.taskId);
+    const state = taskAssignments.get(r.taskId);
+    if (t && state?.mode === "Each" && r.status === "Done") {
+      const me = (spaceMembers.get(t.spaceId) ?? []).find((member) => member.isMe);
+      const mine = state.assignees.find((entry) => entry.memberId === me?.memberId);
+      if (!mine) return { ...fail("Only an assignee can complete their part of this task."), operationId: "x", task: null, warning: null };
+      mine.completedAtUtc ??= now();
+      return update(r.taskId, { status: state.assignees.every((entry) => entry.completedAtUtc) ? "Done" : t.status }, "Complete assigned work on");
+    }
+    return update(r.taskId, { status: r.status }, "Change status of");
+  },
   "tasks.reorder": (r: { taskId: string }) => update(r.taskId, {}, "Reorder"),
   "tasks.delete": (r: { taskId: string }) => {
     const index = tasks.findIndex((t) => t.id === r.taskId);
@@ -1949,7 +1991,11 @@ const handlers: Record<string, Handler> = {
   },
 
   "tags.list": () => ok({ tags }),
-  "people.list": () => ok({ people: [] }),
+  "people.list": (r: { spaceId: string }) => ok({ people: (spaceMembers.get(r.spaceId) ?? []).map((member) => ({
+    actorId: `person:${member.memberId}`, displayName: member.name,
+    initials: member.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
+    colorIndex: 0, kind: "person", isMe: member.isMe, role: member.role, former: false,
+  })) }),
   "spaces.list": () =>
     ok({
       spaces: spaces.map((space) => ({

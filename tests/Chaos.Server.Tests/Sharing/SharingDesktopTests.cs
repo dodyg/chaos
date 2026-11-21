@@ -6,6 +6,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Containers;
 using Chaos.Application.Planning;
+using Chaos.Application.Queries;
 using Chaos.Application.Spaces;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sync;
@@ -127,6 +128,45 @@ internal sealed class SharingWorld : IAsyncDisposable
 public sealed class SharingDesktopTests(PostgresServer postgres)
 {
     private static string Op() => Guid.NewGuid().ToString();
+
+    [Test]
+    public async Task EachAssignment_ThreeMembersSeeTheirWorkAndOfflineCompletionsConverge()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("assignment-three-a@example.com", "Ada");
+        var b = await world.AddPersonAsync("assignment-three-b@example.com", "Bo");
+        var c = await world.AddPersonAsync("assignment-three-c@example.com", "Cy");
+        var (space, _, taskId) = await ShareAsync(world, a, b);
+        await c.Spaces().JoinWithLinkAsync(await InviteAsync(a, space));
+        await world.SettleAsync();
+        var current = (await a.Desktop.Tasks.GetAsync(taskId))!;
+        foreach (var person in new[] { a, b, c })
+            current = (await a.Desktop.Tasks.ChangeAssigneeAsync(new(Op(), taskId, current.Version, person.ProfileId.ToString("D"), true))).Task;
+        current = (await a.Desktop.Tasks.SetAssignModeAsync(new(Op(), taskId, current.Version, TaskAssignMode.Each))).Task;
+        await world.SettleAsync();
+        foreach (var person in new[] { a, b, c })
+        {
+            var page = await new TaskQueries(person.Desktop.Store, person.Desktop.Clock).RunAsync(new TaskQuerySpec { View = TaskView.AssignedToMe });
+            await Assert.That(page.Rows.Select(row => row.Task.Id)).Contains(taskId);
+        }
+        await a.Desktop.Tasks.SetStatusAsync(new(Op(), taskId, current.Version, TaskItemStatus.Done, null));
+        await world.SettleAsync();
+        b.Desktop.Clock.Now = b.Desktop.Clock.Now.AddMinutes(1);
+        c.Desktop.Clock.Now = c.Desktop.Clock.Now.AddMinutes(2);
+        var bTask = (await b.Desktop.Tasks.GetAsync(taskId))!;
+        var cTask = (await c.Desktop.Tasks.GetAsync(taskId))!;
+        await b.Desktop.Tasks.SetStatusAsync(new(Op(), taskId, bTask.Version, TaskItemStatus.Done, null));
+        await c.Desktop.Tasks.SetStatusAsync(new(Op(), taskId, cTask.Version, TaskItemStatus.Done, null));
+        await Assert.That((await b.Desktop.Tasks.GetAsync(taskId))!.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        await Assert.That((await c.Desktop.Tasks.GetAsync(taskId))!.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        await world.SettleAsync();
+        foreach (var person in new[] { a, b, c })
+        {
+            var task = (await person.Desktop.Tasks.GetAsync(taskId))!;
+            await Assert.That(task.Status).IsEqualTo(TaskItemStatus.Done);
+            await Assert.That(task.CompletedAtUtc).IsEqualTo(c.Desktop.Clock.Now);
+        }
+    }
 
     private static async Task<string> CreateListAsync(SyncDevice device, string spaceId, string name) =>
         (await new ContainerCommands(device.Store, device.Ids, device.Clock).CreateAsync(new(Op(), name, ContainerKind.List, spaceId))).Container.Id;

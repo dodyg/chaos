@@ -89,6 +89,14 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                         await RevertLinkAsync(session, link, entry.Label, now, inner);
                     }
 
+                    foreach (var change in changes.Assignees.Reverse())
+                    {
+                        var current = (await session.Tasks.ListAssigneesAsync(change.After.TaskId, inner))
+                            .FirstOrDefault(row => row.MemberId == change.After.MemberId);
+                        if (current != change.After) throw Conflict(entry.Label, "assignment");
+                        await session.Tasks.SaveAssigneeAsync(change.Before ?? change.After with { DeletedAtUtc = now }, inner);
+                    }
+
                     var rewritten = new Dictionary<(ChangeKind Kind, string Id, long Version), long>();
                     foreach (var change in changes.Entities.Reverse())
                     {
@@ -106,7 +114,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
 
                     await RepointOlderEntriesAsync(session, profile.Id, rewritten, inner);
 
-                    return new UndoResult(entry.Label, changes.Entities.Count + changes.Links.Count, Replayed: false);
+                    return new UndoResult(entry.Label, changes.Entities.Count + changes.Links.Count + changes.Assignees.Count, Replayed: false);
                 }, token);
             return replayed ? result with { Replayed = true } : result;
         }, ct);

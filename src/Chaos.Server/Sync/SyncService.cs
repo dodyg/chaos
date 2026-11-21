@@ -465,11 +465,24 @@ public sealed class SyncService(
     {
         if (streamId == account.Id)
         {
-            return null;
+            return kind.Kind == "task_assignee" ? SyncRejection.Forbidden : null;
         }
         if (!roles.TryGetValue(streamId, out var role))
         {
             return SyncRejection.NotMember;
+        }
+        if (kind.Kind == "task_assignee" && change.Op != SyncOp.Purge)
+        {
+            var parts = change.EntityKey.Split('|');
+            var removing = change.Groups.TryGetValue("deleted", out var deleted)
+                && deleted.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null;
+            if (parts.Length != 2 || !Guid.TryParse(parts[1], out var memberId)
+                || (!removing && !await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId
+                    && m.MemberId == memberId && m.RemovedAt == null && m.MemberKind == SpaceMember.PersonKind
+                    && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole), ct)))
+            {
+                return SyncRejection.Forbidden;
+            }
         }
         if (change.Op == SyncOp.Purge)
         {

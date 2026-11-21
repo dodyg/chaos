@@ -9,6 +9,7 @@ using Chaos.Domain.Tasks;
 using Chaos.Domain.Views;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Infrastructure.Tests.Views;
 
@@ -160,6 +161,25 @@ public sealed class SavedViewTests
     }
 
     // ---- Field matrix -----------------------------------------------------------------------
+
+    [Test]
+    public async Task SourceAgent_UsesTheCreationActorRatherThanLaterEdits()
+    {
+        using var host = await DataHost.StartAsync();
+        var w = new World(host);
+        var agent = await w.TaskAsync("Agent work");
+        var person = await w.TaskAsync("Person work");
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "UPDATE TaskHistory SET Actor='agent:11111111-1111-1111-1111-111111111111' WHERE TaskId=$task AND EventKind='task.created';";
+            command.Parameters.AddWithValue("$task", agent.Id);
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        });
+        await SameSetAsync(await w.IdsAsync(Def("{\"field\":\"source\",\"op\":\"is\",\"value\":\"Agent\"}")), [agent.Id]);
+        await SameSetAsync(await w.IdsAsync(Def("{\"field\":\"source\",\"op\":\"is\",\"value\":\"App\"}")), [person.Id]);
+    }
 
     [Test]
     public async Task Run_EveryFieldAndOperator_SelectsTheExpectedTasks()

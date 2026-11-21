@@ -276,6 +276,24 @@ public sealed partial class MyWeekCommands
         }
 
         await OfferAsync(new TaskQuerySpec { View = TaskView.Overdue }, WeekCandidateReason.Overdue);
+        var assignedDue = await session.Queries.QueryAsync(await TaskQueries.ResolveAsync(session, context,
+            new TaskQuerySpec { View = TaskView.AssignedToMe, Due = new LocalDateRange(null, context.Today.AddDays(2)), Limit = TaskQueries.MaxLimit }, token), token);
+        foreach (var row in assignedDue.Rows)
+        {
+            var task = row.Task;
+            var overdue = task.DueDate < context.Today;
+            if (task.DueTime is { } dueTime)
+            {
+                var local = TimeZoneInfo.ConvertTime(context.Now, TaskQueries.FindZone(task.DueZoneId ?? string.Empty) ?? context.Zone);
+                var date = DateOnly.FromDateTime(local.DateTime);
+                overdue = task.DueDate < date || (task.DueDate == date && dueTime < TimeOnly.FromDateTime(local.DateTime));
+            }
+            if (overdue && !task.IsTerminal && !row.ContainerArchived && seen.Add(task.Id))
+            {
+                cache.Remember(task, row.ContainerName, row.ContainerArchived);
+                found.Add(new WeekCandidate(task.Id, WeekCandidateReason.Overdue));
+            }
+        }
         await OfferAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, Due = new LocalDateRange(start, end) }, WeekCandidateReason.DueThisWeek);
         await OfferAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, Planned = new LocalDateRange(start, end) }, WeekCandidateReason.PlannedThisWeek);
         if (WeekCalendar.Contains(start, context.Today))

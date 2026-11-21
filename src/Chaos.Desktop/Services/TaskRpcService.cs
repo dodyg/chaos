@@ -16,6 +16,13 @@ public sealed record ListDeletedTasksRequest(string? ContainerId);
 public sealed record ListTasksResponse(bool Ok, IReadOnlyList<TaskResponse> Tasks, TaskErrorResponse? Error);
 public sealed record EditTaskRequest(string OperationId, string TaskId, string ExpectedVersion, string Title, string Notes, string? PlannedDate, string? PlannedTime, string? PlannedZoneId, string? DueDate, string? DueTime, string? DueZoneId, string Priority, int? EstimateMinutes, string Category);
 public sealed record ChangeTaskStatusRequest(string OperationId, string TaskId, string ExpectedVersion, string Status, string? SubtaskChoice);
+public sealed record ChangeAssigneeRequest(string OperationId, string TaskId, string ExpectedVersion, string MemberId, bool Assigned);
+public sealed record SetAssignmentModeRequest(string OperationId, string TaskId, string ExpectedVersion, string Mode);
+public sealed record AssigneeResponse(string MemberId, string? CompletedAtUtc);
+public sealed record TaskAssignmentsResponse(bool Ok, string Mode, IReadOnlyList<AssigneeResponse> Assignees, TaskErrorResponse? Error);
+public sealed record AssignmentSummariesRequest(IReadOnlyList<string> TaskIds);
+public sealed record AssignmentSummaryDto(string TaskId, string SpaceId, IReadOnlyList<AssigneeResponse> Assignees);
+public sealed record AssignmentSummariesResponse(bool Ok, IReadOnlyList<AssignmentSummaryDto> Tasks, TaskErrorResponse? Error);
 public sealed record ReorderTaskRequest(string OperationId, string TaskId, string ExpectedVersion, int InsertionIndex);
 public sealed record DeleteTaskRequest(string OperationId, string TaskId, string ExpectedVersion);
 
@@ -58,6 +65,36 @@ public sealed record TaskGetResponse(bool Ok, TaskResponse? Task, TaskErrorRespo
 [NeoRpcService("tasks", Version = 1)]
 public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync = null)
 {
+    [NeoRpcMethod("assignmentSummaries")]
+    public ValueTask<AssignmentSummariesResponse> AssignmentSummariesAsync(AssignmentSummariesRequest request, CancellationToken ct) =>
+        Rpc.Run("tasks.assignmentSummaries", async () => new AssignmentSummariesResponse(true,
+            [.. (await commands.GetAssignmentSummariesAsync(request.TaskIds, ct)).Select(task => new AssignmentSummaryDto(task.TaskId, task.SpaceId,
+                [.. task.Assignees.Select(a => new AssigneeResponse(a.MemberId, a.CompletedAtUtc is { } at ? StorageFormats.Instant(at) : null))]))], null),
+            error => new AssignmentSummariesResponse(false, [], error));
+    [NeoRpcMethod("assignments")]
+    public ValueTask<TaskAssignmentsResponse> AssignmentsAsync(GetTaskRequest request, CancellationToken ct) =>
+        Rpc.Run("tasks.assignments", async () =>
+        {
+            var assignments = await commands.GetAssignmentsAsync(request.TaskId, ct);
+            return new TaskAssignmentsResponse(true, assignments.Mode.ToString(),
+                [.. assignments.Assignees.Where(a => a.DeletedAtUtc is null).Select(a => new AssigneeResponse(a.MemberId, a.CompletedAtUtc is { } at ? StorageFormats.Instant(at) : null))], null);
+        }, error => new TaskAssignmentsResponse(false, "Anyone", [], error));
+
+    [NeoRpcMethod("changeAssignee")]
+    public async ValueTask<TaskOperationResponse> ChangeAssigneeAsync(ChangeAssigneeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.changeAssignee");
+        return await MutateAsync(request.OperationId, () => commands.ChangeAssigneeAsync(new(request.OperationId, request.TaskId,
+            Version(request.ExpectedVersion), request.MemberId, request.Assigned), ct));
+    }
+
+    [NeoRpcMethod("setAssignmentMode")]
+    public async ValueTask<TaskOperationResponse> SetAssignmentModeAsync(SetAssignmentModeRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tasks.setAssignmentMode");
+        return await MutateAsync(request.OperationId, () => commands.SetAssignModeAsync(new(request.OperationId, request.TaskId,
+            Version(request.ExpectedVersion), ParseEnum<TaskAssignMode>(request.Mode, "mode")), ct));
+    }
     [NeoRpcMethod("listDeleted")]
     public ValueTask<ListTasksResponse> ListDeletedAsync(ListDeletedTasksRequest request, CancellationToken ct) =>
         Rpc.Run<ListTasksResponse>("tasks.listDeleted", async () => { return new(true, [.. (await commands.ListDeletedAsync(request.ContainerId, ct)).Select(ToResponse)], null); },

@@ -72,7 +72,7 @@ public sealed class SyncKindsTests
     public async Task SyncKinds_MatchTheClientCatalog()
     {
         var catalog = SyncCatalog.Tables.Where(table => table.Mode != SyncMode.LocalOnly).OrderBy(table => table.ApplyOrder).ToList();
-        string[] parentKinds = ["section", "subtask", "diary_entry", "task_history", "github_issue_link", "pad_drawing", "scratch_task_link", "recurrence_occurrence", "recurrence_exception", "page_task_link", "github_repository", "github_checklist_item", "github_comment_link", "github_label_tag", "github_milestone_project", "board_setting"];
+        string[] parentKinds = ["section", "subtask", "task_assignee", "diary_entry", "task_history", "github_issue_link", "pad_drawing", "scratch_task_link", "recurrence_occurrence", "recurrence_exception", "page_task_link", "github_repository", "github_checklist_item", "github_comment_link", "github_label_tag", "github_milestone_project", "board_setting"];
         string[] tagLinks = ["task_tag", "subtask_tag", "pad_tag", "page_tag"];
         await Assert.That(SyncKinds.All.Select(kind => kind.Kind)).IsEquivalentTo(catalog.Select(table => table.Kind));
         foreach (var table in catalog)

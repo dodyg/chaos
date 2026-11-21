@@ -438,6 +438,138 @@ public sealed class TagsAndSearchTests
     }
 
     [Test]
+    public async Task Assignments_EachRequiresEveryLiveAssigneeToComplete()
+    {
+        using var host = await Host.StartAsync();
+        var profile = await host.Storage.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token), CancellationToken.None);
+        const string peer = "11111111-1111-1111-1111-111111111111";
+        Execute(host.Storage.DatabasePath, $"""
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('shared','{profile!.Id}',2,'Shared','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                VALUES ('me','shared','{profile.Id}',1,'Me',1,'2026-11-10T00:00:00Z'),
+                       ('peer','shared','{peer}',1,'Peer',2,'2026-11-10T00:00:00Z');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('shared-list','shared',1,'Shared list','shared list',0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('task','shared','shared-list','Read',0,0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            """);
+        var first = await host.Tasks.ChangeAssigneeAsync(new(Op(), "task", 1, profile.Id, true));
+        var second = await host.Tasks.ChangeAssigneeAsync(new(Op(), "task", first.Task.Version, peer, true));
+        var boards = new Chaos.Application.Boards.BoardCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        await boards.UpdateSettingsAsync(new(Op(), BoardTargetKind.Container, "shared-list", 0, BoardGrouping.Assignee,
+            BoardSwimlane.Assignee, null, null, "{}", "[]"));
+        var boardView = await new Chaos.Application.Boards.BoardQueries(host.Storage.Store).GetAsync("shared-list");
+        await Assert.That(boardView.Cards.Count).IsEqualTo(4);
+        await Assert.That(boardView.Cards.Select(card => card.ColumnKey).Distinct()).IsEquivalentTo([profile.Id, peer]);
+        var moveOperation = Op();
+        await boards.MoveAsync(new(moveOperation, "task", second.Task.Version, BoardGrouping.Assignee, peer, null, null, null));
+        var undo = new Chaos.Application.History.UndoCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        await undo.UndoAsync(new(Op(), moveOperation));
+        var afterMoveUndo = (await host.Tasks.GetAsync("task"))!;
+        var mode = await host.Tasks.SetAssignModeAsync(new(Op(), "task", afterMoveUndo.Version, TaskAssignMode.Each));
+        var boardOperation = Op();
+        var board = await boards.MoveAsync(new(boardOperation, "task", mode.Task.Version, BoardGrouping.Status, "NotStarted", "Done", null, null));
+        await Assert.That(board.Task.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        await Assert.That((await host.Tasks.ListAssigneesAsync("task")).Single(a => a.MemberId == profile.Id).CompletedAtUtc).IsEqualTo(Now);
+        await undo.UndoAsync(new(Op(), boardOperation));
+        var current = (await host.Tasks.GetAsync("task"))!;
+        await Assert.That((await host.Tasks.ListAssigneesAsync("task")).Single(a => a.MemberId == profile.Id).CompletedAtUtc).IsNull();
+        var mine = await host.Tasks.SetStatusAsync(new(Op(), "task", current.Version, TaskItemStatus.Done, null));
+        await Assert.That(mine.Task.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        var rows = await host.Tasks.ListAssigneesAsync("task");
+        await Assert.That(rows.Single(a => a.MemberId == profile.Id).CompletedAtUtc).IsEqualTo(Now);
+        await Assert.That(rows.Single(a => a.MemberId == peer).CompletedAtUtc).IsNull();
+        var removeOperation = Op();
+        var removed = await host.Tasks.ChangeAssigneeAsync(new(removeOperation, "task", mine.Task.Version, peer, false));
+        await Assert.That(removed.Task.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That(removed.Task.CompletedAtUtc).IsEqualTo(Now);
+        await Assert.That((await host.Tasks.ListAssigneesAsync("task")).Single(a => a.MemberId == peer).DeletedAtUtc).IsNotNull();
+        await undo.UndoAsync(new(Op(), removeOperation));
+        await Assert.That((await host.Tasks.GetAsync("task"))!.Status).IsEqualTo(TaskItemStatus.NotStarted);
+        await Assert.That((await host.Tasks.ListAssigneesAsync("task")).Single(a => a.MemberId == peer).DeletedAtUtc).IsNull();
+    }
+
+    [Test]
+    public async Task AssignedToMe_IncludesOnlyLiveSharedAssignmentsAndPersonalTasks()
+    {
+        using var host = await Host.StartAsync();
+        await host.TaskAsync("Personal");
+        Execute(host.Storage.DatabasePath, """
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                SELECT 'shared',Id,2,'Shared','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z' FROM Profiles LIMIT 1;
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                SELECT 'member','shared',Id,1,'Me',2,'now' FROM Profiles LIMIT 1;
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                VALUES ('peer','shared','other-person',1,'Peer',2,'now');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('shared-list','shared',1,'Shared list','shared list',0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('mine','shared','shared-list','Mine',0,0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                       ('other','shared','shared-list','Other',0,1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                       ('removed','shared','shared-list','Removed',0,2,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc,DeletedAtUtc)
+                SELECT 'mine',Id,'now',NULL FROM Profiles LIMIT 1;
+            INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc,DeletedAtUtc)
+                SELECT 'removed',Id,'now','now' FROM Profiles LIMIT 1;
+            INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc) VALUES ('other','other-person','now');
+            UPDATE Tasks SET DueDate='2026-11-09' WHERE Id IN ('mine','removed');
+            """);
+        var spec = new TaskQuerySpec { View = TaskView.AssignedToMe };
+        var page = await host.Queries.RunAsync(spec);
+        await Assert.That(page.Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Personal", "Mine"]);
+        await Assert.That(page.TotalCount).IsEqualTo(2L);
+        await Assert.That(await host.Queries.CountAsync(spec)).IsEqualTo(page.TotalCount);
+        var day = new Chaos.Application.Planning.MyDayCommands(host.Storage.Store, new FixedTimeProvider(Now));
+        var suggestions = await day.SuggestAsync();
+        await Assert.That(suggestions.Select(suggestion => suggestion.Task.Title)).Contains("Mine");
+        await Assert.That(suggestions.Select(suggestion => suggestion.Task.Title)).DoesNotContain("Removed");
+        await day.OpenAsync(new DateOnly(2026, 11, 10));
+        await day.AddAsync(new Chaos.Application.Planning.DayItemCommand(Op(), new DateOnly(2026, 11, 10), "mine"));
+        await Assert.That((await host.Queries.RunAsync(new TaskQuerySpec { View = TaskView.MyDay })).Rows.Select(row => row.Task.Title)).Contains("Mine");
+        var week = new Chaos.Application.Planning.MyWeekCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        var weekStart = (await week.OpenAsync(null)).WeekStart;
+        var started = (await week.StartDraftAsync(new Chaos.Application.Planning.WeekCommand(Op(), weekStart))).Week;
+        await Assert.That(started.Candidates.Any(candidate => candidate.TaskId == "mine" && candidate.Reason == Chaos.Application.Planning.WeekCandidateReason.Overdue)).IsTrue();
+        var draftWeek = new WeekDraft([], [new WeekDraftAssignment("mine", new DateOnly(2026, 11, 10))], [], [], Step: 3);
+        await week.SaveDraftAsync(new Chaos.Application.Planning.WeekDraftCommand(Op(), weekStart, started.DraftRevision, draftWeek));
+        var sharedView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
+            "{\"v\":1,\"items\":[{\"field\":\"space\",\"op\":\"is\",\"value\":\"shared\"}]}") };
+        var sharedPage = await host.Queries.RunAsync(sharedView);
+        await Assert.That(sharedPage.Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Mine", "Other", "Removed"]);
+        await Assert.That(await host.Queries.CountAsync(sharedView)).IsEqualTo(3L);
+        var mineView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
+            "{\"v\":1,\"items\":[{\"field\":\"assignee\",\"op\":\"isMe\"}]}") };
+        await Assert.That((await host.Queries.RunAsync(mineView)).Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Personal", "Mine"]);
+        var noneView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
+            "{\"v\":1,\"items\":[{\"field\":\"assignee\",\"op\":\"isEmpty\"}]}") };
+        await Assert.That((await host.Queries.RunAsync(noneView)).Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Removed"]);
+        var personView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
+            "{\"v\":1,\"items\":[{\"field\":\"assignee\",\"op\":\"in\",\"value\":[\"other-person\"]}]}") };
+        await Assert.That((await host.Queries.RunAsync(personView)).Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Other"]);
+        Execute(host.Storage.DatabasePath, "UPDATE SpaceMembers SET DisplayName='مُحَمَّد' WHERE Id='member';");
+        var search = await host.Queries.RunAsync(new TaskQuerySpec { View = TaskView.Search, Text = "@محمد" });
+        await Assert.That(search.Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Mine"]);
+        await Assert.That(search.Rows[0].Matches).Contains(SearchMatchKind.Assignee);
+        var capture = new Chaos.Application.Capture.CaptureCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        var preview = await capture.PreviewAsync("Read chapter @shared +محمد", []);
+        var defaultPreview = await capture.PreviewAsync("Read chapter +محمد", [], "shared-list");
+        await Assert.That(defaultPreview.Items.Single().Parse.Draft.Title).IsEqualTo("Read chapter");
+        await Assert.That(defaultPreview.Items.Single().Parse.Draft.AssigneeIds.Count).IsEqualTo(1);
+        await Assert.That(defaultPreview.Items.Single().Parse.Draft.ContainerId).IsEqualTo("shared-list");
+        var draft = preview.Items.Single().Parse.Draft;
+        await Assert.That(draft.Title).IsEqualTo("Read chapter");
+        await Assert.That(draft.ContainerId).IsEqualTo("shared-list");
+        var created = await capture.CreateAsync(new(Op(), [new Chaos.Application.Capture.CaptureTaskDraft
+        {
+            Title = draft.Title, ContainerId = draft.ContainerId, AssigneeIds = draft.AssigneeIds,
+        }]));
+        await Assert.That((await host.Tasks.ListAssigneesAsync(created.Tasks.Single().Id)).Count).IsEqualTo(1);
+        Execute(host.Storage.DatabasePath, "UPDATE SpaceMembers SET RemovedAtUtc='2026-11-10T00:00:00Z' WHERE Id='member';");
+        await Assert.That(await host.Queries.CountAsync(sharedView)).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task CountsAndPages_MatchForEveryViewAndFilter()
     {
         using var host = await Host.StartAsync();

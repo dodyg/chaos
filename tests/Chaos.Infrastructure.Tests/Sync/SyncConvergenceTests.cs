@@ -34,6 +34,47 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// </summary>
 public sealed class SyncConvergenceTests
 {
+    [Test]
+    public async Task EachAssignment_OfflineCompletionsConvergeToLatestTimestamp()
+    {
+        var (a, b) = await StartTwoAsync();
+        using (a)
+        using (b)
+        {
+            var task = await CaptureTaskAsync(a);
+            const string first = "11111111-1111-1111-1111-111111111111";
+            const string second = "22222222-2222-2222-2222-222222222222";
+            await a.Store.ExecuteAsync(async (session, token) =>
+            {
+                using var command = session.Connection().CreateCommand();
+                command.CommandText = "UPDATE Tasks SET AssignMode=1 WHERE Id=$task; INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc) VALUES ($task,$first,$time),($task,$second,$time);";
+                command.Parameters.AddWithValue("$task", task.Id);
+                command.Parameters.AddWithValue("$first", first);
+                command.Parameters.AddWithValue("$second", second);
+                command.Parameters.AddWithValue("$time", StorageFormats.Instant(DataHost.Start));
+                await command.ExecuteNonQueryAsync(token);
+                return 0;
+            });
+            await ExchangeAsync(a, b);
+            async Task CompleteAsync(DataHost host, string member, DateTimeOffset time) =>
+                await host.Store.ExecuteAsync(async (session, token) =>
+                {
+                    var row = (await session.Tasks.ListAssigneesAsync(task.Id, token)).Single(a => a.MemberId == member);
+                    await session.Tasks.SaveAssigneeAsync(row with { CompletedAtUtc = time }, token);
+                    return 0;
+                });
+            await CompleteAsync(a, first, DataHost.Start.AddMinutes(1));
+            await CompleteAsync(b, second, DataHost.Start.AddMinutes(2));
+            await ExchangeAsync(a, b);
+            var taskA = await a.Tasks.GetAsync(task.Id);
+            var taskB = await b.Tasks.GetAsync(task.Id);
+            await Assert.That(taskA!.Status).IsEqualTo(TaskItemStatus.Done);
+            await Assert.That(taskB!.Status).IsEqualTo(TaskItemStatus.Done);
+            await Assert.That(taskA.CompletedAtUtc).IsEqualTo(DataHost.Start.AddMinutes(2));
+            await Assert.That(taskB.CompletedAtUtc).IsEqualTo(taskA.CompletedAtUtc);
+        }
+    }
+
     /// <summary>
     /// Both roots share the first three seeded ids (profile, Personal space, Inbox — the order
     /// StorageBootstrap creates them), as two devices restored from the same archive would be. The

@@ -25,6 +25,7 @@ internal static class SyncPurgeSql
             "DELETE FROM DiaryRevisions WHERE EntryId IN (SELECT Id FROM DiaryEntries WHERE TaskId = $k0);",
             "DELETE FROM DiaryEntries WHERE TaskId = $k0;",
             "DELETE FROM TaskTags WHERE TaskId = $k0;",
+            "DELETE FROM TaskAssignees WHERE TaskId = $k0;",
             "DELETE FROM TaskHistory WHERE TaskId = $k0;",
             "DELETE FROM ScratchTaskLinks WHERE TaskId = $k0;",
             "DELETE FROM PageTaskLinks WHERE TaskId = $k0;",

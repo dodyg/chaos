@@ -19,6 +19,7 @@ import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TagDot } from "./tags";
 import { CategoryEdge, type Focus } from "./category";
+import { AssigneeChips, useAssigneeChips } from "./assignees";
 
 const operationId = () => crypto.randomUUID();
 
@@ -57,12 +58,14 @@ const groupByChoices = [
   ["Section", "Sections"],
   ["Priority", "Priority"],
   ["TagGroup", "Tag group"],
+  ["Assignee", "Assignee"],
 ] as const;
 const swimlaneChoices = [
   ["None", "No swimlanes"],
   ["Priority", "Priority"],
   ["TagGroup", "Tag group"],
   ["Category", "Work / Personal"],
+  ["Assignee", "Assignee"],
 ] as const;
 /** A custom view spans lists: no sections to group by, and a lane can be a list. */
 const viewGroupByChoices = groupByChoices.filter(([value]) => value !== "Section");
@@ -206,7 +209,7 @@ export function Board({
     const id = pendingFocus.current;
     if (id === null || loading) return;
     pendingFocus.current = null;
-    focusCard(id);
+    focusCard(board?.cards.find((card) => card.task.id === id));
   }, [board, loading]);
 
   const settings = board?.settings;
@@ -216,6 +219,7 @@ export function Board({
   const lanes = board?.lanes ?? [{ key: "", title: "All tasks", isNone: true }];
   const multipleLanes = lanes.length > 1;
   const cards = board?.cards ?? [];
+  const assignmentInfo = useAssigneeChips(cards.map((card) => card.task), revision);
   const tagById = React.useMemo(() => new Map(tags.map((tag) => [tag.id, tag])), [tags]);
   // The cards of one cell top to bottom (board order is the container's manual order).
   const cellCards = React.useMemo(() => {
@@ -233,9 +237,10 @@ export function Board({
   const columnOrder = (columnKey: string) => lanes.flatMap((lane) => cellCards.get(cellKey(lane.key, columnKey)) ?? []);
   const visibleColumnKeys = new Set(columns.map((column) => column.key));
   // The one card in the Tab order: the last focused card while it is still on the board.
-  const tabStop = cards.some((card) => card.task.id === focusCardId && visibleColumnKeys.has(card.columnKey))
+  const cardIdentity = (card: BoardCardResponse) => JSON.stringify([card.task.id, card.columnKey, card.laneKey]);
+  const tabStop = cards.some((card) => cardIdentity(card) === focusCardId && visibleColumnKeys.has(card.columnKey))
     ? focusCardId
-    : (cards.find((card) => visibleColumnKeys.has(card.columnKey))?.task.id ?? null);
+    : (cards.find((card) => visibleColumnKeys.has(card.columnKey)) ? cardIdentity(cards.find((card) => visibleColumnKeys.has(card.columnKey))!) : null);
 
   /** One board write: inert while it runs, its error shown, the board read again after it. */
   async function mutate(write: () => Promise<boolean>) {
@@ -319,8 +324,9 @@ export function Board({
     });
   }
 
-  function focusCard(id: string | undefined) {
-    if (!id) return;
+  function focusCard(card: BoardCardResponse | undefined) {
+    if (!card) return;
+    const id = cardIdentity(card);
     setFocusCardId(id);
     cardRefs.current.get(id)?.focus();
   }
@@ -333,7 +339,7 @@ export function Board({
         // Down the column as drawn, crossing into the next swimlane at a cell's end.
         event.preventDefault();
         const column = columnOrder(card.columnKey);
-        focusCard(column[column.findIndex((item) => item.task.id === card.task.id) + (event.key === "ArrowDown" ? 1 : -1)]?.task.id);
+        focusCard(column[column.findIndex((item) => cardIdentity(item) === cardIdentity(card)) + (event.key === "ArrowDown" ? 1 : -1)]);
         break;
       }
       case "ArrowRight":
@@ -344,7 +350,7 @@ export function Board({
         if (!nextColumn) return;
         const index = cellOf(card).findIndex((item) => item.task.id === card.task.id);
         const sameLane = cellCards.get(cellKey(card.laneKey, nextColumn.key)) ?? [];
-        focusCard((sameLane[Math.min(index, sameLane.length - 1)] ?? columnOrder(nextColumn.key)[0])?.task.id);
+        focusCard(sameLane[Math.min(index, sameLane.length - 1)] ?? columnOrder(nextColumn.key)[0]);
         break;
       }
       case "Enter":
@@ -372,6 +378,8 @@ export function Board({
           {card.hasIssueLink && <GitHubTaskMark taskId={task.id} version={task.version} revision={revision} linked />}
         </div>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 px-0.5 text-xs text-muted-foreground">
+          <AssigneeChips people={assignmentInfo.chips[task.id]} />
+          {assignmentInfo.error && <span>Assignees unavailable</span>}
           <TaskStaleness task={task} revision={revision} />
           {task.dueDate ? (
             <DateText kind="due" date={task.dueDate} time={task.dueTime}>
@@ -410,7 +418,7 @@ export function Board({
   }
 
   function cardMenu(card: BoardCardResponse) {
-    if (menu?.cardId !== card.task.id) return null;
+    if (menu?.cardId !== cardIdentity(card)) return null;
     // Up and down move within the card's cell, as dragging does.
     const cell = cellOf(card);
     const index = cell.findIndex((item) => item.task.id === card.task.id);
@@ -434,7 +442,7 @@ export function Board({
               role="menuitem"
               className={item}
               disabled={columns.length < 2}
-              onClick={() => setMenu({ cardId: card.task.id, page: "columns" })}
+              onClick={() => setMenu({ cardId: cardIdentity(card), page: "columns" })}
             >
               Move to column…
             </button>
@@ -486,7 +494,7 @@ export function Board({
                   Move to {column.title}
                 </button>
               ))}
-            <button type="button" role="menuitem" className={item} onClick={() => setMenu({ cardId: card.task.id, page: "main" })}>
+            <button type="button" role="menuitem" className={item} onClick={() => setMenu({ cardId: cardIdentity(card), page: "main" })}>
               Back
             </button>
           </>
@@ -505,7 +513,7 @@ export function Board({
     // Chromium (WebView2) cancels a drag whose source changes during dragstart: restyle after it.
     window.setTimeout(() => {
       if (dragged.current !== started) return;
-      setDraggingId(started.cardId);
+      setDraggingId(cardIdentity(card));
       setMenu(null);
     }, 0);
   }
@@ -525,7 +533,8 @@ export function Board({
     const slotAt = (source: Dragged, clientY: number) =>
       ids.filter((id) => {
         if (id === source.cardId) return false;
-        const box = cardRefs.current.get(id)?.getBoundingClientRect();
+        const target = cell.find((item) => item.task.id === id);
+        const box = target && cardRefs.current.get(cardIdentity(target))?.getBoundingClientRect();
         return box !== undefined && clientY > box.top + box.height / 2;
       }).length;
     return {
@@ -547,7 +556,7 @@ export function Board({
         event.preventDefault();
         const placement = dropPlacement(ids, source.cardId, slotAt(source, event.clientY));
         endDrag();
-        const card = cards.find((item) => item.task.id === source.cardId);
+        const card = cards.find((item) => item.task.id === source.cardId && item.columnKey === source.columnKey && item.laneKey === source.laneKey);
         if (card && placement) void moveCard(card, column.key, placement);
       },
     };
@@ -559,20 +568,20 @@ export function Board({
       <li
         key={task.id}
         ref={(element) => {
-          if (element) cardRefs.current.set(task.id, element);
-          else cardRefs.current.delete(task.id);
+          if (element) cardRefs.current.set(cardIdentity(card), element);
+          else cardRefs.current.delete(cardIdentity(card));
         }}
-        tabIndex={tabStop === task.id ? 0 : -1}
+        tabIndex={tabStop === cardIdentity(card) ? 0 : -1}
         aria-label={task.title}
         draggable={!disabled}
         className={cn(
           "group/card relative grid gap-1 rounded-lg border bg-card p-2 shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
           !disabled && "cursor-grab active:cursor-grabbing",
           moving && "opacity-60",
-          draggingId === task.id && "opacity-40",
+          draggingId === cardIdentity(card) && "opacity-40",
         )}
         onFocus={(event) => {
-          if (event.target === event.currentTarget) setFocusCardId(task.id);
+          if (event.target === event.currentTarget) setFocusCardId(cardIdentity(card));
         }}
         onKeyDown={(event) => cardKeyDown(event, card)}
         onDragStart={(event) => startDrag(event, card)}
@@ -604,9 +613,9 @@ export function Board({
               className="text-muted-foreground opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 [@media(hover:none)]:opacity-100"
               disabled={disabled}
               aria-label={`Actions for ${task.title}`}
-              aria-expanded={menu?.cardId === task.id}
+              aria-expanded={menu?.cardId === cardIdentity(card)}
               aria-haspopup="menu"
-              onClick={() => setMenu((current) => (current?.cardId === task.id ? null : { cardId: task.id, page: "main" }))}
+              onClick={() => setMenu((current) => (current?.cardId === cardIdentity(card) ? null : { cardId: cardIdentity(card), page: "main" }))}
             >
               <MoreHorizontal />
             </Button>
