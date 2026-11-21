@@ -42,7 +42,12 @@ Read this section before every package.
    - the smallest next action
 
    Tick a package only when its exit criteria have been demonstrated. An untested assumption does not count as done.
-4. **Gate after every batch of changes.**
+4. **Focused checks during development; full gate before completion.**
+   - While iterating, build affected projects and run the relevant test classes or projects, including PostgreSQL
+     integration tests when server behavior changes. Run Slopwatch after code changes. Do not claim the full gate
+     passed based on focused checks.
+   - Run the full gate once before handing off a coherent change or marking a package complete, and rerun affected
+     checks after subsequent changes. Keep the package-specific exit criteria and CI checks.
    - Run `pwsh -File eng/verify.ps1`. It does a locked restore, the Release build (which includes both frontend
      builds), every TUnit project including `Chaos.Server.Tests`, and Slopwatch.
    - Run `npm test` in `src/Chaos.Desktop/frontend`.

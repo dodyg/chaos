@@ -1,66 +1,46 @@
-# Repeatable verification for Chaos (PLAN §16).
-# Usage:  powershell -File eng/verify.ps1 [-NoServer]
-#   -NoServer skips tests/Chaos.Server.Tests only (PLAN2 §8.8). The server tests need PostgreSQL:
-#   CHAOS_TEST_PG, or Docker for Testcontainers. Progress notes must say when -NoServer was used.
-# Sandbox note: -m:1 is used everywhere; MSBuild cannot start worker nodes in restricted
-# environments, and it is harmless (single node) on normal machines.
-
+# Full verification. -NoServer skips the PostgreSQL suite and must be reported.
+# Supply CHAOS_TEST_PG or use the configured wslc container runtime; Docker is not required.
 param([switch]$NoServer)
 
 $ErrorActionPreference = "Stop"
 $env:DOTNET_NOLOGO = "1"
+$timings = [System.Collections.Generic.List[object]]::new()
+$total = [System.Diagnostics.Stopwatch]::StartNew()
 
-Write-Host "== tool restore =="
-dotnet tool restore
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "== locked restore =="
-dotnet restore Chaos.slnx --locked-mode -m:1
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "== build (Release) =="
-dotnet build Chaos.slnx -c Release --no-restore -m:1
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "== tests: solution (Microsoft.Testing.Platform) =="
-$testProjects = @(
-    "tests/Chaos.Domain.Tests",
-    "tests/Chaos.Application.Tests",
-    "tests/Chaos.Infrastructure.Tests",
-    "tests/Chaos.Sync.Tests",
-    "tests/Chaos.Server.Tests",
-    "tests/Chaos.Desktop.Tests"
-)
-if ($NoServer) {
-    Write-Warning "server tests not run (-NoServer)"
-    $testProjects = $testProjects | Where-Object { $_ -ne "tests/Chaos.Server.Tests" }
-    $solutionExit = 1 # go straight to the per-project runs, which can leave a project out
-} else {
-    dotnet test --solution Chaos.slnx -c Release --no-build --output Minimal -- --minimum-expected-tests 12
-    $solutionExit = $LASTEXITCODE
-}
-if ($solutionExit -eq 0) {
-    Write-Host "solution test run OK"
-} else {
-    # Documented fallback (PLAN §16): direct TUnit executable runs. Each executable is an
-    # MTP runner; a nonzero total is mandatory (a zero count fails the script).
-    Write-Host "solution test run unavailable; falling back to direct TUnit executables"
-    $fallbackFailed = $false
-    foreach ($project in $testProjects) {
-        $dll = Get-ChildItem "$project/bin/Release" -Recurse -Filter "*.Tests.dll" |
-            Where-Object { $_.Name -notlike "TUnit*" -and $_.Name -notlike "Microsoft*" } |
-            Select-Object -First 1
-        if ($null -eq $dll) { Write-Host "MISSING build output: $project"; $fallbackFailed = $true; continue }
-
-        Write-Host "== direct run: $($dll.FullName) =="
-        dotnet $dll.FullName --no-banner
-        if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: $project"; $fallbackFailed = $true }
+function Invoke-VerifyStep([string]$Name, [scriptblock]$Command) {
+    Write-Host "== $Name =="
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $Command
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $watch.Stop()
+        $timings.Add([pscustomobject]@{ Step = $Name; Seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1) })
+        Write-Host "== $Name took $([math]::Round($watch.Elapsed.TotalSeconds, 1))s =="
     }
-    if ($fallbackFailed) { exit 1 }
+    if ($exitCode -ne 0) { throw "$Name failed with exit code $exitCode" }
 }
 
-Write-Host "== slopwatch =="
-dotnet tool run slopwatch -- analyze -d . --fail-on warning
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+try {
+    Invoke-VerifyStep "tool restore" { dotnet tool restore }
+    Invoke-VerifyStep "locked restore" { dotnet restore Chaos.slnx --locked-mode -m:1 }
+    Invoke-VerifyStep "build (Release)" { dotnet build Chaos.slnx -c Release --no-restore -m:1 }
 
-if ($NoServer) { Write-Host "== verify OK (server tests not run) ==" } else { Write-Host "== verify OK ==" }
+    $testProjects = @("Domain", "Application", "Infrastructure", "Sync", "Server", "Desktop")
+    if ($NoServer) {
+        Write-Warning "server tests not run (-NoServer)"
+        $testProjects = $testProjects | Where-Object { $_ -ne "Server" }
+    }
+    foreach ($project in $testProjects) {
+        Invoke-VerifyStep "tests: $project" {
+            dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1
+        }
+    }
+    Invoke-VerifyStep "slopwatch" { dotnet tool run slopwatch -- analyze -d . --fail-on warning }
+    if ($NoServer) { Write-Host "== verify OK (server tests not run) ==" } else { Write-Host "== verify OK ==" }
+} finally {
+    $total.Stop()
+    Write-Host "== timings (seconds) =="
+    $timings | Format-Table -AutoSize | Out-Host
+    Write-Host "Total: $([math]::Round($total.Elapsed.TotalSeconds, 1))s"
+}
