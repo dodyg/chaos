@@ -309,13 +309,11 @@ public sealed class AttachmentCommands
                         throw AppException.NotFound("This upload expired. Add the file again.");
                     }
 
-                    var space = await session.Spaces.GetPersonalByOwnerAsync(profile.Id, inner)
-                        ?? throw new AppException(AppErrorKind.StorageUnavailable, "No personal space exists yet. Restart Chaos to complete first-run setup.");
-                    await RequireOwnerAsync(session, upload.OwnerKind, upload.OwnerId, inner);
+                    var spaceId = await RequireOwnerSpaceAsync(session, upload.OwnerKind, upload.OwnerId, inner);
                     var row = new AttachmentRecord
                     {
                         Id = _ids.NewId().ToString(),
-                        SpaceId = space.Id,
+                        SpaceId = spaceId,
                         OwnerKind = upload.OwnerKind,
                         OwnerId = upload.OwnerId,
                         FileName = upload.FileName,
@@ -528,6 +526,31 @@ public sealed class AttachmentCommands
         {
             throw AppException.NotFound("The item this file belongs to no longer exists.");
         }
+    }
+
+    private static async Task<string> RequireOwnerSpaceAsync(IDataSession session, AttachmentOwnerKind kind, string ownerId, CancellationToken token)
+    {
+        string? spaceId;
+        switch (kind)
+        {
+            case AttachmentOwnerKind.Task:
+                spaceId = (await session.Tasks.GetAsync(ownerId, token))?.SpaceId;
+                break;
+            case AttachmentOwnerKind.Diary:
+                var diary = await session.Diary.GetAsync(ownerId, token);
+                spaceId = diary is null ? null : (await session.Tasks.GetAsync(diary.TaskId, token))?.SpaceId;
+                break;
+            case AttachmentOwnerKind.Pad:
+                spaceId = (await session.Pad.GetAsync(ownerId, token))?.SpaceId;
+                break;
+            case AttachmentOwnerKind.Page:
+                spaceId = (await session.Pages.GetAsync(ownerId, token))?.SpaceId;
+                break;
+            default:
+                spaceId = null;
+                break;
+        }
+        return spaceId ?? throw AppException.NotFound("The item this file belongs to no longer exists.");
     }
 
     private UploadSession Session(string uploadId)

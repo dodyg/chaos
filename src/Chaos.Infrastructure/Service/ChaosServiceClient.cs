@@ -377,9 +377,11 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
 
     // ---- Blobs (PLAN2 §9.2) ---------------------------------------------------------------------
 
-    public async Task<RemoteBlob?> HeadAsync(string sha256, CancellationToken ct)
+    private static string BlobScope(BlobUploadTarget target) => $"stream={Uri.EscapeDataString(target.StreamId)}&attachment={Uri.EscapeDataString(target.AttachmentId)}";
+
+    public async Task<RemoteBlob?> HeadAsync(string sha256, BlobUploadTarget target, CancellationToken ct)
     {
-        using var response = await SendAuthorizedAsync(HttpMethod.Head, $"v1/blobs/{sha256}", null, ct);
+        using var response = await SendAuthorizedAsync(HttpMethod.Head, $"v1/blobs/{sha256}?{BlobScope(target)}", null, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -390,9 +392,9 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
         return new RemoteBlob(state, response.Content.Headers.ContentLength ?? 0);
     }
 
-    public async Task<RemoteUpload> StartUploadAsync(string sha256, long size, CancellationToken ct)
+    public async Task<RemoteUpload> StartUploadAsync(string sha256, long size, BlobUploadTarget target, CancellationToken ct)
     {
-        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}", null, ct, $"{{\"size\":{size.ToString(CultureInfo.InvariantCulture)}}}");
+        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}?{BlobScope(target)}", null, ct, $"{{\"size\":{size.ToString(CultureInfo.InvariantCulture)}}}");
         await EnsureBlobSuccessAsync(response, ct);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
         var root = document.RootElement;
@@ -401,23 +403,24 @@ public sealed class ChaosServiceClient : IChaosServiceClient, IBlobTransport, ID
         return new RemoteUpload(state, root.GetProperty("partSize").GetInt32(), root.GetProperty("partCount").GetInt32(), received);
     }
 
-    public async Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    public async Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, BlobUploadTarget target, CancellationToken ct)
     {
-        using var response = await SendAuthorizedAsync(HttpMethod.Put, $"v1/blobs/{sha256}?part={index.ToString(CultureInfo.InvariantCulture)}", null, ct, rawBytes: bytes.ToArray());
+        using var response = await SendAuthorizedAsync(HttpMethod.Put, $"v1/blobs/{sha256}?part={index.ToString(CultureInfo.InvariantCulture)}&{BlobScope(target)}", null, ct, rawBytes: bytes.ToArray());
         await EnsureBlobSuccessAsync(response, ct);
     }
 
-    public async Task<RemoteBlob> CompleteUploadAsync(string sha256, CancellationToken ct)
+    public async Task<RemoteBlob> CompleteUploadAsync(string sha256, BlobUploadTarget target, CancellationToken ct)
     {
-        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}/complete", null, ct);
+        using var response = await SendAuthorizedAsync(HttpMethod.Post, $"v1/blobs/{sha256}/complete?{BlobScope(target)}", null, ct);
         await EnsureBlobSuccessAsync(response, ct);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
         return new RemoteBlob(document.RootElement.GetProperty("state").GetString() ?? "Clean", document.RootElement.TryGetProperty("size", out var size) ? size.GetInt64() : 0);
     }
 
-    public async Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct)
+    public async Task<Stream> OpenDownloadAsync(string sha256, long offset, string? streamId, CancellationToken ct)
     {
-        var response = await SendAuthorizedAsync(HttpMethod.Get, $"v1/blobs/{sha256}", null, ct, completion: HttpCompletionOption.ResponseHeadersRead, range: offset > 0 ? offset : null);
+        var path = streamId is null ? $"v1/blobs/{sha256}" : $"v1/blobs/{sha256}?stream={Uri.EscapeDataString(streamId)}";
+        var response = await SendAuthorizedAsync(HttpMethod.Get, path, null, ct, completion: HttpCompletionOption.ResponseHeadersRead, range: offset > 0 ? offset : null);
         try
         {
             await EnsureBlobSuccessAsync(response, ct);

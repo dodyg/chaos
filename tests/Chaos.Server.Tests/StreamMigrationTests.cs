@@ -1,5 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
+using Chaos.Server.Auth;
+using Chaos.Server.Blobs;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
 using Chaos.Sync;
@@ -7,12 +10,103 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Chaos.Server.Tests;
 
 [ClassDataSource<PostgresServer>(Shared = SharedType.PerTestSession)]
 public sealed class StreamMigrationTests(PostgresServer postgres)
 {
+    [Test]
+    public async Task Migrate_SeededS008_BackfillsSharedReferencesFromRecordedCustody()
+    {
+        await using var db = ServerDatabase.Open(await postgres.CreateDatabaseAsync());
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync(db.Database.GetMigrations().Single(m => m.EndsWith("S008_StreamUploadSessions", StringComparison.Ordinal)));
+        var owner = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var space = Guid.NewGuid();
+        var attachment = Guid.NewGuid().ToString("D");
+        var hash = new string('a', 64);
+        var privateHash = new string('b', 64);
+        var groups = JsonSerializer.Serialize(new { file = new { values = new { Sha256 = hash } } });
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO "Accounts" ("Id", "PrimaryEmail", "CreatedAt") VALUES
+                ({owner}, 'blob-upgrade-owner@example.invalid', now()), ({other}, 'blob-upgrade-other@example.invalid', now());
+            INSERT INTO "SyncStreams" ("Id", "Kind", "AccountId", "CreatedAt") VALUES ({owner}, 1, {owner}, now()), ({other}, 1, {other}, now());
+            INSERT INTO "SyncStreams" ("Id", "Kind", "SpaceId", "CreatedAt") VALUES ({space}, 2, {space}, now());
+            INSERT INTO "Blobs" ("AccountId", "Sha256", "ByteSize", "State", "StorageKey", "WrappedKey", "CreatedAt") VALUES
+                ({owner}, {hash}, 4, 'Clean', 'original-key', decode('00', 'hex'), now()),
+                ({other}, {privateHash}, 4, 'Clean', 'private-key', decode('01', 'hex'), now());
+            INSERT INTO "SyncEntities" ("StreamId", "Kind", "EntityKey", "Groups", "LastSeq", "UpdatedAt")
+                VALUES ({space}, 'attachment', {attachment}, CAST({groups} AS jsonb), 1, now());
+            INSERT INTO "AttachmentBlobBindings" ("StreamId", "AttachmentId", "Sha256", "CustodianAccountId")
+                VALUES ({space}, {attachment}, {hash}, {owner});
+            """);
+
+        await migrator.MigrateAsync();
+
+        var blobs = await db.Blobs.AsNoTracking().ToListAsync();
+        var personal = blobs.Single(b => b.StreamId == owner && b.Sha256 == hash);
+        var shared = blobs.Single(b => b.StreamId == space && b.Sha256 == hash);
+        await Assert.That(shared.ObjectId).IsEqualTo(personal.ObjectId);
+        await Assert.That(shared.StorageKey).IsEqualTo(personal.StorageKey);
+        await Assert.That(blobs.Any(b => b.StreamId == space && b.Sha256 == privateHash)).IsFalse();
+        await Assert.That(await db.BlobObjects.CountAsync()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Migrate_SeededS007_PreservesUnfinishedAccountUploadsAndParts()
+    {
+        await using var db = ServerDatabase.Open(await postgres.CreateDatabaseAsync());
+        var migrator = db.GetService<IMigrator>();
+        await migrator.MigrateAsync(db.Database.GetMigrations().Single(m => m.EndsWith("S007_AttachmentBlobBindings", StringComparison.Ordinal)));
+        var account = Guid.NewGuid();
+        var bytes = Encoding.ASCII.GetBytes("oldparts");
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var directory = Path.Combine(Path.GetTempPath(), "chaos-s008-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+        var options = Options.Create(new BlobOptions { Directory = directory, PartSize = 4 });
+        var store = new FileBlobStore(options);
+        await store.PutAsync($"parts/{account:N}/{hash}/0", new MemoryStream(bytes, 0, 4, writable: false), CancellationToken.None);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO "Accounts" ("Id", "PrimaryEmail", "CreatedAt") VALUES ({account}, 'upload-upgrade@example.invalid', now());
+            INSERT INTO "SyncStreams" ("Id", "Kind", "AccountId", "CreatedAt") VALUES ({account}, 1, {account}, now());
+            INSERT INTO "BlobUploads" ("AccountId", "Sha256", "ByteSize", "PartCount", "CreatedAt", "UpdatedAt")
+            VALUES ({account}, {hash}, 8, 2, now(), now());
+            INSERT INTO "BlobParts" ("AccountId", "Sha256", "PartIndex", "ByteSize") VALUES ({account}, {hash}, 0, 4);
+            """);
+
+        await migrator.MigrateAsync();
+
+        var upload = await db.BlobUploads.SingleAsync();
+        var part = await db.BlobParts.SingleAsync();
+        await Assert.That(upload.StreamId).IsEqualTo(account);
+        await Assert.That(upload.AccountId).IsEqualTo(account);
+        await Assert.That(upload.PartCount).IsEqualTo(2);
+        await Assert.That(part.StreamId).IsEqualTo(account);
+        await Assert.That(part.PartIndex).IsEqualTo(0);
+        await Assert.That(part.ByteSize).IsEqualTo(4);
+        var service = new BlobService(db, store, new EicarScanner(), new FileKeyWrapper(Path.Combine(directory, "master.key"), createIfMissing: true),
+            options, Options.Create(new LimitsOptions()), TimeProvider.System, NullLogger<BlobService>.Instance);
+        await Assert.That(await service.PutPartAsync(account, account, hash, 1, new MemoryStream(bytes, 4, 4, writable: false), CancellationToken.None))
+            .IsEqualTo(BlobFailure.None);
+        var complete = await service.CompleteAsync(account, Guid.NewGuid(), account, hash, null, CancellationToken.None);
+        await Assert.That(complete.Succeeded).IsTrue();
+        using var output = new MemoryStream();
+        await service.WriteRangeAsync(complete.Value!, 0, bytes.Length - 1, output, CancellationToken.None);
+        await Assert.That(output.ToArray().AsSpan().SequenceEqual(bytes)).IsTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(directory) && Path.GetFullPath(directory).StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     [Test]
     public async Task Migrate_SeededS003_PreservesCursorsAndContinuesSequences()
     {

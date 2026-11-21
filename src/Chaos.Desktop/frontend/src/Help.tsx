@@ -539,6 +539,10 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
               personal tags on those tasks.
             </li>
           </ul>
+          <p>
+            Members can open attachments in a shared space. Owners and Editors can add them; Viewers can attach files to their own
+            diary entries. Shared files count against the uploader’s storage allowance and remain in the space if that person leaves.
+          </p>
           <h3 className="font-semibold">Invites</h3>
           <p>
             An owner can invite by email or make a link. A link can expire (1, 7 or 30 days, or never) and can be limited to 1 or 10 uses.

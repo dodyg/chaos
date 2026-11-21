@@ -41,6 +41,29 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate039_ExistingRemoteState_SeedsOnlyAccountStreamAndRetainsBytes()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 38);
+        Execute(connection, """
+            UPDATE SyncState SET AccountId='account', Enabled=1 WHERE Id=1;
+            INSERT INTO Spaces (Id, OwnerProfileId, Kind, Name, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('personal','owner',1,'Personal','now','now'), ('shared','owner',2,'Shared','now','now');
+            INSERT INTO Attachments (Id,SpaceId,OwnerKind,OwnerId,FileName,OriginalFileName,MediaType,ByteSize,Sha256,CreatedAtUtc,UpdatedAtUtc)
+            VALUES ('personal-file','personal',1,'task','a','a','text/plain',1,printf('%064d',1),'now','now'),
+                   ('shared-file','shared',1,'task','b','b','text/plain',1,printf('%064d',2),'now','now');
+            INSERT INTO AttachmentLocalState (Sha256,State,UpdatedAtUtc,Remote,NextTryUtc,Failures)
+            VALUES (printf('%064d',1),0,'now',1,'later',2), (printf('%064d',2),0,'now',1,NULL,0);
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM AttachmentStreamState;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM AttachmentStreamState WHERE StreamId='account' AND Sha256=printf('%064d',1) AND Remote=0 AND NextTryUtc IS NULL AND Failures=0;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM AttachmentLocalState WHERE State=0;"))).IsEqualTo(2L);
+        Execute(connection, "DELETE FROM AttachmentLocalState WHERE Sha256=printf('%064d',1);");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM AttachmentStreamState;"))).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Migrate038_PopulatedParents_PreservesDependentsAndTrigger()
     {
         using var connection = Open();

@@ -4,12 +4,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Chaos.Server.Blobs;
+using Chaos.Server.Auth;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
 using Chaos.Server.Tests.Sharing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Chaos.Server.Tests.Sync;
 
@@ -18,10 +21,12 @@ internal sealed class FakeScanner : IMalwareScanner
 {
     public bool Unavailable { get; set; }
     public int Scans;
+    public Func<CancellationToken, Task>? BeforeScan { get; set; }
 
     public async Task<ScanResult> ScanAsync(Stream content, CancellationToken ct)
     {
         Interlocked.Increment(ref Scans);
+        if (BeforeScan is { } before) await before(ct);
         if (Unavailable)
         {
             throw new IOException("The scanner is down.");
@@ -39,6 +44,37 @@ internal sealed class FakeScanner : IMalwareScanner
 [ClassDataSource<PostgresServer>(Shared = SharedType.PerTestSession)]
 public sealed class BlobTests(PostgresServer postgres)
 {
+    private sealed class FailOnceDeleteStore(IBlobStore inner) : IBlobStore
+    {
+        private bool _fail = true;
+        public Task PutAsync(string key, Stream content, CancellationToken ct) => inner.PutAsync(key, content, ct);
+        public Task<bool> ExistsAsync(string key, CancellationToken ct) => inner.ExistsAsync(key, ct);
+        public Task<Stream?> OpenReadAsync(string key, long offset, CancellationToken ct) => inner.OpenReadAsync(key, offset, ct);
+        public Task DeletePrefixAsync(string prefix, CancellationToken ct) => inner.DeletePrefixAsync(prefix, ct);
+        public Task CheckAsync(CancellationToken ct) => inner.CheckAsync(ct);
+        public Task DeleteAsync(string key, CancellationToken ct)
+        {
+            if (_fail)
+            {
+                _fail = false;
+                throw new IOException("The object store is temporarily unavailable.");
+            }
+            return inner.DeleteAsync(key, ct);
+        }
+    }
+    private sealed class FailAfterObjectPutStore(IBlobStore inner) : IBlobStore
+    {
+        public async Task PutAsync(string key, Stream content, CancellationToken ct)
+        {
+            await inner.PutAsync(key, content, ct);
+            if (key.StartsWith("blobs/", StringComparison.Ordinal)) throw new IOException("The store disconnected after writing.");
+        }
+        public Task<bool> ExistsAsync(string key, CancellationToken ct) => inner.ExistsAsync(key, ct);
+        public Task<Stream?> OpenReadAsync(string key, long offset, CancellationToken ct) => inner.OpenReadAsync(key, offset, ct);
+        public Task DeleteAsync(string key, CancellationToken ct) => inner.DeleteAsync(key, ct);
+        public Task DeletePrefixAsync(string prefix, CancellationToken ct) => inner.DeletePrefixAsync(prefix, ct);
+        public Task CheckAsync(CancellationToken ct) => inner.CheckAsync(ct);
+    }
     private sealed record Caller(string Token, Guid Device, Guid Account);
 
     private sealed class Rig : IAsyncDisposable
@@ -408,6 +444,37 @@ public sealed class BlobTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task ConcurrentUploads_QuotaAllowsOne_ObjectAndChargeRemainConsistent()
+    {
+        await using var rig = await StartAsync(quota: 3000);
+        var caller = await SignInAsync(rig.Server, "quota-race@example.com");
+        var first = Random(2000);
+        var second = Random(2000);
+        foreach (var bytes in new[] { first, second })
+        {
+            using var started = await StartUploadAsync(rig.Server, caller, Sha(bytes), bytes.Length);
+            using var part = await PutPartAsync(rig.Server, caller, Sha(bytes), 0, bytes);
+            await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        }
+
+        var results = await Task.WhenAll(CompleteAsync(rig.Server, caller, Sha(first)), CompleteAsync(rig.Server, caller, Sha(second)));
+        try
+        {
+            await Assert.That(results.Count(r => r.StatusCode == HttpStatusCode.OK)).IsEqualTo(1);
+            await Assert.That(results.Count(r => r.StatusCode == HttpStatusCode.RequestEntityTooLarge)).IsEqualTo(1);
+            await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
+            await Assert.That((await db.Accounts.SingleAsync(a => a.Id == caller.Account)).StorageBytes).IsEqualTo(2000L);
+            await Assert.That(await db.BlobObjects.CountAsync()).IsEqualTo(1);
+            await Assert.That(StoredObjects(rig).Length).IsEqualTo(1);
+        }
+        finally
+        {
+            foreach (var response in results) response.Dispose();
+        }
+    }
+
+    [Test]
     public async Task A_file_larger_than_the_per_file_limit_is_refused()
     {
         await using var rig = await StartAsync();
@@ -444,6 +511,47 @@ public sealed class BlobTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task PurgeSharedSpace_ObjectStillReferencedByPersonalAttachment_IsRetainedAndChargedOnce()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("retained-personal@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        var bytes = Random(3000);
+        var sha = Sha(bytes);
+        (await UploadAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), bytes)).EnsureSuccessStatusCode();
+        var container = Guid.NewGuid().ToString("D");
+        var movedTask = Guid.NewGuid().ToString("D");
+        var personalTask = Guid.NewGuid().ToString("D");
+        var movedAttachment = Guid.NewGuid().ToString("D");
+        var personalAttachment = Guid.NewGuid().ToString("D");
+        var changes = await world.PushAsync(owner,
+            SharingHarness.Change("container", container, "create", new { SpaceId = owner.PersonalSpaceId.ToString("D"), Kind = 2L, IsInbox = 0L, CreatedAtUtc = Now() }),
+            SharingHarness.Change("task", movedTask, "create", new { SpaceId = owner.PersonalSpaceId.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("task", movedTask, "place", new { ContainerId = container, SectionId = (string?)null }),
+            SharingHarness.Change("task", personalTask, "create", new { SpaceId = owner.PersonalSpaceId.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", movedAttachment, "create", new { SpaceId = owner.PersonalSpaceId.ToString("D"), OwnerKind = 1L, OwnerId = movedTask, CreatedAtUtc = Now() }),
+            AttachmentFile(movedAttachment, sha, bytes.Length),
+            SharingHarness.Change("attachment", personalAttachment, "create", new { SpaceId = owner.PersonalSpaceId.ToString("D"), OwnerKind = 1L, OwnerId = personalTask, CreatedAtUtc = Now() }),
+            AttachmentFile(personalAttachment, sha, bytes.Length));
+        await Assert.That(changes.Rejections()).IsEmpty();
+        await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{space:D}/moves", new MoveRequest(Guid.NewGuid(), Guid.Parse(container)));
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        rig.Server.Clock.Advance(TimeSpan.FromDays(31));
+        await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+            await SpacePurgeService.PurgeDueAsync(db, rig.Server.Clock.GetUtcNow(), CancellationToken.None,
+                scope.ServiceProvider.GetRequiredService<BlobService>());
+        }
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.BlobObjects.CountAsync()).IsEqualTo(1);
+        await Assert.That(await check.Blobs.CountAsync(b => b.StreamId == owner.AccountId && b.Sha256 == sha)).IsEqualTo(1);
+        await Assert.That((await check.Accounts.SingleAsync(a => a.Id == owner.AccountId)).StorageBytes).IsEqualTo(bytes.Length);
+        await Assert.That(StoredObjects(rig).Length).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Shared_attachment_bytes_follow_the_space_and_are_purged_when_it_is_gone()
     {
         await using var rig = await StartAsync();
@@ -475,13 +583,31 @@ public sealed class BlobTests(PostgresServer postgres)
         await world.CallAsync(owner, HttpMethod.Post, $"/v2/spaces/{space:D}/moves",
             new MoveRequest(Guid.NewGuid(), Guid.Parse(container)));
 
+        await using (var db = ServerDatabase.Open(rig.Server.ConnectionString))
+        {
+            var references = await db.Blobs.Where(b => b.Sha256 == sha).ToListAsync();
+            await Assert.That(references.Count).IsEqualTo(2);
+            await Assert.That(references.Select(b => b.ObjectId).Distinct().Count()).IsEqualTo(1);
+            await Assert.That((await db.Accounts.SingleAsync(a => a.Id == owner.AccountId)).StorageBytes).IsEqualTo(bytes.Length);
+        }
+
         using var memberGet = await SendAsync(rig.Server,
-            new Caller(member.Token, member.DeviceId, member.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}");
+            new Caller(member.Token, member.DeviceId, member.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
         await Assert.That(memberGet.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await Assert.That((await memberGet.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+        using var scopedGet = await SendAsync(rig.Server,
+            new Caller(member.Token, member.DeviceId, member.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
+        await Assert.That(scopedGet.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await scopedGet.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
         using var strangerGet = await SendAsync(rig.Server,
             new Caller(outsider.Token, outsider.DeviceId, outsider.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}");
         await Assert.That(strangerGet.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        using var scopedStranger = await SendAsync(rig.Server,
+            new Caller(outsider.Token, outsider.DeviceId, outsider.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
+        await Assert.That(scopedStranger.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        using var wrongStream = await SendAsync(rig.Server,
+            new Caller(member.Token, member.DeviceId, member.AccountId), HttpMethod.Head, $"/v1/blobs/{sha}?stream={member.AccountId:D}");
+        await Assert.That(wrongStream.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
         rig.Server.Clock.Advance(TimeSpan.FromDays(8));
         await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
@@ -501,6 +627,397 @@ public sealed class BlobTests(PostgresServer postgres)
         }
         await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
         await Assert.That(await check.Blobs.AnyAsync(b => b.Sha256 == sha)).IsFalse();
+    }
+
+    [Test]
+    public async Task ViewerDiaryAttachment_OnlyItsAuthorCanUploadAndEdit()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("diary-attachment-owner@example.com");
+        var viewer = await world.SignInAsync("diary-attachment-viewer@example.com");
+        var other = await world.SignInAsync("diary-attachment-other@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(viewer, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        await world.JoinAsync(other, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        var task = Guid.NewGuid().ToString("D");
+        var diary = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var bytes = Random(1234);
+        var sha = Sha(bytes);
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("task", task, "create",
+            new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("diary_entry", diary, "create",
+            new { TaskId = task, AuthorProfileId = viewer.ProfileId.ToString("D"), EntryAtUtc = Now(), CreatedAtUtc = Now() }))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer,
+            SharingHarness.Change("attachment", attachment, "create", new { SpaceId = space.ToString("D"), OwnerKind = 2L, OwnerId = diary, CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, bytes.Length))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(other, SharingHarness.Change("attachment", attachment, "name",
+            new { FileName = "forged", OriginalFileName = "forged" }))).Rejections()).Contains(Chaos.Sync.SyncRejection.Forbidden);
+        var forged = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(other, SharingHarness.Change("attachment", forged, "create",
+            new { SpaceId = space.ToString("D"), OwnerKind = 2L, OwnerId = diary, CreatedAtUtc = Now() }))).Rejections()).Contains(Chaos.Sync.SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("attachment", attachment, "deleted",
+            new { DeletedAtUtc = Now() }))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(other, SharingHarness.Change("attachment", attachment, "deleted",
+            new { DeletedAtUtc = (string?)null }))).Rejections()).Contains(Chaos.Sync.SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("attachment", attachment, "deleted",
+            new { DeletedAtUtc = (string?)null }))).Rejections()).IsEmpty();
+
+        var path = $"/v1/blobs/{sha}?stream={space:D}&attachment={attachment}";
+        var caller = new Caller(viewer.Token, viewer.DeviceId, viewer.AccountId);
+        var stranger = new Caller(other.Token, other.DeviceId, other.AccountId);
+        using var refused = await SendAsync(rig.Server, stranger, HttpMethod.Post, path,
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        await Assert.That(refused.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        using var started = await SendAsync(rig.Server, caller, HttpMethod.Post, path,
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var sent = await SendAsync(rig.Server, caller, HttpMethod.Put, path + "&part=0", new ByteArrayContent(bytes));
+        using var completed = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}&attachment={attachment}");
+        await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(sent.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(completed.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using var read = await SendAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
+        await Assert.That(read.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await read.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+    }
+
+    [Test]
+    public async Task InterruptedObjectWrite_LeavesDurableCleanupAndNoQuotaCharge()
+    {
+        await using var rig = await StartAsync();
+        var caller = await SignInAsync(rig.Server, "upload-interrupted@example.com");
+        var bytes = Random(5000);
+        var sha = Sha(bytes);
+        using var started = await StartUploadAsync(rig.Server, caller, sha, bytes.Length);
+        using var part = await PutPartAsync(rig.Server, caller, sha, 0, bytes);
+        await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await using var scope = rig.Server.Factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+        var store = new FailAfterObjectPutStore(scope.ServiceProvider.GetRequiredService<IBlobStore>());
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<BlobOptions>>();
+        var service = new BlobService(db, store, scope.ServiceProvider.GetRequiredService<IMalwareScanner>(),
+            scope.ServiceProvider.GetRequiredService<IKeyWrapper>(), options,
+            scope.ServiceProvider.GetRequiredService<IOptions<LimitsOptions>>(), rig.Server.Clock, NullLogger<BlobService>.Instance);
+
+        await Assert.ThrowsAsync<IOException>(() => service.CompleteAsync(caller.Account, caller.Device, caller.Account, sha, null, CancellationToken.None));
+        await Assert.That(await db.BlobDeletions.CountAsync()).IsEqualTo(1);
+        await Assert.That(await db.BlobObjects.CountAsync()).IsEqualTo(0);
+        await Assert.That((await db.Accounts.AsNoTracking().SingleAsync(a => a.Id == caller.Account)).StorageBytes).IsEqualTo(0L);
+        await Assert.That(StoredObjects(rig).Length).IsEqualTo(1);
+        rig.Server.Clock.Advance(options.Value.UploadExpiry + TimeSpan.FromSeconds(1));
+        await service.SweepAsync(CancellationToken.None);
+        await Assert.That(await db.BlobDeletions.CountAsync()).IsEqualTo(0);
+        await Assert.That(StoredObjects(rig).Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ObjectDeletion_StoreFailure_QueuesAndRetriesWithoutDoubleCharging()
+    {
+        await using var rig = await StartAsync();
+        var caller = await SignInAsync(rig.Server, "delete-retry@example.com");
+        var bytes = Random(5000);
+        using var uploaded = await UploadAsync(rig.Server, caller, bytes);
+        await Assert.That(uploaded.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await using var scope = rig.Server.Factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+        var obj = await db.BlobObjects.AsNoTracking().SingleAsync();
+        await db.Blobs.ExecuteDeleteAsync();
+        var store = new FailOnceDeleteStore(scope.ServiceProvider.GetRequiredService<IBlobStore>());
+        var service = new BlobService(db, store, scope.ServiceProvider.GetRequiredService<IMalwareScanner>(),
+            scope.ServiceProvider.GetRequiredService<IKeyWrapper>(), scope.ServiceProvider.GetRequiredService<IOptions<BlobOptions>>(),
+            scope.ServiceProvider.GetRequiredService<IOptions<LimitsOptions>>(), rig.Server.Clock, NullLogger<BlobService>.Instance);
+
+        await Assert.ThrowsAsync<IOException>(() => service.PurgeUnreferencedObjectsAsync([obj.Id], CancellationToken.None));
+        await Assert.That(await db.BlobDeletions.CountAsync()).IsEqualTo(1);
+        await Assert.That((await db.Accounts.AsNoTracking().SingleAsync(a => a.Id == caller.Account)).StorageBytes).IsEqualTo(0L);
+        await Assert.That(await store.ExistsAsync(obj.StorageKey, CancellationToken.None)).IsTrue();
+        await service.SweepAsync(CancellationToken.None);
+        await Assert.That(await db.BlobDeletions.CountAsync()).IsEqualTo(0);
+        await Assert.That(await store.ExistsAsync(obj.StorageKey, CancellationToken.None)).IsFalse();
+        await Assert.That((await db.Accounts.AsNoTracking().SingleAsync(a => a.Id == caller.Account)).StorageBytes).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task SharedBlob_UploaderDeletesAccount_BytesSurviveUntilSpaceIsPurged()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("retained-blob-owner@example.com");
+        var editor = await world.SignInAsync("retained-blob-editor@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var bytes = Random(4000);
+        var sha = Sha(bytes);
+        var task = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var changes = await world.PushAsync(editor,
+            SharingHarness.Change("task", task, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachment, "create", new { SpaceId = space.ToString("D"), OwnerKind = 1L, OwnerId = task, CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, bytes.Length));
+        await Assert.That(changes.Rejections()).IsEmpty();
+        var uploader = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        using var start = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var part = await SendAsync(rig.Server, uploader, HttpMethod.Put, $"/v1/blobs/{sha}?stream={space:D}&part=0", new ByteArrayContent(bytes));
+        using var complete = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}");
+        await Assert.That(start.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(complete.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await using (var db = ServerDatabase.Open(rig.Server.ConnectionString))
+        {
+            await Assert.That((await db.Accounts.SingleAsync(a => a.Id == editor.AccountId)).StorageBytes).IsEqualTo(bytes.Length);
+            await Assert.That((await db.Accounts.SingleAsync(a => a.Id == owner.AccountId)).StorageBytes).IsEqualTo(0L);
+        }
+        using var delete = await SendAsync(rig.Server, uploader, HttpMethod.Delete, "/v1/account",
+            new StringContent("{\"confirmation\":\"DELETE\"}", Encoding.UTF8, "application/json"));
+        await Assert.That(delete.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        using var read = await SendAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
+        await Assert.That(read.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That((await read.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        rig.Server.Clock.Advance(TimeSpan.FromDays(31));
+        await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+            await SpacePurgeService.PurgeDueAsync(db, rig.Server.Clock.GetUtcNow(), CancellationToken.None,
+                scope.ServiceProvider.GetRequiredService<BlobService>());
+        }
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.BlobObjects.CountAsync()).IsEqualTo(0);
+        await Assert.That(StoredObjects(rig).Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DeleteAccount_LastMemberSpace_RemovesFormerMembersUploadParts()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("session-delete-owner@example.com");
+        var editor = await world.SignInAsync("session-delete-editor@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var bytes = Random(2000);
+        var sha = Sha(bytes);
+        var caller = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        using var started = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var part = await SendAsync(rig.Server, caller, HttpMethod.Put, $"/v1/blobs/{sha}?stream={space:D}&part=0", new ByteArrayContent(bytes));
+        await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        var partsPath = Path.Combine(rig.BlobDirectory, "objects", "parts", editor.AccountId.ToString("N"), "stream-" + space.ToString("N"), sha);
+        await Assert.That(Directory.Exists(partsPath)).IsTrue();
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}/members/{editor.ProfileId:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        using var delete = await SendAsync(rig.Server, new Caller(owner.Token, owner.DeviceId, owner.AccountId), HttpMethod.Delete,
+            "/v1/account", new StringContent("{\"confirmation\":\"DELETE\"}", Encoding.UTF8, "application/json"));
+        await Assert.That(delete.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(Directory.Exists(partsPath)).IsFalse();
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.Accounts.AnyAsync(a => a.Id == editor.AccountId)).IsTrue();
+        await Assert.That(await check.BlobUploads.AnyAsync(u => u.StreamId == space)).IsFalse();
+    }
+
+    [Test]
+    public async Task PurgeSpace_UnfinishedSharedUpload_RemovesItsParts()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("session-purge-owner@example.com");
+        var editor = await world.SignInAsync("session-purge-editor@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var bytes = Random(2000);
+        var sha = Sha(bytes);
+        var caller = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        using var started = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var part = await SendAsync(rig.Server, caller, HttpMethod.Put, $"/v1/blobs/{sha}?stream={space:D}&part=0", new ByteArrayContent(bytes));
+        await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        var partsPath = Path.Combine(rig.BlobDirectory, "objects", "parts", editor.AccountId.ToString("N"), "stream-" + space.ToString("N"), sha);
+        await Assert.That(Directory.Exists(partsPath)).IsTrue();
+        await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        rig.Server.Clock.Advance(TimeSpan.FromDays(31));
+        await using (var scope = rig.Server.Factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ChaosDbContext>();
+            var service = scope.ServiceProvider.GetRequiredService<BlobService>();
+            await SpacePurgeService.PurgeDueAsync(db, rig.Server.Clock.GetUtcNow(), CancellationToken.None, service);
+        }
+        await Assert.That(Directory.Exists(partsPath)).IsFalse();
+        await using var check = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await check.BlobUploads.AnyAsync(u => u.StreamId == space)).IsFalse();
+    }
+
+    [Test]
+    public async Task StreamUploads_SameHashInDifferentStreams_StaySeparateAndCannotBeTakenOver()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("session-owner@example.com");
+        var editor = await world.SignInAsync("session-editor@example.com");
+        var first = await world.CreateSpaceAsync(owner);
+        var second = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, first, SpaceMember.EditorRole));
+        var bytes = Random(2000);
+        var sha = Sha(bytes);
+        var uploader = new Caller(owner.Token, owner.DeviceId, owner.AccountId);
+        var other = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        foreach (var stream in new[] { first, second })
+        {
+            using var started = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}?stream={stream:D}",
+                new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+            await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        }
+        using var firstPart = await SendAsync(rig.Server, uploader, HttpMethod.Put, $"/v1/blobs/{sha}?stream={first:D}&part=0", new ByteArrayContent(bytes));
+        await Assert.That(firstPart.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        using var secondStatus = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}?stream={second:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        await Assert.That((await JsonAsync(secondStatus)).GetProperty("received").GetArrayLength()).IsEqualTo(0);
+        using var hijack = await SendAsync(rig.Server, other, HttpMethod.Put, $"/v1/blobs/{sha}?stream={first:D}&part=0", new ByteArrayContent(bytes));
+        using var takeover = await SendAsync(rig.Server, other, HttpMethod.Post, $"/v1/blobs/{sha}?stream={first:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        await Assert.That(hijack.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        await Assert.That(takeover.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        using var secondPart = await SendAsync(rig.Server, uploader, HttpMethod.Put, $"/v1/blobs/{sha}?stream={second:D}&part=0", new ByteArrayContent(bytes));
+        await Assert.That(secondPart.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        using var firstDone = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={first:D}");
+        using var secondDone = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={second:D}");
+        await Assert.That(firstDone.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(secondDone.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await db.BlobUploads.CountAsync()).IsEqualTo(0);
+        await Assert.That(await db.BlobParts.CountAsync()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task CompleteUpload_MembershipRemovedDuringScan_DoesNotStoreBlobOrChargeQuota()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("upload-race-owner@example.com");
+        var editor = await world.SignInAsync("upload-race-editor@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var bytes = Random(2000);
+        var sha = Sha(bytes);
+        var caller = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        using var start = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var part = await SendAsync(rig.Server, caller, HttpMethod.Put, $"/v1/blobs/{sha}?stream={space:D}&part=0", new ByteArrayContent(bytes));
+        await Assert.That(start.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        var scanning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Scanner.BeforeScan = async ct => { scanning.TrySetResult(); await release.Task.WaitAsync(ct); };
+        var completing = SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}");
+        try
+        {
+            await scanning.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Assert.That((await world.CallAsync(owner, HttpMethod.Delete, $"/v2/spaces/{space:D}/members/{editor.ProfileId:D}")).Status).IsEqualTo(HttpStatusCode.OK);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        using var complete = await completing;
+        await Assert.That(complete.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
+        await Assert.That(await db.Blobs.AnyAsync(b => b.StreamId == space && b.Sha256 == sha)).IsFalse();
+        await Assert.That((await db.Accounts.SingleAsync(a => a.Id == editor.AccountId)).StorageBytes).IsEqualTo(0L);
+        await Assert.That(StoredObjects(rig)).IsEmpty();
+    }
+
+    [Test]
+    public async Task StreamUpload_ViewerAndOutsider_AreRefusedAtEveryStep()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("upload-owner@example.com");
+        var editor = await world.SignInAsync("upload-editor@example.com");
+        var viewer = await world.SignInAsync("upload-viewer@example.com");
+        var outsider = await world.SignInAsync("upload-outsider@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        await world.JoinAsync(viewer, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        var bytes = Random(2000);
+        var sha = Sha(bytes);
+        var taskId = Guid.NewGuid().ToString("D");
+        var attachmentId = Guid.NewGuid().ToString("D");
+        var metadata = await world.PushAsync(owner,
+            SharingHarness.Change("task", taskId, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachmentId, "create",
+                new { SpaceId = space.ToString("D"), OwnerKind = 1L, OwnerId = taskId, CreatedAtUtc = Now() }),
+            AttachmentFile(attachmentId, sha, bytes.Length));
+        await Assert.That(metadata.Rejections()).IsEmpty();
+        foreach (var person in new[] { viewer, outsider })
+        {
+            var caller = new Caller(person.Token, person.DeviceId, person.AccountId);
+            using var start = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+                new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+            using var part = await SendAsync(rig.Server, caller, HttpMethod.Put, $"/v1/blobs/{sha}?part=0&stream={space:D}", new ByteArrayContent(bytes));
+            using var complete = await SendAsync(rig.Server, caller, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}");
+            await Assert.That(start.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+            await Assert.That(part.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+            await Assert.That(complete.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        }
+
+        using var viewerTask = await SendAsync(rig.Server, new Caller(viewer.Token, viewer.DeviceId, viewer.AccountId), HttpMethod.Post,
+            $"/v1/blobs/{sha}?stream={space:D}&attachment={attachmentId}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        await Assert.That(viewerTask.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        var writer = new Caller(editor.Token, editor.DeviceId, editor.AccountId);
+        using var accepted = await SendAsync(rig.Server, writer, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var sent = await SendAsync(rig.Server, writer, HttpMethod.Put, $"/v1/blobs/{sha}?part=0&stream={space:D}", new ByteArrayContent(bytes));
+        using var finished = await SendAsync(rig.Server, writer, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}");
+        await Assert.That(accepted.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(sent.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(finished.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task Shared_blocked_attachment_IsNeverDownloadedByEitherMember()
+    {
+        await using var rig = await StartAsync();
+        var world = new SharingHarness(rig.Server);
+        var owner = await world.SignInAsync("blocked-space-owner@example.com");
+        var member = await world.SignInAsync("blocked-space-member@example.com");
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(member, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+
+        var bytes = Encoding.ASCII.GetBytes("EICAR test file, harmless");
+        var sha = Sha(bytes);
+        var task = Guid.NewGuid().ToString("D");
+        var attachment = Guid.NewGuid().ToString("D");
+        var pushed = await world.PushAsync(owner,
+            SharingHarness.Change("task", task, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("attachment", attachment, "create",
+                new { SpaceId = space.ToString("D"), OwnerKind = "task", OwnerId = task, CreatedAtUtc = Now() }),
+            AttachmentFile(attachment, sha, bytes.Length));
+        await Assert.That(pushed.Rejections()).IsEmpty();
+
+        var uploader = new Caller(owner.Token, owner.DeviceId, owner.AccountId);
+        using var started = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}?stream={space:D}",
+            new StringContent($"{{\"size\":{bytes.Length}}}", Encoding.UTF8, "application/json"));
+        using var sent = await SendAsync(rig.Server, uploader, HttpMethod.Put, $"/v1/blobs/{sha}?stream={space:D}&part=0", new ByteArrayContent(bytes));
+        using var uploaded = await SendAsync(rig.Server, uploader, HttpMethod.Post, $"/v1/blobs/{sha}/complete?stream={space:D}");
+        await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(sent.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That((await JsonAsync(uploaded)).GetProperty("state").GetString()).IsEqualTo(BlobStates.Blocked);
+        foreach (var caller in new[] { owner, member })
+        {
+            var identity = new Caller(caller.Token, caller.DeviceId, caller.AccountId);
+            using var head = await SendAsync(rig.Server, identity, HttpMethod.Head, $"/v1/blobs/{sha}?stream={space:D}");
+            using var get = await SendAsync(rig.Server, identity, HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
+            await Assert.That(head.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(head.Headers.GetValues(BlobEndpoints.StateHeader).Single()).IsEqualTo(BlobStates.Blocked);
+            await Assert.That(get.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+        }
+
+        await Assert.That(StoredObjects(rig)).IsEmpty();
     }
 
     [Test]
@@ -556,8 +1073,8 @@ public sealed class BlobTests(PostgresServer postgres)
 
         var thief = new Caller(attacker.Token, attacker.DeviceId, attacker.AccountId);
         var viewer = new Caller(reader.Token, reader.DeviceId, reader.AccountId);
-        using (var stolen = await SendAsync(rig.Server, thief, HttpMethod.Get, $"/v1/blobs/{sha}"))
-        using (var relayed = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}"))
+        using (var stolen = await SendAsync(rig.Server, thief, HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}"))
+        using (var relayed = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}"))
         {
             await Assert.That(stolen.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
             await Assert.That(relayed.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
@@ -565,9 +1082,14 @@ public sealed class BlobTests(PostgresServer postgres)
 
         // Once the member who attached it uploads the bytes, the space reads that member's copy.
         (await UploadAsync(rig.Server, thief, bytes)).EnsureSuccessStatusCode();
-        using var shared = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}");
+        using var shared = await SendAsync(rig.Server, viewer, HttpMethod.Get, $"/v1/blobs/{sha}?stream={space:D}");
         await Assert.That(shared.StatusCode).IsEqualTo(HttpStatusCode.OK);
         await Assert.That((await shared.Content.ReadAsByteArrayAsync()).AsSpan().SequenceEqual(bytes)).IsTrue();
+        // Readable through the space does not mean the viewer has uploaded its own copy.
+        using var readableHead = await SendAsync(rig.Server, viewer, HttpMethod.Head, $"/v1/blobs/{sha}?stream={space:D}");
+        using var ownHead = await SendAsync(rig.Server, viewer, HttpMethod.Head, $"/v1/blobs/{sha}?own=true");
+        await Assert.That(readableHead.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(ownHead.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
         await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
         var binding = await db.AttachmentBlobBindings.SingleAsync(b => b.StreamId == space && b.AttachmentId == attachment);
         await Assert.That(binding.CustodianAccountId).IsEqualTo(attacker.AccountId);
@@ -696,7 +1218,8 @@ public sealed class BlobTests(PostgresServer postgres)
         await using var db = ServerDatabase.Open(rig.Server.ConnectionString);
         await Assert.That(await db.Blobs.CountAsync(b => b.AccountId == caller.Account)).IsEqualTo(0);
         await Assert.That(await db.BlobUploads.CountAsync(b => b.AccountId == caller.Account)).IsEqualTo(0);
-        await Assert.That(Directory.Exists(Path.Combine(rig.BlobDirectory, "objects", "blobs", caller.Account.ToString("N")))).IsFalse();
+        var oldBlobDirectory = Path.Combine(rig.BlobDirectory, "objects", "blobs", caller.Account.ToString("N"));
+        await Assert.That(Directory.Exists(oldBlobDirectory) && Directory.EnumerateFiles(oldBlobDirectory, "*", SearchOption.AllDirectories).Any()).IsFalse();
         await Assert.That(Directory.Exists(Path.Combine(rig.BlobDirectory, "objects", "parts", caller.Account.ToString("N")))).IsFalse();
         await Assert.That(await db.Blobs.CountAsync(b => b.AccountId == other.Account)).IsEqualTo(1);
         await Assert.That(StoredObjects(rig).Length).IsEqualTo(1);

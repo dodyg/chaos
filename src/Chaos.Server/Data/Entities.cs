@@ -226,7 +226,9 @@ public static class BlobStates
 /// <summary>One attachment's bytes on the service, per account (PLAN2 §8.2). The bytes are encrypted in the object store.</summary>
 public sealed class BlobRow
 {
+    public Guid StreamId { get; set; }
     public Guid AccountId { get; set; }
+    public Guid ObjectId { get; set; }
 
     /// <summary>Lowercase hex SHA-256 of the plaintext.</summary>
     public required string Sha256 { get; set; }
@@ -247,6 +249,24 @@ public sealed class BlobRow
     public DateTimeOffset? UnreferencedSince { get; set; }
 }
 
+/// <summary>One stored encrypted object, which can be referenced from more than one stream.</summary>
+public sealed class BlobObjectRow
+{
+    public Guid Id { get; set; }
+    public Guid AccountId { get; set; }
+    public long ByteSize { get; set; }
+    public required string State { get; set; }
+    public required string StorageKey { get; set; }
+}
+
+/// <summary>A committed object deletion awaiting removal from the object store.</summary>
+public sealed class BlobDeletionRow
+{
+    public Guid Id { get; set; }
+    public required string StorageKey { get; set; }
+    public DateTimeOffset NotBefore { get; set; }
+}
+
 /// <summary>
 /// Which account's stored blob an attachment in a space stream reads from. The server records it when that account's
 /// push wins the attachment's <c>file</c> group, or when the account moves the attachment in from its own stream. A
@@ -263,6 +283,7 @@ public sealed class AttachmentBlobBinding
 /// <summary>An upload that has started and not yet completed.</summary>
 public sealed class BlobUploadRow
 {
+    public Guid StreamId { get; set; }
     public Guid AccountId { get; set; }
     public required string Sha256 { get; set; }
     public long ByteSize { get; set; }
@@ -275,7 +296,7 @@ public sealed class BlobUploadRow
 /// <summary>One received part of an upload; its bytes are in the object store.</summary>
 public sealed class BlobPartRow
 {
-    public Guid AccountId { get; set; }
+    public Guid StreamId { get; set; }
     public required string Sha256 { get; set; }
     public int PartIndex { get; set; }
     public int ByteSize { get; set; }

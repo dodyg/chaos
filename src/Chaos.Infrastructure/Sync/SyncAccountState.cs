@@ -171,8 +171,11 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
     /// "Already on the service" belongs to the account the device was talking to. A different account, or a rebuilt service, has none
     /// of those files, so joining or leaving forgets it; the next transfer pass asks the service (a HEAD) and uploads what is missing.
     /// </summary>
-    private static void ForgetRemoteAttachments(SqliteConnection connection) =>
+    private static void ForgetRemoteAttachments(SqliteConnection connection)
+    {
+        SyncSql.Execute(connection, "DELETE FROM AttachmentStreamState;");
         SyncSql.Execute(connection, "UPDATE AttachmentLocalState SET Remote = 0, NextTryUtc = NULL, Failures = 0;");
+    }
 
     /// <summary>Turns sync on for this account: the cursor starts at zero and the upload of what the account lacks is owed.</summary>
     public Task EnableAsync(Guid accountId, CancellationToken ct) =>

@@ -98,7 +98,7 @@ public static class BlobEndpoints
         _ => ApiErrors.Problem("error", "The request failed.", StatusCodes.Status500InternalServerError),
     };
 
-    private static async Task<IResult> Head(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
+    private static async Task<IResult> Head(string sha256, bool? own, Guid? stream, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
         if (CallerIdentity.TryGet(user) is not { } caller)
         {
@@ -110,7 +110,10 @@ public static class BlobEndpoints
             return Failure(BlobFailure.InvalidHash);
         }
 
-        if (await blobs.FindReadableAsync(caller.AccountId, sha256, ct) is not { } blob)
+        var blob = stream is { } streamId
+            ? await blobs.FindReadableInStreamAsync(caller.AccountId, streamId, sha256, ct)
+            : await blobs.FindAsync(caller.AccountId, sha256, ct);
+        if (blob is null)
         {
             return Results.NotFound();
         }
@@ -120,44 +123,59 @@ public static class BlobEndpoints
         return Results.Ok();
     }
 
-    private static async Task<IResult> Start(string sha256, StartUploadRequest request, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
+    private static async Task<IResult> Start(string sha256, Guid? stream, string? attachment, StartUploadRequest request, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
         if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
 
-        var outcome = await blobs.StartAsync(caller.AccountId, caller.DeviceId, sha256, request.Size, ct);
+        if (stream is { } streamId && !await blobs.CanUploadToStreamAsync(caller.AccountId, streamId, sha256, attachment, ct))
+        {
+            return Results.NotFound();
+        }
+
+        var outcome = await blobs.StartAsync(caller.AccountId, caller.DeviceId, stream ?? caller.AccountId, sha256, request.Size, ct);
         return outcome.Succeeded
             ? Results.Ok(new { state = outcome.Value!.BlobState, partSize = outcome.Value.PartSize, partCount = outcome.Value.PartCount, received = outcome.Value.Received })
             : Failure(outcome.Failure);
     }
 
-    private static async Task<IResult> PutPart(string sha256, int part, HttpContext http, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
+    private static async Task<IResult> PutPart(string sha256, int part, Guid? stream, string? attachment, HttpContext http, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
         if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
 
-        var failure = await blobs.PutPartAsync(caller.AccountId, sha256, part, http.Request.Body, ct);
+        if (stream is { } streamId && !await blobs.CanUploadToStreamAsync(caller.AccountId, streamId, sha256, attachment, ct))
+        {
+            return Results.NotFound();
+        }
+
+        var failure = await blobs.PutPartAsync(caller.AccountId, stream ?? caller.AccountId, sha256, part, http.Request.Body, ct);
         return failure == BlobFailure.None ? Results.NoContent() : Failure(failure);
     }
 
-    private static async Task<IResult> Complete(string sha256, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
+    private static async Task<IResult> Complete(string sha256, Guid? stream, string? attachment, ClaimsPrincipal user, BlobService blobs, CancellationToken ct)
     {
         if (CallerIdentity.TryGet(user) is not { } caller)
         {
             return Results.Unauthorized();
         }
 
-        var outcome = await blobs.CompleteAsync(caller.AccountId, caller.DeviceId, sha256, ct);
+        if (stream is { } streamId && !await blobs.CanUploadToStreamAsync(caller.AccountId, streamId, sha256, attachment, ct))
+        {
+            return Results.NotFound();
+        }
+
+        var outcome = await blobs.CompleteAsync(caller.AccountId, caller.DeviceId, stream ?? caller.AccountId, sha256, attachment, ct);
         return outcome.Succeeded
             ? Results.Ok(new { state = outcome.Value!.State, size = outcome.Value.ByteSize, detail = outcome.Value.Detail })
             : Failure(outcome.Failure);
     }
 
-    private static async Task<IResult> Download(string sha256, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
+    private static async Task<IResult> Download(string sha256, Guid? stream, ClaimsPrincipal user, HttpContext http, BlobService blobs, CancellationToken ct)
     {
         if (CallerIdentity.TryGet(user) is not { } caller)
         {
@@ -169,7 +187,10 @@ public static class BlobEndpoints
             return Failure(BlobFailure.InvalidHash);
         }
 
-        if (await blobs.FindReadableAsync(caller.AccountId, sha256, ct) is not { } blob)
+        var blob = stream is { } streamId
+            ? await blobs.FindReadableInStreamAsync(caller.AccountId, streamId, sha256, ct)
+            : await blobs.FindAsync(caller.AccountId, sha256, ct);
+        if (blob is null)
         {
             return Results.NotFound();
         }

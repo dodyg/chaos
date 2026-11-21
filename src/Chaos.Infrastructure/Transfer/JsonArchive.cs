@@ -89,6 +89,7 @@ public static class JsonArchive
         ["ActivityCursors"] = "event stream consumer positions, device-local",
         ["JobRuns"] = "background job diagnostics, device-local",
         ["AttachmentLocalState"] = "which attachment bytes this device holds, device-local",
+        ["AttachmentStreamState"] = "attachment transfer status per stream, device-local",
         ["OfflineContainers"] = "lists and projects this device keeps offline, device-local",
         ["DeviceSettings"] = "this device's identity and device-only settings",
     };

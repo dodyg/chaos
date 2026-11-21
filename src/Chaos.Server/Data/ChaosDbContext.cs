@@ -21,6 +21,8 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<SpaceMember> SpaceMembers => Set<SpaceMember>();
     public DbSet<SpaceInvite> SpaceInvites => Set<SpaceInvite>();
     public DbSet<BlobRow> Blobs => Set<BlobRow>();
+    public DbSet<BlobObjectRow> BlobObjects => Set<BlobObjectRow>();
+    public DbSet<BlobDeletionRow> BlobDeletions => Set<BlobDeletionRow>();
     public DbSet<AttachmentBlobBinding> AttachmentBlobBindings => Set<AttachmentBlobBinding>();
     public DbSet<BlobUploadRow> BlobUploads => Set<BlobUploadRow>();
     public DbSet<BlobPartRow> BlobParts => Set<BlobPartRow>();
@@ -49,6 +51,8 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new SpaceMemberConfiguration());
         modelBuilder.ApplyConfiguration(new SpaceInviteConfiguration());
         modelBuilder.ApplyConfiguration(new BlobConfiguration());
+        modelBuilder.ApplyConfiguration(new BlobObjectConfiguration());
+        modelBuilder.ApplyConfiguration(new BlobDeletionConfiguration());
         modelBuilder.ApplyConfiguration(new AttachmentBlobBindingConfiguration());
         modelBuilder.ApplyConfiguration(new BlobUploadConfiguration());
         modelBuilder.ApplyConfiguration(new BlobPartConfiguration());
@@ -178,11 +182,37 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
                 t.HasCheckConstraint("CK_Blobs_ByteSize", "\"ByteSize\" >= 0");
                 t.HasCheckConstraint("CK_Blobs_State", $"\"State\" IN ({InList(BlobStates.All)})");
             });
-            e.HasKey(x => new { x.AccountId, x.Sha256 });
+            e.HasKey(x => new { x.StreamId, x.Sha256 });
             e.HasIndex(x => x.UnreferencedSince).HasDatabaseName("IX_Blobs_UnreferencedSince");
-            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(x => x.StreamId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<BlobObjectRow>().WithMany().HasForeignKey(x => x.ObjectId).OnDelete(DeleteBehavior.Restrict);
         }
 
+    }
+
+    private sealed class BlobObjectConfiguration : IEntityTypeConfiguration<BlobObjectRow>
+    {
+        public void Configure(EntityTypeBuilder<BlobObjectRow> e)
+        {
+            e.ToTable("BlobObjects", t =>
+            {
+                t.HasCheckConstraint("CK_BlobObjects_ByteSize", "\"ByteSize\" >= 0");
+                t.HasCheckConstraint("CK_BlobObjects_State", $"\"State\" IN ({InList(BlobStates.All)})");
+            });
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.HasIndex(x => x.AccountId).HasDatabaseName("IX_BlobObjects_AccountId");
+        }
+    }
+
+    private sealed class BlobDeletionConfiguration : IEntityTypeConfiguration<BlobDeletionRow>
+    {
+        public void Configure(EntityTypeBuilder<BlobDeletionRow> e)
+        {
+            e.ToTable("BlobDeletions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+        }
     }
 
     private sealed class SpaceMemberConfiguration : IEntityTypeConfiguration<SpaceMember>
@@ -248,9 +278,10 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
                 t.HasCheckConstraint("CK_BlobUploads_Sha256", "\"Sha256\" ~ '^[0-9a-f]{64}$'");
                 t.HasCheckConstraint("CK_BlobUploads_ByteSize", "\"ByteSize\" >= 0 AND \"PartCount\" >= 0");
             });
-            e.HasKey(x => new { x.AccountId, x.Sha256 });
+            e.HasKey(x => new { x.StreamId, x.Sha256 });
             e.HasIndex(x => x.UpdatedAt).HasDatabaseName("IX_BlobUploads_UpdatedAt");
             e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<SyncStream>().WithMany().HasForeignKey(x => x.StreamId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 
@@ -259,8 +290,8 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         public void Configure(EntityTypeBuilder<BlobPartRow> e)
         {
             e.ToTable("BlobParts", t => t.HasCheckConstraint("CK_BlobParts_PartIndex", "\"PartIndex\" >= 0 AND \"ByteSize\" > 0"));
-            e.HasKey(x => new { x.AccountId, x.Sha256, x.PartIndex });
-            e.HasOne<BlobUploadRow>().WithMany().HasForeignKey(x => new { x.AccountId, x.Sha256 }).OnDelete(DeleteBehavior.Cascade);
+            e.HasKey(x => new { x.StreamId, x.Sha256, x.PartIndex });
+            e.HasOne<BlobUploadRow>().WithMany().HasForeignKey(x => new { x.StreamId, x.Sha256 }).OnDelete(DeleteBehavior.Cascade);
         }
     }
 

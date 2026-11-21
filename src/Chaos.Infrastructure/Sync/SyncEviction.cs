@@ -74,7 +74,7 @@ public sealed class SyncEviction(SqliteApplicationStore store, TimeProvider cloc
                 }
 
                 using var delete = connection.CreateCommand();
-                delete.CommandText = "DELETE FROM SyncStreams WHERE StreamId = $id AND State = 'evicting';";
+                delete.CommandText = "DELETE FROM AttachmentStreamState WHERE StreamId = $id; DELETE FROM SyncStreams WHERE StreamId = $id AND State = 'evicting';";
                 delete.Parameters.AddWithValue("$id", streamId);
                 delete.ExecuteNonQuery();
                 return Task.FromResult(new SyncEvictionResult(streamId, name, entities, discarded));

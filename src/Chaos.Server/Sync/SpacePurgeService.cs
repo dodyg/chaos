@@ -42,16 +42,23 @@ public sealed class SpacePurgeService(IServiceScopeFactory scopes, TimeProvider 
         {
             return 0;
         }
-        // Read before the delete: the bindings go with their stream.
-        var bound = await db.AttachmentBlobBindings.AsNoTracking()
-            .Where(b => due.Contains(b.StreamId))
-            .Select(b => new { b.CustodianAccountId, b.Sha256 })
-            .Distinct()
-            .ToListAsync(ct);
+        // Read before the delete: blob references go with their streams, while objects may be shared.
+        var objects = await db.Blobs.AsNoTracking().Where(b => due.Contains(b.StreamId))
+            .Select(b => b.ObjectId).Distinct().ToListAsync(ct);
+        var uploads = await db.BlobUploads.AsNoTracking().Where(u => due.Contains(u.StreamId))
+            .Select(u => new { u.AccountId, u.StreamId, u.Sha256 }).ToListAsync(ct);
         var count = await db.SyncStreams.Where(s => due.Contains(s.Id)).ExecuteDeleteAsync(ct);
-        if (blobs is not null && bound.Count > 0)
+        if (blobs is not null)
         {
-            await blobs.PurgeUnreferencedAsync([.. bound.Select(b => (b.CustodianAccountId, b.Sha256))], ct);
+            foreach (var upload in uploads)
+            {
+                await blobs.DeleteUploadPartsAsync(upload.AccountId, upload.StreamId, upload.Sha256, ct);
+            }
+        }
+        if (blobs is not null && objects.Count > 0)
+        {
+            await blobs.RemoveUnreferencedRowsAsync(objects, ct);
+            await blobs.PurgeUnreferencedObjectsAsync(objects, ct);
         }
 
         return count;

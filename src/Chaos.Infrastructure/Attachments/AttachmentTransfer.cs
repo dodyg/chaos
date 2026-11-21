@@ -62,6 +62,8 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         public bool Upload;
     }
 
+    private sealed record UploadCandidate(string AccountId, BlobUploadTarget Target, string Sha, long Size, int Remote, string? NextTryUtc);
+
     /// <summary>Raised when any attachment's transfer state changed, so the UI can refresh.</summary>
     public event Action? Changed;
 
@@ -166,9 +168,9 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             try
             {
                 await VerifyOnServiceAsync(ct);
-                foreach (var (sha, size) in await UploadCandidatesAsync(ct))
+                foreach (var candidate in await UploadCandidatesAsync(ct))
                 {
-                    switch (await TryUploadAsync(sha, size, ct))
+                    switch (await TryUploadAsync(candidate, ct))
                     {
                         case true:
                             uploaded++;
@@ -213,46 +215,73 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     /// </summary>
     private async Task VerifyOnServiceAsync(CancellationToken ct)
     {
-        var (account, marked) = await store.QueryAsync((session, _) => Task.FromResult((
-            SyncSql.Text(session.Connection(), "SELECT AccountId FROM SyncState WHERE Id = 1;"),
-            ReadHashes(session.Connection(), $"""
-                SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
-                JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
-                WHERE a.DeletedAtUtc IS NULL AND s.Remote = {OnService}
-                GROUP BY a.Sha256;
-                """))), ct);
+        var account = await store.QueryAsync((session, _) => Task.FromResult(
+            SyncSql.Text(session.Connection(), "SELECT AccountId FROM SyncState WHERE Id = 1;")), ct);
         if (_verifiedAccount != account)
         {
             _verified.Clear();
             _verifiedAccount = account;
         }
 
-        foreach (var (sha, _) in marked)
+        foreach (var candidate in (await ReadUploadTargetsAsync(ct)).Where(c => c.Remote == OnService))
         {
-            if (_verified.Contains(sha) || !await files.ExistsAsync(sha, ct))
+            var key = candidate.Target.StreamId + ":" + candidate.Sha;
+            if (_verified.Contains(key) || !await files.ExistsAsync(candidate.Sha, ct))
             {
                 continue;
             }
 
-            if (await transport.HeadAsync(sha, ct) is null)
+            var remote = await transport.HeadAsync(candidate.Sha, candidate.Target, ct);
+            if (remote is null)
             {
-                await SetRemoteAsync(sha, Unknown, ct);
+                await SetStreamRemoteAsync(candidate, Unknown, ct);
+            }
+            else if (remote.IsBlocked)
+            {
+                await SetStreamRemoteAsync(candidate, Blocked, ct);
             }
 
-            _verified.Add(sha);
+            _verified.Add(key);
         }
     }
 
     private Task<bool> IsEnabledAsync(CancellationToken ct) =>
         store.QueryAsync((session, _) => Task.FromResult(SyncSql.Scalar(session.Connection(), "SELECT Enabled FROM SyncState WHERE Id = 1;") == 1), ct);
 
-    private Task<List<(string Sha, long Size)>> UploadCandidatesAsync(CancellationToken ct) =>
-        store.QueryAsync((session, _) => Task.FromResult(ReadHashes(session.Connection(), $"""
-            SELECT a.Sha256, MAX(a.ByteSize) FROM Attachments a
-            LEFT JOIN AttachmentLocalState s ON s.Sha256 = a.Sha256
-            WHERE a.DeletedAtUtc IS NULL AND COALESCE(s.Remote, {Unknown}) IN ({Unknown}, {UploadFailed}, {OverQuota}) AND (s.NextTryUtc IS NULL OR s.NextTryUtc <= $now)
-            GROUP BY a.Sha256 ORDER BY MIN(a.CreatedAtUtc), a.Sha256;
-            """, ("$now", StorageFormats.Instant(clock.GetUtcNow())))), ct);
+    private async Task<List<UploadCandidate>> UploadCandidatesAsync(CancellationToken ct)
+    {
+        var now = StorageFormats.Instant(clock.GetUtcNow());
+        return (await ReadUploadTargetsAsync(ct)).Where(c => (c.Remote is Unknown or UploadFailed or OverQuota)
+            && (c.NextTryUtc is null || string.CompareOrdinal(c.NextTryUtc, now) <= 0)).ToList();
+    }
+
+    private Task<List<UploadCandidate>> ReadUploadTargetsAsync(CancellationToken ct) => store.QueryAsync((session, _) =>
+    {
+        using var command = session.Connection().CreateCommand();
+        command.CommandText = """
+            WITH writable AS (
+              SELECT state.AccountId, CASE WHEN space.Kind=1 THEN state.AccountId ELSE stream.StreamId END AS StreamId,
+                     a.Id, a.Sha256, a.ByteSize, a.CreatedAtUtc
+              FROM Attachments a JOIN Spaces space ON space.Id=a.SpaceId
+              CROSS JOIN SyncState state
+              LEFT JOIN SyncStreams stream ON stream.SpaceId=space.Id AND stream.Kind='space' AND stream.State='active'
+              WHERE state.Id=1 AND state.Enabled=1 AND state.AccountId IS NOT NULL
+                AND a.DeletedAtUtc IS NULL AND space.DeletedAtUtc IS NULL
+                AND (space.Kind=1 OR stream.Role IN (1,2) OR (stream.Role=3 AND a.OwnerKind=2
+                    AND EXISTS (SELECT 1 FROM DiaryEntries d WHERE d.Id=a.OwnerId AND d.AuthorProfileId=state.ProfileBinding AND d.DeletedAtUtc IS NULL)))
+            )
+            SELECT w.AccountId,w.StreamId,MIN(w.Id),w.Sha256,MAX(w.ByteSize),COALESCE(remote.Remote,0),remote.NextTryUtc
+            FROM writable w LEFT JOIN AttachmentStreamState remote ON remote.StreamId=w.StreamId AND remote.Sha256=w.Sha256
+            WHERE w.StreamId IS NOT NULL
+            GROUP BY w.AccountId,w.StreamId,w.Sha256,remote.Remote,remote.NextTryUtc
+            ORDER BY MIN(w.CreatedAtUtc),w.StreamId,w.Sha256;
+            """;
+        using var reader = command.ExecuteReader();
+        var result = new List<UploadCandidate>();
+        while (reader.Read()) result.Add(new(reader.GetString(0), new(reader.GetString(1), reader.GetString(2)), reader.GetString(3),
+            reader.GetInt64(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
+        return Task.FromResult(result);
+    }, ct);
 
     /// <summary>
     /// Files that are missing here and should come now: small ones, and any size in a pinned container. The pad and pages are always
@@ -300,8 +329,9 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
     // ---- Upload --------------------------------------------------------------------------------------
 
     /// <summary>Returns true when the bytes are now on the service (or were), false on a failure, null when there was nothing to send from here.</summary>
-    private async Task<bool?> TryUploadAsync(string sha, long size, CancellationToken ct)
+    private async Task<bool?> TryUploadAsync(UploadCandidate candidate, CancellationToken ct)
     {
+        var (sha, size, target) = (candidate.Sha, candidate.Size, candidate.Target);
         if (!await files.ExistsAsync(sha, ct))
         {
             return null;
@@ -311,17 +341,17 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         Changed?.Invoke();
         try
         {
-            var existing = await transport.HeadAsync(sha, ct);
+            var existing = await transport.HeadAsync(sha, target, ct);
             if (existing is not null)
             {
-                await SetRemoteAsync(sha, existing.IsBlocked ? Blocked : OnService, ct);
+                await SetStreamRemoteAsync(candidate, existing.IsBlocked ? Blocked : OnService, ct);
                 return !existing.IsBlocked;
             }
 
-            var upload = await transport.StartUploadAsync(sha, size, ct);
+            var upload = await transport.StartUploadAsync(sha, size, target, ct);
             if (upload.BlobState is { } already)
             {
-                await SetRemoteAsync(sha, already == "Blocked" ? Blocked : OnService, ct);
+                await SetStreamRemoteAsync(candidate, already == "Blocked" ? Blocked : OnService, ct);
                 return already != "Blocked";
             }
 
@@ -349,38 +379,38 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
                     filled += read;
                 }
 
-                await transport.PutPartAsync(sha, index, buffer.AsMemory(0, length), ct);
+                await transport.PutPartAsync(sha, index, buffer.AsMemory(0, length), target, ct);
                 progress.Done += length;
                 Changed?.Invoke();
             }
 
-            var done = await transport.CompleteUploadAsync(sha, ct);
+            var done = await transport.CompleteUploadAsync(sha, target, ct);
             if (done.IsBlocked)
             {
-                await SetRemoteAsync(sha, Blocked, ct);
+                await SetStreamRemoteAsync(candidate, Blocked, ct);
                 await RaiseAttentionAsync("attachment.blocked", sha, "A file you attached was blocked by the online service's malware check. It stays on this computer but is not shared.", ct);
                 return false;
             }
 
-            await SetRemoteAsync(sha, OnService, ct);
+            await SetStreamRemoteAsync(candidate, OnService, ct);
             return true;
         }
         catch (BlobTransferException error) when (error.Kind == BlobFailureKind.Quota)
         {
-            await SetRemoteAsync(sha, OverQuota, ct, retryAfter: _options.QuotaRetry);
+            await SetStreamRemoteAsync(candidate, OverQuota, ct, retryAfter: _options.QuotaRetry);
             await RaiseAttentionAsync("attachment.quota", sha, "The online service has no room for a file you attached. It stays on this computer; free some space or remove files to upload it.", ct);
             return false;
         }
         catch (BlobTransferException error)
         {
             // Too large, a hash mismatch, a scanner that is down: the file stays here and the upload is tried again later.
-            await SetRemoteAsync(sha, UploadFailed, ct, backoff: true);
+            await SetStreamRemoteAsync(candidate, UploadFailed, ct, backoff: true);
             System.Diagnostics.Trace.TraceWarning("Attachment upload refused: {0}", error.Kind);
             return false;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            await SetRemoteAsync(sha, UploadFailed, ct, backoff: true);
+            await SetStreamRemoteAsync(candidate, UploadFailed, ct, backoff: true);
             return false;
         }
         finally
@@ -440,7 +470,7 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         Changed?.Invoke();
         try
         {
-            await using var body = await transport.OpenDownloadAsync(sha, 0, ct);
+            await using var body = await OpenFromReadableStreamAsync(sha, ct);
             await using var counted = new CountingStream(body, progress);
             await files.PutAsync(counted, Math.Max(size, 1) + 1024, sha, ct);
             await SetBytesStateAsync(sha, AttachmentBytesState.Present, ct, remote: OnService);
@@ -478,6 +508,53 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             _progress.TryRemove(sha, out _);
             Changed?.Invoke();
         }
+    }
+
+    private async Task<Stream> OpenFromReadableStreamAsync(string sha, CancellationToken ct)
+    {
+        var streams = await store.QueryAsync((session, _) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                SELECT DISTINCT CASE WHEN s.Kind = 1 THEN state.AccountId ELSE s.Id END
+                FROM Attachments a JOIN Spaces s ON s.Id = a.SpaceId
+                CROSS JOIN SyncState state
+                WHERE state.Id = 1 AND a.Sha256 = $sha AND a.DeletedAtUtc IS NULL
+                  AND s.DeletedAtUtc IS NULL
+                ORDER BY 1;
+                """;
+            command.Parameters.AddWithValue("$sha", sha);
+            var result = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    result.Add(reader.GetString(0));
+                }
+            }
+            return Task.FromResult(result);
+        }, ct);
+
+        if (streams.Count == 0)
+        {
+            return await transport.OpenDownloadAsync(sha, 0, null, ct);
+        }
+
+        BlobTransferException? notFound = null;
+        foreach (var stream in streams)
+        {
+            try
+            {
+                return await transport.OpenDownloadAsync(sha, 0, stream, ct);
+            }
+            catch (BlobTransferException error) when (error.Kind == BlobFailureKind.NotFound)
+            {
+                notFound = error;
+            }
+        }
+
+        throw notFound ?? new BlobTransferException(BlobFailureKind.NotFound, "The file is not available in its streams yet.");
     }
 
     private sealed class CountingStream(Stream inner, Progress progress) : Stream
@@ -543,6 +620,15 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
             return AttachmentTransferInfo.Idle;
         }
 
+        var targets = (await ReadUploadTargetsAsync(ct)).Where(c => c.Sha == sha256).ToList();
+        if (targets.Count > 0 && remote != Blocked)
+        {
+            remote = targets.Any(c => c.Remote == Blocked) ? Blocked
+                : targets.Any(c => c.Remote == OverQuota) ? OverQuota
+                : targets.Any(c => c.Remote == UploadFailed) ? UploadFailed
+                : targets.Any(c => c.Remote == Unknown) ? Unknown : OnService;
+        }
+
         _progress.TryGetValue(sha256, out var live);
         int? Percent() => live is { Total: > 0 } p ? (int)Math.Clamp(Interlocked.Read(ref p.Done) * 100 / p.Total, 0, 100) : null;
 
@@ -589,6 +675,9 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
                     Remote = CASE WHEN Remote IN ({UploadFailed}, {OverQuota}) THEN {Unknown} ELSE Remote END,
                     State = CASE WHEN State = 3 THEN 1 ELSE State END
                 WHERE Sha256 = $sha;
+                UPDATE AttachmentStreamState SET NextTryUtc = NULL, Failures = 0,
+                    Remote = CASE WHEN Remote IN ({UploadFailed}, {OverQuota}) THEN {Unknown} ELSE Remote END
+                WHERE Sha256 = $sha;
                 """;
             command.Parameters.AddWithValue("$sha", sha256);
             command.ExecuteNonQuery();
@@ -597,8 +686,44 @@ public sealed class AttachmentTransfer(SqliteApplicationStore store, IAttachment
         Wake();
     }
 
-    private Task SetRemoteAsync(string sha, int remote, CancellationToken ct, bool backoff = false, TimeSpan? retryAfter = null) =>
-        UpsertAsync(sha, state: null, remote, backoff, retryAfter, ct);
+    private Task SetStreamRemoteAsync(UploadCandidate candidate, int remote, CancellationToken ct, bool backoff = false, TimeSpan? retryAfter = null) =>
+        store.ExecuteAsync((session, _) =>
+        {
+            var connection = session.Connection();
+            using var current = connection.CreateCommand();
+            current.CommandText = """
+                SELECT EXISTS(SELECT 1 FROM SyncState state WHERE state.Id=1 AND state.Enabled=1 AND state.AccountId=$account
+                    AND ($stream=$account OR EXISTS (SELECT 1 FROM SyncStreams s WHERE s.StreamId=$stream AND s.Kind='space' AND s.State='active')));
+                """;
+            current.Parameters.AddWithValue("$account", candidate.AccountId);
+            current.Parameters.AddWithValue("$stream", candidate.Target.StreamId);
+            if (Convert.ToInt64(current.ExecuteScalar(), CultureInfo.InvariantCulture) == 0) return Task.FromResult(0);
+
+            using var failure = connection.CreateCommand();
+            failure.CommandText = "SELECT COALESCE((SELECT Failures FROM AttachmentStreamState WHERE StreamId=$stream AND Sha256=$sha),0);";
+            failure.Parameters.AddWithValue("$stream", candidate.Target.StreamId);
+            failure.Parameters.AddWithValue("$sha", candidate.Sha);
+            var failures = backoff || retryAfter is not null ? Convert.ToInt64(failure.ExecuteScalar(), CultureInfo.InvariantCulture) + 1 : 0;
+            var wait = retryAfter ?? TimeSpan.FromSeconds(Math.Min(_options.MaxBackoff.TotalSeconds, _options.MinBackoff.TotalSeconds * Math.Pow(2, Math.Min(Math.Max(failures - 1, 0), 20))));
+            var next = failures > 0 ? StorageFormats.Instant(clock.GetUtcNow() + wait) : null;
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO AttachmentLocalState (Sha256,State,UpdatedAtUtc,Remote,Failures)
+                VALUES ($sha,0,$now,$remote,0)
+                ON CONFLICT (Sha256) DO UPDATE SET UpdatedAtUtc=$now, Remote=CASE WHEN Remote=2 THEN 2 ELSE $remote END;
+                INSERT INTO AttachmentStreamState (StreamId,Sha256,Remote,NextTryUtc,Failures)
+                VALUES ($stream,$sha,$remote,$next,$failures)
+                ON CONFLICT (StreamId,Sha256) DO UPDATE SET Remote=$remote,NextTryUtc=$next,Failures=$failures;
+                """;
+            command.Parameters.AddWithValue("$sha", candidate.Sha);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(clock.GetUtcNow()));
+            command.Parameters.AddWithValue("$remote", remote);
+            command.Parameters.AddWithValue("$stream", candidate.Target.StreamId);
+            command.Parameters.AddWithValue("$next", (object?)next ?? DBNull.Value);
+            command.Parameters.AddWithValue("$failures", failures);
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        }, ct);
 
     private Task SetBytesStateAsync(string sha, AttachmentBytesState state, CancellationToken ct, int? remote = null, bool backoff = false) =>
         UpsertAsync(sha, state, remote, backoff, null, ct);

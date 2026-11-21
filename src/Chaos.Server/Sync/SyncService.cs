@@ -480,13 +480,15 @@ public sealed class SyncService(
             return SyncRejection.Forbidden;
         }
 
+        var viewerDiaryAttachment = role == SpaceMember.ViewerRole && kind.Kind == "attachment"
+            && await IsViewerDiaryAttachmentAsync(account, streamId, change, ct);
         foreach (var group in change.Groups.Keys)
         {
             var required = kind.Group(group)!.Write;
             var allowed = required switch
             {
                 SyncWrite.Owner => role == SpaceMember.OwnerRole,
-                SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole,
+                SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole || viewerDiaryAttachment,
                 SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
                 SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
                 SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole)
@@ -522,6 +524,33 @@ public sealed class SyncService(
             return SyncRejection.Forbidden;
         }
         return null;
+    }
+
+    private async Task<bool> IsViewerDiaryAttachmentAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
+    {
+        var stored = await db.SyncEntities.FindAsync([streamId, "attachment", change.EntityKey], ct);
+        if (stored is { PurgedAt: not null } or { MovedTo: not null })
+        {
+            return false;
+        }
+
+        var groups = stored is null ? new Dictionary<string, SyncGroupState>() : SyncJson.ReadGroups(stored.Groups);
+        if (stored is not null && change.Groups.TryGetValue("create", out var incoming))
+        {
+            if (!groups.TryGetValue("create", out var existing) || !SameValues(existing.Values.Values, incoming.Values.Values))
+            {
+                return false;
+            }
+        }
+        else if (stored is null && change.Groups.TryGetValue("create", out var create))
+        {
+            groups["create"] = create;
+        }
+
+        var restoring = change.Groups.TryGetValue("deleted", out var deleted)
+            && deleted.Values.Values.TryGetValue("DeletedAtUtc", out var deletedAt) && deletedAt is null;
+        return account.ProfileId is { } profileId
+            && await DiaryAttachmentAuthorization.IsAuthorAsync(db, streamId, profileId, groups, ct, restoring);
     }
 
     private async Task<bool> IsAuthorAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
@@ -699,6 +728,20 @@ public sealed class SyncService(
             binding.Sha256 = sha;
             binding.CustodianAccountId = custodian;
         }
+        await CopyBlobReferenceAsync(db, custodian, streamId, sha, ct);
+    }
+
+    internal static async Task CopyBlobReferenceAsync(ChaosDbContext db, Guid sourceStream, Guid targetStream, string sha, CancellationToken ct)
+    {
+        if (sourceStream == targetStream || await db.Blobs.FindAsync([targetStream, sha], ct) is not null) return;
+        var source = await db.Blobs.FindAsync([sourceStream, sha], ct);
+        if (source is null) return;
+        db.Blobs.Add(new BlobRow
+        {
+            StreamId = targetStream, AccountId = source.AccountId, ObjectId = source.ObjectId, Sha256 = source.Sha256,
+            ByteSize = source.ByteSize, State = source.State, Detail = source.Detail, StorageKey = source.StorageKey,
+            WrappedKey = source.WrappedKey, CreatedAt = source.CreatedAt,
+        });
     }
 
     private void Log(Guid streamId, long seq, Guid changeId, SyncChange change, string op, string groupsJson,

@@ -165,9 +165,58 @@ namespace Chaos.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Chaos.Server.Data.BlobDeletionRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("NotBefore")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BlobDeletions", (string)null);
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.BlobObjectRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("ByteSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .HasDatabaseName("IX_BlobObjects_AccountId");
+
+                    b.ToTable("BlobObjects", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_BlobObjects_ByteSize", "\"ByteSize\" >= 0");
+
+                            t.HasCheckConstraint("CK_BlobObjects_State", "\"State\" IN ('Clean', 'Blocked')");
+                        });
+                });
+
             modelBuilder.Entity("Chaos.Server.Data.BlobPartRow", b =>
                 {
-                    b.Property<Guid>("AccountId")
+                    b.Property<Guid>("StreamId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Sha256")
@@ -179,7 +228,7 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<int>("ByteSize")
                         .HasColumnType("integer");
 
-                    b.HasKey("AccountId", "Sha256", "PartIndex");
+                    b.HasKey("StreamId", "Sha256", "PartIndex");
 
                     b.ToTable("BlobParts", null, t =>
                         {
@@ -189,11 +238,14 @@ namespace Chaos.Server.Data.Migrations
 
             modelBuilder.Entity("Chaos.Server.Data.BlobRow", b =>
                 {
-                    b.Property<Guid>("AccountId")
+                    b.Property<Guid>("StreamId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Sha256")
                         .HasColumnType("text");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
 
                     b.Property<long>("ByteSize")
                         .HasColumnType("bigint");
@@ -203,6 +255,9 @@ namespace Chaos.Server.Data.Migrations
 
                     b.Property<string>("Detail")
                         .HasColumnType("text");
+
+                    b.Property<Guid>("ObjectId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -219,7 +274,9 @@ namespace Chaos.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("bytea");
 
-                    b.HasKey("AccountId", "Sha256");
+                    b.HasKey("StreamId", "Sha256");
+
+                    b.HasIndex("ObjectId");
 
                     b.HasIndex("UnreferencedSince")
                         .HasDatabaseName("IX_Blobs_UnreferencedSince");
@@ -236,11 +293,14 @@ namespace Chaos.Server.Data.Migrations
 
             modelBuilder.Entity("Chaos.Server.Data.BlobUploadRow", b =>
                 {
-                    b.Property<Guid>("AccountId")
+                    b.Property<Guid>("StreamId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Sha256")
                         .HasColumnType("text");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid");
 
                     b.Property<long>("ByteSize")
                         .HasColumnType("bigint");
@@ -257,7 +317,9 @@ namespace Chaos.Server.Data.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.HasKey("AccountId", "Sha256");
+                    b.HasKey("StreamId", "Sha256");
+
+                    b.HasIndex("AccountId");
 
                     b.HasIndex("UpdatedAt")
                         .HasDatabaseName("IX_BlobUploads_UpdatedAt");
@@ -843,16 +905,22 @@ namespace Chaos.Server.Data.Migrations
                 {
                     b.HasOne("Chaos.Server.Data.BlobUploadRow", null)
                         .WithMany()
-                        .HasForeignKey("AccountId", "Sha256")
+                        .HasForeignKey("StreamId", "Sha256")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
             modelBuilder.Entity("Chaos.Server.Data.BlobRow", b =>
                 {
-                    b.HasOne("Chaos.Server.Data.Account", null)
+                    b.HasOne("Chaos.Server.Data.BlobObjectRow", null)
                         .WithMany()
-                        .HasForeignKey("AccountId")
+                        .HasForeignKey("ObjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
+                        .WithMany()
+                        .HasForeignKey("StreamId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -862,6 +930,12 @@ namespace Chaos.Server.Data.Migrations
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany()
                         .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Chaos.Server.Data.SyncStream", null)
+                        .WithMany()
+                        .HasForeignKey("StreamId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

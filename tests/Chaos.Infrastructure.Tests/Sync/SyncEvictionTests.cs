@@ -46,6 +46,10 @@ public sealed class SyncEvictionTests
     {
         using var host = await DataHost.StartAsync();
         var (space, shared, personal) = await SeedAsync(host);
+        await ExecuteAsync(host, """
+            INSERT INTO AttachmentLocalState (Sha256,State,UpdatedAtUtc) VALUES (printf('%064d',1),0,'now');
+            INSERT INTO AttachmentStreamState (StreamId,Sha256,Remote) VALUES ($space,printf('%064d',1),1), ('account',printf('%064d',1),1);
+            """, ("$space", space));
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM SyncOutbox WHERE Kind='task' AND EntityKey='{shared}';")).IsGreaterThan(0L);
         var outboxBefore = await CountAsync(host, "SELECT count(*) FROM SyncOutbox;");
         await ExecuteAsync(host, "UPDATE SyncStreams SET State='evicting' WHERE StreamId=$id;", ("$id", space));
@@ -64,6 +68,8 @@ public sealed class SyncEvictionTests
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM SyncClocks WHERE Kind='task' AND EntityKey='{shared}';")).IsEqualTo(0L);
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM SyncOutbox WHERE EntityKey='{shared}';")).IsEqualTo(0L);
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM SyncStreams WHERE StreamId='{space}';")).IsEqualTo(0L);
+        await Assert.That(await CountAsync(host, "SELECT count(*) FROM AttachmentStreamState WHERE StreamId='account';")).IsEqualTo(1L);
+        await Assert.That(await CountAsync(host, $"SELECT count(*) FROM AttachmentStreamState WHERE StreamId='{space}';")).IsEqualTo(0L);
         // Personal work and the overlay stay: the server tombstones overlays for every device of the account.
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM Tasks WHERE Id='{personal}';")).IsEqualTo(1L);
         await Assert.That(await CountAsync(host, $"SELECT count(*) FROM DayPlanItems WHERE TaskId='{shared}';")).IsEqualTo(1L);

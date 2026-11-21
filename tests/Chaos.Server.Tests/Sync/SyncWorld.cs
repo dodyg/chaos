@@ -114,7 +114,7 @@ internal sealed class SyncDevice : IAsyncDisposable
             // The join flow records the account; protocol 2 discovery checks the streams against it.
             await using var db = ServerDatabase.Open(server.ConnectionString);
             var account = await db.Accounts.Where(a => a.PrimaryEmail == email).Select(a => a.Id).SingleAsync();
-            await device.ExecuteAsync($"UPDATE SyncState SET Enabled = 1, AccountId = '{account:D}' WHERE Id = 1;");
+            await device.ExecuteAsync($"UPDATE SyncState SET Enabled = 1, AccountId = '{account:D}', ProfileBinding = (SELECT Id FROM Profiles WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc LIMIT 1) WHERE Id = 1;");
         }
 
         return device;

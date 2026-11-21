@@ -26,21 +26,24 @@ public sealed record RemoteBlob(string State, long Size)
 /// <summary>The answer to starting an upload: the finished blob's state (nothing to send), or the part layout and the parts the service already holds.</summary>
 public sealed record RemoteUpload(string? BlobState, int PartSize, int PartCount, IReadOnlyList<int> Received);
 
+/// <summary>The stream and attachment whose upload is being authorized.</summary>
+public sealed record BlobUploadTarget(string StreamId, string AttachmentId);
+
 /// <summary>The service's blob endpoints (PLAN2 §9.2): resumable parts up, ranged bytes down. Implemented by the service client.</summary>
 public interface IBlobTransport
 {
     /// <summary>The blob's state, or null when the account does not have it.</summary>
-    Task<RemoteBlob?> HeadAsync(string sha256, CancellationToken ct);
+    Task<RemoteBlob?> HeadAsync(string sha256, BlobUploadTarget target, CancellationToken ct);
 
-    Task<RemoteUpload> StartUploadAsync(string sha256, long size, CancellationToken ct);
+    Task<RemoteUpload> StartUploadAsync(string sha256, long size, BlobUploadTarget target, CancellationToken ct);
 
-    Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, CancellationToken ct);
+    Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, BlobUploadTarget target, CancellationToken ct);
 
     /// <summary>Asks the service to verify, scan and store. Returns the blob's state; throws <see cref="BlobTransferException"/> on a hash mismatch or quota.</summary>
-    Task<RemoteBlob> CompleteUploadAsync(string sha256, CancellationToken ct);
+    Task<RemoteBlob> CompleteUploadAsync(string sha256, BlobUploadTarget target, CancellationToken ct);
 
     /// <summary>Opens the bytes from <paramref name="offset"/>. Throws <see cref="BlobTransferException"/> with <see cref="BlobFailureKind.NotFound"/> or <see cref="BlobFailureKind.Blocked"/>.</summary>
-    Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct);
+    Task<Stream> OpenDownloadAsync(string sha256, long offset, string? streamId, CancellationToken ct);
 }
 
 /// <summary>How an attachment's bytes stand on this device, beyond present or missing (PLAN2 §9.2).</summary>

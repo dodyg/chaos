@@ -1,11 +1,15 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Attachments;
+using Chaos.Application.Contracts;
+using Chaos.Application.History;
 using Chaos.Application.Containers;
 using Chaos.Application.Planning;
 using Chaos.Application.Spaces;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sync;
+using Chaos.Infrastructure.Attachments;
 using Chaos.Server.Tests.Sync;
 using Microsoft.EntityFrameworkCore;
 
@@ -162,6 +166,71 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
         await Assert.That(joined.Role).IsEqualTo(2);
         await world.SettleAsync();
         return (space.SpaceId, list, task);
+    }
+
+    [Test]
+    public async Task ViewerDiaryAttachment_UploadsFromDesktopAndReachesOwner()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("diary-file-owner@example.com", "Ada");
+        var b = await world.AddPersonAsync("diary-file-viewer@example.com", "Bo");
+        var (space, _, task) = await ShareAsync(world, a, b);
+        var role = await a.Desktop.Client.CallAsync(HttpMethod.Patch, $"v2/spaces/{space}/members/{b.ProfileId:D}",
+            JsonSerializer.Serialize(new { role = 3 }), CancellationToken.None);
+        await Assert.That(role.Ok).IsTrue();
+        b.Desktop.Engine.RequestDiscovery();
+        await world.SettleAsync();
+        var diary = (await new DiaryCommands(b.Desktop.Store, b.Desktop.Ids, b.Desktop.Clock).AddAsync(new(Op(), task, "An update", null))).Entry;
+        var aFiles = AttachmentFileStoreFactory.Create(a.Desktop.Storage.Options);
+        var bFiles = AttachmentFileStoreFactory.Create(b.Desktop.Storage.Options);
+        using var aTransfer = new AttachmentTransfer(a.Desktop.Store, aFiles, a.Desktop.Client, a.Desktop.Clock);
+        using var bTransfer = new AttachmentTransfer(b.Desktop.Store, bFiles, b.Desktop.Client, b.Desktop.Clock);
+        var commands = new AttachmentCommands(b.Desktop.Store, bFiles, b.Desktop.Ids, b.Desktop.Clock,
+            new DirectoryUploadStaging(b.Desktop.Storage.Options.UploadsDirectory), availability: bTransfer);
+        var bytes = System.Text.Encoding.UTF8.GetBytes("Viewer's attached note");
+        var upload = await commands.BeginAsync(new BeginAttachmentUploadCommand(AttachmentOwnerKind.Diary, diary.Id, "note.txt", bytes.Length));
+        await commands.ChunkAsync(upload.UploadId, 0, bytes);
+        var attachment = (await commands.CommitAsync(new CommitAttachmentCommand(Op(), upload.UploadId))).Attachment;
+
+        await world.SettleAsync();
+        await Assert.That((await bTransfer.RunOnceAsync(CancellationToken.None)).Uploaded).IsEqualTo(1);
+        await world.SettleAsync();
+        await Assert.That((await aTransfer.RunOnceAsync(CancellationToken.None)).Downloaded).IsEqualTo(1);
+        await using var body = await aFiles.OpenReadAsync(attachment.Sha256, 0, CancellationToken.None);
+        using var copy = new MemoryStream();
+        await body!.CopyToAsync(copy);
+        await Assert.That(copy.ToArray().AsSpan().SequenceEqual(bytes)).IsTrue();
+    }
+
+    [Test]
+    public async Task SharedAttachment_UploadedByOneDesktop_DownloadsOnAnotherAccount()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("attachment-a@example.com", "Ada");
+        var b = await world.AddPersonAsync("attachment-b@example.com", "Bo");
+        var (_, _, task) = await ShareAsync(world, a, b);
+        var aFiles = AttachmentFileStoreFactory.Create(a.Desktop.Storage.Options);
+        var bFiles = AttachmentFileStoreFactory.Create(b.Desktop.Storage.Options);
+        using var aTransfer = new AttachmentTransfer(a.Desktop.Store, aFiles, a.Desktop.Client, a.Desktop.Clock);
+        using var bTransfer = new AttachmentTransfer(b.Desktop.Store, bFiles, b.Desktop.Client, b.Desktop.Clock);
+        var commands = new AttachmentCommands(a.Desktop.Store, aFiles, a.Desktop.Ids, a.Desktop.Clock,
+            new DirectoryUploadStaging(a.Desktop.Storage.Options.UploadsDirectory), availability: aTransfer);
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGPQCFigEbCAAUIBABzOBGFvelvCAAAAAElFTkSuQmCC");
+        var upload = await commands.BeginAsync(new BeginAttachmentUploadCommand(AttachmentOwnerKind.Task, task, "image.png", bytes.Length));
+        await commands.ChunkAsync(upload.UploadId, 0, bytes);
+        var attachment = (await commands.CommitAsync(new CommitAttachmentCommand(Op(), upload.UploadId))).Attachment;
+        await Assert.That(attachment.MediaType).IsEqualTo("image/png");
+
+        await world.SettleAsync();
+        var sent = await aTransfer.RunOnceAsync(CancellationToken.None);
+        await Assert.That(sent.Uploaded).IsEqualTo(1);
+        await world.SettleAsync();
+        var received = await bTransfer.RunOnceAsync(CancellationToken.None);
+        await Assert.That(received.Downloaded).IsEqualTo(1);
+        await using var body = await bFiles.OpenReadAsync(attachment.Sha256, 0, CancellationToken.None);
+        using var copy = new MemoryStream();
+        await body!.CopyToAsync(copy);
+        await Assert.That(copy.ToArray().AsSpan().SequenceEqual(bytes)).IsTrue();
     }
 
     [Test]

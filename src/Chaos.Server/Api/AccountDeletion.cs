@@ -27,10 +27,12 @@ public sealed class AccountDeletion(
             return new(false, []);
         }
 
+        var discardedUploads = new List<(Guid AccountId, Guid StreamId, string Sha256)>();
         var strategy = db.Database.CreateExecutionStrategy();
         var transactionBlock = await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
+            discardedUploads.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
             var memberSpaceIds = await db.SpaceMembers.AsNoTracking().Where(m => m.AccountId == accountId)
                 .Select(m => m.SpaceId).Distinct().Order().ToListAsync(ct);
@@ -78,7 +80,20 @@ public sealed class AccountDeletion(
                     : [];
                 if (member.RemovedAt is null && peers.Count == 0)
                 {
+                    var uploads = await db.BlobUploads.AsNoTracking().Where(u => u.StreamId == member.SpaceId)
+                        .Select(u => new { u.AccountId, u.StreamId, u.Sha256 }).ToListAsync(ct);
+                    discardedUploads.AddRange(uploads.Select(u => (u.AccountId, u.StreamId, u.Sha256)));
                     await db.SyncStreams.Where(s => s.Id == member.SpaceId).ExecuteDeleteAsync(ct);
+                    // The database cascade removed these rows. Do not let EF's tracked relationship fix-up
+                    // issue updates for member rows that no longer exist when the account is removed.
+                    foreach (var tracked in db.ChangeTracker.Entries<SpaceMember>().Where(e => e.Entity.SpaceId == member.SpaceId).ToList())
+                    {
+                        tracked.State = EntityState.Detached;
+                    }
+                    foreach (var tracked in db.ChangeTracker.Entries<SyncStream>().Where(e => e.Entity.Id == member.SpaceId).ToList())
+                    {
+                        tracked.State = EntityState.Detached;
+                    }
                     continue;
                 }
 
@@ -136,6 +151,10 @@ public sealed class AccountDeletion(
             return new(false, transactionBlock.Distinct(StringComparer.Ordinal).Order().ToList());
         }
         await blobs.DeleteAccountObjectsAsync(accountId, ct);
+        foreach (var upload in discardedUploads)
+        {
+            await blobs.DeleteUploadPartsAsync(upload.AccountId, upload.StreamId, upload.Sha256, ct);
+        }
         return new(true, []);
     }
 

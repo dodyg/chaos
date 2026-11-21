@@ -621,6 +621,7 @@ public static class SyncCatalog
         new SyncTable("RecurrenceSeriesRevisions", "recurrence_series_revision", SyncMode.LocalOnly, ["SeriesId", "Revision"], ApplyOrder: 510), // per-device revision numbering
         new SyncTable("PageRevisions", "page_revision", SyncMode.LocalOnly, ["PageId", "Number"], ApplyOrder: 511), // per-device version history; sync.merged writes a local revision (§7.7)
         new SyncTable("AttachmentLocalState", "attachment_local_state", SyncMode.LocalOnly, ["Sha256"], ApplyOrder: 539), // whether this device holds the bytes (PLAN2 §9.1)
+        new SyncTable("AttachmentStreamState", "attachment_stream_state", SyncMode.LocalOnly, ["StreamId", "Sha256"], ApplyOrder: 542), // remote transfer status, per stream and device
         new SyncTable("OfflineContainers", "offline_container", SyncMode.LocalOnly, ["ContainerId"], ApplyOrder: 541), // lists and projects this device keeps fully offline (PLAN2 §9.2)
         new SyncTable("GitHubSyncRuns", "github_sync_run", SyncMode.LocalOnly, ["Id"], ApplyOrder: 512), // runner diagnostics (§7.11)
         new SyncTable("GitHubIssueWrites", "github_issue_write", SyncMode.LocalOnly, ["IssueLinkId"], ApplyOrder: 513), // only the runner device queues GitHub writes (§7.11)

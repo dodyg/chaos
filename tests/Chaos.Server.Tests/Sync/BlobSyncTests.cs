@@ -24,11 +24,11 @@ internal sealed class CountingTransport(IBlobTransport inner) : IBlobTransport
     /// <summary>The upload loses its connection when this many parts have gone (then the setting resets).</summary>
     public int? DropAfterParts { get; set; }
 
-    public Task<RemoteBlob?> HeadAsync(string sha256, CancellationToken ct) => inner.HeadAsync(sha256, ct);
+    public Task<RemoteBlob?> HeadAsync(string sha256, BlobUploadTarget target, CancellationToken ct) => inner.HeadAsync(sha256, target, ct);
 
-    public Task<RemoteUpload> StartUploadAsync(string sha256, long size, CancellationToken ct) => inner.StartUploadAsync(sha256, size, ct);
+    public Task<RemoteUpload> StartUploadAsync(string sha256, long size, BlobUploadTarget target, CancellationToken ct) => inner.StartUploadAsync(sha256, size, target, ct);
 
-    public async Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    public async Task PutPartAsync(string sha256, int index, ReadOnlyMemory<byte> bytes, BlobUploadTarget target, CancellationToken ct)
     {
         if (DropAfterParts is { } limit && PartsSent >= limit)
         {
@@ -36,16 +36,16 @@ internal sealed class CountingTransport(IBlobTransport inner) : IBlobTransport
             throw new ChaosServiceException(ServiceFailure.Offline, "The connection was lost.");
         }
 
-        await inner.PutPartAsync(sha256, index, bytes, ct);
+        await inner.PutPartAsync(sha256, index, bytes, target, ct);
         PartsSent++;
     }
 
-    public Task<RemoteBlob> CompleteUploadAsync(string sha256, CancellationToken ct) => inner.CompleteUploadAsync(sha256, ct);
+    public Task<RemoteBlob> CompleteUploadAsync(string sha256, BlobUploadTarget target, CancellationToken ct) => inner.CompleteUploadAsync(sha256, target, ct);
 
-    public Task<Stream> OpenDownloadAsync(string sha256, long offset, CancellationToken ct)
+    public Task<Stream> OpenDownloadAsync(string sha256, long offset, string? streamId, CancellationToken ct)
     {
         Downloads++;
-        return inner.OpenDownloadAsync(sha256, offset, ct);
+        return inner.OpenDownloadAsync(sha256, offset, streamId, ct);
     }
 }
 

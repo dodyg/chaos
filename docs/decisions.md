@@ -1162,3 +1162,29 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - My Day accepts tasks from shared spaces this device holds, because the day item is a personal overlay.
 - Restoring a JSON archive turns shared spaces into Personal copies with new IDs and no membership (see `docs/data-transfer.md`). IDs are rewritten in every TEXT column of every ordinary table; IDs inside JSON payloads (undo entries, saved filters) are not rewritten.
 - Released (protocol 1) desktops on an account that uses sharing (owner chose option C). A protocol 1 pull receives each `moved` row as a `purge` with the same change ID and sequence, so the moved work leaves that desktop and it stays personal-only. A protocol 1 push to moved work, or to anything that routes to a space stream, is refused with `schema-too-old`, which the released build shows as "Update Chaos to keep syncing." The released build then stops pushing for the rest of that session; its pulls continue.
+
+## 2026-11-20 (PLAN3 E9 shared attachment quota)
+
+- The owner confirmed the plan's default: each shared attachment blob counts against the uploader's quota.
+
+## 2026-11-21 (Q6 viewer diary attachments)
+
+- A Viewer may write attachment metadata only for their own live diary entry. Existing attachment ownership cannot be changed by the Viewer. An explicitly scoped Viewer upload supplies the attachment ID; each request checks the live membership, stored diary author, current hash and server-recorded custodian. Stream-keyed storage and desktop routing remain Q6 work.
+
+## 2026-11-21 (Q6 attachment downloads)
+
+- Desktop downloads select stream IDs from live local attachments: Personal uses the account stream and shared attachments use their space stream. When a hash is attached in several streams, a 404 advances to the next stream; other errors retain their existing behavior. The device-local bytes are still cached by hash. Upload state and storage remain account-scoped pending S008.
+
+## 2026-11-21 (Q6 device-local stream state)
+
+- Client migration 039 adds `AttachmentStreamState` keyed by stream and hash. The legacy hash-only remote status may have come from a different stream, so migration seeds account-stream rows as unknown and does not infer shared-stream status. Local byte state remains keyed by hash. Account disconnect clears these rows; space eviction deletes that space's rows. The upload engine does not yet use the new table; S008 and stream-aware uploads remain unfinished. Later provisional client migrations move up one number.
+
+## 2026-11-21 (Q6 upload-session migration)
+
+- Split the provisional S008 into `S008_StreamUploadSessions` and `S009_StreamBlobs` so each data transformation can be reviewed and tested without editing an applied migration. Agent migration moves to S010. S008 rekeys upload sessions and parts by stream and hash, preserves existing Personal upload part paths, and restricts each session to its uploader. Shared-upload paths remain under the uploader's part prefix, so account deletion can remove them. Finished blobs remain account-keyed until S009.
+
+## 2026-11-21 (Q6 stream blobs and object lifecycle)
+
+- S008 keys upload sessions and parts by stream and hash, retaining the uploader for ownership and quota. S009 keys blob references by stream and hash and introduces separately owned objects. The migration retains Personal objects and copies shared references only when recorded live custody identifies them. Moving a blob adds a reference to the same object; its uploader is charged once. Shared references survive the uploader's account deletion.
+- S010 and S011 add a durable deletion queue with a deadline. Removing the final reference releases quota and queues the object in the same transaction; failed object-store deletions are retried. A staged write is queued before storage begins and removed from the queue when its blob is committed. Sweep and purge serialize reference removal with stream changes.
+- Desktop uploads select the attachment's stream and keep remote upload status per stream and hash. Viewer uploads require the Viewer's own live diary attachment; the service checks membership again when committing an upload. New attachments inherit their parent entity's space. Q17's provisional server migration moves to S012.

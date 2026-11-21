@@ -1637,9 +1637,27 @@ and remove all behave as 7.6 and 7.7 say.
 **Exit:** a person who never used Chaos can be invited by email, join from the link on the web or the desktop, and
 see and edit the shared list according to their role. Native check: two installed desktops (record it).
 
-### [ ] Q6: Shared attachments
+### [x] Q6: Shared attachments
 
-**Depends on:** Q4. **Server migration:** `S008_StreamBlobs`. **Read:** PLAN2 §9.2, E9.
+**Progress note 2026-11-20.** Added a server regression test proving that a shared attachment blocked by the malware scanner reports its blocked state and cannot be downloaded by either the uploader or another member; the focused PostgreSQL test passed 1/1. Slopwatch found 0 issues. Desktop frontend tests passed 302/302; web tests passed 16/16 and web lint exited 0 with its existing hook-dependency warning. The full `eng/verify.ps1` gate stopped at the Release build because a running Chaos Desktop process held its output DLLs; no gate test counts are claimed. S008, stream-scoped blob and upload storage, authorization, moves, cleanup, client transfers and the remaining Q6 acceptance tests are not implemented. Current account deletion deletes the uploader's objects, and local transfer state is keyed by hash alone, so the existing Q3 shared-read path does not satisfy Q6. Smallest next action: design and implement S008's object ownership and stream references with a seeded upgrade test, then update the transfer and cleanup paths together.
+
+**Progress note 2026-11-20 (continued).** The owner confirmed E9: each shared blob counts against its uploader's quota. Added explicit stream-scoped HEAD and GET reads using live membership and the existing custody bindings, with 404 for a non-member or a different stream. Upload verification now checks the uploader's own copy, so another member's readable blob cannot falsely satisfy it. Two focused PostgreSQL regressions passed 2/2 across separate runs; strict Slopwatch found 0 issues. The Release build passed. A full gate run under concurrent load encountered PostgreSQL timeouts; a second run with `DOTNET_PROCESSOR_COUNT=2` passed Application 125/125 and Domain 273/273, but Desktop had a scheduler timeout (97/98) and the still-running server and infrastructure suites were interrupted; no complete gate counts are claimed. Desktop frontend tests passed 302/302; web tests passed 16/16 and web lint exited 0 with its existing hook-dependency warning. S008, stream-scoped uploads, role checks on uploads, moves and object lifecycle, stream-aware client transfers, and Q6's end-to-end evidence remain undone. Smallest next action: implement S008's object ownership and stream references with a seeded upgrade test; preserve shared objects when the uploader's account is deleted.
+
+**Progress note 2026-11-21 (upload checks).** Explicitly scoped upload start, part and completion requests now check live Owner or Editor membership; a PostgreSQL regression passed 1/1 for editor, viewer and non-member calls. Viewer diary attachments still need attachment-specific authorization, and the sync permission rules currently reject viewer-written attachment metadata. Upload sessions and bytes are still keyed by account, so these checks do not complete stream-scoped uploads. The full `eng/verify.ps1` run with PostgreSQL and `DOTNET_PROCESSOR_COUNT=4` passed: Domain 273, Application 125, Infrastructure 735, Sync 30, Desktop 98 and Server 187 (1,448 total); Slopwatch found 0 issues. Desktop frontend tests passed 302/302, web tests passed 16/16, and web lint exited 0 with its existing hook-dependency warning. S008, stream-scoped session storage, viewer diary authorization, moves, object cleanup, client transfers and Q6 end-to-end checks remain. Smallest next action: implement S008 with a seeded upgrade and object lifetime tests before changing upload storage and account deletion.
+
+**Progress note 2026-11-21 (viewer diary attachments).** A Viewer can now push metadata and explicitly upload bytes for an attachment to their own live diary entry; each upload request supplies the attachment ID and checks the stored diary author, hash and custody. Existing ownership cannot be rewritten, and another Viewer cannot edit or upload it. A focused PostgreSQL test passed 1/1. The full `eng/verify.ps1` gate passed with PostgreSQL: Domain 273, Application 125, Infrastructure 735, Sync 30, Desktop 98 and Server 188 (1,449 total); Slopwatch found 0 issues. Desktop frontend tests passed 302/302, web tests passed 16/16 and web lint exited 0 with its existing hook-dependency warning. S008, stream-keyed upload sessions and blobs, object lifetime and cleanup, desktop stream routing and the remaining end-to-end checks remain unimplemented; the current bytes are still account-scoped. Smallest next action: implement S008 and its seeded upgrade and object lifetime tests, including preserving shared bytes across uploader deletion.
+
+**Progress note 2026-11-21 (download routing).** Desktop downloads now pass the attachment's account or space stream and try the next stream on 404 when the same hash is attached in more than one. A file-backed SQLite test covers that case; all three focused transfer tests and a PostgreSQL two-device transfer test passed. The full `eng/verify.ps1` gate passed: Domain 273, Application 125, Infrastructure 736, Sync 30, Desktop 98 and Server 188 (1,450 total), with 0 Slopwatch issues. Desktop frontend tests passed 302/302, web tests passed 16/16, and web lint exited 0 with its existing hook-dependency warning. S008, stream-keyed upload sessions and blobs, per-stream upload state, object lifetime and cleanup, and the shared cross-account end-to-end tests remain. Smallest next action: implement S008 and seeded upgrade and object lifetime tests, including account deletion.
+
+**Progress note 2026-11-21 (viewer restore).** A Viewer can now restore an attachment on their own live diary entry after deleting it; another Viewer is refused. The focused PostgreSQL test passed 1/1. The full `eng/verify.ps1` gate passed with PostgreSQL: Domain 273, Application 125, Infrastructure 736, Sync 30, Desktop 98 and Server 188 (1,450 total), with 0 Slopwatch issues. Desktop frontend tests passed 302/302, web tests passed 16/16 and web lint exited 0 with its existing hook-dependency warning. S008, stream-keyed uploads and blobs, per-stream upload state, shared-object lifetime and cleanup, and the remaining end-to-end checks remain unimplemented. Smallest next action: implement S008 and seeded upgrade and object lifetime tests, including account deletion.
+
+**Progress note 2026-11-21 (local stream-state migration).** Added client migration 039 and the device-local `AttachmentStreamState` table, classified and excluded from archives. Existing ambiguous hash-only remote state is rechecked rather than assumed to apply to a particular stream. Account disconnect clears the new rows; space eviction clears that space's rows, and removing local hash state cascades to them. The upload engine is not yet wired to the table. Focused upgrade, catalog, eviction and account-reset checks passed. The first full gate encountered a server timeout on an older PostgreSQL instance with 7,262 accumulated test databases; it was interrupted. The full gate then passed on a fresh `wslc` PostgreSQL instance: Domain 273, Application 125, Infrastructure 738, Sync 30, Desktop 98 and Server 188 (1,452 total), with 0 Slopwatch issues. Desktop frontend tests passed 302/302, web tests passed 16/16, and web lint exited 0 with its existing hook-dependency warning. S008, stream-keyed server uploads and blobs, use of the local stream state, object lifetime and cleanup, and shared end-to-end checks remain unimplemented. Smallest next action: implement S008 with a data-preserving seeded upgrade and object lifetime tests, then wire the upload engine to the new local state.
+
+**Progress note 2026-11-21 (completed).** S008–S011 migrate upload sessions and blob references to streams, preserve seeded legacy uploads and shared custody, and queue object deletion durably. Stream authorization includes a Viewer's own diary attachments; uploads recheck membership at commit. Shared object references survive uploader deletion and charge the uploader once per object. Desktop migration 039 and transfer wiring track upload state per stream; new attachments inherit their parent's space. A two-account desktop integration test transfers and checks the exact bytes of a shared PNG, and a frontend test covers rendering attached images; this is automated evidence, not a native interactive check. Regression tests cover permissions, moves, malware blocking, concurrent quota, interrupted writes, cleanup and account deletion.
+
+The final `eng/verify.ps1` gate passed on fresh wslc PostgreSQL with `DOTNET_PROCESSOR_COUNT=4` and `TUNIT_MAX_PARALLEL_TESTS=2`: Domain 273, Application 125, Infrastructure 739, Sync 30, Desktop 98 and Server 201 (1,466 total); Slopwatch found 0 issues. A previous combined run failed the 1,000-task sync stress test under load and its fallback exhausted Windows sockets; the isolated server suite then passed 201/201 before the clean gate passed. Desktop frontend tests passed 302/302, web tests 16/16, and web lint exited 0 with its existing hook-dependency warning.
+
+**Depends on:** Q4. **Server migrations:** `S008_StreamUploadSessions`, `S009_StreamBlobs`, `S010_BlobDeletionQueue`, `S011_BlobDeletionDeadline`. **Client migration:** `039_attachment_stream_state.sql`. **Read:** PLAN2 §9.2, E9.
 
 1. **Re-key `Blobs`** and upload sessions by `(StreamId, Sha256)`. Backfill `StreamId = AccountId`. Keep the
    uploader's `AccountId` for quota (E9).
@@ -1661,7 +1679,7 @@ see and edit the shared list according to their role. Native check: two installe
 
 ### [ ] Q7: Assignees, Assigned to me, people in quick add, views and search
 
-**Depends on:** Q5. **Migration:** `039_assignees.sql` (`TaskAssignees`, `Tasks.AssignMode`, `BoardSettings` rebuild for the assignee grouping). **Read:** 9.3.
+**Depends on:** Q5. **Migration:** `040_assignees.sql` (`TaskAssignees`, `Tasks.AssignMode`, `BoardSettings` rebuild for the assignee grouping). **Read:** 9.3.
 
 1. Domain `TaskAssignment`, with the *each* and *anyone* rules and the deterministic completion recompute, which
    the applier also calls.
@@ -1687,7 +1705,7 @@ tasks.
 
 ### [ ] Q8: Comments, mentions, notices and shared-space notifications
 
-**Depends on:** Q7. **Migration:** `040_collaboration_notices.sql` (`CollaborationNotices`,
+**Depends on:** Q7. **Migration:** `041_collaboration_notices.sql` (`CollaborationNotices`,
 `SpaceNotificationSettings`). **Read:** 9.4, 9.5.
 
 1. Diary author display, owner delete with the placeholder, and the server Author rule (from Q3) surfaced in the
@@ -1711,7 +1729,7 @@ nobody else.
 
 ### [ ] Q9: A space's own states and shared tags
 
-**Depends on:** Q7. **Migration:** `041_space_states_tags.sql` (`SpaceStates`, `Tasks.CustomStateId`, `Tags`
+**Depends on:** Q7. **Migration:** `042_space_states_tags.sql` (`SpaceStates`, `Tasks.CustomStateId`, `Tags`
 rebuild). **Read:** 9.6, 9.7.
 
 1. States: owner settings UI, picker in the task editor, board columns, delete-moves-to-base, view filter by state.
@@ -1736,7 +1754,7 @@ rebuild). **Read:** 9.6, 9.7.
 
 ### [ ] Q10: Shared boards, calendars and custom views
 
-**Depends on:** Q9. **Migration:** `042_view_alert_settings.sql`. **Read:** 9.8.
+**Depends on:** Q9. **Migration:** `043_view_alert_settings.sql`. **Read:** 9.8.
 
 1. Live board refresh from other people's changes. A test with two devices: B moves a card and A's open board
    updates without focus.
@@ -1753,7 +1771,7 @@ rebuild). **Read:** 9.6, 9.7.
 
 ### [ ] Q11: Shared pads and pages (live, merged)
 
-**Depends on:** Q8 and E2. **Migration:** `043_text_merge.sql` (`TextBase`). **Read:** 9.9.
+**Depends on:** Q8 and E2. **Migration:** `044_text_merge.sql` (`TextBase`). **Read:** 9.9.
 
 1. `Chaos.Domain/Text/Diff3.cs` from the Q0 spike, with the 20 fixture triples and property tests: merging a text
    with itself is identity, and a one-sided change wins.
@@ -1775,7 +1793,7 @@ nothing is lost.
 
 ### [ ] Q12: Rotating repeating tasks
 
-**Depends on:** Q7. **Migration:** `044_rotation.sql`. **Read:** 9.10.
+**Depends on:** Q7. **Migration:** `045_rotation.sql`. **Read:** 9.10.
 
 1. The rotation group, the occurrence `RotationIndex`, assignee at materialization, skipping removed members, and
    the editor UI ("Next: …").
@@ -1789,7 +1807,7 @@ nothing is lost.
 
 ### [ ] Q13: Delegation, follow-ups and nudges
 
-**Depends on:** Q8. **Migration:** `045_delegation.sql` (`TaskDelegations`, `Nudges`, `FollowUps.DelegationId`).
+**Depends on:** Q8. **Migration:** `046_delegation.sql` (`TaskDelegations`, `Nudges`, `FollowUps.DelegationId`).
 **Read:** 9.11.
 
 1. Domain `DelegationState` with the full transition table. Server rules for who may write each transition.
@@ -1817,7 +1835,7 @@ the diary.
 
 ### [ ] Q14: Space and project summaries, and standups
 
-**Depends on:** Q13. **Migration:** `046_space_updates.sql` (`SpaceUpdates`). **Read:** 9.12.
+**Depends on:** Q13. **Migration:** `047_space_updates.sql` (`SpaceUpdates`). **Read:** 9.12.
 
 1. The spaces section in `SummaryFactsBuilder`, the project progress changes, and the Summaries page rendering.
 2. **Post as standup**: editor, post, the Overview list, edit and delete by the author, delete by an owner.
@@ -1832,7 +1850,7 @@ standup after editing it.
 
 ### [ ] Q15: GitHub in shared spaces and the missing GitHub fields
 
-**Depends on:** Q9. **Migration:** `047_github_sharing.sql` (`GitHubPullRequestLinks`, `assignee_intent` as a set,
+**Depends on:** Q9. **Migration:** `048_github_sharing.sql` (`GitHubPullRequestLinks`, `assignee_intent` as a set,
 baseline author). **Read:** section 10, `GITHUB.md` §1–§3, PLAN2 §7.11.
 
 1. Owner-only management (UI plus the server write roles), the runner restricted to owners, and the runner cleared
@@ -1856,7 +1874,7 @@ connection.
 
 ### [ ] Q16: Google Calendar time blocking
 
-**Depends on:** Q7 (for "assigned to me" on shared tasks). **Migration:** `048_time_blocking.sql`. **Read:** section
+**Depends on:** Q7 (for "assigned to me" on shared tasks). **Migration:** `049_time_blocking.sql`. **Read:** section
 11.
 
 1. The incremental consent with `calendar.app.created`, creating the calendar, the settings UI (account, titles or
@@ -1878,7 +1896,7 @@ the task.
 
 ### [ ] Q17: Agent foundation (identity, claims, Ready for agent, limits, revert)
 
-**Depends on:** Q8. **Server migration:** `S009_Agents`. **Client migration:** `049_agents.sql` (task `claim` and
+**Depends on:** Q8. **Server migration:** `S012_Agents`. **Client migration:** `050_agents.sql` (task `claim` and
 `agent` groups, `LocalAgents`, `LocalAgentAccess`, `LocalAgentTokens`, `TaskProposals`, and a rebuild of
 `ActivityLog` that adds `'agent'` to its `Source` CHECK from `030_activity_log.sql`). **Read:** section 12, E5, E8.
 
@@ -2127,23 +2145,27 @@ If a number is taken when you start, use the next free number and update this ta
 | Number | Package | Contents |
 | --- | --- | --- |
 | 038 | Q4 | Spaces rebuild, DiaryEntries rebuild, SpaceMembers, SyncStreams |
-| 039 | Q7 | TaskAssignees, Tasks.AssignMode |
-| 040 | Q8 | CollaborationNotices, SpaceNotificationSettings |
-| 041 | Q9 | SpaceStates, Tasks.CustomStateId, Tags rebuild |
-| 042 | Q10 | View alert settings |
-| 043 | Q11 | TextBase |
-| 044 | Q12 | Rotation |
-| 045 | Q13 | TaskDelegations, Nudges, FollowUps.DelegationId |
-| 046 | Q14 | SpaceUpdates |
-| 047 | Q15 | GitHub pull request links, assignee intent set, author |
-| 048 | Q16 | Time blocking settings and events |
-| 049 | Q17 | Claim and agent groups, local agents, access, tokens, proposals |
+| 039 | Q6 | Device-local attachment state per stream |
+| 040 | Q7 | TaskAssignees, Tasks.AssignMode |
+| 041 | Q8 | CollaborationNotices, SpaceNotificationSettings |
+| 042 | Q9 | SpaceStates, Tasks.CustomStateId, Tags rebuild |
+| 043 | Q10 | View alert settings |
+| 044 | Q11 | TextBase |
+| 045 | Q12 | Rotation |
+| 046 | Q13 | TaskDelegations, Nudges, FollowUps.DelegationId |
+| 047 | Q14 | SpaceUpdates |
+| 048 | Q15 | GitHub pull request links, assignee intent set, author |
+| 049 | Q16 | Time blocking settings and events |
+| 050 | Q17 | Claim and agent groups, local agents, access, tokens, proposals |
 | S004 | (PLAN2 P18) | Reserved: calendar feed tokens |
 | S005 | Q2 | Streams |
 | S006 | Q3 | Spaces, members, invites |
 | S007 | Q3 | Attachment blob bindings (custody fix, decision 2026-11-20) |
-| S008 | Q6 | Stream blobs |
-| S009 | Q17 | Agents |
+| S008 | Q6 | Stream-keyed upload sessions and parts |
+| S009 | Q6 | Stream blobs and shared object lifecycle |
+| S010 | Q6 | Durable object-deletion queue |
+| S011 | Q6 | Deadline for staged object cleanup |
+| S012 | Q17 | Agents |
 
 ## Appendix B: Dependencies to resolve and pin
 

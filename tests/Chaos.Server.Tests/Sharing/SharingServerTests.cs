@@ -756,7 +756,11 @@ public sealed class SharingServerTests(PostgresServer postgres)
             TaskCreationOptions.RunContinuationsAsynchronously);
         var broadcaster = server.Factory.Services.GetRequiredService<SyncBroadcaster>();
         using var subscription = broadcaster.SubscribeStreams(member.AccountId,
-            (stream, seq) => heard.TrySetResult((stream, seq)));
+            (stream, seq) =>
+            {
+                // Membership notifications can still be in flight; wait for the notification sent below.
+                if (stream == space && seq == 77) heard.TrySetResult((stream, seq));
+            });
         await using (var db = ServerDatabase.Open(server.ConnectionString))
         {
             var payload = SyncNotificationListener.Payload(space, 77);

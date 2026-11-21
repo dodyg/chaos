@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using Chaos.Server.Auth;
 using Chaos.Server.Data;
+using Chaos.Server.Sync;
+using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -41,7 +43,11 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 
     public static string ObjectKey(Guid accountId, string sha256) => $"blobs/{accountId:N}/{sha256}/{Guid.NewGuid():N}";
 
-    public static string PartKey(Guid accountId, string sha256, int index) => $"parts/{accountId:N}/{sha256}/{index}";
+    private static string PartsPrefix(Guid accountId, Guid streamId, string sha256) => streamId == accountId
+        ? $"parts/{accountId:N}/{sha256}/"
+        : $"parts/{accountId:N}/stream-{streamId:N}/{sha256}/";
+
+    public static string PartKey(Guid accountId, Guid streamId, string sha256, int index) => $"{PartsPrefix(accountId, streamId, sha256)}{index}";
 
     public static string AccountPrefix(Guid accountId) => $"blobs/{accountId:N}/";
 
@@ -50,46 +56,64 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
     public static bool IsHash(string? value) => value is { Length: 64 } && value.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
 
     public Task<BlobRow?> FindAsync(Guid accountId, string sha256, CancellationToken ct) =>
-        db.Blobs.AsNoTracking().FirstOrDefaultAsync(b => b.AccountId == accountId && b.Sha256 == sha256, ct);
+        FindInStreamAsync(accountId, sha256, ct);
 
-    /// <summary>
-    /// The caller's own blob, or the blob of the account bound as custodian of a live attachment in a space the caller
-    /// can read. Naming a hash in an attachment is never enough on its own: the server, not the client, records whose
-    /// blob an attachment reads from (<see cref="AttachmentBlobBinding"/>).
-    /// </summary>
-    public async Task<BlobRow?> FindReadableAsync(Guid accountId, string sha256, CancellationToken ct)
+    private Task<BlobRow?> FindInStreamAsync(Guid streamId, string sha256, CancellationToken ct) =>
+        db.Blobs.AsNoTracking().FirstOrDefaultAsync(b => b.StreamId == streamId && b.Sha256 == sha256, ct);
+
+    /// <summary>Whether this account can upload bytes for the selected stream.</summary>
+    public async Task<bool> CanUploadToStreamAsync(Guid accountId, Guid streamId, string sha256, string? attachmentId, CancellationToken ct)
     {
-        if (await FindAsync(accountId, sha256, ct) is { } own)
+        if (streamId == accountId)
         {
-            return own;
+            return true;
         }
 
-        var spaces = await db.SpaceMembers.AsNoTracking()
-            .Where(m => m.AccountId == accountId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null
-                && db.SyncStreams.Any(s => s.Id == m.SpaceId && s.Kind == SyncStream.SpaceKind && s.DeletedAt == null))
-            .Select(m => m.SpaceId)
-            .ToArrayAsync(ct);
-        if (spaces.Length == 0)
+        var member = await db.SpaceMembers.AsNoTracking().FirstOrDefaultAsync(m => m.SpaceId == streamId && m.AccountId == accountId
+            && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null
+            && db.SyncStreams.Any(s => s.Id == streamId && s.Kind == SyncStream.SpaceKind && s.DeletedAt == null), ct);
+        if (member is null)
         {
-            return null;
+            return false;
+        }
+        if (member.Role is SpaceMember.OwnerRole or SpaceMember.EditorRole)
+        {
+            return true;
+        }
+        if (member.Role != SpaceMember.ViewerRole || string.IsNullOrEmpty(attachmentId))
+        {
+            return false;
+        }
+
+        var binding = await db.AttachmentBlobBindings.AsNoTracking().FirstOrDefaultAsync(b => b.StreamId == streamId
+            && b.AttachmentId == attachmentId && b.CustodianAccountId == accountId && b.Sha256 == sha256, ct);
+        var attachment = binding is null ? null : await db.SyncEntities.FindAsync([streamId, "attachment", attachmentId], ct);
+        return attachment is { PurgedAt: null, MovedTo: null }
+            && await DiaryAttachmentAuthorization.IsAuthorAsync(db, streamId, member.MemberId, SyncJson.ReadGroups(attachment.Groups), ct);
+    }
+
+    /// <summary>Finds a blob only in the requested readable stream, using the server-recorded attachment custody.</summary>
+    public async Task<BlobRow?> FindReadableInStreamAsync(Guid accountId, Guid streamId, string sha256, CancellationToken ct)
+    {
+        if (streamId == accountId)
+        {
+            return await FindAsync(accountId, sha256, ct);
         }
 
         return await db.Blobs.FromSqlInterpolated($"""
-            SELECT b.* FROM "Blobs" b
-            WHERE b."Sha256" = {sha256} AND EXISTS (
-                SELECT 1 FROM "AttachmentBlobBindings" binding
-                JOIN "SyncEntities" e ON e."StreamId" = binding."StreamId" AND e."Kind" = 'attachment' AND e."EntityKey" = binding."AttachmentId"
-                WHERE binding."StreamId" = ANY({spaces}) AND binding."CustodianAccountId" = b."AccountId" AND binding."Sha256" = b."Sha256"
-                  AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
-                  AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-                  AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256")
-            ORDER BY b."AccountId"
-            LIMIT 1
+            SELECT b.* FROM "Blobs" b WHERE b."StreamId" = {streamId} AND b."Sha256" = {sha256}
+              AND EXISTS (SELECT 1 FROM "SpaceMembers" member JOIN "SyncStreams" stream ON stream."Id" = member."SpaceId"
+                WHERE member."SpaceId" = b."StreamId" AND member."AccountId" = {accountId}
+                  AND member."MemberKind" = 1 AND member."RemovedAt" IS NULL AND stream."Kind" = 2 AND stream."DeletedAt" IS NULL)
+              AND EXISTS (SELECT 1 FROM "SyncEntities" e WHERE e."StreamId" = b."StreamId" AND e."Kind" = 'attachment'
+                AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
+                AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+                AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256")
             """).AsNoTracking().FirstOrDefaultAsync(ct);
     }
 
     /// <summary>Starts an upload, or resumes one, or says the blob is already there. Starting is idempotent.</summary>
-    public async Task<BlobOutcome<UploadStatus>> StartAsync(Guid accountId, Guid deviceId, string sha256, long size, CancellationToken ct)
+    public async Task<BlobOutcome<UploadStatus>> StartAsync(Guid accountId, Guid deviceId, Guid streamId, string sha256, long size, CancellationToken ct)
     {
         if (!IsHash(sha256))
         {
@@ -101,7 +125,7 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
             return BlobOutcome<UploadStatus>.Fail(BlobFailure.TooLarge);
         }
 
-        var existing = await FindAsync(accountId, sha256, ct);
+        var existing = await FindInStreamAsync(streamId, sha256, ct);
         if (existing is not null)
         {
             return BlobOutcome<UploadStatus>.Ok(new UploadStatus(existing.State, Options.PartSize, 0, []));
@@ -116,41 +140,53 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 
         var partCount = (int)((size + Options.PartSize - 1) / Options.PartSize);
         var now = clock.GetUtcNow();
-        var upload = await db.BlobUploads.FirstOrDefaultAsync(u => u.AccountId == accountId && u.Sha256 == sha256, ct);
+        var upload = await db.BlobUploads.FirstOrDefaultAsync(u => u.StreamId == streamId && u.Sha256 == sha256, ct);
+        if (upload is not null && upload.AccountId != accountId)
+        {
+            return BlobOutcome<UploadStatus>.Fail(BlobFailure.NoUpload);
+        }
         if (upload is not null && upload.ByteSize != size)
         {
             // The same hash cannot have two sizes; an earlier start with a wrong size is discarded.
-            await DiscardUploadAsync(accountId, sha256, ct);
+            await DiscardUploadAsync(accountId, streamId, sha256, ct);
             upload = null;
         }
 
         if (upload is null)
         {
-            db.BlobUploads.Add(new BlobUploadRow { AccountId = accountId, Sha256 = sha256, ByteSize = size, PartCount = partCount, CreatedAt = now, UpdatedAt = now, DeviceId = deviceId });
+            db.BlobUploads.Add(new BlobUploadRow { StreamId = streamId, AccountId = accountId, Sha256 = sha256, ByteSize = size, PartCount = partCount, CreatedAt = now, UpdatedAt = now, DeviceId = deviceId });
             try
             {
                 await db.SaveChangesAsync(ct);
             }
             catch (DbUpdateException)
             {
-                // Two first calls raced; the other one started it.
                 db.ChangeTracker.Clear();
+                upload = await db.BlobUploads.AsNoTracking().FirstOrDefaultAsync(u => u.StreamId == streamId && u.Sha256 == sha256, ct);
+                if (upload is null)
+                {
+                    throw;
+                }
+                if (upload.AccountId != accountId || upload.ByteSize != size)
+                {
+                    return BlobOutcome<UploadStatus>.Fail(BlobFailure.NoUpload);
+                }
             }
         }
 
-        var received = await db.BlobParts.AsNoTracking().Where(p => p.AccountId == accountId && p.Sha256 == sha256).OrderBy(p => p.PartIndex).Select(p => p.PartIndex).ToListAsync(ct);
+        var received = await db.BlobParts.AsNoTracking().Where(p => p.StreamId == streamId && p.Sha256 == sha256).OrderBy(p => p.PartIndex).Select(p => p.PartIndex).ToListAsync(ct);
         return BlobOutcome<UploadStatus>.Ok(new UploadStatus(null, Options.PartSize, partCount, received));
     }
 
     /// <summary>Stores one part. Sending a part again replaces it. The part must be exactly the size the layout calls for.</summary>
-    public async Task<BlobFailure> PutPartAsync(Guid accountId, string sha256, int index, Stream body, CancellationToken ct)
+    public async Task<BlobFailure> PutPartAsync(Guid accountId, Guid streamId, string sha256, int index, Stream body, CancellationToken ct)
     {
         if (!IsHash(sha256))
         {
             return BlobFailure.InvalidHash;
         }
 
-        var upload = await db.BlobUploads.AsNoTracking().FirstOrDefaultAsync(u => u.AccountId == accountId && u.Sha256 == sha256, ct);
+        var upload = await db.BlobUploads.AsNoTracking().FirstOrDefaultAsync(u => u.StreamId == streamId && u.AccountId == accountId && u.Sha256 == sha256, ct);
         if (upload is null)
         {
             return BlobFailure.NoUpload;
@@ -175,13 +211,13 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
             return BlobFailure.BadPart;
         }
 
-        await store.PutAsync(PartKey(accountId, sha256, index), new MemoryStream(buffer, 0, expected, writable: false), ct);
+        await store.PutAsync(PartKey(accountId, streamId, sha256, index), new MemoryStream(buffer, 0, expected, writable: false), ct);
         var now = clock.GetUtcNow();
         await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO "BlobParts" ("AccountId", "Sha256", "PartIndex", "ByteSize") VALUES ({accountId}, {sha256}, {index}, {expected})
-            ON CONFLICT ("AccountId", "Sha256", "PartIndex") DO UPDATE SET "ByteSize" = EXCLUDED."ByteSize"
+            INSERT INTO "BlobParts" ("StreamId", "Sha256", "PartIndex", "ByteSize") VALUES ({streamId}, {sha256}, {index}, {expected})
+            ON CONFLICT ("StreamId", "Sha256", "PartIndex") DO UPDATE SET "ByteSize" = EXCLUDED."ByteSize"
             """, ct);
-        await db.BlobUploads.Where(u => u.AccountId == accountId && u.Sha256 == sha256).ExecuteUpdateAsync(s => s.SetProperty(u => u.UpdatedAt, now), ct);
+        await db.BlobUploads.Where(u => u.StreamId == streamId && u.AccountId == accountId && u.Sha256 == sha256).ExecuteUpdateAsync(s => s.SetProperty(u => u.UpdatedAt, now), ct);
         return BlobFailure.None;
     }
 
@@ -189,26 +225,30 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
     /// Joins the parts, checks the SHA-256, scans, and (only when clean) encrypts and stores. A mismatch discards the upload. A blocked
     /// file leaves a <c>Blocked</c> row and no bytes, so every device can learn of it without downloading anything.
     /// </summary>
-    public async Task<BlobOutcome<BlobRow>> CompleteAsync(Guid accountId, Guid deviceId, string sha256, CancellationToken ct)
+    public async Task<BlobOutcome<BlobRow>> CompleteAsync(Guid accountId, Guid deviceId, Guid streamId, string sha256, string? attachmentId, CancellationToken ct)
     {
         if (!IsHash(sha256))
         {
             return BlobOutcome<BlobRow>.Fail(BlobFailure.InvalidHash);
         }
 
-        var finished = await FindAsync(accountId, sha256, ct);
+        var finished = await FindInStreamAsync(streamId, sha256, ct);
         if (finished is not null)
         {
+            if (await db.BlobUploads.AsNoTracking().AnyAsync(u => u.StreamId == streamId && u.AccountId == accountId && u.Sha256 == sha256, ct))
+            {
+                await DiscardUploadAsync(accountId, streamId, sha256, ct);
+            }
             return BlobOutcome<BlobRow>.Ok(finished);
         }
 
-        var upload = await db.BlobUploads.AsNoTracking().FirstOrDefaultAsync(u => u.AccountId == accountId && u.Sha256 == sha256, ct);
+        var upload = await db.BlobUploads.AsNoTracking().FirstOrDefaultAsync(u => u.StreamId == streamId && u.AccountId == accountId && u.Sha256 == sha256, ct);
         if (upload is null)
         {
             return BlobOutcome<BlobRow>.Fail(BlobFailure.NoUpload);
         }
 
-        var received = await db.BlobParts.AsNoTracking().Where(p => p.AccountId == accountId && p.Sha256 == sha256).CountAsync(ct);
+        var received = await db.BlobParts.AsNoTracking().Where(p => p.StreamId == streamId && p.Sha256 == sha256).CountAsync(ct);
         if (received != upload.PartCount)
         {
             return BlobOutcome<BlobRow>.Fail(BlobFailure.Incomplete);
@@ -216,7 +256,7 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 
         ScanResult scan;
         string actualHash;
-        await using (var joined = new JoinedParts(store, accountId, sha256, upload.PartCount))
+        await using (var joined = new JoinedParts(store, accountId, streamId, sha256, upload.PartCount))
         using (var hashing = new HashingReadStream(joined))
         {
             try
@@ -236,15 +276,16 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 
         if (!string.Equals(actualHash, sha256, StringComparison.Ordinal))
         {
-            await DiscardUploadAsync(accountId, sha256, ct);
+            await DiscardUploadAsync(accountId, streamId, sha256, ct);
             return BlobOutcome<BlobRow>.Fail(BlobFailure.HashMismatch);
         }
 
         var now = clock.GetUtcNow();
         BlobRow row;
+        var objectId = Guid.NewGuid();
         if (!scan.Clean)
         {
-            row = new BlobRow { AccountId = accountId, Sha256 = sha256, ByteSize = upload.ByteSize, State = BlobStates.Blocked, Detail = scan.Signature, StorageKey = string.Empty, WrappedKey = [], CreatedAt = now };
+            row = new BlobRow { StreamId = streamId, AccountId = accountId, ObjectId = objectId, Sha256 = sha256, ByteSize = upload.ByteSize, State = BlobStates.Blocked, Detail = scan.Signature, StorageKey = string.Empty, WrappedKey = [], CreatedAt = now };
             log.LogWarning("A blob was blocked by the malware check ({Signature}) for account {AccountId}", scan.Signature, accountId);
         }
         else
@@ -253,12 +294,16 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
             // Every completion encrypts with its own data key into its own object, so two completions of the same blob
             // (a client retry) can never overwrite each other's bytes; the one whose row lands is the one that stays readable.
             var key = ObjectKey(accountId, sha256);
+            // Persist a delayed cleanup before writing the object. Publishing its references removes this entry
+            // in the same transaction; a crash before publication leaves an object the sweep can reclaim.
+            db.BlobDeletions.Add(new BlobDeletionRow { Id = objectId, StorageKey = key, NotBefore = now + Options.UploadExpiry });
+            await db.SaveChangesAsync(ct);
             var temp = Path.Combine(Path.GetTempPath(), "chaos-blob-" + Guid.NewGuid().ToString("N"));
             try
             {
                 await using (var sealedFile = new FileStream(temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 81920, FileOptions.Asynchronous | FileOptions.DeleteOnClose))
                 {
-                    await using (var plain = new JoinedParts(store, accountId, sha256, upload.PartCount))
+                    await using (var plain = new JoinedParts(store, accountId, streamId, sha256, upload.PartCount))
                     {
                         await BlobCrypto.EncryptAsync(plain, sealedFile, dataKey, ct);
                     }
@@ -272,38 +317,77 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
                 File.Delete(temp);
             }
 
-            // The quota is checked and the bytes counted in one statement, so two uploads cannot both squeeze under it.
-            var counted = await db.Accounts.Where(a => a.Id == accountId && a.StorageBytes + upload.ByteSize <= limits.Value.AccountQuotaBytes)
-                .ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes + upload.ByteSize), ct);
-            if (counted == 0)
-            {
-                await store.DeleteAsync(key, ct);
-                await AuditQuotaAsync(accountId, deviceId, ct);
-                return BlobOutcome<BlobRow>.Fail(BlobFailure.Quota);
-            }
-
-            row = new BlobRow { AccountId = accountId, Sha256 = sha256, ByteSize = upload.ByteSize, State = BlobStates.Clean, StorageKey = key, WrappedKey = keys.Wrap(dataKey), CreatedAt = now };
+            row = new BlobRow { StreamId = streamId, AccountId = accountId, ObjectId = objectId, Sha256 = sha256, ByteSize = upload.ByteSize, State = BlobStates.Clean, StorageKey = key, WrappedKey = keys.Wrap(dataKey), CreatedAt = now };
         }
 
-        db.Blobs.Add(row);
         try
         {
-            await db.SaveChangesAsync(ct);
+            var strategy = db.Database.CreateExecutionStrategy();
+            var result = await strategy.ExecuteAsync(async () =>
+            {
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                var lockedStream = await db.SyncStreams.FromSqlInterpolated($"SELECT * FROM \"SyncStreams\" WHERE \"Id\" = {streamId} FOR UPDATE").SingleOrDefaultAsync(ct);
+                if (lockedStream is null || lockedStream.DeletedAt is not null
+                    || !await CanUploadToStreamAsync(accountId, streamId, sha256, attachmentId, ct)) return BlobFailure.NoUpload;
+                if (await db.Blobs.AsNoTracking().AnyAsync(b => b.StreamId == streamId && b.Sha256 == sha256 && b.ObjectId == objectId, ct))
+                {
+                    return BlobFailure.None; // A retried commit already stored this object.
+                }
+                if (row.State == BlobStates.Clean)
+                {
+                    // Charge the object in the same transaction as its references.
+                    var counted = await db.Accounts.Where(a => a.Id == accountId && a.StorageBytes + upload.ByteSize <= limits.Value.AccountQuotaBytes)
+                        .ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes + upload.ByteSize), ct);
+                    if (counted == 0) return BlobFailure.Quota;
+                }
+                db.BlobObjects.Add(new BlobObjectRow { Id = objectId, AccountId = accountId, ByteSize = row.ByteSize, State = row.State, StorageKey = row.StorageKey });
+                db.Blobs.Add(row);
+                if (row.StorageKey.Length > 0) await db.BlobDeletions.Where(d => d.Id == objectId).ExecuteDeleteAsync(ct);
+                if (streamId == accountId)
+                {
+                    var bindings = await db.AttachmentBlobBindings.AsNoTracking()
+                        .Where(b => b.CustodianAccountId == accountId && b.Sha256 == sha256).ToListAsync(ct);
+                    foreach (var binding in bindings)
+                    {
+                        if (!await CanUploadToStreamAsync(accountId, binding.StreamId, sha256, binding.AttachmentId, ct)) continue;
+                        var attachment = await db.SyncEntities.FindAsync([binding.StreamId, "attachment", binding.AttachmentId], ct);
+                        if (attachment is null || attachment.PurgedAt is not null || attachment.MovedTo is not null) continue;
+                        var groups = SyncJson.ReadGroups(attachment.Groups);
+                        if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null
+                            || groups.GetValueOrDefault("file")?.Values.Values.GetValueOrDefault("Sha256")?.ToString() != sha256) continue;
+                        await SyncService.CopyBlobReferenceAsync(db, accountId, binding.StreamId, sha256, ct);
+                    }
+                }
+                await db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+                return BlobFailure.None;
+            });
+            if (result != BlobFailure.None)
+            {
+                if (row.StorageKey.Length > 0) await TryDeletePendingObjectAsync(objectId, row.StorageKey, ct);
+                if (result == BlobFailure.Quota) await AuditQuotaAsync(accountId, deviceId, ct);
+                return BlobOutcome<BlobRow>.Fail(result);
+            }
         }
         catch (DbUpdateException)
         {
-            // A parallel completion stored it first. Take back what this one counted and drop its own object.
+            // A parallel completion stored it first. Its transaction won; this object's quota charge rolled back.
             db.ChangeTracker.Clear();
-            if (row.State == BlobStates.Clean)
+            var winner = await FindInStreamAsync(streamId, sha256, ct);
+            if (row.State == BlobStates.Clean && winner?.ObjectId != objectId)
             {
-                await store.DeleteAsync(row.StorageKey, ct);
-                await db.Accounts.Where(a => a.Id == accountId).ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - upload.ByteSize), ct);
+                await TryDeletePendingObjectAsync(objectId, row.StorageKey, ct);
             }
-
-            return BlobOutcome<BlobRow>.Ok((await FindAsync(accountId, sha256, ct))!);
+            if (winner is null)
+            {
+                throw;
+            }
+            await DiscardUploadAsync(accountId, streamId, sha256, ct);
+            return BlobOutcome<BlobRow>.Ok(winner);
         }
 
-        await DiscardUploadAsync(accountId, sha256, ct);
+        await DiscardUploadAsync(accountId, streamId, sha256, ct);
         return BlobOutcome<BlobRow>.Ok(row);
     }
 
@@ -314,10 +398,10 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
         await BlobCrypto.DecryptRangeAsync(offset => store.OpenReadAsync(blob.StorageKey, offset, ct), dataKey, blob.ByteSize, start, endInclusive, destination, ct);
     }
 
-    private async Task DiscardUploadAsync(Guid accountId, string sha256, CancellationToken ct)
+    private async Task DiscardUploadAsync(Guid accountId, Guid streamId, string sha256, CancellationToken ct)
     {
-        await db.BlobUploads.Where(u => u.AccountId == accountId && u.Sha256 == sha256).ExecuteDeleteAsync(ct);
-        await store.DeletePrefixAsync($"parts/{accountId:N}/{sha256}/", ct);
+        await db.BlobUploads.Where(u => u.AccountId == accountId && u.StreamId == streamId && u.Sha256 == sha256).ExecuteDeleteAsync(ct);
+        await store.DeletePrefixAsync(PartsPrefix(accountId, streamId, sha256), ct);
     }
 
     private async Task AuditQuotaAsync(Guid accountId, Guid deviceId, CancellationToken ct)
@@ -326,12 +410,17 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>Removes every object the account has: its blobs and any parts of unfinished uploads. Called when the account is deleted (PLAN2 §8.6).</summary>
+    /// <summary>Removes unfinished parts and collects objects no surviving stream references after account deletion.</summary>
     public async Task DeleteAccountObjectsAsync(Guid accountId, CancellationToken ct)
     {
-        await store.DeletePrefixAsync(AccountPrefix(accountId), ct);
         await store.DeletePrefixAsync(AccountPartsPrefix(accountId), ct);
+        var candidates = await db.BlobObjects.AsNoTracking().Where(o => o.AccountId == accountId).Select(o => o.Id).ToListAsync(ct);
+        await PurgeUnreferencedObjectsAsync(candidates, ct);
     }
+
+    /// <summary>Removes parts whose upload rows were removed along with a stream.</summary>
+    public Task DeleteUploadPartsAsync(Guid accountId, Guid streamId, string sha256, CancellationToken ct) =>
+        store.DeletePrefixAsync(PartsPrefix(accountId, streamId, sha256), ct);
 
     /// <summary>
     /// One pass of housekeeping: marks blobs no live attachment references, deletes the ones unreferenced past the grace period (PLAN2 §9.2),
@@ -347,64 +436,106 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
 
         var cutoff = now - Options.UnreferencedGrace;
         var expired = await db.Blobs.AsNoTracking().Where(b => b.UnreferencedSince != null && b.UnreferencedSince <= cutoff)
-            .Select(b => new { b.AccountId, b.Sha256, b.StorageKey, b.ByteSize, b.State }).ToListAsync(ct);
+            .Select(b => new { b.StreamId, b.Sha256, b.ObjectId }).ToListAsync(ct);
+        var removedBlobs = 0;
         foreach (var blob in expired)
         {
-            // The row goes first: a failure in between leaves an orphaned object, which is harmless, not a row pointing at nothing.
-            var removed = await db.Blobs.Where(b => b.AccountId == blob.AccountId && b.Sha256 == blob.Sha256).ExecuteDeleteAsync(ct);
-            if (removed == 1 && blob.State == BlobStates.Clean)
-            {
-                await db.Accounts.Where(a => a.Id == blob.AccountId).ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - blob.ByteSize), ct);
-            }
-
-            if (removed == 1 && blob.StorageKey.Length > 0)
-            {
-                await store.DeleteAsync(blob.StorageKey, ct);
-            }
+            removedBlobs += await DeleteStaleReferenceAsync(blob.StreamId, blob.Sha256, blob.ObjectId, cutoff, ct);
         }
+
+        var orphaned = await db.BlobObjects.AsNoTracking().Where(o => !db.Blobs.Any(b => b.ObjectId == o.Id)).Select(o => o.Id).ToListAsync(ct);
+        await PurgeUnreferencedObjectsAsync(orphaned, ct);
+        await FlushObjectDeletionsAsync(ct);
 
         var stale = now - Options.UploadExpiry;
-        var uploads = await db.BlobUploads.AsNoTracking().Where(u => u.UpdatedAt <= stale).Select(u => new { u.AccountId, u.Sha256 }).ToListAsync(ct);
+        var uploads = await db.BlobUploads.AsNoTracking().Where(u => u.UpdatedAt <= stale).Select(u => new { u.AccountId, u.StreamId, u.Sha256 }).ToListAsync(ct);
         foreach (var upload in uploads)
         {
-            await DiscardUploadAsync(upload.AccountId, upload.Sha256, ct);
+            await DiscardUploadAsync(upload.AccountId, upload.StreamId, upload.Sha256, ct);
         }
 
-        return (expired.Count, uploads.Count);
+        return (removedBlobs, uploads.Count);
     }
 
-    /// <summary>Removes the named blobs at once when nothing references them any more (the attachments of a purged space).</summary>
-    public async Task<int> PurgeUnreferencedAsync(IReadOnlyCollection<(Guid AccountId, string Sha256)> candidates, CancellationToken ct)
+    /// <summary>Queues objects for deletion only after the final stream reference has gone.</summary>
+    public async Task<int> PurgeUnreferencedObjectsAsync(IReadOnlyCollection<Guid> candidates, CancellationToken ct)
     {
         var removed = 0;
-        foreach (var (accountId, sha256) in candidates.Distinct())
+        foreach (var id in candidates.Distinct())
         {
-            var blob = await db.Blobs.FromSqlRaw(
-                    "SELECT * FROM \"Blobs\" b WHERE b.\"AccountId\" = {0} AND b.\"Sha256\" = {1} AND NOT " + ReferencedSql,
-                    accountId, sha256)
-                .FirstOrDefaultAsync(ct);
-            if (blob is null)
+            var strategy = db.Database.CreateExecutionStrategy();
+            var queued = await strategy.ExecuteAsync(async () =>
             {
-                continue;
-            }
-
-            db.Blobs.Remove(blob);
-            if (blob.State == BlobStates.Clean)
-            {
-                await db.Accounts.Where(a => a.Id == blob.AccountId)
-                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - blob.ByteSize), ct);
-            }
-
-            await db.SaveChangesAsync(ct);
-            if (blob.StorageKey.Length > 0)
-            {
-                await store.DeleteAsync(blob.StorageKey, ct);
-            }
-
-            removed++;
+                db.ChangeTracker.Clear();
+                await using var tx = await db.Database.BeginTransactionAsync(ct);
+                var obj = await db.BlobObjects.FromSqlInterpolated($"SELECT * FROM \"BlobObjects\" WHERE \"Id\" = {id} FOR UPDATE").SingleOrDefaultAsync(ct);
+                if (obj is null || await db.Blobs.AnyAsync(b => b.ObjectId == id, ct)) return false;
+                if (obj.State == BlobStates.Clean)
+                {
+                    await db.Accounts.Where(a => a.Id == obj.AccountId)
+                        .ExecuteUpdateAsync(s => s.SetProperty(a => a.StorageBytes, a => a.StorageBytes - obj.ByteSize), ct);
+                }
+                if (obj.StorageKey.Length > 0) db.BlobDeletions.Add(new BlobDeletionRow { Id = obj.Id, StorageKey = obj.StorageKey, NotBefore = clock.GetUtcNow() });
+                db.BlobObjects.Remove(obj);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return true;
+            });
+            if (queued) removed++;
         }
-
+        await FlushObjectDeletionsAsync(ct);
         return removed;
+    }
+
+    /// <summary>Removes stale stream references to objects from a purged space before collecting those objects.</summary>
+    public async Task RemoveUnreferencedRowsAsync(IReadOnlyCollection<Guid> candidates, CancellationToken ct)
+    {
+        var references = await db.Blobs.AsNoTracking().Where(b => candidates.Contains(b.ObjectId))
+            .Select(b => new { b.StreamId, b.Sha256, b.ObjectId }).ToListAsync(ct);
+        foreach (var reference in references)
+        {
+            await DeleteStaleReferenceAsync(reference.StreamId, reference.Sha256, reference.ObjectId, null, ct);
+        }
+    }
+
+    private Task<int> DeleteStaleReferenceAsync(Guid streamId, string sha256, Guid objectId, DateTimeOffset? cutoff, CancellationToken ct) =>
+        db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var stream = await db.SyncStreams.FromSqlInterpolated($"SELECT * FROM \"SyncStreams\" WHERE \"Id\" = {streamId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+            if (stream is null) return 0;
+            var sql = "DELETE FROM \"Blobs\" b WHERE b.\"StreamId\" = {0} AND b.\"Sha256\" = {1} AND b.\"ObjectId\" = {2} AND "
+                + (cutoff is null ? "" : "b.\"UnreferencedSince\" <= {3} AND ") + "NOT " + ReferencedSql;
+            object[] parameters = cutoff is null ? [streamId, sha256, objectId] : [streamId, sha256, objectId, cutoff.Value];
+            var removed = await db.Database.ExecuteSqlRawAsync(sql, parameters, ct);
+            await transaction.CommitAsync(ct);
+            return removed;
+        });
+
+    private async Task FlushObjectDeletionsAsync(CancellationToken ct)
+    {
+        var pending = await db.BlobDeletions.AsNoTracking().Where(d => d.NotBefore <= clock.GetUtcNow()).ToListAsync(ct);
+        foreach (var item in pending)
+        {
+            await store.DeleteAsync(item.StorageKey, ct);
+            await db.BlobDeletions.Where(d => d.Id == item.Id).ExecuteDeleteAsync(ct);
+        }
+    }
+
+    private async Task TryDeletePendingObjectAsync(Guid id, string storageKey, CancellationToken ct)
+    {
+        try
+        {
+            await store.DeleteAsync(storageKey, ct);
+            await db.BlobDeletions.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // The durable entry remains for a later sweep; no content or object path is logged.
+            log.LogWarning("Deferred cleanup for blob object {ObjectId}", id);
+        }
     }
 
     /// <summary>
@@ -414,20 +545,13 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
     private const string ReferencedSql = """
         (EXISTS (
             SELECT 1 FROM "SyncEntities" e
-            WHERE e."StreamId" = b."AccountId" AND e."Kind" = 'attachment' AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
-              AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
-              AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256")
-        OR EXISTS (
-            SELECT 1 FROM "AttachmentBlobBindings" binding
-            JOIN "SyncEntities" e ON e."StreamId" = binding."StreamId" AND e."Kind" = 'attachment' AND e."EntityKey" = binding."AttachmentId"
-            WHERE binding."CustodianAccountId" = b."AccountId" AND binding."Sha256" = b."Sha256"
-              AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
+            WHERE e."StreamId" = b."StreamId" AND e."Kind" = 'attachment' AND e."PurgedAt" IS NULL AND e."MovedTo" IS NULL
               AND e."Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
               AND e."Groups" -> 'file' -> 'values' ->> 'Sha256' = b."Sha256"))
         """;
 
     /// <summary>The parts of one upload read as a single stream, one part open at a time.</summary>
-    private sealed class JoinedParts(IBlobStore store, Guid accountId, string sha256, int partCount) : Stream
+    private sealed class JoinedParts(IBlobStore store, Guid accountId, Guid streamId, string sha256, int partCount) : Stream
     {
         private int _next;
         private Stream? _current;
@@ -457,7 +581,7 @@ public sealed class BlobService(ChaosDbContext db, IBlobStore store, IMalwareSca
                         return 0;
                     }
 
-                    _current = await store.OpenReadAsync(PartKey(accountId, sha256, _next++), 0, cancellationToken)
+                    _current = await store.OpenReadAsync(PartKey(accountId, streamId, sha256, _next++), 0, cancellationToken)
                         ?? throw new IOException("An uploaded part is missing from the store.");
                 }
 
