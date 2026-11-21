@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Chaos.Application.Capture;
 using Chaos.Application.Contracts;
 using Chaos.Application.Pages;
@@ -408,23 +407,23 @@ public sealed class SyncEndToEndTests(PostgresServer postgres)
         var probe = await CaptureAsync(a, "Edited while uploading");
         var pushesBefore = a.Network.Pushes;
 
+        var pushPause = a.Network.PauseNextPush();
         var upload = Task.Run(() => a.SyncAsync());
-        var worst = TimeSpan.Zero;
-        var edits = 0;
-        while (!upload.IsCompleted)
+        try
         {
-            var started = Stopwatch.StartNew();
-            await RetitleAsync(a, probe.Id, notes: $"edit {edits++}");
-            await Task.Yield();
-            worst = worst < started.Elapsed ? started.Elapsed : worst;
+            await pushPause.Started.WaitAsync(TimeSpan.FromSeconds(10));
+            await RetitleAsync(a, probe.Id, notes: "edited while upload request is in flight")
+                .WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            pushPause.Release();
+            await upload;
         }
 
         var result = await upload;
         await Assert.That(result.Problem).IsNull();
         await Assert.That(a.Network.Pushes - pushesBefore >= 3).IsTrue(); // 1,000+ changes cannot fit one 500-change push
-        await Assert.That(edits >= 1).IsTrue();
-        // Generous for a shared CI runner: an edit blocked behind the whole upload would take many seconds.
-        await Assert.That(worst < TimeSpan.FromMilliseconds(750)).IsTrue();
 
         await world.SettleAsync();
         await Assert.That(await b.CountAsync("SELECT count(*) FROM Tasks WHERE Title LIKE 'Imported task %';")).IsEqualTo(1000L);
