@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Check the committed files, without letting uncommitted fixes hide a CI failure.
+if ! git diff HEAD --quiet -- src/Chaos.Desktop/frontend src/Chaos.Web; then
+    echo "Push blocked: commit or stash frontend changes before checking formatting." >&2
+    exit 1
+fi
+
+for frontend in src/Chaos.Desktop/frontend src/Chaos.Web; do
+    if ! npm --prefix "$frontend" run format:check; then
+        echo "Push blocked: run npm --prefix $frontend run format, commit the fixes, and push again." >&2
+        exit 1
+    fi
+done

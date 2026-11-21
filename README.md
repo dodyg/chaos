@@ -23,6 +23,19 @@ new pad note).
 
 ## Check it
 
+Enable the formatting check before each push (once per checkout):
+
+```powershell
+pwsh -File eng/install-git-hooks.ps1
+```
+
+The push hook runs `npm run format:check` for both frontends, using their installed
+dependencies. Build the desktop project first to generate its client and install its
+dependencies; run `npm ci` in `src/Chaos.Web` for the web frontend. If formatting fails,
+run `npm run format` in the reported frontend, commit the fixes and push again. Commit
+or stash frontend edits before pushing so the check covers the committed version.
+Git hook settings are local, so each new checkout needs the setup command above.
+
 ```powershell
 pwsh -File eng/verify.ps1
 ```
