@@ -268,13 +268,22 @@ export function QuickAdd({
                     />
                   </div>
                   <TokenChips item={item} exclusions={exclusions} onToggle={(token) => toggle(item, token)} />
-                  {item.containerCandidates.length > 0 && <label className="grid gap-1 text-sm">
-                    List for line {item.lineNumber}
-                    <NativeSelect value={draftFor(item).containerId ?? ""} onChange={(event) => override(item.lineNumber, { containerId: event.target.value || null })}>
-                      <NativeSelectOption value="">Choose a list…</NativeSelectOption>
-                      {item.containerCandidates.map((candidate) => <NativeSelectOption key={candidate.id} value={candidate.id}>{candidate.name}</NativeSelectOption>)}
-                    </NativeSelect>
-                  </label>}
+                  {item.containerCandidates.length > 0 && (
+                    <label className="grid gap-1 text-sm">
+                      List for line {item.lineNumber}
+                      <NativeSelect
+                        value={draftFor(item).containerId ?? ""}
+                        onChange={(event) => override(item.lineNumber, { containerId: event.target.value || null })}
+                      >
+                        <NativeSelectOption value="">Choose a list…</NativeSelectOption>
+                        {item.containerCandidates.map((candidate) => (
+                          <NativeSelectOption key={candidate.id} value={candidate.id}>
+                            {candidate.name}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </label>
+                  )}
                   {item.draft.subtasks.length > 0 && (
                     <ul className="grid gap-0.5 pl-6 text-xs" aria-label={`Subtasks on line ${item.lineNumber}`}>
                       {item.draft.subtasks.map((subtask, index) => (
@@ -390,7 +399,8 @@ function SingleDraft({
   const repeat = item.tokens.find((token) => token.kind === "Recurrence" && token.state === "Applied");
   const candidates = new Set(item.containerCandidates.map((candidate) => candidate.id));
   const ordered = [
-    ...item.containerCandidates.filter((candidate) => !containers.some((container) => container.id === candidate.id))
+    ...item.containerCandidates
+      .filter((candidate) => !containers.some((container) => container.id === candidate.id))
       .map((candidate) => ({ ...candidate, kind: "List" })),
     ...containers.filter((container) => candidates.has(container.id)),
     ...containers.filter((container) => !candidates.has(container.id)),

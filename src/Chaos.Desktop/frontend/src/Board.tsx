@@ -219,7 +219,10 @@ export function Board({
   const lanes = board?.lanes ?? [{ key: "", title: "All tasks", isNone: true }];
   const multipleLanes = lanes.length > 1;
   const cards = board?.cards ?? [];
-  const assignmentInfo = useAssigneeChips(cards.map((card) => card.task), revision);
+  const assignmentInfo = useAssigneeChips(
+    cards.map((card) => card.task),
+    revision,
+  );
   const tagById = React.useMemo(() => new Map(tags.map((tag) => [tag.id, tag])), [tags]);
   // The cards of one cell top to bottom (board order is the container's manual order).
   const cellCards = React.useMemo(() => {
@@ -240,7 +243,9 @@ export function Board({
   const cardIdentity = (card: BoardCardResponse) => JSON.stringify([card.task.id, card.columnKey, card.laneKey]);
   const tabStop = cards.some((card) => cardIdentity(card) === focusCardId && visibleColumnKeys.has(card.columnKey))
     ? focusCardId
-    : (cards.find((card) => visibleColumnKeys.has(card.columnKey)) ? cardIdentity(cards.find((card) => visibleColumnKeys.has(card.columnKey))!) : null);
+    : cards.find((card) => visibleColumnKeys.has(card.columnKey))
+      ? cardIdentity(cards.find((card) => visibleColumnKeys.has(card.columnKey))!)
+      : null;
 
   /** One board write: inert while it runs, its error shown, the board read again after it. */
   async function mutate(write: () => Promise<boolean>) {
@@ -556,7 +561,9 @@ export function Board({
         event.preventDefault();
         const placement = dropPlacement(ids, source.cardId, slotAt(source, event.clientY));
         endDrag();
-        const card = cards.find((item) => item.task.id === source.cardId && item.columnKey === source.columnKey && item.laneKey === source.laneKey);
+        const card = cards.find(
+          (item) => item.task.id === source.cardId && item.columnKey === source.columnKey && item.laneKey === source.laneKey,
+        );
         if (card && placement) void moveCard(card, column.key, placement);
       },
     };
@@ -615,7 +622,9 @@ export function Board({
               aria-label={`Actions for ${task.title}`}
               aria-expanded={menu?.cardId === cardIdentity(card)}
               aria-haspopup="menu"
-              onClick={() => setMenu((current) => (current?.cardId === cardIdentity(card) ? null : { cardId: cardIdentity(card), page: "main" }))}
+              onClick={() =>
+                setMenu((current) => (current?.cardId === cardIdentity(card) ? null : { cardId: cardIdentity(card), page: "main" }))
+              }
             >
               <MoreHorizontal />
             </Button>

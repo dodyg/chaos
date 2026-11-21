@@ -1780,14 +1780,17 @@ const handlers: Record<string, Handler> = {
     return update(r.taskId, fields as Partial<TaskResponse>, "Edit");
   },
   "tasks.assignments": (r: { taskId: string }) => ok(taskAssignments.get(r.taskId) ?? { mode: "Anyone", assignees: [] }),
-  "tasks.assignmentSummaries": (r: { taskIds: string[] }) => ok({ tasks: r.taskIds.flatMap((taskId) => {
-    const task = find(taskId);
-    const state = taskAssignments.get(taskId);
-    return task && state?.assignees.length ? [{ taskId, spaceId: task.spaceId, assignees: state.assignees }] : [];
-  }) }),
+  "tasks.assignmentSummaries": (r: { taskIds: string[] }) =>
+    ok({
+      tasks: r.taskIds.flatMap((taskId) => {
+        const task = find(taskId);
+        const state = taskAssignments.get(taskId);
+        return task && state?.assignees.length ? [{ taskId, spaceId: task.spaceId, assignees: state.assignees }] : [];
+      }),
+    }),
   "tasks.changeAssignee": (r: { taskId: string; memberId: string; assigned: boolean; expectedVersion: string }) => {
     const t = find(r.taskId);
-    const members = t ? spaceMembers.get(t.spaceId) ?? [] : [];
+    const members = t ? (spaceMembers.get(t.spaceId) ?? []) : [];
     const me = members.find((member) => member.isMe);
     const person = members.find((member) => member.memberId === r.memberId && (member.role === 1 || member.role === 2));
     if (!t || t.version !== r.expectedVersion || !me || me.role > 2 || (r.assigned && !person))
@@ -1816,7 +1819,11 @@ const handlers: Record<string, Handler> = {
       const mine = state.assignees.find((entry) => entry.memberId === me?.memberId);
       if (!mine) return { ...fail("Only an assignee can complete their part of this task."), operationId: "x", task: null, warning: null };
       mine.completedAtUtc ??= now();
-      return update(r.taskId, { status: state.assignees.every((entry) => entry.completedAtUtc) ? "Done" : t.status }, "Complete assigned work on");
+      return update(
+        r.taskId,
+        { status: state.assignees.every((entry) => entry.completedAtUtc) ? "Done" : t.status },
+        "Complete assigned work on",
+      );
     }
     return update(r.taskId, { status: r.status }, "Change status of");
   },
@@ -1991,11 +1998,24 @@ const handlers: Record<string, Handler> = {
   },
 
   "tags.list": () => ok({ tags }),
-  "people.list": (r: { spaceId: string }) => ok({ people: (spaceMembers.get(r.spaceId) ?? []).map((member) => ({
-    actorId: `person:${member.memberId}`, displayName: member.name,
-    initials: member.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(),
-    colorIndex: 0, kind: "person", isMe: member.isMe, role: member.role, former: false,
-  })) }),
+  "people.list": (r: { spaceId: string }) =>
+    ok({
+      people: (spaceMembers.get(r.spaceId) ?? []).map((member) => ({
+        actorId: `person:${member.memberId}`,
+        displayName: member.name,
+        initials: member.name
+          .split(/\s+/)
+          .map((part) => part[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase(),
+        colorIndex: 0,
+        kind: "person",
+        isMe: member.isMe,
+        role: member.role,
+        former: false,
+      })),
+    }),
   "spaces.list": () =>
     ok({
       spaces: spaces.map((space) => ({
