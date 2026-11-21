@@ -35,7 +35,10 @@ internal sealed class SharedSeedIds : IIdGenerator
 /// <summary>Sits between a device and the in-process server so a test can take the network away or lose an answer.</summary>
 internal sealed class FlakyNetwork(HttpMessageHandler inner) : DelegatingHandler(inner)
 {
+    private sealed record PushPause(TaskCompletionSource Started, TaskCompletionSource Release);
+
     private int _dropAnswers;
+    private PushPause? _nextPushPause;
 
     public bool Offline { get; set; }
 
@@ -44,6 +47,19 @@ internal sealed class FlakyNetwork(HttpMessageHandler inner) : DelegatingHandler
 
     public int Pushes;
 
+    public (Task Started, Action Release) PauseNextPush()
+    {
+        var pause = new PushPause(
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        if (Interlocked.CompareExchange(ref _nextPushPause, pause, null) is not null)
+        {
+            throw new InvalidOperationException("A push is already paused.");
+        }
+
+        return (pause.Started.Task, () => pause.Release.TrySetResult());
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         if (Offline)
@@ -51,8 +67,15 @@ internal sealed class FlakyNetwork(HttpMessageHandler inner) : DelegatingHandler
             throw new HttpRequestException("The network is down.");
         }
 
+        var isPush = request.RequestUri!.AbsolutePath.EndsWith("/sync/push", StringComparison.Ordinal);
+        if (isPush && Interlocked.Exchange(ref _nextPushPause, null) is { } pause)
+        {
+            pause.Started.TrySetResult();
+            await pause.Release.Task.WaitAsync(cancellationToken);
+        }
+
         var response = await base.SendAsync(request, cancellationToken);
-        if (request.RequestUri!.AbsolutePath.EndsWith("/sync/push", StringComparison.Ordinal))
+        if (isPush)
         {
             Interlocked.Increment(ref Pushes);
             if (Interlocked.Decrement(ref _dropAnswers) >= 0)
