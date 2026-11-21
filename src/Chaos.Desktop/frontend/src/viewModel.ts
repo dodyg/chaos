@@ -24,12 +24,27 @@ const dateOps = [
 ] as const;
 
 export const viewFields: readonly ViewFieldInfo[] = [
-  { name: "space", label: "Space", type: "id", operators: [
-    { op: "is", label: "is" }, { op: "isNot", label: "is not" }, { op: "in", label: "is one of" },
-  ] },
-  { name: "assignee", label: "Assignee", type: "id", operators: [
-    { op: "isMe", label: "is me" }, { op: "is", label: "is" }, { op: "in", label: "is one of" }, { op: "isEmpty", label: "is none" },
-  ] },
+  {
+    name: "space",
+    label: "Space",
+    type: "id",
+    operators: [
+      { op: "is", label: "is" },
+      { op: "isNot", label: "is not" },
+      { op: "in", label: "is one of" },
+    ],
+  },
+  {
+    name: "assignee",
+    label: "Assignee",
+    type: "id",
+    operators: [
+      { op: "isMe", label: "is me" },
+      { op: "is", label: "is" },
+      { op: "in", label: "is one of" },
+      { op: "isEmpty", label: "is none" },
+    ],
+  },
   {
     name: "container",
     label: "List or project",

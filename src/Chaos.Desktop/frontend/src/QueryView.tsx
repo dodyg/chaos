@@ -129,7 +129,10 @@ export function QueryView({
 }) {
   const [filters, setFilters] = React.useState<Filters>(noFilters);
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
-  const assignmentInfo = useAssigneeChips(rows.map((row) => row.task), revision);
+  const assignmentInfo = useAssigneeChips(
+    rows.map((row) => row.task),
+    revision,
+  );
   const [total, setTotal] = React.useState(0);
   const [cursor, setCursor] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -483,7 +486,7 @@ export function QueryView({
                                     ? "Matched the waiting person"
                                     : match === "Assignee"
                                       ? "Matched an assignee"
-                                    : `Matched in ${match === "Subtask" ? "a subtask" : "the diary"}`}
+                                      : `Matched in ${match === "Subtask" ? "a subtask" : "the diary"}`}
                                 </Badge>
                               ))}
                             {row.tagIds

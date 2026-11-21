@@ -58,14 +58,48 @@ function task(id: string, title: string, containerId: string, spaceId: string): 
 test("assignment picker offers owners and editors and shows completion", async () => {
   const requests: unknown[] = [];
   const item = task("t1", "Read", "bins", shared);
-  const person = (id: string, role: number) => ({ actorId: `person:${id}`, displayName: id, initials: id[0], colorIndex: 0, kind: "person", isMe: false, role, former: false });
-  const directoryApi = { list: async () => ({ ok: true, people: [person("Owner", 1), person("Editor", 2), person("Viewer", 3)], error: null }) };
-  const api = { ...taskRpc,
-    assignments: async () => ({ ok: true, mode: "Each", assignees: [{ memberId: "Owner", completedAtUtc: "2026-11-21T00:00:00Z" }], error: null }),
-    changeAssignee: async (request: unknown) => { requests.push(request); return { ok: true, operationId: "op", task: item, error: null, warning: null }; },
+  const person = (id: string, role: number) => ({
+    actorId: `person:${id}`,
+    displayName: id,
+    initials: id[0],
+    colorIndex: 0,
+    kind: "person",
+    isMe: false,
+    role,
+    former: false,
+  });
+  const directoryApi = {
+    list: async () => ({ ok: true, people: [person("Owner", 1), person("Editor", 2), person("Viewer", 3)], error: null }),
+  };
+  const api = {
+    ...taskRpc,
+    assignments: async () => ({
+      ok: true,
+      mode: "Each",
+      assignees: [{ memberId: "Owner", completedAtUtc: "2026-11-21T00:00:00Z" }],
+      error: null,
+    }),
+    changeAssignee: async (request: unknown) => {
+      requests.push(request);
+      return { ok: true, operationId: "op", task: item, error: null, warning: null };
+    },
   };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<AssignmentPicker task={item} taskApi={api} directoryApi={directoryApi} canEdit run={async (action, after) => { const result = await action(); if (result.task) after?.(result.task); }} onSaved={() => {}} setError={() => {}} />, { container: dom.window.document.body });
+  render(
+    <AssignmentPicker
+      task={item}
+      taskApi={api}
+      directoryApi={directoryApi}
+      canEdit
+      run={async (action, after) => {
+        const result = await action();
+        if (result.task) after?.(result.task);
+      }}
+      onSaved={() => {}}
+      setError={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
   try {
     assert.ok(await screen.findByText("Owner"));
     assert.ok(screen.getByText("Completed"));
@@ -74,17 +108,33 @@ test("assignment picker offers owners and editors and shows completion", async (
     await user.click(screen.getByRole("checkbox", { name: /Editor/ }));
     assert.equal((requests[0] as { memberId: string; assigned: boolean }).memberId, "Editor");
     assert.equal((requests[0] as { assigned: boolean }).assigned, true);
-  } finally { cleanup(); }
+  } finally {
+    cleanup();
+  }
 });
 
 test("assignee chips read task assignments in one batch and show names and completion", async () => {
   const items = [task("t1", "One", "bins", shared), task("t2", "Two", "bins", shared)];
   const calls: string[][] = [];
-  const api = { assignmentSummaries: async ({ taskIds }: { taskIds: readonly string[] }) => {
-    calls.push([...taskIds]);
-    return { ok: true, error: null, tasks: [{ taskId: "t1", spaceId: shared, assignees: [{ memberId: "a", completedAtUtc: "2026-11-21T00:00:00Z" }] }] };
-  } };
-  const directory = { list: async () => ({ ok: true, error: null, people: [{ actorId: "person:a", displayName: "Ana", initials: "A", colorIndex: 0, kind: "person", isMe: false, role: 2, former: false }] }) };
+  const api = {
+    assignmentSummaries: async ({ taskIds }: { taskIds: readonly string[] }) => {
+      calls.push([...taskIds]);
+      return {
+        ok: true,
+        error: null,
+        tasks: [{ taskId: "t1", spaceId: shared, assignees: [{ memberId: "a", completedAtUtc: "2026-11-21T00:00:00Z" }] }],
+      };
+    },
+  };
+  const directory = {
+    list: async () => ({
+      ok: true,
+      error: null,
+      people: [
+        { actorId: "person:a", displayName: "Ana", initials: "A", colorIndex: 0, kind: "person", isMe: false, role: 2, former: false },
+      ],
+    }),
+  };
   function Example() {
     const { chips } = useAssigneeChips(items, 0, api, directory);
     return <AssigneeChips people={chips.t1} />;
@@ -94,7 +144,9 @@ test("assignee chips read task assignments in one batch and show names and compl
     assert.ok(await screen.findByText("Ana"));
     assert.ok(screen.getByLabelText("completed"));
     assert.deepEqual(calls, [["t1", "t2"]]);
-  } finally { cleanup(); }
+  } finally {
+    cleanup();
+  }
 });
 
 test("access follows the role: Personal edits, owner and editor edit, viewer and unknown spaces do not", () => {
