@@ -46,6 +46,7 @@ public sealed record SpaceRecord : AggregateRecord
     public required string OwnerProfileId { get; init; }
     public required SpaceKind Kind { get; init; }
     public required string Name { get; init; }
+    public string? DefaultDeadlineReminderJson { get; init; }
 }
 
 public sealed record ContainerRecord : AggregateRecord

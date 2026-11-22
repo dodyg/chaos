@@ -5,6 +5,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Reminders;
 using Chaos.Application.Summaries;
 using Chaos.Application.Views;
+using Chaos.Infrastructure.Activity;
 
 namespace Chaos.Desktop.Platform;
 
@@ -17,7 +18,7 @@ namespace Chaos.Desktop.Platform;
 /// tick generates scheduled plain summaries (PLAN §12) when one is given: morning, evening and
 /// weekly at their times, and missed periods once at the next start.
 /// </summary>
-public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null, IJobRuns? jobRuns = null) : IDisposable
+public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null, IJobRuns? jobRuns = null, CollaborationNoticeDeriver? collaboration = null, CollaborationInbox? inbox = null) : IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
@@ -96,6 +97,18 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
     private async Task TickPassAsync(CancellationToken ct)
     {
         {
+            if (collaboration is not null) await collaboration.DeriveAsync(ct);
+            await reminders.ResyncAllAsync(ct);
+            if (inbox is not null)
+            {
+                foreach (var notice in await inbox.DueAsync(ct))
+                {
+                    await adapter.ShowAsync(new NotificationRequest(notice.Id, 1, notice.TaskId ?? string.Empty,
+                        notice.Kind == "assigned" ? $"Assigned by {notice.ActorName}" : notice.Kind == "due-soon" ? "Task due soon" : $"Mentioned by {notice.ActorName}",
+                        notice.Kind == "assigned" ? "A task was assigned to you." : notice.Kind == "due-soon" ? "A shared task is due within a day." : "You were mentioned in a shared space.", clock.GetUtcNow(), false, IsCollaboration: true), ct);
+                    await inbox.MarkDeliveredAsync(notice.Id, ct);
+                }
+            }
             if (summaries is not null)
             {
                 await summaries.GenerateDueAsync(ct);

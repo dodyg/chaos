@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "../../Chaos.Desktop/frontend/src/markdownCore";
+import {
+  diagramFailureMessage,
+  isMemberMention,
+  isSafeExternalUrl,
+  reapplyInlineStyles,
+} from "../../Chaos.Desktop/frontend/src/markdownCore";
 
 const remarkPlugins = [remarkGfm];
 function MermaidDiagram({ source }) {
@@ -54,7 +59,7 @@ export function attachmentUrl(src) {
   return match ? `/v1/web/attachments/${match[1].toLowerCase()}` : null;
 }
 function urlTransform(url) {
-  return attachmentLink.test(url) ? url : defaultUrlTransform(url);
+  return attachmentLink.test(url) || isMemberMention(url) ? url : defaultUrlTransform(url);
 }
 
 function NoteImage({ src, alt }) {
@@ -84,6 +89,12 @@ const components = {
   h4: "h6",
   h5: "h6",
   a({ node, href, children, ...props }) {
+    if (href && isMemberMention(href))
+      return (
+        <span className="member-mention" data-mention="true">
+          {children}
+        </span>
+      );
     // Only http, https and mailto links are clickable, as in the desktop app; same-note anchors still work.
     if (!href || (!href.startsWith("#") && !isSafeExternalUrl(href))) return children;
     return (

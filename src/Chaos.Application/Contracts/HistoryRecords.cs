@@ -13,6 +13,7 @@ public sealed record DiaryEntryRecord : AggregateRecord
     public required string RawMarkdown { get; init; }
     public required long Revision { get; init; }
     public DateTimeOffset? EditedAtUtc { get; init; }
+    public bool RemovedByOwner { get; init; }
 }
 
 /// <summary>One saved state of a diary entry; the store appends one for every add and update.</summary>

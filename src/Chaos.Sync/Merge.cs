@@ -22,7 +22,8 @@ public sealed record SyncChange(
     string Kind,
     string EntityKey,
     SyncOp Op,
-    IReadOnlyDictionary<string, SyncGroupState> Groups)
+    IReadOnlyDictionary<string, SyncGroupState> Groups,
+    string? ActorId = null)
 {
     public static SyncChange Upsert(string changeId, string kind, string entityKey, IReadOnlyDictionary<string, SyncGroupState> groups) =>
         new(changeId, kind, entityKey, SyncOp.Upsert, groups);

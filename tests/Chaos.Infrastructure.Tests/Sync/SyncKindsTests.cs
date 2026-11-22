@@ -81,7 +81,8 @@ public sealed class SyncKindsTests
             await Assert.That(kind.KeyParts).IsEqualTo(table.Key.Count);
             await Assert.That(kind.ApplyOrder).IsEqualTo(table.ApplyOrder);
             await Assert.That(kind.Groups.Select(group => group.Name)).IsEquivalentTo(table.Groups.Select(group => group.Name));
-            await Assert.That(kind.HasSpace).IsEqualTo(table.Groups.Any(group => group.Name == "create" && group.Columns.Contains("SpaceId")));
+            // Notification preferences refer to a space but belong to the member's account stream.
+            await Assert.That(kind.HasSpace).IsEqualTo(table.Kind != "space_notification_setting" && table.Groups.Any(group => group.Name == "create" && group.Columns.Contains("SpaceId")));
             var route = table.Kind == "space_member" ? SyncRouteKind.ServerOnly
                 : parentKinds.Contains(table.Kind) ? SyncRouteKind.Parent
                 : tagLinks.Contains(table.Kind) ? SyncRouteKind.FollowsTag

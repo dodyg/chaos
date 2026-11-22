@@ -1196,3 +1196,7 @@ plan provides one, and each blocking package stays unticked until the owner conf
 ## 2026-11-21 (Q7 delegation sequencing)
 
 - The owner chose to leave shared-space quick-add `+name` combined with `follow up` as text until Q13 supplies delegation. Q7 may implement ordinary member assignment and Personal waiting without advancing Q13.
+## 2026-11-22 (Q8 shared notifications)
+
+- Due-soon notices are offered within 24 hours of the due instant for tasks assigned to the member or without assignees; they are off by default.
+- The owner default deadline reminder stores an offset in minutes in `DefaultDeadlineReminderJson`. Derived jobs use a separate local notification source and never create reminder rules.

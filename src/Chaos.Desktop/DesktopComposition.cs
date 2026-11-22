@@ -125,7 +125,9 @@ internal sealed class DesktopComposition : IDisposable
             _reminders = new ReminderCommands(store, ids, clock, _tasks, notifications);
             // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
             _summaries = new SummaryCommands(store, ids, clock);
-            _reminderEngine = Own(new ReminderEngine(_reminders, notifications, clock, _summaries, _viewAlerts, jobRuns));
+            _reminderEngine = Own(new ReminderEngine(_reminders, notifications, clock, _summaries, _viewAlerts, jobRuns,
+                new Chaos.Infrastructure.Activity.CollaborationNoticeDeriver(store, clock),
+                new Chaos.Infrastructure.Activity.CollaborationInbox(store, clock)));
 
             // Backups, restore, export, import and deletion (PLAN §14). Attachment bytes live behind IAttachmentFileStore
             // (PLAN2 §9.1); this is the one place the provider is chosen.
@@ -260,6 +262,9 @@ internal sealed class DesktopComposition : IDisposable
         var committed = rpc.AddActivityEventsCommittedEvent();
         _activityPublisher.Attach(payload => committed.PublishAsync(payload).AsTask());
         rpc.AddActivityRpcService(new ActivityRpcService(_activityFeed));
+        rpc.AddCollaborationRpcService(new CollaborationRpcService(
+            new Chaos.Infrastructure.Activity.CollaborationInbox(_store, _clock),
+            new Chaos.Infrastructure.Activity.SpaceNotificationPreferences(_store, _clock)));
         rpc.AddShellRpcService(new ShellRpcService(Activations, shell, ProfileSettings, _appVersion, _reminderEngine.ResyncAsync, store));
         rpc.AddUpdatesRpcService(new UpdatesRpcService(_releaseFeed, new ShellBrowser(), _appVersion));
         rpc.AddTaskRpcService(new TaskRpcService(_tasks, _githubEngine));

@@ -38,6 +38,19 @@ async function show(source) {
   };
 }
 
+test("member mentions are inert chips and unknown schemes stay blocked", async () => {
+  const id = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const view = await show(`[@Mina](chaos:member/${id}) [other](chaos:unknown/${id})`);
+  try {
+    assert.equal(view.container.querySelector('[data-mention="true"]').textContent, "@Mina");
+    assert.equal(view.container.querySelectorAll('[data-mention="true"]').length, 1);
+    assert.equal(view.container.querySelector("a"), null);
+    assert.match(view.container.textContent, /other/);
+  } finally {
+    await view.close();
+  }
+});
+
 test("Mermaid fences render SVG while ordinary code remains code", async () => {
   const view = await show("```mermaid\nerDiagram\n CUSTOMER ||--o{ ORDER : places\n```\n\n```js\nconst n = 1;\n```");
   try {

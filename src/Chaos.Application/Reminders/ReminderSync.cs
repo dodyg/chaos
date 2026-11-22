@@ -4,6 +4,7 @@ using Chaos.Application.Queries;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Reminders;
 using Chaos.Domain.Tasks;
+using System.Text.Json;
 
 namespace Chaos.Application.Reminders;
 
@@ -108,6 +109,19 @@ public static class ReminderSync
             desired[(NotificationSourceKind.ReminderRule, rule.Id)] = RuleTarget(rule, task, profile, zone).Target;
         }
 
+        var space = await session.Spaces.GetAsync(task.SpaceId, ct);
+        if (space is { Kind: SpaceKind.Shared, DefaultDeadlineReminderJson: not null }
+            && await session.Notifications.OwnerDefaultEnabledAsync(profile.Id, task.SpaceId, ct)
+            && DefaultOffset(space.DefaultDeadlineReminderJson) is { } offset)
+        {
+            var members = await session.People.ListAsync(task.SpaceId, ct);
+            var active = members.Any(member => !member.Former && string.Equals(member.ActorId, $"person:{profile.Id}", StringComparison.OrdinalIgnoreCase));
+            var assignees = (await session.Tasks.ListAssigneesAsync(taskId, ct)).Where(a => a.DeletedAtUtc is null).ToList();
+            var eligible = active && (assignees.Count == 0 || assignees.Any(a => string.Equals(a.MemberId, profile.Id, StringComparison.OrdinalIgnoreCase)));
+            var due = eligible && !task.IsTerminal && task.DeletedAtUtc is null ? DueAnchor(task, profile, zone) : null;
+            desired[(NotificationSourceKind.SpaceDefault, $"spacedefault:{profile.Id}:{task.Id}")] = due is null ? null : ReminderTiming.OffsetTarget(due.Value, offset);
+        }
+
         if (await session.Waiting.FindActiveFollowUpAsync(taskId, ct) is { } followUp)
         {
             var waiting = await session.Waiting.FindActiveAsync(taskId, ct);
@@ -132,6 +146,21 @@ public static class ReminderSync
         foreach (var ((kind, sourceId), target) in desired)
         {
             await ApplyAsync(session, profile, zone, task, kind, sourceId, target, now, ids, ct);
+        }
+    }
+
+    private static int? DefaultOffset(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("offsetMinutes", out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var offset)
+                && Math.Abs((long)offset) <= ReminderTiming.MaximumOffsetMinutes ? offset : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

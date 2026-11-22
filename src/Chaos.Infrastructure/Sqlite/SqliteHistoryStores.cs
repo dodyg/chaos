@@ -53,7 +53,7 @@ public sealed class SqliteDiaryStore(SqliteConnection connection) : IDiaryStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE DiaryEntries SET EntryAtUtc = $entryAt, RawMarkdown = $markdown, Revision = $revision, EditedAtUtc = $edited,
-                Version = $version, UpdatedAtUtc = $updated, DeletedAtUtc = $deleted
+                Version = $version, UpdatedAtUtc = $updated, DeletedAtUtc = $deleted, RemovedByOwner = $removedByOwner
             WHERE Id = $id AND Version = $expected;
             """;
         command.Parameters.AddWithValue("$entryAt", StorageFormats.Instant(updated.EntryAtUtc));
@@ -63,6 +63,7 @@ public sealed class SqliteDiaryStore(SqliteConnection connection) : IDiaryStore
         command.Parameters.AddWithValue("$version", updated.Version);
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(updated.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        command.Parameters.AddWithValue("$removedByOwner", updated.RemovedByOwner ? 1 : 0);
         command.Parameters.AddWithValue("$id", updated.Id);
         command.Parameters.AddWithValue("$expected", expectedVersion);
         if (await command.ExecuteNonQueryAsync(ct) != 1)
@@ -137,6 +138,7 @@ public sealed class SqliteDiaryStore(SqliteConnection connection) : IDiaryStore
         CreatedAtUtc = reader.I("CreatedAtUtc"),
         UpdatedAtUtc = reader.I("UpdatedAtUtc"),
         DeletedAtUtc = reader.In("DeletedAtUtc"),
+        RemovedByOwner = reader.B("RemovedByOwner"),
     };
 }
 

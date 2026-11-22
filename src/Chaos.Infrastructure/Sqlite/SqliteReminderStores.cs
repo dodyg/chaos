@@ -268,6 +268,9 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chao
             SELECT TaskId FROM ReminderRules WHERE ProfileId=$profile AND DeletedAtUtc IS NULL
             UNION SELECT TaskId FROM FollowUps WHERE ProfileId=$profile AND DeletedAtUtc IS NULL AND ResolvedAtUtc IS NULL
             UNION SELECT TaskId FROM NotificationJobs WHERE ProfileId=$profile AND State IN (0,1)
+            UNION SELECT t.Id FROM Tasks t JOIN Spaces s ON s.Id=t.SpaceId
+              JOIN SpaceMembers m ON m.SpaceId=s.Id AND m.MemberId=$profile COLLATE NOCASE AND m.RemovedAtUtc IS NULL
+              WHERE s.Kind=2 AND s.DefaultDeadlineReminderJson IS NOT NULL AND t.DeletedAtUtc IS NULL
             ORDER BY 1
             """;
         command.Parameters.AddWithValue("$profile", profileId);
@@ -275,6 +278,15 @@ public sealed class SqliteNotificationJobStore(SqliteConnection connection, Chao
         var ids = new List<string>();
         while (await reader.ReadAsync(ct)) ids.Add(reader.GetString(0));
         return ids;
+    }
+
+    public async Task<bool> OwnerDefaultEnabledAsync(string profileId, string spaceId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE((SELECT CASE WHEN \"Nothing\"=1 THEN 0 ELSE OwnerDefaultReminder END FROM SpaceNotificationSettings WHERE ProfileId=$profile AND SpaceId=$space),1);";
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$space", spaceId);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(ct), System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 
     private async Task<IReadOnlyList<NotificationJobRecord>> ReadAsync(string sql, CancellationToken ct, params (string Name, object Value)[] parameters)

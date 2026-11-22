@@ -24,7 +24,8 @@ public sealed record NotificationRequest(
     string Title,
     string Body,
     DateTimeOffset DeliverAtUtc,
-    bool IsFollowUp);
+    bool IsFollowUp,
+    bool IsCollaboration = false);
 
 public enum NotificationShowOutcome { System = 0, InApp = 1, Suppressed = 2 }
 

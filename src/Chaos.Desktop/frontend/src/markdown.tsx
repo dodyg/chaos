@@ -12,7 +12,7 @@ import type { Root as HastRoot, ElementContent } from "hast";
 import { ChevronRight, ImageOff, Link2Off, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { attachmentRpc } from "#neoastra";
-import { diagramFailureMessage, isSafeExternalUrl, reapplyInlineStyles } from "./markdownCore";
+import { diagramFailureMessage, isMemberMention, isSafeExternalUrl, reapplyInlineStyles } from "./markdownCore";
 import {
   AttachmentCard,
   internalAttachmentId,
@@ -867,6 +867,13 @@ function AttachmentImage({ id, alt, links }: { id: string; alt: string; links: M
 }
 
 function MarkdownLink({ url, links, children }: { url: string; links: MarkdownLinks; children: React.ReactNode }) {
+  if (isMemberMention(url)) {
+    return (
+      <span className="inline rounded-full bg-muted px-1.5 py-0.5 text-sm font-medium" data-mention="true">
+        {children}
+      </span>
+    );
+  }
   const fileId = internalAttachmentId(url);
   if (fileId) {
     if (!links.attachments) return <span className="text-muted-foreground">{children}</span>;

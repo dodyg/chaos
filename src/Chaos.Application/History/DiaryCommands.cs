@@ -1,6 +1,7 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
+using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.History;
 
@@ -41,7 +42,8 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
         await store.QueryAsync<IReadOnlyList<TimelineItem>>(async (session, token) =>
         {
             _ = await session.Tasks.GetIncludingDeletedAsync(taskId, token) ?? throw AppException.NotFound("No task with that ID exists on this computer.");
-            var diary = await session.Diary.ListByTaskAsync(taskId, includeDeleted: false, token);
+            var diary = (await session.Diary.ListByTaskAsync(taskId, includeDeleted: true, token))
+                .Where(entry => entry.DeletedAtUtc is null || entry.RemovedByOwner);
             var history = await session.History.ListByTaskAsync(taskId, token);
             return [.. diary.Select((entry, index) => (Item: new TimelineItem(entry.EntryAtUtc, entry, null), Rank: 0, Index: index))
                 .Concat(history.Select((entry, index) => (Item: new TimelineItem(entry.EffectiveAtUtc, null, entry), Rank: 1, Index: index)))
@@ -132,8 +134,20 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
                     throw AppException.VersionConflict("This diary entry changed elsewhere while you were working. Refresh and try again.");
                 }
 
-                _ = await session.Tasks.GetAsync(entry.TaskId, inner)
+                var task = await session.Tasks.GetAsync(entry.TaskId, inner)
                     ?? throw AppException.Validation("taskId", "Restore the task before changing its diary.");
+                var space = await session.Spaces.GetAsync(task.SpaceId, inner);
+                if (space?.Kind == SpaceKind.Shared)
+                {
+                    var members = await session.People.ListAsync(task.SpaceId, inner);
+                    var me = members.FirstOrDefault(member => !member.Former &&
+                        string.Equals(member.ActorId, $"person:{profile.Id}", StringComparison.OrdinalIgnoreCase));
+                    var author = string.Equals(entry.AuthorProfileId, profile.Id, StringComparison.OrdinalIgnoreCase);
+                    if (me is null || (!author && !(commandKind == "diary.delete" && me.Role == 1)))
+                        throw AppException.Validation("entryId", commandKind == "diary.delete"
+                            ? "Only the author or a space owner can delete this entry."
+                            : "Only the author can change this entry.");
+                }
                 var link = await session.GitHub.FindLinkByTaskAsync(entry.TaskId, inner);
                 var mapping = link is null or { State: 4 } ? null : (await session.GitHub.ListCommentLinksAsync(link.Id, inner)).FirstOrDefault(m => m.DiaryEntryId == entry.Id);
                 if (deleteOnGitHub && (mapping is null || mapping.CommentId is null)) throw AppException.Validation("entryId", "This diary entry has no GitHub comment to delete.");
@@ -147,6 +161,10 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
                 {
                     return new DiaryMutationResult(entry, Replayed: false); // nothing to change
                 }
+
+                if (commandKind == "diary.delete")
+                    updated = updated with { RemovedByOwner = !string.Equals(entry.AuthorProfileId, profile.Id, StringComparison.OrdinalIgnoreCase) };
+                else if (commandKind == "diary.restore") updated = updated with { RemovedByOwner = false };
 
                 var applied = await session.Diary.UpdateAsync(
                     updated with { Revision = entry.Revision + 1, Version = entry.Version + 1, UpdatedAtUtc = now },

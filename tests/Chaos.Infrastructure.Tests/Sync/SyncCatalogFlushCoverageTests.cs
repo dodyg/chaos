@@ -22,6 +22,7 @@ using Chaos.Domain.Recurrence;
 using Chaos.Domain.Summaries;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sqlite;
+using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
@@ -62,6 +63,7 @@ public sealed class SyncCatalogFlushCoverageTests
 
         ["task"] = Work,
         ["task_assignee"] = "assignment",
+        ["space_notification_setting"] = "assignment",
         ["subtask"] = Work,
         ["task_tag"] = Work,
         ["task_history"] = Work,
@@ -195,6 +197,8 @@ public sealed class SyncCatalogFlushCoverageTests
                 });
                 var assignedTask = (await host.Tasks.CaptureAsync(new(Op(), container, "Assign", null))).Task;
                 await host.Tasks.ChangeAssigneeAsync(new(Op(), assignedTask.Id, assignedTask.Version, profile!.Id, true));
+                await new SpaceNotificationPreferences(host.Store, host.Clock).SetAsync(space, new SpaceNotificationPreference(Nothing: true));
+                expected["space_notification_setting"] = $"spacenotify:{profile.Id}:{space}";
                 expected["task_assignee"] = $"{assignedTask.Id}|{profile.Id}";
                 break;
             case "reminder_ack":

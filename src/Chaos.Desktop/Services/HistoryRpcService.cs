@@ -18,7 +18,7 @@ public sealed record TaskSnapshotResponse(TaskResponse Task, bool Deleted, IRead
 public sealed record HistoryAsOfResponse(bool Ok, bool Existed, TaskSnapshotResponse? Snapshot, HistoryEntryResponse? Entry, TaskErrorResponse? Error);
 public sealed record RestoreFieldsRequest(string OperationId, string TaskId, string ExpectedVersion, string EntryId, IReadOnlyList<string> Fields);
 
-public sealed record DiaryEntryResponse(string Id, string TaskId, string EntryAtUtc, string Markdown, string Revision, string? EditedAtUtc, string Version, bool Deleted);
+public sealed record DiaryEntryResponse(string Id, string TaskId, string EntryAtUtc, string Markdown, string Revision, string? EditedAtUtc, string Version, bool Deleted, string AuthorProfileId, bool RemovedByOwner);
 public sealed record DiaryListRequest(string TaskId, bool IncludeDeleted);
 public sealed record DiaryListResponse(bool Ok, IReadOnlyList<DiaryEntryResponse> Entries, TaskErrorResponse? Error);
 public sealed record TimelineItemResponse(string AtUtc, DiaryEntryResponse? Diary, HistoryEntryResponse? Event);
@@ -236,10 +236,10 @@ internal static class HistoryRpc
         StorageFormats.Instant(entry.EffectiveAtUtc), entry.AggregateVersion.ToString(CultureInfo.InvariantCulture), entry.Actor);
 
     public static DiaryEntryResponse Map(DiaryEntryRecord entry) => new(
-        entry.Id, entry.TaskId, StorageFormats.Instant(entry.EntryAtUtc), entry.RawMarkdown,
+        entry.Id, entry.TaskId, StorageFormats.Instant(entry.EntryAtUtc), entry.DeletedAtUtc is not null && entry.RemovedByOwner ? string.Empty : entry.RawMarkdown,
         entry.Revision.ToString(CultureInfo.InvariantCulture),
         entry.EditedAtUtc is null ? null : StorageFormats.Instant(entry.EditedAtUtc.Value),
-        entry.Version.ToString(CultureInfo.InvariantCulture), entry.DeletedAtUtc is not null);
+        entry.Version.ToString(CultureInfo.InvariantCulture), entry.DeletedAtUtc is not null, entry.AuthorProfileId, entry.RemovedByOwner);
 
     public static TaskSnapshotResponse Map(TaskAggregateSnapshot snapshot) => new(
         TaskRpcService.ToResponse(snapshot.Task),

@@ -228,6 +228,10 @@ public static class SyncCatalog
         new SyncTable("CalendarEvents", "calendar_event", SyncMode.LocalOnly, ["SourceId", "ExternalId"], ApplyOrder: 532), // each device fetches its own cache (PLAN2 §10.2)
         new SyncTable("CalendarSourceState", "calendar_source_state", SyncMode.LocalOnly, ["SourceId"], ApplyOrder: 533), // this device's fetch state, ETag included
         new SyncTable("GoogleAccountState", "google_account_state", SyncMode.LocalOnly, ["AccountId"], ApplyOrder: 534), // this device's sign-in problems (P6)
+        new SyncTable("SpaceNotificationSettings", "space_notification_setting", SyncMode.Merge, ["Id"],
+            Groups: [new("create", ["ProfileId", "SpaceId", "CreatedAtUtc"]),
+                new("settings", ["Assigned", "Mentioned", "DueSoon", "Delegations", "Nothing", "OwnerDefaultReminder"])],
+            LocalColumns: ["Version"], ApplyOrder: 58),
         new SyncTable("Tasks", "task", SyncMode.Merge, ["Id"],
             Groups:
             [
@@ -287,7 +291,7 @@ public static class SyncCatalog
             [
                 new("create", ["TaskId", "AuthorProfileId", "EntryAtUtc", "CreatedAtUtc"]),
                 new("entry", ["RawMarkdown", "EditedAtUtc"]),
-                new("deleted", ["DeletedAtUtc"]),
+                new("deleted", ["DeletedAtUtc", "RemovedByOwner"]),
             ],
             LocalColumns: ["Version", "Revision"], // Revision numbers this device's version rows (DiaryRevisions stay local)
             ApplyOrder: 100),
@@ -644,6 +648,7 @@ public static class SyncCatalog
         new SyncTable("SyncOutbox", "sync_outbox", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 524), // outgoing queue
         new SyncTable("SyncInboxParked", "sync_inbox_parked", SyncMode.LocalOnly, ["ChangeId"], ApplyOrder: 525), // parked remote changes (§7.8)
         new SyncTable("SyncAttention", "sync_attention", SyncMode.LocalOnly, ["Id"], ApplyOrder: 526), // notices for the person (§7.9)
+        new SyncTable("CollaborationNotices", "collaboration_notice", SyncMode.LocalOnly, ["Id"], ApplyOrder: 543),
         new SyncTable("ActivityLog", "activity_log", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 535), // system event stream (PLAN2 §6.4)
         new SyncTable("ActivityLogEntities", "activity_log_entity", SyncMode.LocalOnly, ["Seq", "Kind", "EntityKey"], ApplyOrder: 536),
         new SyncTable("ActivityCursors", "activity_cursor", SyncMode.LocalOnly, ["Consumer"], ApplyOrder: 537),

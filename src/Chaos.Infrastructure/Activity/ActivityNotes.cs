@@ -9,8 +9,12 @@ namespace Chaos.Infrastructure.Activity;
 public sealed class ActivityNotes : IActivityRecorder
 {
     private readonly List<(string Kind, string Key, ActivityOp Op, long? Version)> _items = [];
+    private readonly List<RemoteTextChange> _remoteTextChanges = [];
 
     public IReadOnlyList<(string Kind, string Key, ActivityOp Op, long? Version)> Items => _items;
+    public IReadOnlyList<RemoteTextChange> RemoteTextChanges => _remoteTextChanges;
+
+    public void NoteRemoteText(RemoteTextChange change) => _remoteTextChanges.Add(change);
 
     public void Note(string kind, string entityKey, ActivityOp op, long? version = null)
     {
@@ -19,3 +23,6 @@ public sealed class ActivityNotes : IActivityRecorder
         _items.Add((kind, entityKey, op, version));
     }
 }
+
+/// <summary>A winning remote text change, captured before another change can overwrite its prior value.</summary>
+public sealed record RemoteTextChange(string ChangeId, string Kind, string EntityId, string SpaceId, string ActorId, string? Before, string After);

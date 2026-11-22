@@ -1043,6 +1043,7 @@ function PageEditor({
           key={isDaily ? "daily" : page?.id}
           id={isDaily ? "page-daily" : `page-${page?.id}`}
           label={isDaily ? "Daily page" : "Page"}
+          spaceId={page?.spaceId}
           attachmentOwner={page ? { kind: "page", id: page.id } : undefined}
           attachmentApi={links.attachmentApi}
           value={body}

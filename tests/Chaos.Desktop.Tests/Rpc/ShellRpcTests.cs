@@ -131,4 +131,16 @@ public sealed class ShellRpcTests
         await Assert.That(WindowsToastAdapter.OsId(request).Length).IsEqualTo(16);
         await Assert.That(WindowsToastAdapter.OsId(request)).IsNotEqualTo(WindowsToastAdapter.OsId(request with { Generation = 10 }));
     }
+
+    [Test]
+    public async Task CollaborationToast_OpensTheMentionedTaskWithoutReminderActions()
+    {
+        var taskId = Guid.NewGuid().ToString("D");
+        var request = new NotificationRequest(Guid.NewGuid().ToString("D"), 1, taskId, "Mention", "A comment", DateTimeOffset.UnixEpoch, false, IsCollaboration: true);
+        var document = new XmlDocument();
+        document.LoadXml(WindowsToastAdapter.ContentXml(request));
+        var actions = document.SelectNodes("/toast/actions/action")!.Cast<XmlElement>().ToList();
+        await Assert.That(actions.Count).IsEqualTo(1);
+        await Assert.That(actions[0].GetAttribute("arguments")).IsEqualTo($"chaos:task/{taskId}");
+    }
 }

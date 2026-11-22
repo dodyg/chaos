@@ -24,6 +24,7 @@ type Engine = import("./VoiceRecorder").RecorderEngine;
 const base = {
   archived: false,
   archivedAtUtc: null,
+  spaceId: "",
   deleted: false,
   createdAtUtc: "",
   updatedAtUtc: "",

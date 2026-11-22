@@ -30,6 +30,7 @@ const { DraftRegistry } = await import("./padAutosave");
 function note(id: string, markdown: string, draftVersion = "1"): PadItemResponse {
   return {
     id,
+    spaceId: "",
     markdown,
     version: "2",
     draftVersion,

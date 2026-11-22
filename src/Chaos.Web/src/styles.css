@@ -373,6 +373,12 @@ h2 {
   overflow-wrap: anywhere;
   margin-top: 8px;
 }
+.markdown-notes .member-mention {
+  border-radius: 9999px;
+  background: #e7eaf0;
+  padding: 0.1em 0.45em;
+  font-weight: 600;
+}
 .markdown-notes > * + *,
 .markdown-notes blockquote > * + * {
   margin-block-start: 0.75em;

@@ -183,6 +183,7 @@ public interface INotificationJobStore
     Task<IReadOnlyList<NotificationJobRecord>> ListDeliveredAsync(string profileId, int limit, CancellationToken ct);
     /// <summary>Tasks of the profile that have an active reminder rule, an active follow-up or a pending notification.</summary>
     Task<IReadOnlyList<string>> ListTasksWithSourcesAsync(string profileId, CancellationToken ct);
+    Task<bool> OwnerDefaultEnabledAsync(string profileId, string spaceId, CancellationToken ct);
 }
 
 public interface IReminderRuleStore

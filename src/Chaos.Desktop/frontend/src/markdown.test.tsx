@@ -35,9 +35,56 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { MarkdownPreview, extractChecklist, htmlToMarkdown, internalLinkIds } = await import("./markdown");
 const { formatEdit, linkQueryAt, padLinkMarkdown, taskLinkMarkdown } = await import("./markdownEditing");
 const { MarkdownEditor } = await import("./MarkdownEditor");
+const { diaryAuthorLabel } = await import("./TaskJournal");
 const { App } = await import("./App");
 
 const taskId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+test("a former diary author retains their name", () => {
+  assert.equal(
+    diaryAuthorLabel(taskId, [
+      {
+        actorId: `person:${taskId}`,
+        displayName: "Mina",
+        initials: "M",
+        colorIndex: 0,
+        kind: "person",
+        isMe: false,
+        role: 2,
+        former: true,
+      },
+    ]),
+    "Mina (former member)",
+  );
+});
+
+test("member mentions render as inert chips and unknown schemes stay blocked", () => {
+  const { container } = render(<MarkdownPreview source={`[@Mina](chaos:member/${taskId}) [other](chaos:unknown/${taskId})`} />);
+  assert.equal(container.querySelector('[data-mention="true"]')?.textContent, "@Mina");
+  assert.equal(container.querySelectorAll('[data-mention="true"]').length, 1);
+  assert.equal(container.querySelector("a, button"), null);
+  assert.match(container.textContent ?? "", /other/);
+  cleanup();
+});
+
+test("the member picker inserts a stable mention using keyboard selection", async () => {
+  function Host() {
+    const [value, setValue] = React.useState("");
+    const members = React.useMemo(() => [{ id: taskId, name: "Mina" }], []);
+    return <MarkdownEditor id="mention-test" label="Comment" value={value} onChange={setValue} members={members} />;
+  }
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<Host />);
+  try {
+    const editor = screen.getByRole("combobox", { name: "Comment" });
+    await user.type(editor, "Hello @Mi");
+    assert.ok(await screen.findByRole("option", { name: /Mina/ }));
+    await user.keyboard("{Enter}");
+    assert.equal((editor as HTMLTextAreaElement).value, `Hello [@Mina](chaos:member/${taskId})`);
+  } finally {
+    cleanup();
+  }
+});
 
 test("GFM renders headings, emphasis, strike, tables, task lists and highlighted code as elements", () => {
   const source = [
@@ -443,6 +490,8 @@ test("the journal shows diary Markdown and history events, opens an earlier vers
               id: "d1",
               taskId,
               entryAtUtc: "2026-11-10T10:00:00.0000000Z",
+              authorProfileId: taskId,
+              removedByOwner: false,
               markdown: "Called **twice**",
               revision: "1",
               editedAtUtc: null,
@@ -503,11 +552,31 @@ test("the journal shows diary Markdown and history events, opens an earlier vers
 
 test("a connected journal offers explicit GitHub posting and deletion choices", async () => {
   const { TaskJournal } = await import("./TaskJournal");
+  const peopleApi = {
+    list: async () => ({
+      ok: true,
+      people: [
+        {
+          actorId: `person:${taskId}`,
+          displayName: "Me",
+          initials: "M",
+          colorIndex: 0,
+          kind: "person",
+          isMe: true,
+          role: 1,
+          former: false,
+        },
+      ],
+      error: null,
+    }),
+  };
   const deleted: boolean[] = [];
   const entry = {
     id: "d1",
     taskId,
     entryAtUtc: "2026-11-10T10:00:00Z",
+    authorProfileId: taskId,
+    removedByOwner: false,
     markdown: "Comment",
     revision: "1",
     editedAtUtc: null,
@@ -556,6 +625,7 @@ test("a connected journal offers explicit GitHub posting and deletion choices", 
       task={task(taskId, "Task")}
       api={journalApi}
       githubApi={githubApi}
+      peopleApi={peopleApi}
       revision={0}
       busy={false}
       onChanged={() => {}}
@@ -570,6 +640,7 @@ test("a connected journal offers explicit GitHub posting and deletion choices", 
         task={task(taskId, "Task")}
         api={journalApi}
         githubApi={githubApi}
+        peopleApi={peopleApi}
         revision={1}
         busy={false}
         onChanged={() => {}}

@@ -22,11 +22,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownPreview, htmlToMarkdown, type MarkdownLinks } from "./markdown";
-import { attachmentRpc } from "#neoastra";
+import { attachmentRpc, peopleRpc } from "#neoastra";
 import { AttachmentPanel, attachmentMarkdown, uploadFile, type AttachmentApi, type AttachmentOwnerKind } from "./attachments";
 import {
   formatEdit,
   linkQueryAt,
+  mentionQueryAt,
+  memberLinkMarkdown,
   listLinkMarkdown,
   padLinkMarkdown,
   pageLinkMarkdown,
@@ -40,12 +42,12 @@ import { continueList, indentItem, moveItem, outdentItem } from "./outline";
 export type LinkCandidate = {
   id: string;
   title: string;
-  kind?: "task" | "pad" | "page" | "list" | "newPage";
+  kind?: "task" | "pad" | "page" | "list" | "newPage" | "member";
   icon?: string | null;
   detail?: string;
 };
 
-const candidateLabels: Record<string, string> = { pad: "Note", page: "Page", list: "List", newPage: "New page" };
+const candidateLabels: Record<string, string> = { pad: "Note", page: "Page", list: "List", newPage: "New page", member: "Member" };
 
 type Props = {
   id: string;
@@ -57,6 +59,8 @@ type Props = {
   disabled?: boolean;
   /** Candidates for `[[` internal links (tasks now; pad items with package 5). */
   searchLinks?: (query: string) => Promise<LinkCandidate[]>;
+  members?: readonly { id: string; name: string }[];
+  spaceId?: string | null;
   links?: MarkdownLinks;
   onBlur?: () => void;
   /** Extra classes for the source area and preview box, e.g. a taller minimum height. */
@@ -109,6 +113,8 @@ export function MarkdownEditor({
   placeholder,
   disabled,
   searchLinks,
+  members,
+  spaceId,
   links,
   onBlur,
   areaClassName,
@@ -124,7 +130,30 @@ export function MarkdownEditor({
   const area = React.useRef<HTMLTextAreaElement | null>(null);
   const pendingSelection = React.useRef<[number, number] | null>(null);
   const [mode, setMode] = React.useState<"source" | "preview">("source");
-  const [linkQuery, setLinkQuery] = React.useState<{ start: number; query: string } | null>(null);
+  const [spaceMembers, setSpaceMembers] = React.useState<readonly { id: string; name: string }[]>([]);
+  React.useEffect(() => {
+    let active = true;
+    setSpaceMembers([]);
+    if (spaceId && !members)
+      void peopleRpc
+        .list({ spaceId })
+        .then((result) => {
+          if (active && result.ok)
+            setSpaceMembers(
+              result.people
+                .filter((p) => p.role !== null && !p.former && p.actorId.startsWith("person:"))
+                .map((p) => ({ id: p.actorId.slice(7), name: p.displayName })),
+            );
+        })
+        .catch(() => {
+          if (active) setSpaceMembers([]);
+        });
+    return () => {
+      active = false;
+    };
+  }, [spaceId, members]);
+  const mentionMembers = members ?? spaceMembers;
+  const [linkQuery, setLinkQuery] = React.useState<{ start: number; query: string; mention?: boolean } | null>(null);
   const [candidates, setCandidates] = React.useState<LinkCandidate[]>([]);
   const [active, setActive] = React.useState(0);
   const [expanded, setExpanded] = React.useState(false);
@@ -193,6 +222,17 @@ export function MarkdownEditor({
   }, [selectRange?.key]);
 
   React.useEffect(() => {
+    if (linkQuery?.mention) {
+      const query = linkQuery.query.trim().toLocaleLowerCase();
+      setCandidates(
+        mentionMembers
+          .filter((member) => member.name.toLocaleLowerCase().includes(query))
+          .slice(0, 8)
+          .map((member) => ({ id: member.id, title: member.name, kind: "member" })),
+      );
+      setActive(0);
+      return;
+    }
     if (!linkQuery || !searchLinks) {
       setCandidates([]);
       return;
@@ -214,7 +254,7 @@ export function MarkdownEditor({
       current = false;
       clearTimeout(timer);
     };
-  }, [linkQuery?.query, linkQuery?.start, searchLinks]);
+  }, [linkQuery?.query, linkQuery?.start, linkQuery?.mention, searchLinks, mentionMembers]);
 
   function apply(edit: TextEdit) {
     const element = area.current;
@@ -240,22 +280,25 @@ export function MarkdownEditor({
   }
 
   function trackLinkQuery(text: string, caret: number) {
-    setLinkQuery(searchLinks ? linkQueryAt(text, caret) : null);
+    const mention = mentionMembers.length ? mentionQueryAt(text, caret) : null;
+    setLinkQuery(mention ? { ...mention, mention: true } : searchLinks ? linkQueryAt(text, caret) : null);
   }
 
   function pick(candidate: LinkCandidate) {
     const element = area.current;
     if (!element || !linkQuery) return;
     const insert =
-      candidate.kind === "pad"
-        ? padLinkMarkdown(candidate.title, candidate.id)
-        : candidate.kind === "page"
-          ? pageLinkMarkdown(candidate.title, candidate.id)
-          : candidate.kind === "list"
-            ? listLinkMarkdown(candidate.title, candidate.id)
-            : candidate.kind === "newPage"
-              ? `[[${candidate.title.replace(/[[\]|]/g, "")}]]`
-              : taskLinkMarkdown(candidate.title, candidate.id);
+      candidate.kind === "member"
+        ? memberLinkMarkdown(candidate.title, candidate.id)
+        : candidate.kind === "pad"
+          ? padLinkMarkdown(candidate.title, candidate.id)
+          : candidate.kind === "page"
+            ? pageLinkMarkdown(candidate.title, candidate.id)
+            : candidate.kind === "list"
+              ? listLinkMarkdown(candidate.title, candidate.id)
+              : candidate.kind === "newPage"
+                ? `[[${candidate.title.replace(/[[\]|]/g, "")}]]`
+                : taskLinkMarkdown(candidate.title, candidate.id);
     apply({
       start: linkQuery.start,
       end: element.selectionStart,
@@ -471,10 +514,10 @@ export function MarkdownEditor({
                 grow && !expanded && "[field-sizing:content]",
               )}
               dir="auto"
-              role={searchLinks ? "combobox" : undefined}
-              aria-expanded={searchLinks ? showList : undefined}
+              role={searchLinks || mentionMembers.length ? "combobox" : undefined}
+              aria-expanded={searchLinks || mentionMembers.length ? showList : undefined}
               aria-controls={showList ? listId : undefined}
-              aria-autocomplete={searchLinks ? "list" : undefined}
+              aria-autocomplete={searchLinks || mentionMembers.length ? "list" : undefined}
               aria-activedescendant={showList ? `${listId}-${active}` : undefined}
               onChange={(event) => {
                 onChange(event.target.value);
@@ -500,7 +543,7 @@ export function MarkdownEditor({
               <ul
                 id={listId}
                 role="listbox"
-                aria-label="Link to a task, page or note"
+                aria-label={linkQuery?.mention ? "Mention a member" : "Link to a task, page or note"}
                 className="absolute inset-x-0 top-full z-20 mt-1 grid max-h-56 overflow-y-auto rounded-md border bg-popover p-1 text-sm shadow-md"
               >
                 {candidates.map((candidate, index) => (

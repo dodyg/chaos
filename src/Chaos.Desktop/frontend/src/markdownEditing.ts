@@ -96,6 +96,18 @@ export function linkQueryAt(text: string, caret: number): { start: number; query
   return { start: caret - match[0].length, query: match[1] };
 }
 
+/** A mention query at a word boundary; email addresses do not open the picker. */
+export function mentionQueryAt(text: string, caret: number): { start: number; query: string } | null {
+  const match = /(?:^|[\s(])@([^@\n\[\]]{0,60})$/.exec(text.slice(0, caret));
+  if (!match) return null;
+  return { start: caret - match[1].length - 1, query: match[1] };
+}
+
+export function memberLinkMarkdown(name: string, memberId: string): string {
+  const label = name.replace(/[[\]\\]/g, (character) => `\\${character}`);
+  return `[@${label}](chaos:member/${memberId})`;
+}
+
 /** Markdown for an internal task link: a readable label plus the stable ID. */
 export function taskLinkMarkdown(title: string, taskId: string): string {
   const label = title.replace(/[[\]\\]/g, (character) => `\\${character}`);

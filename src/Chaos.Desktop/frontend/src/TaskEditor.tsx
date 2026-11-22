@@ -71,7 +71,7 @@ import { GitHubTaskNotice } from "./GitHubTaskNotice";
 import { MeetingTaskNotice } from "./meetings";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { extractChecklist, MarkdownPreview, type MarkdownLinks } from "./markdown";
-import { TaskJournal, when } from "./TaskJournal";
+import { TaskJournal, diaryAuthorLabel, when } from "./TaskJournal";
 import { RecurrenceEditor } from "./RecurrenceEditor";
 import { TaskReminders, TaskWaiting } from "./Reminders";
 import { TagPicker } from "./tags";
@@ -162,6 +162,33 @@ export function TaskEditor({
   const { taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
   // A viewer of a shared space only ever gets the read-only view (PLAN3 §9.1).
   const spaceAccess = useSpaceRole(editing.spaceId);
+  const [mentionMembers, setMentionMembers] = React.useState<readonly { id: string; name: string }[]>([]);
+  const [journalPeople, setJournalPeople] = React.useState<readonly PersonResponse[]>([]);
+  React.useEffect(() => {
+    let current = true;
+    setMentionMembers([]);
+    setJournalPeople([]);
+    if (spaceAccess.shared) {
+      void peopleRpc
+        .list({ spaceId: editing.spaceId })
+        .then((result) => {
+          if (current && result.ok) {
+            setJournalPeople(result.people);
+            setMentionMembers(
+              result.people
+                .filter((person) => !person.former && person.actorId.startsWith("person:"))
+                .map((person) => ({ id: person.actorId.slice(7), name: person.displayName })),
+            );
+          }
+        })
+        .catch(() => {
+          if (current) setMentionMembers([]);
+        });
+    }
+    return () => {
+      current = false;
+    };
+  }, [editing.spaceId, spaceAccess.shared]);
   const canEdit = spaceAccess.canEdit;
   const viewingTask = viewingRequested || !canEdit;
   const drag = useDragReorder();
@@ -363,9 +390,9 @@ export function TaskEditor({
     setDiaryEntries([]);
     if (!viewingTask) return;
     let current = true;
-    void Promise.resolve(journalApi.diaryRpc.list({ taskId: editing.id, includeDeleted: false }))
+    void Promise.resolve(journalApi.diaryRpc.list({ taskId: editing.id, includeDeleted: true }))
       .then((result) => {
-        if (current && result?.ok) setDiaryEntries(result.entries.filter((entry) => !entry.deleted));
+        if (current && result?.ok) setDiaryEntries(result.entries.filter((entry) => !entry.deleted || entry.removedByOwner));
       })
       .catch(() => {
         /* the diary is supplementary in the view; the Diary tab still reports load errors */
@@ -373,7 +400,7 @@ export function TaskEditor({
     return () => {
       current = false;
     };
-  }, [viewingTask, editing.id, editing.version]);
+  }, [viewingTask, editing.id, editing.version, subtaskRevision]);
 
   async function runSubtask(action: () => Promise<SubtaskOperationResponse>, after?: (saved: SubtaskResponse) => void) {
     if (busy) return;
@@ -614,7 +641,7 @@ export function TaskEditor({
               </ul>
             </section>
           )}
-          {diaryEntries.length > 0 && (
+          {(canEdit || !spaceAccess.shared) && diaryEntries.length > 0 && (
             <section className="mt-6" aria-label="Diary">
               <h4 className="mb-2 font-semibold">
                 Diary<Count>{diaryEntries.length}</Count>
@@ -623,14 +650,35 @@ export function TaskEditor({
                 {diaryEntries.map((entry) => (
                   <li key={entry.id} className="grid gap-1.5 rounded-lg border bg-background p-3">
                     <span className="text-xs text-muted-foreground">
+                      {spaceAccess.shared && <>{diaryAuthorLabel(entry.authorProfileId, journalPeople)} · </>}
                       {when(entry.entryAtUtc)}
                       {entry.editedAtUtc && ` · edited ${when(entry.editedAtUtc)}`}
                     </span>
-                    <MarkdownPreview source={entry.markdown} links={links} compact className="text-sm" />
+                    {entry.deleted && entry.removedByOwner ? (
+                      <p className="text-sm italic text-muted-foreground">Removed by an owner</p>
+                    ) : (
+                      <MarkdownPreview source={entry.markdown} links={links} compact className="text-sm" />
+                    )}
                   </li>
                 ))}
               </ol>
             </section>
+          )}
+          {!canEdit && spaceAccess.shared && (
+            <div className="mt-6">
+              <TaskJournal
+                task={editing}
+                api={journalApi}
+                revision={revision + subtaskRevision}
+                busy={busy}
+                canChangeTask={false}
+                links={links}
+                searchLinks={searchLinks}
+                members={mentionMembers}
+                onError={setError}
+                onChanged={changed}
+              />
+            </div>
           )}
           {canEdit ? (
             <Button className="mt-6" variant="outline" onClick={() => setViewingTask(false)}>
@@ -724,6 +772,7 @@ export function TaskEditor({
                   placeholder="Add details… Markdown works here."
                   links={links}
                   searchLinks={searchLinks}
+                  members={mentionMembers}
                   areaClassName="min-h-[max(16rem,calc(100vh-24rem))]"
                 />
                 {checklistPanel()}
@@ -1224,6 +1273,7 @@ export function TaskEditor({
                   busy={busy}
                   links={links}
                   searchLinks={searchLinks}
+                  members={mentionMembers}
                   onError={setError}
                   onChanged={(saved) => {
                     if (saved) {

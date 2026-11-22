@@ -47,7 +47,7 @@ public static class PlainTextExport
             attachmentPaths[attachment.Id] = attachmentPath;
         }
 
-        string Links(string markdown, string filePath) => RewriteAttachmentLinks(markdown, filePath, attachmentPaths);
+        string Links(string markdown, string filePath) => RewriteMemberLinks(RewriteAttachmentLinks(markdown, filePath, attachmentPaths));
 
         var containers = snapshot.Containers.ToDictionary(c => c.Id, StringComparer.Ordinal);
         var folders = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -107,6 +107,15 @@ public static class PlainTextExport
             var pagePath = Unique(used, $"{folder}/{SafeFileName(page.Title, 60)} ({page.Id[..8]}).md");
             Add(zip, pagePath, Links(PageMarkdown(page), pagePath));
         }
+    }
+
+    /// <summary>Turns member links into readable names in human-readable Markdown exports, preserving code.</summary>
+    public static string RewriteMemberLinks(string markdown)
+    {
+        const string pattern = "(?<code>^[ \\t]{0,3}(?<fence>`{3,}|~{3,})[^\\r\\n]*(?:\\r?\\n|\\z).*?(?:^[ \\t]{0,3}\\k<fence>[ \\t]*$|\\z)|(?<tick>`+)[^\\r\\n]*?\\k<tick>)|(?<!\\\\)\\[(?<name>@(?:\\\\.|[^\\]\\\\])*)\\]\\(chaos:member/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\)";
+        return System.Text.RegularExpressions.Regex.Replace(markdown, pattern,
+            match => match.Groups["name"].Success ? match.Groups["name"].Value : match.Value,
+            System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     }
 
     /// <summary>Rewrites <c>chaos:attachment/&lt;id&gt;</c> to the relative path of the exported file; unknown ids are left alone.</summary>

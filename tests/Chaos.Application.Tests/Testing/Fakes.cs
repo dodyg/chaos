@@ -230,6 +230,7 @@ public sealed class FakeNotificationJobStore(List<NotificationJobRecord> rows) :
         Task.FromResult<IReadOnlyList<NotificationJobRecord>>([.. rows.Where(row => row.ProfileId == profileId && row.DeliveredAtUtc is not null).OrderByDescending(row => row.DeliveredAtUtc).Take(limit)]);
     public Task<IReadOnlyList<string>> ListTasksWithSourcesAsync(string profileId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<string>>([.. rows.Where(row => row.ProfileId == profileId && row.State == NotificationJobState.Pending).Select(row => row.TaskId).Distinct()]);
+    public Task<bool> OwnerDefaultEnabledAsync(string profileId, string spaceId, CancellationToken ct) => Task.FromResult(true);
 }
 
 public sealed class FakeDiaryStore(List<DiaryEntryRecord> rows, List<DiaryRevisionRecord> revisions) : IDiaryStore

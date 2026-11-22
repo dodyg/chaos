@@ -45,7 +45,7 @@ public sealed record FollowUpRecord : AggregateRecord
     public DateTimeOffset? DueAtUtc { get; init; }
 }
 
-public enum NotificationSourceKind { ReminderRule = 0, FollowUp = 1 }
+public enum NotificationSourceKind { ReminderRule = 0, FollowUp = 1, SpaceDefault = 2 }
 
 public enum NotificationJobState { Pending = 0, Delivered = 1, Acknowledged = 2, Snoozed = 3, Cancelled = 4 }
 

@@ -10,6 +10,7 @@ using Chaos.Application.Queries;
 using Chaos.Application.Spaces;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sync;
+using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Attachments;
 using Chaos.Server.Tests.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -206,6 +207,80 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
         await Assert.That(joined.Role).IsEqualTo(2);
         await world.SettleAsync();
         return (space.SpaceId, list, task);
+    }
+
+    [Test]
+    public async Task SharedPull_ReportsTheAuthenticatedChangeActor()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("actor-owner@example.com", "Ada");
+        var b = await world.AddPersonAsync("actor-editor@example.com", "Bo");
+        var (space, _, task) = await ShareAsync(world, a, b);
+        await EditAsync(b.Desktop, task, notes: "A note by Bo");
+        await world.SettleAsync();
+        var response = await a.Desktop.Client.CallAsync(HttpMethod.Get, $"v2/sync/pull?stream={space}&after=0&limit=1000", null, CancellationToken.None);
+        await Assert.That(response.Ok).IsTrue();
+        using var page = JsonDocument.Parse(response.Body);
+        var changes = page.RootElement.GetProperty("changes").EnumerateArray()
+            .Where(row => row.GetProperty("op").GetString() == "upsert")
+            .Select(Chaos.Sync.SyncJson.ParseChange).ToList();
+        var edit = changes.Single(change => change.Kind == "task" && change.EntityKey == task
+            && change.Groups.TryGetValue("notes", out var group) && Equals(group.Values.Values["Notes"], "A note by Bo"));
+        await Assert.That(edit.ActorId).IsEqualTo(b.ProfileId.ToString("D"));
+    }
+
+    [Test]
+    public async Task SharedComment_MentionsOnlyTheNamedMemberOnce()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("mention-a@example.com", "Ada");
+        var b = await world.AddPersonAsync("mention-b@example.com", "Bo");
+        var c = await world.AddPersonAsync("mention-c@example.com", "Cy");
+        var (space, _, task) = await ShareAsync(world, a, b);
+        await c.Spaces().JoinWithLinkAsync(await InviteAsync(a, space));
+        await world.SettleAsync();
+        var diary = new DiaryCommands(a.Desktop.Store, a.Desktop.Ids, a.Desktop.Clock);
+        var mention = $"[@Bo](chaos:member/{b.ProfileId:D})";
+        var entry = (await diary.AddAsync(new(Op(), task, $"Please review {mention}", null))).Entry;
+        await world.SettleAsync();
+        var bDeriver = new CollaborationNoticeDeriver(b.Desktop.Store, b.Desktop.Clock);
+        await Assert.That(await bDeriver.DeriveAsync()).IsEqualTo(1);
+        await Assert.That(await new CollaborationNoticeDeriver(a.Desktop.Store, a.Desktop.Clock).DeriveAsync()).IsEqualTo(0);
+        await Assert.That(await new CollaborationNoticeDeriver(c.Desktop.Store, c.Desktop.Clock).DeriveAsync()).IsEqualTo(0);
+        var due = await new CollaborationInbox(b.Desktop.Store, b.Desktop.Clock).DueAsync();
+        await Assert.That(due.Count).IsEqualTo(1);
+        await Assert.That(due[0].TaskId).IsEqualTo(task);
+        await diary.EditAsync(new(Op(), entry.Id, entry.Version, $"Please review {mention} tomorrow"));
+        await world.SettleAsync();
+        await Assert.That(await bDeriver.DeriveAsync()).IsEqualTo(0);
+        await Assert.That((await new CollaborationInbox(b.Desktop.Store, b.Desktop.Clock).ListAsync()).Count).IsEqualTo(1);
+        var current = (await a.Desktop.Tasks.GetAsync(task))!;
+        await a.Desktop.Tasks.ChangeAssigneeAsync(new(Op(), task, current.Version, b.ProfileId.ToString("D"), true));
+        await world.SettleAsync();
+        await Assert.That(await bDeriver.DeriveAsync()).IsEqualTo(1);
+        await Assert.That((await new CollaborationInbox(b.Desktop.Store, b.Desktop.Clock).ListAsync()).Any(n => n.Kind == "assigned" && n.TaskId == task)).IsTrue();
+    }
+
+    [Test]
+    public async Task OwnerDeletesAnotherMembersComment_LeavesPlaceholderOnBothDevices()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var owner = await world.AddPersonAsync("remove-owner@example.com", "Ada");
+        var author = await world.AddPersonAsync("remove-author@example.com", "Bo");
+        var (_, _, task) = await ShareAsync(world, owner, author);
+        var authorDiary = new DiaryCommands(author.Desktop.Store, author.Desktop.Ids, author.Desktop.Clock);
+        var entry = (await authorDiary.AddAsync(new(Op(), task, "Original comment", null))).Entry;
+        await world.SettleAsync();
+        var ownerDiary = new DiaryCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock);
+        var ownerEntry = (await ownerDiary.ListAsync(task, false)).Single(e => e.Id == entry.Id);
+        await ownerDiary.DeleteAsync(new(Op(), entry.Id, ownerEntry.Version));
+        await world.SettleAsync();
+        foreach (var diary in new[] { ownerDiary, authorDiary })
+        {
+            var placeholder = (await diary.TimelineAsync(task)).Single(item => item.Diary?.Id == entry.Id).Diary!;
+            await Assert.That(placeholder.DeletedAtUtc).IsNotNull();
+            await Assert.That(placeholder.RemovedByOwner).IsTrue();
+        }
     }
 
     [Test]

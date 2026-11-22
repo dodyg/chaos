@@ -33,6 +33,7 @@ const quotesId = "00000000-0000-4000-8000-000000000002";
 function page(id: string, title: string, markdown: string, patch: Partial<PageResponse> = {}): PageResponse {
   return {
     id,
+    spaceId: "",
     parentPageId: null,
     title,
     markdown,

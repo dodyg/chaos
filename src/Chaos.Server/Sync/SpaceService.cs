@@ -878,7 +878,7 @@ public sealed class SpaceService(
         {
             group = "removed"; column = "RemovedAtUtc"; return true;
         }
-        if (kind == "week_assignment")
+        if (kind is "week_assignment" or "space_notification_setting")
         {
             group = "purge"; column = string.Empty; return true;
         }

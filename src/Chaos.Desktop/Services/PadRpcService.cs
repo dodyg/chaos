@@ -12,7 +12,7 @@ public sealed record PadRegionDto(double X, double Y, double W, double H);
 public sealed record PadTaskLinkResponse(string TaskId, string Title, bool Deleted, string Quote, PadRegionDto? Region = null);
 public sealed record PadItemResponse(string Id, string Markdown, string Version, string DraftVersion, bool Archived, string? ArchivedAtUtc, bool Deleted,
     string CreatedAtUtc, string UpdatedAtUtc, IReadOnlyList<string> TagIds, IReadOnlyList<PadTaskLinkResponse> Tasks,
-    string Kind = "text", string? PreviewAttachmentId = null, int Width = 0, int Height = 0);
+    string Kind = "text", string? PreviewAttachmentId = null, int Width = 0, int Height = 0, string SpaceId = "");
 public sealed record PadListResponse(bool Ok, IReadOnlyList<PadItemResponse> Items, TaskErrorResponse? Error);
 public sealed record PadGetRequest(string ItemId);
 public sealed record PadCreateRequest(string OperationId, string Markdown);
@@ -215,7 +215,8 @@ public sealed class PadRpcService(PadCommands pad)
         view.Item.Kind == PadItemKind.Drawing ? "drawing" : "text",
         view.Drawing?.PreviewAttachmentId,
         view.Drawing?.Width ?? 0,
-        view.Drawing?.Height ?? 0);
+        view.Drawing?.Height ?? 0,
+        view.Item.SpaceId);
 
     private static PadRegionDto? MapRegion(PadRegion? region) => region is null ? null : new(region.X, region.Y, region.W, region.H);
 

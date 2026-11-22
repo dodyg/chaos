@@ -63,6 +63,7 @@ public sealed class SqliteSpaceStore(SqliteConnection connection) : ISpaceStore
         OwnerProfileId = r.S("OwnerProfileId"),
         Kind = (SpaceKind)(int)r.L("Kind"),
         Name = r.S("Name"),
+        DefaultDeadlineReminderJson = r.Sn("DefaultDeadlineReminderJson"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

@@ -233,6 +233,7 @@ const drawings = new Map<string, { strokesJson: string; revision: string }>();
 const padNotes: PadItemResponse[] = [
   {
     id: "pad-1",
+    spaceId: "",
     markdown: "React Server Components\n\n- read the RFC\n- try it in a side project",
     version: "1",
     draftVersion: "1",
@@ -1483,6 +1484,7 @@ function pageView(page: PreviewPage) {
   ];
   return {
     ...pageSummary(page),
+    spaceId: "",
     markdown: page.markdown,
     draftVersion: String(page.draftVersion),
     createdAtUtc: page.createdAtUtc,

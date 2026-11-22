@@ -32,7 +32,11 @@ public static class SyncJson
         var groups = root.TryGetProperty("groups", out var groupsElement)
             ? ParseGroups(groupsElement, kind)
             : new Dictionary<string, SyncGroupState>(StringComparer.Ordinal);
-        return new SyncChange(changeId, kind, key, op, groups);
+        var actor = root.TryGetProperty("actorId", out var actorElement) && actorElement.ValueKind == JsonValueKind.String
+            ? actorElement.GetString() : null;
+        if (actor is not null && !Guid.TryParseExact(actor, "D", out _))
+            throw new FormatException("A change has an invalid actor ID.");
+        return new SyncChange(changeId, kind, key, op, groups, actor);
     }
 
     public static Dictionary<string, SyncGroupState> ReadGroups(string json)
@@ -74,7 +78,7 @@ public static class SyncJson
     }
 
     /// <summary>Writes one change, with the service's sequence number when it came from the change log.</summary>
-    public static void WriteChange(Utf8JsonWriter writer, string changeId, string kind, string key, SyncOp op, IReadOnlyDictionary<string, SyncGroupState> groups, long? seq = null)
+    public static void WriteChange(Utf8JsonWriter writer, string changeId, string kind, string key, SyncOp op, IReadOnlyDictionary<string, SyncGroupState> groups, long? seq = null, Guid? actorId = null)
     {
         writer.WriteStartObject();
         writer.WriteString("changeId", changeId);
@@ -85,6 +89,7 @@ public static class SyncJson
         {
             writer.WriteNumber("seq", sequence);
         }
+        if (actorId is { } actor) writer.WriteString("actorId", actor);
 
         writer.WritePropertyName("groups");
         WriteGroups(writer, groups);

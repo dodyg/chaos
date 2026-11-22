@@ -874,6 +874,39 @@ public sealed class SyncConvergenceTests
     }
 
     [Test]
+    public async Task ApplyAsync_RemoteTextChanges_PreservesEachPreviousTextAndActor()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "Remote text");
+        await ExchangeAsync(a, b);
+        var actor = Guid.NewGuid();
+        var device = Guid.NewGuid();
+        string Change(string value, int offset)
+        {
+            using var bytes = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(bytes))
+                SyncJson.WriteChange(writer, Guid.NewGuid().ToString("D"), "task", task.Id, SyncOp.Upsert,
+                    new Dictionary<string, SyncGroupState> { ["notes"] = new(Hlc.Create(a.Clock.Now.ToUnixTimeMilliseconds() + offset, 0, device),
+                        new SyncGroupValues(new Dictionary<string, object?> { ["Notes"] = value })) }, actorId: actor);
+            return Encoding.UTF8.GetString(bytes.ToArray());
+        }
+        var changes = new[] { Change("First", 1000), Change("Second", 2000) };
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+        await applier.ApplyAsync(changes);
+        var json = await TextAsync(b, "SELECT DetailJson FROM ActivityLog WHERE Source='sync' AND DetailJson IS NOT NULL ORDER BY Seq DESC LIMIT 1;");
+        using var details = JsonDocument.Parse(json!);
+        var events = details.RootElement.EnumerateArray().ToArray();
+        await Assert.That(events.Length).IsEqualTo(2);
+        await Assert.That(events[0].GetProperty("ActorId").GetString()).IsEqualTo(actor.ToString("D"));
+        await Assert.That(events[0].GetProperty("After").GetString()).IsEqualTo("First");
+        await Assert.That(events[1].GetProperty("Before").GetString()).IsEqualTo("First");
+        await Assert.That(events[1].GetProperty("After").GetString()).IsEqualTo("Second");
+        await applier.ApplyAsync(changes);
+        await Assert.That(await CountAsync(b, "SELECT count(*) FROM ActivityLog WHERE Source='sync' AND DetailJson IS NOT NULL;")).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task A_stale_undo_is_refused_after_a_remote_change()
     {
         using var a = await StartAsync();

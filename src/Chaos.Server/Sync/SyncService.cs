@@ -504,7 +504,7 @@ public sealed class SyncService(
                 SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole || viewerDiaryAttachment,
                 SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
                 SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
-                SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole)
+                SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole && Value(change, "deleted", "DeletedAtUtc") is not null)
                     || await IsAuthorAsync(account, streamId, change, ct),
                 SyncWrite.Server => false,
                 _ => false,
@@ -527,6 +527,15 @@ public sealed class SyncService(
             {
                 return SyncRejection.Forbidden;
             }
+        }
+        if (kind.Kind == "diary_entry" && change.Groups.TryGetValue("deleted", out var deletion)
+            && deletion.Values.Values.TryGetValue("RemovedByOwner", out var marker))
+        {
+            var author = await StoredAuthorAsync(streamId, change, ct);
+            var deleted = deletion.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null;
+            var ownerRemoval = deleted && author is not null && author != account.ProfileId;
+            if ((marker is not long flag || flag is < 0 or > 1) || (flag == 1) != ownerRemoval
+                || (ownerRemoval && role != SpaceMember.OwnerRole)) return SyncRejection.Forbidden;
         }
         if (kind.Kind == "task_history" && await HistoryRefusalAsync(account, role, change, streamId, ct) is { } history)
         {
@@ -923,7 +932,8 @@ public sealed class SyncService(
         {
             return;
         }
-        SyncJson.WriteChange(writer, row.ChangeId.ToString("D"), row.Kind, row.EntityKey, op, groups, row.Seq);
+        SyncJson.WriteChange(writer, row.ChangeId.ToString("D"), row.Kind, row.EntityKey, op, groups, row.Seq,
+            protocolVersion == SyncProtocol.Version2 ? row.ActorId : null);
     }
 
     private Dictionary<string, SyncGroupState> KnownGroups(string kind, Dictionary<string, SyncGroupState> groups, int clientSchema)

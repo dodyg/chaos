@@ -1,5 +1,13 @@
 import React from "react";
-import { spaceRpc, type ContainerResponse, type SpaceInviteResponseItem, type SpaceMemberResponse, type SpaceResponse } from "#neoastra";
+import {
+  collaborationRpc,
+  spaceRpc,
+  type ContainerResponse,
+  type SpaceInviteResponseItem,
+  type SpaceMemberResponse,
+  type SpaceResponse,
+  type SpaceNotificationPreference,
+} from "#neoastra";
 import { ChevronRight, FolderKanban, Home, ListTodo, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -561,7 +569,174 @@ export function DeleteSpaceDialog({
   );
 }
 
-type HomeTab = "overview" | "members" | "settings";
+type HomeTab = "overview" | "members" | "notifications" | "settings";
+
+function SpaceNotifications({ spaceId }: { spaceId: string }) {
+  const [settings, setSettings] = React.useState<SpaceNotificationPreference | null>(null);
+  const [message, setMessage] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  React.useEffect(() => {
+    let active = true;
+    void collaborationRpc
+      .settings({ spaceId })
+      .then((result) => {
+        if (!active) return;
+        if (result.ok && result.settings) setSettings(result.settings);
+        else setMessage(result.error?.message ?? "Could not load notification settings.");
+      })
+      .catch(() => {
+        if (active) setMessage("Could not load notification settings.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [spaceId]);
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (!settings || saving) return;
+    setSaving(true);
+    try {
+      const result = await collaborationRpc.setSettings({ spaceId, settings });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not save notification settings.");
+      setMessage("Notification settings saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save notification settings.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <form role="tabpanel" aria-label="Notifications" className="grid max-w-lg gap-3" onSubmit={(event) => void save(event)}>
+      <h3 className="font-semibold">Your notifications</h3>
+      {message && (
+        <p role="status" className="text-sm">
+          {message}
+        </p>
+      )}
+      {settings && (
+        <>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.assigned}
+              disabled={settings.nothing || saving}
+              onChange={(event) => setSettings({ ...settings, assigned: event.target.checked })}
+            />{" "}
+            When a task is assigned to me
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.mentioned}
+              disabled={settings.nothing || saving}
+              onChange={(event) => setSettings({ ...settings, mentioned: event.target.checked })}
+            />{" "}
+            When someone mentions me
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.dueSoon}
+              disabled={settings.nothing || saving}
+              onChange={(event) => setSettings({ ...settings, dueSoon: event.target.checked })}
+            />{" "}
+            When a task is due within a day
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.delegations}
+              disabled={settings.nothing || saving}
+              onChange={(event) => setSettings({ ...settings, delegations: event.target.checked })}
+            />{" "}
+            Delegation updates
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.ownerDefaultReminder}
+              disabled={saving}
+              onChange={(event) => setSettings({ ...settings, ownerDefaultReminder: event.target.checked })}
+            />{" "}
+            Use this space’s default deadline reminder
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.nothing}
+              disabled={saving}
+              onChange={(event) => setSettings({ ...settings, nothing: event.target.checked })}
+            />{" "}
+            Nothing from this space
+          </label>
+          <Button className="w-fit" disabled={saving}>
+            Save notifications
+          </Button>
+        </>
+      )}
+    </form>
+  );
+}
+
+function SpaceDefaultReminder({ spaceId }: { spaceId: string }) {
+  const [offset, setOffset] = React.useState<string>("none");
+  const [ready, setReady] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  React.useEffect(() => {
+    let active = true;
+    void collaborationRpc
+      .defaultDeadline({ spaceId })
+      .then((result) => {
+        if (!active) return;
+        if (!result.ok) throw new Error(result.error?.message ?? "Could not load the default reminder.");
+        setOffset(result.offsetMinutes === null ? "none" : String(result.offsetMinutes));
+        setReady(true);
+      })
+      .catch((error: unknown) => {
+        if (active) setMessage(error instanceof Error ? error.message : "Could not load the default reminder.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [spaceId]);
+  return (
+    <form
+      className="grid gap-2 border-b pb-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void collaborationRpc
+          .setDefaultDeadline({ spaceId, offsetMinutes: offset === "none" ? null : Number(offset) })
+          .then((result) => {
+            setMessage(result.ok ? "Default reminder saved." : (result.error?.message ?? "Could not save the default reminder."));
+          })
+          .catch(() => setMessage("Could not save the default reminder."));
+      }}
+    >
+      <h3 className="font-semibold">Default deadline reminder</h3>
+      <p className="text-sm text-muted-foreground">
+        Members can turn this off for themselves. It applies to tasks assigned to them and unassigned tasks.
+      </p>
+      <label className="grid gap-1 text-sm">
+        Remind before the deadline
+        <NativeSelect value={offset} onChange={(event) => setOffset(event.target.value)} disabled={!ready}>
+          <NativeSelectOption value="none">No default</NativeSelectOption>
+          <NativeSelectOption value="0">At the deadline</NativeSelectOption>
+          <NativeSelectOption value="-60">1 hour before</NativeSelectOption>
+          <NativeSelectOption value="-1440">1 day before</NativeSelectOption>
+          <NativeSelectOption value="-10080">1 week before</NativeSelectOption>
+        </NativeSelect>
+      </label>
+      {message && (
+        <p role="status" className="text-sm">
+          {message}
+        </p>
+      )}
+      <Button className="w-fit" disabled={!ready}>
+        Save default reminder
+      </Button>
+    </form>
+  );
+}
 
 /** A shared space's home (§9.1): Overview, Members and, for an owner, Settings. */
 export function SpaceHome({
@@ -607,6 +782,7 @@ export function SpaceHome({
   const tabs: [HomeTab, string][] = [
     ["overview", "Overview"],
     ["members", "Members"],
+    ["notifications", "Notifications"],
     ...(access.isOwner ? ([["settings", "Settings"]] as [HomeTab, string][]) : []),
   ];
   const projects = lists.filter((list) => list.kind === "Project");
@@ -760,8 +936,10 @@ export function SpaceHome({
         </div>
       )}
 
+      {tab === "notifications" && <SpaceNotifications spaceId={space.spaceId} />}
       {tab === "settings" && access.isOwner && (
         <div role="tabpanel" aria-label="Settings" className="grid max-w-lg gap-3">
+          <SpaceDefaultReminder spaceId={space.spaceId} />
           <h3 className="font-semibold">Delete this space</h3>
           <p className="text-sm">
             Deleting removes the space for everyone. You can restore it within 30 days. After that it and everything in it is deleted for

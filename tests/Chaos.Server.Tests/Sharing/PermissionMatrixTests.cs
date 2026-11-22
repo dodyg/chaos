@@ -20,6 +20,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         board_setting=create,grouping,limits,deleted
         saved_view=create,name,look,pinned,position,definition,layout,alerts,deleted
         calendar_source=create,name,look,busy,enabled,owner,position,deleted
+        space_notification_setting=create,settings
         task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted
         task_assignee=create,done,deleted
         calendar_event_link=create,deleted

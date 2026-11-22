@@ -15,6 +15,11 @@ export function isSafeExternalUrl(url: string): boolean {
   }
 }
 
+/** A member mention is inert and must never be passed to a URL opener. */
+export function isMemberMention(url: string): boolean {
+  return /^chaos:member\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(url);
+}
+
 /** Splits CSS declaration text on top-level semicolons (not those inside parentheses or quotes). */
 export function declarationsOf(css: string): Array<[string, string, string]> {
   const parts: string[] = [];

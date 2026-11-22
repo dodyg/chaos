@@ -5,11 +5,57 @@ using Chaos.Desktop.Platform;
 using Chaos.Desktop.Services;
 using Chaos.Desktop.Tests.Testing;
 using Chaos.Infrastructure.Bootstrap;
+using Chaos.Infrastructure.Activity;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Desktop.Tests.Rpc;
 
 public sealed class ReminderRpcTests
 {
+    private sealed class CaptureAdapter : INotificationAdapter
+    {
+        public List<NotificationRequest> Shown { get; } = [];
+        public NotificationCapabilities Capabilities { get; } = new("test", false, false, NotificationPermission.Granted, "test");
+        public Task<NotificationScheduleResult> ScheduleAsync(NotificationRequest request, CancellationToken ct) => Task.FromResult(new NotificationScheduleResult(false, null, null));
+        public Task CancelAsync(string osNotificationId, CancellationToken ct) => Task.CompletedTask;
+        public Task<NotificationShowOutcome> ShowAsync(NotificationRequest request, CancellationToken ct) { Shown.Add(request); return Task.FromResult(NotificationShowOutcome.InApp); }
+    }
+
+    [Test]
+    public async Task CollaborationNotice_TickPresentsItOnce()
+    {
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+        var ids = new GuidIds();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        var tasks = new TaskCommands(storage.Store, ids, clock);
+        var task = (await tasks.CaptureAsync(new(Op(), "", "Review", null))).Task;
+        var id = Guid.NewGuid().ToString("D");
+        await storage.Store.ExecuteAsync((session, _) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO CollaborationNotices (Id,Kind,SpaceId,EntityKind,EntityId,ActorId,CreatedAtUtc,NotifyAtUtc)
+                VALUES ($id,'mentioned',$space,'task',$task,$actor,$now,$now);
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$space", task.SpaceId);
+            command.Parameters.AddWithValue("$task", task.Id);
+            command.Parameters.AddWithValue("$actor", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(clock.GetUtcNow()));
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        var adapter = new CaptureAdapter();
+        var reminders = new ReminderCommands(storage.Store, ids, clock, tasks, adapter);
+        var inbox = new CollaborationInbox(storage.Store, clock);
+        using var engine = new ReminderEngine(reminders, adapter, clock, inbox: inbox);
+        await engine.TickAsync(CancellationToken.None);
+        await engine.TickAsync(CancellationToken.None);
+        await Assert.That(adapter.Shown.Count).IsEqualTo(1);
+        await Assert.That(adapter.Shown[0].TaskId).IsEqualTo(task.Id);
+        await Assert.That(adapter.Shown[0].IsCollaboration).IsTrue();
+        await Assert.That((await inbox.ListAsync()).Single().DeliveredAtUtc).IsNotNull();
+    }
     private sealed class GuidIds : IIdGenerator
     {
         public Guid NewId() => Guid.NewGuid();

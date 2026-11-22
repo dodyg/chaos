@@ -33,7 +33,11 @@ try {
     }
     foreach ($project in $testProjects) {
         Invoke-VerifyStep "tests: $project" {
-            dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1
+            if ($project -eq "Server") {
+                dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1 --maximum-parallel-tests 1
+            } else {
+                dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1
+            }
         }
     }
     Invoke-VerifyStep "slopwatch" { dotnet tool run slopwatch -- analyze -d . --fail-on warning }

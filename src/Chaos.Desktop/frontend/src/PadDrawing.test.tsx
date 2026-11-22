@@ -31,6 +31,7 @@ const { parseDrawing } = await import("./drawing");
 
 const item = {
   id: "d1",
+  spaceId: "",
   markdown: "",
   version: "1",
   draftVersion: "0",

@@ -8,7 +8,7 @@ public sealed record OverlayRef(string Kind, string? Column = null, int? KeyPart
 
 public sealed record SyncGroupInfo(string Name, int Since, SyncWrite Write = SyncWrite.Editor);
 
-/// <summary>A synced kind as the service needs to know it: its key parts, whether its create group names a space, and its groups.</summary>
+/// <summary>A synced kind as the service needs to know it: its key parts, whether its create group owns a space, and its groups.</summary>
 public sealed record SyncKindInfo(string Kind, int KeyParts, int ApplyOrder, bool HasSpace, IReadOnlyList<SyncGroupInfo> Groups)
 {
     public SyncRoute Route { get; init; } = new(SyncRouteKind.Account);
@@ -42,6 +42,7 @@ public static class SyncKinds
         new("board_setting", 1, 55, false, ["create", "grouping", "limits", "deleted"]),
         new("saved_view", 1, 56, true, ["create", "name", "look", "pinned", "position", "definition", "layout", "alerts", "deleted"]),
         new("calendar_source", 1, 57, false, ["create", "name", "look", "busy", "enabled", "owner", "position", "deleted"]),
+        new("space_notification_setting", 1, 58, false, new SyncGroupInfo[] { new("create", 6), new("settings", 6) }),
         new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1) }),
         new("task_assignee", 2, 61, false, new SyncGroupInfo[] { new("create", 5), new("done", 5), new("deleted", 5) }),
         new("calendar_event_link", 1, 65, false, ["create", "deleted"]),
@@ -91,7 +92,7 @@ public static class SyncKinds
     {
         var route = kind.Kind switch
         {
-            "profile" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
+            "profile" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
             "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
             "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"), // Q9 adds this nullable column.
@@ -115,6 +116,7 @@ public static class SyncKinds
         };
         IReadOnlyList<OverlayRef> overlays = kind.Kind switch
         {
+            "space_notification_setting" => [new("space", "SpaceId", Group: "create")],
             "calendar_event_link" or "reminder_rule" or "waiting_detail" or "follow_up" or "day_plan_item" or "week_assignment" => [new("task", "TaskId", Group: "create")],
             "week_goal_task" or "task_tag" => [new("task", KeyPart: kind.Kind == "week_goal_task" ? 1 : 0)],
             "subtask_tag" => [new("subtask", KeyPart: 0)],

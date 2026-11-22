@@ -4,6 +4,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Activity;
 using Chaos.Infrastructure.Search;
 using Chaos.Infrastructure.Sqlite;
+using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Sync.UniqueRules;
 using Chaos.Domain.Tasks;
 using Chaos.Sync;
@@ -113,7 +114,7 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                         continue;
                     }
                     if (change is null) throw new InvalidOperationException("A parsed sync change is missing.");
-                    var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
+                    var outcome = await ApplyStepWithTextAsync((SqliteDataSession)session, connection, schema, change, payload, token);
                     if (outcome is StepResult.Applied or StepResult.Purged)
                         session.Activity.Note(change.Kind, change.EntityKey, outcome == StepResult.Purged ? ActivityOp.Delete : ActivityOp.Upsert);
                     if (outcome == StepResult.Applied && change.Kind is "task_assignee" or "task")
@@ -145,7 +146,7 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                         continue;
                     }
 
-                    var outcome = await ApplyStepAsync(connection, schema, change, payload, token);
+                    var outcome = await ApplyStepWithTextAsync((SqliteDataSession)session, connection, schema, change, payload, token);
                     if (outcome is StepResult.Parked)
                     {
                         BumpParkedCycles(connection, changeId);
@@ -224,6 +225,42 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                 case StepResult.Skipped: skipped++; break;
             }
         }
+    }
+
+    private async Task<StepResult> ApplyStepWithTextAsync(SqliteDataSession session, SqliteConnection connection, SyncSchema schema,
+        SyncChange change, string payload, CancellationToken ct)
+    {
+        var before = change.ActorId is not null && change.Op == SyncOp.Upsert ? ReadText(connection, change) : null;
+        var result = await ApplyStepAsync(connection, schema, change, payload, ct);
+        if (result == StepResult.Applied && change.ActorId is { } actor && ReadText(connection, change) is { } after
+            && !string.Equals(before?.Text, after.Text, StringComparison.Ordinal))
+            session.Notes.NoteRemoteText(new RemoteTextChange(change.ChangeId, change.Kind, change.EntityKey, after.SpaceId, actor, before?.Text, after.Text));
+        return result;
+    }
+
+    private static (string SpaceId, string Text)? ReadText(SqliteConnection connection, SyncChange change)
+    {
+        var query = change.Kind switch
+        {
+            "task" => "SELECT SpaceId, Notes FROM Tasks WHERE Id=$id AND DeletedAtUtc IS NULL",
+            "diary_entry" => "SELECT t.SpaceId, d.RawMarkdown FROM DiaryEntries d JOIN Tasks t ON t.Id=d.TaskId WHERE d.Id=$id AND d.DeletedAtUtc IS NULL",
+            "page" => "SELECT SpaceId, RawMarkdown FROM Pages WHERE Id=$id AND DeletedAtUtc IS NULL",
+            "pad" => "SELECT SpaceId, RawMarkdown FROM ScratchPadItems WHERE Id=$id AND DeletedAtUtc IS NULL",
+            "task_assignee" => "SELECT t.SpaceId, a.MemberId FROM TaskAssignees a JOIN Tasks t ON t.Id=a.TaskId WHERE a.TaskId=$id AND a.MemberId=$member AND a.DeletedAtUtc IS NULL",
+            _ => null,
+        };
+        if (query is null) return null;
+        using var command = connection.CreateCommand();
+        command.CommandText = query;
+        var parts = change.EntityKey.Split('|');
+        command.Parameters.AddWithValue("$id", parts[0]);
+        if (change.Kind == "task_assignee")
+        {
+            if (parts.Length != 2) return null;
+            command.Parameters.AddWithValue("$member", parts[1]);
+        }
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? (reader.GetString(0), reader.IsDBNull(1) ? string.Empty : reader.GetString(1)) : null;
     }
 
     private static StepResult ApplyMoved(SqliteConnection connection, SyncSchema schema, MovedChange moved)

@@ -744,6 +744,7 @@ export function ScratchPad({
                 key={isNew ? `new-${newNote?.key}` : `${item.id}-${newKey}`}
                 id={isNew ? "pad-new" : `pad-${item.id}`}
                 label="Note"
+                spaceId={item.spaceId}
                 attachmentOwner={isNew && newNote?.itemId === null ? undefined : { kind: "pad", id: item.id }}
                 value={snapshot.text}
                 onChange={(value) => saver.edit(value)}

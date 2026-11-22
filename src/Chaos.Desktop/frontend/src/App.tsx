@@ -63,6 +63,7 @@ import { backgroundImage, useDayBackground } from "./MyDayBackground";
 import { MyWeek } from "./MyWeek";
 import { Calendar } from "./Calendar";
 import { AlertStack, NotificationCenter } from "./Reminders";
+import { CollaborationInbox } from "./CollaborationInbox";
 import { Summaries, SummaryPrompts } from "./Summaries";
 import { DataSettings } from "./DataSettings";
 import { Settings } from "./Settings";
@@ -160,6 +161,7 @@ type View =
   | "myweek"
   | "calendar"
   | "notifications"
+  | "collaboration"
   | "summaries"
   | "data"
   | "settings"
@@ -1719,6 +1721,19 @@ export function App({
                   </span>
                 )}
               </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className={navItem}
+                aria-current={view === "collaboration" ? "page" : undefined}
+                onClick={() => {
+                  setEditing(null);
+                  setShowTagSettings(false);
+                  setView("collaboration");
+                }}
+              >
+                <Inbox /> Collaboration inbox
+              </Button>
               <SidebarSection id="views" title="Views">
                 {builtInViews.map((item) => (
                   <Button
@@ -2310,6 +2325,14 @@ export function App({
                 />
               ) : view === "notifications" ? (
                 <NotificationCenter revision={revision} api={reminderApi} onOpen={(id) => void openTaskById(id)} />
+              ) : view === "collaboration" ? (
+                <CollaborationInbox
+                  onOpen={(notice) => {
+                    if (notice.taskId) void openTaskById(notice.taskId);
+                    else if (notice.entityKind === "page") openPages({ kind: "page", pageId: notice.entityId });
+                    else if (notice.entityKind === "pad") openPad({ itemId: notice.entityId });
+                  }}
+                />
               ) : view === "viewedit" && viewDraft ? (
                 <ViewEditor
                   key={viewDraft.view?.id ?? "new"}
@@ -2610,6 +2633,14 @@ export function App({
             }}
           />
           <AlertStack api={reminderApi} onOpen={(id) => void openTaskById(id)} onChanged={changed} />
+          <CollaborationInbox
+            alerts
+            onOpen={(notice) => {
+              if (notice.taskId) void openTaskById(notice.taskId);
+              else if (notice.entityKind === "page") openPages({ kind: "page", pageId: notice.entityId });
+              else if (notice.entityKind === "pad") openPad({ itemId: notice.entityId });
+            }}
+          />
           {paletteOpen && (
             <CommandPalette
               commands={paletteCommands()}

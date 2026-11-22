@@ -153,7 +153,9 @@ public sealed class WindowsToastAdapter : INotificationAdapter
     public static string ContentXml(NotificationRequest request)
     {
         static string Attr(string value) => SecurityElement.Escape(value) ?? "";
-        var open = LaunchIntents.ReminderUri(request.JobId, request.Generation, ReminderActivation.Open);
+        var open = request.IsCollaboration
+            ? Guid.TryParseExact(request.TaskId, "D", out _) ? LaunchIntents.TaskUri(request.TaskId) : "chaos:open"
+            : LaunchIntents.ReminderUri(request.JobId, request.Generation, ReminderActivation.Open);
         var builder = new StringBuilder();
         builder.Append("<toast scenario=\"reminder\" activationType=\"protocol\" launch=\"").Append(Attr(open)).Append("\">");
         builder.Append("<visual><binding template=\"ToastGeneric\">");
@@ -164,6 +166,12 @@ public sealed class WindowsToastAdapter : INotificationAdapter
         }
 
         builder.Append("</binding></visual><actions>");
+        if (request.IsCollaboration)
+        {
+            builder.Append("<action activationType=\"protocol\" content=\"Open\" arguments=\"").Append(Attr(open)).Append("\"/>");
+            builder.Append("</actions></toast>");
+            return builder.ToString();
+        }
         foreach (var (label, action) in new[]
         {
             ("Open", ReminderActivation.Open),

@@ -13,7 +13,7 @@ public sealed record PageTaskLinkResponse(string TaskId, string Title, bool Dele
 public sealed record PageBacklinkResponse(string Kind, string Id, string Title, string Line);
 public sealed record PageResponse(string Id, string? ParentPageId, string Title, string Markdown, string Version, string DraftVersion, string? DailyDate,
     bool Deleted, string CreatedAtUtc, string UpdatedAtUtc, string? Icon, IReadOnlyList<string> TagIds, IReadOnlyList<PageTaskLinkResponse> Tasks,
-    IReadOnlyList<PageBacklinkResponse> Backlinks);
+    IReadOnlyList<PageBacklinkResponse> Backlinks, string SpaceId);
 public sealed record PageListRequest();
 public sealed record PageListResponse(bool Ok, IReadOnlyList<PageSummaryResponse> Pages, TaskErrorResponse? Error);
 public sealed record PageDailyListRequest(string? From, string? To);
@@ -237,7 +237,7 @@ public sealed class PageRpcService(PageCommands pages)
         icon,
         tagIds,
         [.. tasks.Select(task => new PageTaskLinkResponse(task.Link.TaskId, task.Title, task.Deleted, task.Link.Quote))],
-        [.. backlinks.Select(Map)]);
+        [.. backlinks.Select(Map)], page.SpaceId);
 
     private static PageBacklinkResponse Map(PageBacklink link) => new(link.Kind, link.Id, link.Title, link.Line);
 

@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Count, DeletedItems, Field, StatusBadge, label } from "@/components/common";
 import { MarkdownEditor, type LinkCandidate } from "./MarkdownEditor";
 import { MarkdownPreview, type MarkdownLinks } from "./markdown";
+import { avatarClass } from "./assignees";
 
 type Api = { diaryRpc: typeof diaryRpc; historyRpc: typeof historyRpc };
 
@@ -108,6 +109,29 @@ export function actorLabel(actor: string, people: readonly PersonResponse[] = []
   return "Unknown person";
 }
 
+export function diaryAuthorLabel(profileId: string, people: readonly PersonResponse[]): string {
+  const person = people.find((candidate) => candidate.actorId.toLowerCase() === `person:${profileId}`.toLowerCase());
+  if (!person) return "Unknown person";
+  return person.former ? `${person.displayName} (former member)` : person.isMe ? "You" : person.displayName;
+}
+
+function DiaryAuthor({ profileId, people }: { profileId: string; people: readonly PersonResponse[] }) {
+  const person = people.find((candidate) => candidate.actorId.toLowerCase() === `person:${profileId}`.toLowerCase());
+  return (
+    <span className="inline-flex items-center gap-1">
+      {person && (
+        <span
+          aria-hidden="true"
+          className={`inline-flex size-5 items-center justify-center rounded-full text-[0.6rem] font-semibold ${avatarClass(person.colorIndex)}`}
+        >
+          {person.initials}
+        </span>
+      )}
+      {diaryAuthorLabel(profileId, people)}
+    </span>
+  );
+}
+
 function errorText(error: { message: string; fields: ReadonlyArray<{ message: string }> } | null, fallback: string) {
   return error?.fields.map((field) => field.message).join("; ") || error?.message || fallback;
 }
@@ -121,20 +145,26 @@ export function TaskJournal({
   task,
   api = { diaryRpc, historyRpc },
   githubApi = gitHubRpc,
+  peopleApi = peopleRpc,
+  canChangeTask = true,
   revision,
   busy,
   links,
   searchLinks,
+  members,
   onChanged,
   onError,
 }: {
   task: TaskResponse;
   api?: Api;
   githubApi?: typeof gitHubRpc;
+  peopleApi?: Pick<typeof peopleRpc, "list">;
+  canChangeTask?: boolean;
   revision: number;
   busy: boolean;
   links?: MarkdownLinks;
   searchLinks?: (query: string) => Promise<LinkCandidate[]>;
+  members?: readonly { id: string; name: string }[];
   onChanged: (task?: TaskResponse) => void;
   onError: (message: string) => void;
 }) {
@@ -149,7 +179,7 @@ export function TaskJournal({
   React.useEffect(() => {
     let active = true;
     setPeople([]);
-    void peopleRpc
+    void peopleApi
       .list({ spaceId: task.spaceId })
       .then((result) => {
         if (active && result.ok) setPeople(result.people);
@@ -160,7 +190,7 @@ export function TaskJournal({
     return () => {
       active = false;
     };
-  }, [task.spaceId, revision]);
+  }, [task.spaceId, revision, peopleApi]);
   React.useEffect(() => {
     let active = true;
     if (postingContext.current.taskId !== task.id) {
@@ -240,7 +270,14 @@ export function TaskJournal({
   function add(event: React.FormEvent) {
     event.preventDefault();
     void mutate(
-      () => api.diaryRpc.add({ operationId: operationId(), taskId: task.id, markdown: draft, entryAtUtc: null, postToGitHub }),
+      () =>
+        api.diaryRpc.add({
+          operationId: operationId(),
+          taskId: task.id,
+          markdown: draft,
+          entryAtUtc: null,
+          postToGitHub: canChangeTask && postToGitHub,
+        }),
       "Could not add the diary entry.",
       () => {
         setDraft("");
@@ -299,8 +336,9 @@ export function TaskJournal({
           placeholder="What happened? Markdown works here."
           links={links}
           searchLinks={searchLinks}
+          members={members}
         />
-        {connected && (
+        {connected && canChangeTask && (
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={postToGitHub} onChange={(e) => setPostToGitHub(e.target.checked)} disabled={disabled} />
             Also post to GitHub on sync
@@ -375,7 +413,7 @@ export function TaskJournal({
                     <MarkdownPreview source={snapshot.task.notes} links={links} compact />
                   </div>
                 </div>
-                {viewer.entry && (
+                {viewer.entry && canChangeTask && (
                   <fieldset className="grid gap-2">
                     <legend className="text-xs font-medium text-muted-foreground">Restore values from this version</legend>
                     <div className="flex flex-wrap gap-x-3 gap-y-1">
@@ -424,48 +462,66 @@ export function TaskJournal({
               <li key={`d-${item.diary.id}`} className="grid gap-1.5 rounded-lg border bg-background p-3">
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span>
-                    {when(item.diary.entryAtUtc)}
+                    <DiaryAuthor profileId={item.diary.authorProfileId} people={people} /> · {when(item.diary.entryAtUtc)}
                     {item.diary.editedAtUtc && ` · edited ${when(item.diary.editedAtUtc)}`}
                   </span>
                   <span className="flex gap-0.5">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label="Edit diary entry"
-                      disabled={disabled}
-                      onClick={() => setEditing(item.diary)}
-                    >
-                      <Pencil />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      className="hover:text-destructive"
-                      aria-label="Delete diary entry"
-                      disabled={disabled}
-                      onClick={() => {
-                        const entry = item.diary!;
-                        if (connected) setDeleting(entry);
-                        else
-                          void mutate(
-                            () =>
-                              api.diaryRpc.delete({
-                                operationId: operationId(),
-                                entryId: entry.id,
-                                expectedVersion: entry.version,
-                                deleteOnGitHub: false,
-                              }),
-                            "Could not delete the diary entry.",
-                          );
-                      }}
-                    >
-                      <Trash2 />
-                    </Button>
+                    {!item.diary.deleted &&
+                      people.some(
+                        (person) =>
+                          person.isMe &&
+                          !person.former &&
+                          person.actorId.toLowerCase() === `person:${item.diary!.authorProfileId}`.toLowerCase(),
+                      ) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Edit diary entry"
+                          disabled={disabled}
+                          onClick={() => setEditing(item.diary)}
+                        >
+                          <Pencil />
+                        </Button>
+                      )}
+                    {!item.diary.deleted &&
+                      people.some(
+                        (person) =>
+                          person.isMe &&
+                          !person.former &&
+                          (person.role === 1 || person.actorId.toLowerCase() === `person:${item.diary!.authorProfileId}`.toLowerCase()),
+                      ) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="hover:text-destructive"
+                          aria-label="Delete diary entry"
+                          disabled={disabled}
+                          onClick={() => {
+                            const entry = item.diary!;
+                            if (connected) setDeleting(entry);
+                            else
+                              void mutate(
+                                () =>
+                                  api.diaryRpc.delete({
+                                    operationId: operationId(),
+                                    entryId: entry.id,
+                                    expectedVersion: entry.version,
+                                    deleteOnGitHub: false,
+                                  }),
+                                "Could not delete the diary entry.",
+                              );
+                          }}
+                        >
+                          <Trash2 />
+                        </Button>
+                      )}
                   </span>
                 </div>
-                {editing?.id === item.diary.id ? (
+                {item.diary.deleted && item.diary.removedByOwner ? (
+                  <p className="text-sm italic text-muted-foreground">Removed by an owner</p>
+                ) : editing?.id === item.diary.id ? (
                   <form
                     className="grid gap-2"
                     onSubmit={(e) => {
@@ -494,6 +550,7 @@ export function TaskJournal({
                       disabled={disabled}
                       links={links}
                       searchLinks={searchLinks}
+                      members={members}
                     />
                     <div className="flex gap-2">
                       <Button size="sm" disabled={disabled || !editing.markdown.trim()}>
@@ -570,8 +627,12 @@ export function TaskJournal({
       )}
       <DeletedItems
         noun="diary entries"
-        items={deleted}
-        name={(entry) => entry.markdown.split("\n")[0].slice(0, 60)}
+        items={deleted.filter((entry) =>
+          people.some(
+            (person) => person.isMe && !person.former && person.actorId.toLowerCase() === `person:${entry.authorProfileId}`.toLowerCase(),
+          ),
+        )}
+        name={(entry) => (entry.removedByOwner ? "Removed by an owner" : entry.markdown.split("\n")[0].slice(0, 60))}
         busy={disabled}
         onRestore={(entry) =>
           void mutate(
