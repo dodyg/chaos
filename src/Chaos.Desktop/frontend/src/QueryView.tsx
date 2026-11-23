@@ -48,7 +48,11 @@ export const builtInViews = [
   { view: "Waiting", title: "Waiting", hint: "Tasks waiting on someone outside the app." },
   { view: "RecentlyCompleted", title: "Recently completed", hint: "Done in the last 30 days, newest first." },
   { view: "AssignedToMe", title: "Assigned to me", hint: "Open tasks in Personal and shared tasks assigned to you." },
-  { view: "DelegatedByMe", title: "Delegated by me", hint: "Tasks you delegated to members and that still await an answer or your review, by person then due date." },
+  {
+    view: "DelegatedByMe",
+    title: "Delegated by me",
+    hint: "Tasks you delegated to members and that still await an answer or your review, by person then due date.",
+  },
 ] as const;
 
 type Filters = { status: string; priority: string; includeCompleted: boolean; includeArchived: boolean; dueFrom: string; dueTo: string };

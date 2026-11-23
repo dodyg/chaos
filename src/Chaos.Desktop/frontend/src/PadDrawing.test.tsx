@@ -99,7 +99,7 @@ const captureApi = {
       tagIds: [],
       tagPaths: [],
       assigneeIds: [],
-    delegateToId: null,
+      delegateToId: null,
       waitingOn: null,
       followUpDate: null,
       followUpTime: null,

@@ -72,7 +72,11 @@ function delegation(patch: Partial<DelegationDto> = {}): DelegationDto {
   };
 }
 
-function item(patch: Partial<DelegationDto> = {}, nudges: DelegationItemDto["nudges"] = [], names: { from: string; to: string } = { from: "Omar", to: "Sara" }): DelegationItemDto {
+function item(
+  patch: Partial<DelegationDto> = {},
+  nudges: DelegationItemDto["nudges"] = [],
+  names: { from: string; to: string } = { from: "Omar", to: "Sara" },
+): DelegationItemDto {
   const current = delegation(patch);
   return {
     delegation: current,
@@ -133,9 +137,18 @@ test("the delegation card shows the recipient's side and sends the move", async 
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
   const changed: (TaskResponse | null)[] = [];
   const user = userEvent.setup({ document: dom.window.document });
-  render(<DelegationSection task={task()} canEdit={false} api={api} directoryApi={directoryApi} onTaskChanged={(value) => changed.push(value)} />, {
-    container: dom.window.document.body,
-  });
+  render(
+    <DelegationSection
+      task={task()}
+      canEdit={false}
+      api={api}
+      directoryApi={directoryApi}
+      onTaskChanged={(value) => changed.push(value)}
+    />,
+    {
+      container: dom.window.document.body,
+    },
+  );
   try {
     assert.ok(await screen.findByText("Omar"));
     assert.ok(screen.getByText(/waiting for your answer/));
@@ -163,7 +176,9 @@ test("the delegator's card offers nudge, take back and the follow-up, and the nu
   const { api, calls } = fakeApi([item({ fromMemberId: me, toMemberId: omar, state: "Accepted" }, nudges, { from: "Sara", to: "Omar" })]);
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<DelegationSection task={task()} canEdit api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, { container: dom.window.document.body });
+  render(<DelegationSection task={task()} canEdit api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, {
+    container: dom.window.document.body,
+  });
   try {
     assert.ok(await screen.findByText("Omar"));
     assert.ok(screen.getByText(/Delegated to/));
@@ -190,7 +205,9 @@ test("the delegator can close a reviewed result or send it back", async () => {
   const { api, calls } = fakeApi([item({ fromMemberId: me, toMemberId: omar, state: "Done" }, [], { from: "Sara", to: "Omar" })]);
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<DelegationSection task={task()} canEdit api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, { container: dom.window.document.body });
+  render(<DelegationSection task={task()} canEdit api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, {
+    container: dom.window.document.body,
+  });
   try {
     assert.ok(await screen.findByText(/waiting for your review/));
     await user.click(screen.getByRole("button", { name: "Accept result" }));
@@ -206,7 +223,9 @@ test("declining asks for a reason and sends it", async () => {
   const { api, calls } = fakeApi([item()]);
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<DelegationSection task={task()} canEdit={false} api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, { container: dom.window.document.body });
+  render(<DelegationSection task={task()} canEdit={false} api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, {
+    container: dom.window.document.body,
+  });
   try {
     await screen.findByText("Omar");
     await user.click(screen.getByRole("button", { name: "Decline" }));
@@ -223,10 +242,15 @@ test("declining asks for a reason and sends it", async () => {
 
 test("a refused decline keeps the reason for retry", async () => {
   const { api: baseApi } = fakeApi([item()]);
-  const api: DelegationApi = { ...baseApi, respond: async () => ({ ok: false, error: { message: "Please retry" }, delegation: null, task: null, replayed: false }) as never };
+  const api: DelegationApi = {
+    ...baseApi,
+    respond: async () => ({ ok: false, error: { message: "Please retry" }, delegation: null, task: null, replayed: false }) as never,
+  };
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
   const user = userEvent.setup({ document: dom.window.document });
-  render(<DelegationSection task={task()} canEdit={false} api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, { container: dom.window.document.body });
+  render(<DelegationSection task={task()} canEdit={false} api={api} directoryApi={directoryApi} onTaskChanged={() => {}} />, {
+    container: dom.window.document.body,
+  });
   try {
     await screen.findByText("Omar");
     await user.click(screen.getByRole("button", { name: "Decline" }));
@@ -234,7 +258,9 @@ test("a refused decline keeps the reason for retry", async () => {
     await user.click(screen.getByRole("button", { name: "Decline" }));
     await screen.findByText("Please retry");
     assert.equal((screen.getByLabelText("Why are you declining?") as HTMLTextAreaElement).value, "Too busy");
-  } finally { cleanup(); }
+  } finally {
+    cleanup();
+  }
 });
 
 test("the delegate dialog sends the brief, review and follow-up", async () => {
@@ -253,7 +279,11 @@ test("the delegate dialog sends the brief, review and follow-up", async () => {
   );
   try {
     const member = (await screen.findByLabelText("Delegate to")) as HTMLSelectElement;
-    assert.deepEqual([...member.options].map((option) => option.value).filter(Boolean), [omar], "viewers and the person themself are not offered");
+    assert.deepEqual(
+      [...member.options].map((option) => option.value).filter(Boolean),
+      [omar],
+      "viewers and the person themself are not offered",
+    );
     await user.selectOptions(member, omar);
     await user.type(screen.getByLabelText("Message (optional)"), "Please handle the venue");
     await user.type(screen.getByLabelText("Done looks like (optional)"), "Quote sent");
@@ -280,10 +310,17 @@ test("the delegate dialog sends the brief, review and follow-up", async () => {
 test("the nudge dialog counts the last 24 hours and blocks at the limit", async () => {
   const { api, calls } = fakeApi([]);
   const sent: number[] = [];
-  const recent = [0, 1, 2].map((hours) => ({ id: `n${hours}`, text: "x", sentAtUtc: new Date(Date.now() - hours * 60 * 60 * 1000).toISOString() }));
-  render(<NudgeDialog delegationId="d1" version="2" toName="Omar" nudges={recent} api={api} onClose={() => {}} onSent={() => sent.push(1)} />, {
-    container: dom.window.document.body,
-  });
+  const recent = [0, 1, 2].map((hours) => ({
+    id: `n${hours}`,
+    text: "x",
+    sentAtUtc: new Date(Date.now() - hours * 60 * 60 * 1000).toISOString(),
+  }));
+  render(
+    <NudgeDialog delegationId="d1" version="2" toName="Omar" nudges={recent} api={api} onClose={() => {}} onSent={() => sent.push(1)} />,
+    {
+      container: dom.window.document.body,
+    },
+  );
   try {
     assert.ok(await screen.findByText(/3 times in the last 24 hours/));
     assert.equal((screen.getByRole("button", { name: "Send nudge" }) as HTMLButtonElement).disabled, true);
@@ -316,9 +353,21 @@ test("a delegation follow-up in My Day offers nudge and take back", async () => 
   const changed: number[] = [];
   const user = userEvent.setup({ document: dom.window.document });
   const directoryApi = { list: async () => ({ ok: true, people: [person(me, "Sara", true), person(omar, "Omar", false)], error: null }) };
-  render(<FollowUps day="2026-11-23" revision={0} busy={false} api={waitingApi as unknown as typeof waitingRpc} delegationApi={api} directoryApi={directoryApi} onOpen={() => {}} onChanged={() => changed.push(1)} />, {
-    container: dom.window.document.body,
-  });
+  render(
+    <FollowUps
+      day="2026-11-23"
+      revision={0}
+      busy={false}
+      api={waitingApi as unknown as typeof waitingRpc}
+      delegationApi={api}
+      directoryApi={directoryApi}
+      onOpen={() => {}}
+      onChanged={() => changed.push(1)}
+    />,
+    {
+      container: dom.window.document.body,
+    },
+  );
   try {
     assert.ok(await screen.findByText("Send the quote"));
     assert.ok(screen.getByText("Omar"));

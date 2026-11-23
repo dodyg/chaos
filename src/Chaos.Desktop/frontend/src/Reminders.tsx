@@ -18,7 +18,20 @@ import {
   type TaskResponse,
   type WaitingResponse,
 } from "#neoastra";
-import { Bell, BellOff, BellRing, Check, Clock, ExternalLink, Handshake, MessageSquareText, Plus, Trash2, UserRound, X } from "lucide-react";
+import {
+  Bell,
+  BellOff,
+  BellRing,
+  Check,
+  Clock,
+  ExternalLink,
+  Handshake,
+  MessageSquareText,
+  Plus,
+  Trash2,
+  UserRound,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -573,25 +586,29 @@ export function FollowUps({
     }
   }
 
-/** A delegation move from My Day: the live delegation's version is read first, then the move is made. */
-async function takeBack(item: FollowUpItemResponse) {
-  if (working || busy || !item.delegationId) return;
-  setWorking(true);
-  setError(null);
-  try {
-    const view = await delegationApi.get({ taskId: item.task.id });
-    const live = view.ok ? view.live.find((entry) => entry.delegation.id === item.delegationId) : null;
-    if (!live) throw new Error("This delegation is no longer active.");
-    const result = await delegationApi.withdraw({ operationId: operationId(), delegationId: live.delegation.id, expectedVersion: live.delegation.version });
-    if (!result.ok) throw new Error(result.error?.message ?? "Could not take the task back.");
-    setLocal((value) => value + 1);
-    onChanged();
-  } catch (e) {
-    setError(e instanceof Error ? e.message : "Could not take the task back.");
-  } finally {
-    setWorking(false);
+  /** A delegation move from My Day: the live delegation's version is read first, then the move is made. */
+  async function takeBack(item: FollowUpItemResponse) {
+    if (working || busy || !item.delegationId) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const view = await delegationApi.get({ taskId: item.task.id });
+      const live = view.ok ? view.live.find((entry) => entry.delegation.id === item.delegationId) : null;
+      if (!live) throw new Error("This delegation is no longer active.");
+      const result = await delegationApi.withdraw({
+        operationId: operationId(),
+        delegationId: live.delegation.id,
+        expectedVersion: live.delegation.version,
+      });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not take the task back.");
+      setLocal((value) => value + 1);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not take the task back.");
+    } finally {
+      setWorking(false);
+    }
   }
-}
 
   if (items.length === 0 && !error) return null;
   const disabled = busy || working;
@@ -599,8 +616,12 @@ async function takeBack(item: FollowUpItemResponse) {
     setWorking(true);
     setError(null);
     try {
-      const [view, directory] = await Promise.all([delegationApi.get({ taskId: item.task.id }), directoryApi.list({ spaceId: item.task.spaceId })]);
-      if (!view.ok || !view.task || !view.live.some((entry) => entry.delegation.id === item.delegationId)) throw new Error(view.error?.message ?? "This delegation is no longer active.");
+      const [view, directory] = await Promise.all([
+        delegationApi.get({ taskId: item.task.id }),
+        directoryApi.list({ spaceId: item.task.spaceId }),
+      ]);
+      if (!view.ok || !view.task || !view.live.some((entry) => entry.delegation.id === item.delegationId))
+        throw new Error(view.error?.message ?? "This delegation is no longer active.");
       if (!directory.ok) throw new Error(directory.error?.message ?? "Could not load members.");
       setHandingOver({ task: view.task, people: directory.people });
     } catch (e) {
@@ -662,7 +683,19 @@ async function takeBack(item: FollowUpItemResponse) {
               </Button>
               {item.delegationId && (
                 <>
-                  <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={() => void delegationApi.get({ taskId: item.task.id }).then((view) => setNudging(view.ok ? (view.live.find((entry) => entry.delegation.id === item.delegationId) ?? null) : null))}>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() =>
+                      void delegationApi
+                        .get({ taskId: item.task.id })
+                        .then((view) =>
+                          setNudging(view.ok ? (view.live.find((entry) => entry.delegation.id === item.delegationId) ?? null) : null),
+                        )
+                    }
+                  >
                     <BellRing />
                     Nudge
                   </Button>
@@ -772,11 +805,19 @@ async function takeBack(item: FollowUpItemResponse) {
           }}
         />
       )}
-      {handingOver && <DelegateDialog task={handingOver.task} people={handingOver.people} api={delegationApi} onClose={() => setHandingOver(null)} onDelegated={() => {
-        setHandingOver(null);
-        setLocal((value) => value + 1);
-        onChanged();
-      }} />}
+      {handingOver && (
+        <DelegateDialog
+          task={handingOver.task}
+          people={handingOver.people}
+          api={delegationApi}
+          onClose={() => setHandingOver(null)}
+          onDelegated={() => {
+            setHandingOver(null);
+            setLocal((value) => value + 1);
+            onChanged();
+          }}
+        />
+      )}
     </section>
   );
 }

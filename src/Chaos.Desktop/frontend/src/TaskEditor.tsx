@@ -866,7 +866,14 @@ export function TaskEditor({
               <TabsContent value="details" className="grid grid-cols-[minmax(0,1fr)] gap-4">
                 {spaceAccess.shared && (
                   <>
-                    <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={canEdit} run={run} onSaved={setEditing} setError={setError} />
+                    <AssignmentPicker
+                      task={editing}
+                      taskApi={taskRpc}
+                      canEdit={canEdit}
+                      run={run}
+                      onSaved={setEditing}
+                      setError={setError}
+                    />
                     <DelegationSection
                       task={editing}
                       canEdit={canEdit}

@@ -23,10 +23,18 @@ const nudgeLimit = 3;
 /** A yyyy-MM-dd date in the person's locale (no time zone involved). */
 export function dayText(date: string) {
   const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString(undefined, { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" });
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString(undefined, {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
-export type DelegationApi = Pick<typeof DelegationRpc, "get" | "list" | "nudgeTemplate" | "delegate" | "respond" | "done" | "close" | "reopen" | "withdraw" | "nudge">;
+export type DelegationApi = Pick<
+  typeof DelegationRpc,
+  "get" | "list" | "nudgeTemplate" | "delegate" | "respond" | "done" | "close" | "reopen" | "withdraw" | "nudge"
+>;
 
 /** Which side of a delegation the local person is on, read from the directory's `isMe` flags. */
 export function sideOf(delegation: DelegationDto, people: readonly PersonResponse[]): DelegationSide {
@@ -71,7 +79,9 @@ function FollowUpLine({ followUp, dueAtUtc, overdue }: { followUp: FollowUpDto |
   return (
     <span className={overdue ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
       Your follow-up: {when}
-      {dueAtUtc && followUp.kind !== "Fixed" ? ` (due ${new Date(dueAtUtc).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })})` : ""}
+      {dueAtUtc && followUp.kind !== "Fixed"
+        ? ` (due ${new Date(dueAtUtc).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })})`
+        : ""}
       {overdue ? " · overdue" : ""}
     </span>
   );
@@ -91,7 +101,8 @@ export function DelegationCard({
   people: readonly PersonResponse[];
   api: DelegationApi;
   onChanged: (task: TaskResponse | null) => void;
-  onOpenNudge: (item: DelegationItemDto) => void;}) {
+  onOpenNudge: (item: DelegationItemDto) => void;
+}) {
   const { busy, error, run } = useAction();
   const delegation = item.delegation;
   const other = side === "From" ? item.toName : item.fromName;
@@ -125,14 +136,14 @@ export function DelegationCard({
           )}
           <span className="text-muted-foreground"> · {describeDelegation(delegation.state, side)}</span>
         </span>
-        {delegation.dueDate && (
-          <span className="text-xs text-muted-foreground">
-            due {dayText(delegation.dueDate)}
-          </span>
-        )}
+        {delegation.dueDate && <span className="text-xs text-muted-foreground">due {dayText(delegation.dueDate)}</span>}
         {delegation.reviewRequired && <span className="text-xs text-muted-foreground">review needed</span>}
       </div>
-      {delegation.message && <p className="text-sm whitespace-pre-wrap" dir="auto">{delegation.message}</p>}
+      {delegation.message && (
+        <p className="text-sm whitespace-pre-wrap" dir="auto">
+          {delegation.message}
+        </p>
+      )}
       {delegation.doneDefinition && (
         <p className="text-sm text-muted-foreground" dir="auto">
           Done looks like: {delegation.doneDefinition}
@@ -140,7 +151,8 @@ export function DelegationCard({
       )}
       {delegation.response && (
         <p className="text-sm whitespace-pre-wrap" dir="auto">
-          <MessageSquareWarning className="inline size-3.5 text-muted-foreground" aria-hidden /> {delegation.state === "Question" ? "Question" : "Reason"}: {delegation.response}
+          <MessageSquareWarning className="inline size-3.5 text-muted-foreground" aria-hidden />{" "}
+          {delegation.state === "Question" ? "Question" : "Reason"}: {delegation.response}
         </p>
       )}
       {side === "From" && <FollowUpLine followUp={item.followUp} dueAtUtc={item.followUpDueAtUtc} overdue={item.followUpOverdue} />}
@@ -158,8 +170,16 @@ export function DelegationCard({
             const text = askText.trim();
             if (!text) return;
             void act(() =>
-              api.respond({ operationId: operationId(), delegationId: delegation.id, expectedVersion: delegation.version, response: ask, text }),
-            ).then((result) => { if (result) setAsk(null); });
+              api.respond({
+                operationId: operationId(),
+                delegationId: delegation.id,
+                expectedVersion: delegation.version,
+                response: ask,
+                text,
+              }),
+            ).then((result) => {
+              if (result) setAsk(null);
+            });
           }}
         >
           <Field label={ask === "Question" ? "Your question" : "Why are you declining?"}>
@@ -189,7 +209,22 @@ export function DelegationCard({
       {!ask && moves.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {moves.includes("Accept") && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.respond({ operationId: operationId(), delegationId: delegation.id, expectedVersion: delegation.version, response: "Accept", text: null }))}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  api.respond({
+                    operationId: operationId(),
+                    delegationId: delegation.id,
+                    expectedVersion: delegation.version,
+                    response: "Accept",
+                    text: null,
+                  }),
+                )
+              }
+            >
               Accept
             </Button>
           )}
@@ -204,7 +239,21 @@ export function DelegationCard({
             </Button>
           )}
           {moves.includes("Done") && (
-            <Button size="sm" disabled={busy} onClick={() => void act(() => api.done({ operationId: operationId(), delegationId: delegation.id, expectedVersion: delegation.version, summary: null, openSubtaskChoice: null }))}>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  api.done({
+                    operationId: operationId(),
+                    delegationId: delegation.id,
+                    expectedVersion: delegation.version,
+                    summary: null,
+                    openSubtaskChoice: null,
+                  }),
+                )
+              }
+            >
               Mark done
             </Button>
           )}
@@ -224,7 +273,13 @@ export function DelegationCard({
             </Button>
           )}
           {moves.includes("Nudge") && (
-            <Button size="sm" variant="outline" disabled={busy || !canNudge} title={canNudge ? undefined : `You have nudged ${nudges} times in the last 24 hours; the limit is ${nudgeLimit}.`} onClick={() => onOpenNudge(item)}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || !canNudge}
+              title={canNudge ? undefined : `You have nudged ${nudges} times in the last 24 hours; the limit is ${nudgeLimit}.`}
+              onClick={() => onOpenNudge(item)}
+            >
               Nudge
             </Button>
           )}
@@ -258,11 +313,14 @@ export function DelegateDialog({
   const [followUpAt, setFollowUpAt] = React.useState("");
   const [followUpAmount, setFollowUpAmount] = React.useState("");
   const [followUpUnit, setFollowUpUnit] = React.useState("Days");
-  const eligible = people.filter((person) => person.kind === "person" && !person.former && !person.isMe && (person.role === 1 || person.role === 2));
+  const eligible = people.filter(
+    (person) => person.kind === "person" && !person.former && !person.isMe && (person.role === 1 || person.role === 2),
+  );
   return (
     <Modal title="Delegate" onClose={onClose}>
       <p className="text-sm text-muted-foreground">
-        The task is assigned to the person you name. They can accept, ask or decline; you get a follow-up in My Day. Nothing is sent outside this space.
+        The task is assigned to the person you name. They can accept, ask or decline; you get a follow-up in My Day. Nothing is sent outside
+        this space.
       </p>
       <form
         className="grid gap-3"
@@ -273,7 +331,12 @@ export function DelegateDialog({
             followUp = followUpAt ? { kind: followUpKind, fixedAtUtc: new Date(followUpAt).toISOString(), amount: null, unit: null } : null;
           } else if (followUpKind === "AfterWaiting" || followUpKind === "BeforeDue" || followUpKind === "AfterInactivity") {
             const amount = Number(followUpAmount);
-            followUp = { kind: followUpKind, fixedAtUtc: null, amount: amount > 0 ? amount : null, unit: followUpKind === "AfterInactivity" ? "Days" : followUpUnit };
+            followUp = {
+              kind: followUpKind,
+              fixedAtUtc: null,
+              amount: amount > 0 ? amount : null,
+              unit: followUpKind === "AfterInactivity" ? "Days" : followUpUnit,
+            };
           }
           void run(() =>
             api.delegate({
@@ -305,10 +368,24 @@ export function DelegateDialog({
           </NativeSelect>
         </Field>
         <Field label="Message (optional)">
-          <textarea value={message} onChange={(event) => setMessage(event.target.value)} rows={3} maxLength={4000} className="w-full rounded-md border bg-background px-2 py-1 text-sm" dir="auto" />
+          <textarea
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            rows={3}
+            maxLength={4000}
+            className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+            dir="auto"
+          />
         </Field>
         <Field label="Done looks like (optional)">
-          <textarea value={doneDefinition} onChange={(event) => setDoneDefinition(event.target.value)} rows={2} maxLength={4000} className="w-full rounded-md border bg-background px-2 py-1 text-sm" dir="auto" />
+          <textarea
+            value={doneDefinition}
+            onChange={(event) => setDoneDefinition(event.target.value)}
+            rows={2}
+            maxLength={4000}
+            className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+            dir="auto"
+          />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Due date (optional)">
@@ -316,7 +393,8 @@ export function DelegateDialog({
           </Field>
           <Field label="Review">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={review} onChange={(event) => setReview(event.target.checked)} /> I review before it counts as done
+              <input type="checkbox" checked={review} onChange={(event) => setReview(event.target.checked)} /> I review before it counts as
+              done
             </label>
           </Field>
         </div>
@@ -406,7 +484,14 @@ export function NudgeDialog({
         onSubmit={(event) => {
           event.preventDefault();
           const sent = (text ?? "").trim();
-          void run(() => api.nudge({ operationId: operationId(), delegationId, expectedVersion: version, text: sent && sent !== template ? sent : null })).then((result) => {
+          void run(() =>
+            api.nudge({
+              operationId: operationId(),
+              delegationId,
+              expectedVersion: version,
+              text: sent && sent !== template ? sent : null,
+            }),
+          ).then((result) => {
             if (result) onSent();
           });
         }}
@@ -486,13 +571,22 @@ export function DelegationSection({
     <fieldset className="grid gap-2 rounded-lg border p-3" data-testid="delegation-section">
       <legend className="px-1 text-sm font-medium">Delegation</legend>
       {live.map((item) => (
-        <DelegationCard key={item.delegation.id} item={item} side={sideOf(item.delegation, people)} people={people} api={api} onChanged={onTaskChanged} onOpenNudge={(target) => setNudge(target)} />
+        <DelegationCard
+          key={item.delegation.id}
+          item={item}
+          side={sideOf(item.delegation, people)}
+          people={people}
+          api={api}
+          onChanged={onTaskChanged}
+          onOpenNudge={(target) => setNudge(target)}
+        />
       ))}
       {history.length > 0 && (
         <ul className="grid gap-1 text-xs text-muted-foreground">
           {history.map((item) => (
             <li key={item.delegation.id}>
-              {sideOf(item.delegation, people) === "From" ? "Delegated to" : "From"} <bdi>{item.toName}</bdi> · {describeDelegation(item.delegation.state, sideOf(item.delegation, people))} ·{" "}
+              {sideOf(item.delegation, people) === "From" ? "Delegated to" : "From"} <bdi>{item.toName}</bdi> ·{" "}
+              {describeDelegation(item.delegation.state, sideOf(item.delegation, people))} ·{" "}
               {dayText(item.delegation.stateChangedAtUtc.slice(0, 10))}
             </li>
           ))}
@@ -507,7 +601,16 @@ export function DelegationSection({
         </div>
       )}
       {dialog === "delegate" && (
-        <DelegateDialog task={task} people={people} api={api} onClose={() => setDialog(null)} onDelegated={(updated) => { setDialog(null); onTaskChanged(updated); }} />
+        <DelegateDialog
+          task={task}
+          people={people}
+          api={api}
+          onClose={() => setDialog(null)}
+          onDelegated={(updated) => {
+            setDialog(null);
+            onTaskChanged(updated);
+          }}
+        />
       )}
       {nudge && (
         <NudgeDialog

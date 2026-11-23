@@ -63,7 +63,8 @@ const row = (item: TaskResponse): QueryRowResponse => ({
   groupDate: null,
   waitingPerson: null,
   nextFollowUpAtUtc: null,
-  lastActivityAtUtc: null, delegatedTo: null,
+  lastActivityAtUtc: null,
+  delegatedTo: null,
 });
 const clock = (today: string): DayClockResponse => ({ today, nextDayStartsAtUtc: `${addDays(today, 1)}T00:00:00.0000000Z`, zoneId: "UTC" });
 const summary = (date: string, today: string, open = 0): DaySummaryResponse => ({
