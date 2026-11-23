@@ -180,7 +180,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
     public async Task<RecurrenceActionResult> SkipAsync(RecurrenceActionCommand command, CancellationToken ct = default) =>
         await ActionAsync(command, "recurrence.skip", async (session, task, _, now, token) =>
         {
-            var cancelled = task with { Status = TaskItemStatus.Cancelled, CancelledAtUtc = now,
+            var cancelled = task with { Status = TaskItemStatus.Cancelled, CustomStateId = null, CancelledAtUtc = now,
                 Version = task.Version + 1, UpdatedAtUtc = now };
             if (await session.Tasks.UpdateAsync(cancelled, task.Version, token) is null)
                 throw AppException.VersionConflict("This task changed elsewhere.");
@@ -402,7 +402,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         var successor = template.Task with
         {
             Id = taskId, ContainerId = completed.ContainerId, SectionId = completed.SectionId,
-            Status = TaskItemStatus.NotStarted, CompletedAtUtc = null, CancelledAtUtc = null,
+            Status = TaskItemStatus.NotStarted, CustomStateId = null, CompletedAtUtc = null, CancelledAtUtc = null,
             PlannedDate = planned.Date ?? (template.Task.DueDate is null ? DateOnly.FromDateTime(next.Value) : null),
             PlannedTime = planned.Time ?? (template.Task.PlannedDate is null && template.Task.DueDate is null && rule.AnchorTime is not null ? TimeOnly.FromDateTime(next.Value) : null),
             PlannedZoneId = template.Task.PlannedDate is null && template.Task.DueDate is null && rule.AnchorTime is not null ? rule.ZoneId : template.Task.PlannedZoneId,

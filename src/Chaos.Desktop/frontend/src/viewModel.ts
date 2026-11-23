@@ -65,6 +65,16 @@ export const viewFields: readonly ViewFieldInfo[] = [
     ],
   },
   {
+    name: "customState",
+    label: "Space state",
+    type: "id",
+    operators: [
+      { op: "is", label: "is" },
+      { op: "isNot", label: "is not" },
+      { op: "in", label: "is one of" },
+    ],
+  },
+  {
     name: "priority",
     label: "Priority",
     type: "ordinal",

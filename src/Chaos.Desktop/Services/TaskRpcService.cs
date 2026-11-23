@@ -16,6 +16,8 @@ public sealed record ListDeletedTasksRequest(string? ContainerId);
 public sealed record ListTasksResponse(bool Ok, IReadOnlyList<TaskResponse> Tasks, TaskErrorResponse? Error);
 public sealed record EditTaskRequest(string OperationId, string TaskId, string ExpectedVersion, string Title, string Notes, string? PlannedDate, string? PlannedTime, string? PlannedZoneId, string? DueDate, string? DueTime, string? DueZoneId, string Priority, int? EstimateMinutes, string Category);
 public sealed record ChangeTaskStatusRequest(string OperationId, string TaskId, string ExpectedVersion, string Status, string? SubtaskChoice);
+public sealed record ChangeTaskCustomStateRequest(string OperationId, string TaskId, string ExpectedVersion, string CustomStateId);
+public sealed record TaskCustomStateResponse(bool Ok, string? CustomStateId, TaskErrorResponse? Error);
 public sealed record ChangeAssigneeRequest(string OperationId, string TaskId, string ExpectedVersion, string MemberId, bool Assigned);
 public sealed record SetAssignmentModeRequest(string OperationId, string TaskId, string ExpectedVersion, string Mode);
 public sealed record AssigneeResponse(string MemberId, string? CompletedAtUtc);
@@ -65,6 +67,17 @@ public sealed record TaskGetResponse(bool Ok, TaskResponse? Task, TaskErrorRespo
 [NeoRpcService("tasks", Version = 1)]
 public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync = null)
 {
+    [NeoRpcMethod("customState")]
+    public ValueTask<TaskCustomStateResponse> CustomStateAsync(GetTaskRequest request, CancellationToken ct) =>
+        Rpc.Run("tasks.customState", async () => new TaskCustomStateResponse(true, (await commands.GetAsync(request.TaskId, ct))?.CustomStateId, null),
+            error => new TaskCustomStateResponse(false, null, error));
+    [NeoRpcMethod("setCustomState")]
+    public async ValueTask<TaskOperationResponse> SetCustomStateAsync(ChangeTaskCustomStateRequest request, CancellationToken ct)
+    {
+        using var scope = ActivityScope.Rpc("tasks.setCustomState");
+        return await MutateAsync(request.OperationId, () => commands.SetCustomStateAsync(new(request.OperationId, request.TaskId,
+            Version(request.ExpectedVersion), request.CustomStateId), ct));
+    }
     [NeoRpcMethod("assignmentSummaries")]
     public ValueTask<AssignmentSummariesResponse> AssignmentSummariesAsync(AssignmentSummariesRequest request, CancellationToken ct) =>
         Rpc.Run("tasks.assignmentSummaries", async () => new AssignmentSummariesResponse(true,

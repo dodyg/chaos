@@ -334,7 +334,12 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             <strong>Boards</strong> show a list or project as a Kanban board: switch with the List / Board control above the tasks (each
             list remembers its own). Drag cards between and within columns (a card stays in its swimlane), or use the arrow keys and each
             card's menu. Columns group by status, section, priority or a tag's children, with optional swimlanes, WIP limits and hidden
-            columns in the board settings. Switching layout never changes the tasks.
+            columns in the board settings. Switching layout never changes the tasks. On a shared list, board settings and card moves are
+            shared and updates from other members appear while the board is open.
+          </p>
+          <p>
+            <strong>Shared calendars</strong> can be narrowed to a space with the Space filter. Planned and due tasks and future repeats in
+            that space appear there; your meetings and week plans remain private to your account.
           </p>
           <p>
             <strong>Custom views</strong> keep a search you want again. Under Views choose New view, then add conditions on status,
@@ -349,7 +354,8 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             as "3 new tasks in My open bugs", held until your quiet hours end). Tasks already in the view when you switch it on stay quiet,
             and a task that leaves and comes back is announced again only after 24 hours. When GitHub is connected, views can also use the
             GitHub repository, issue state (open or closed), labels, milestone and assignee of a task that came from an issue; these read
-            the last state Chaos synced, so they work offline.
+            the last state Chaos synced, so they work offline. Choose Share with space to copy a personal view into a shared space; the
+            original stays personal and the copy only matches that space. Each person controls their own alerts for a shared view.
           </p>
           <p>
             <strong>Tags</strong> cut across lists. Nest them with a slash (#home/garden), and drag a task onto a tag in the sidebar to tag

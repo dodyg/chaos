@@ -41,6 +41,27 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate043_PreservesPersonalAlertPreferencesAndQueuesThemForSync()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 42);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('personal','person',1,'Personal','now','now'),('team','person',2,'Team','now','now');
+            INSERT INTO SavedViews (Id,SpaceId,Name,DefinitionJson,LayoutJson,AlertsEnabled,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('on','personal','On','{}','{}',1,'now','now'),('off','personal','Off','{}','{}',0,'now','now'),
+                    ('shared','team','Shared','{}','{}',1,'now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT COUNT(*) FROM ViewAlertSettings WHERE Id='viewalert:person:on' AND Enabled=1;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT COUNT(*) FROM ViewAlertSettings WHERE Id='viewalert:person:off' AND Enabled=0;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT COUNT(*) FROM ViewAlertSettings WHERE ViewId='shared';"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT COUNT(*) FROM SyncPending WHERE Kind='view_alert_setting';"))).IsEqualTo(4L);
+    }
+
+    [Test]
     public async Task Migrate040_PreservesBoardSettingsAndCapturesAssignments()
     {
         using var connection = Open();
@@ -115,7 +136,7 @@ public sealed class SharingMigrationTests
         await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM DiaryRevisions WHERE EntryId='entry';"))).IsEqualTo(1L);
         await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
         await Assert.That(Convert.ToInt64(Scalar(connection, "PRAGMA foreign_keys;"))).IsEqualTo(1L);
-        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_Spaces_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name GLOB 'TR_Sync_Spaces_*';"))).IsEqualTo(3L);
         await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_SpaceMembers_%';"))).IsEqualTo(0L);
         Execute(connection, "UPDATE Spaces SET ColorKey='blue' WHERE Id='space';");
         // Client schema 4 captures the space's sidebar look; schema 3 left the group to newer clients.

@@ -35,12 +35,13 @@ internal sealed class MergeTagRule : IUniqueRule
 
         using var insert = conflict.Connection.CreateCommand();
         insert.CommandText = """
-            INSERT INTO Tags (Id, OwnerProfileId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-            VALUES ($id, $owner, $name, $norm, $parent, $color, $position, 1, $created, $updated, $deleted)
+            INSERT INTO Tags (Id, OwnerProfileId, SpaceId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+            VALUES ($id, $owner, $space, $name, $norm, $parent, $color, $position, 1, $created, $updated, $deleted)
             ON CONFLICT (Id) DO NOTHING;
             """;
         insert.Parameters.AddWithValue("$id", conflict.Key["Id"]);
-        insert.Parameters.AddWithValue("$owner", values.GetValueOrDefault("OwnerProfileId") ?? string.Empty);
+        insert.Parameters.AddWithValue("$owner", values.GetValueOrDefault("OwnerProfileId") ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$space", values.GetValueOrDefault("SpaceId") ?? DBNull.Value);
         insert.Parameters.AddWithValue("$name", values.GetValueOrDefault("DisplayName") ?? string.Empty);
         insert.Parameters.AddWithValue("$norm", values.GetValueOrDefault("NormalizedName") ?? string.Empty);
         insert.Parameters.AddWithValue("$parent", values.GetValueOrDefault("ParentTagId") ?? DBNull.Value);

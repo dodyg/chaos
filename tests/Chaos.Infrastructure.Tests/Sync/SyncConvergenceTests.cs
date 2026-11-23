@@ -10,6 +10,7 @@ using Chaos.Application.GitHub;
 using Chaos.Infrastructure.Tests.Testing;
 using Chaos.Application.Pages;
 using Chaos.Application.Reminders;
+using Chaos.Application.Spaces;
 using Chaos.Domain.Reminders;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
@@ -34,6 +35,96 @@ namespace Chaos.Infrastructure.Tests.Sync;
 /// </summary>
 public sealed class SyncConvergenceTests
 {
+    [Test]
+    public async Task ConcurrentStateRenames_RenameTheLosingState()
+    {
+        var (a, b) = await StartTwoAsync();
+        using (a)
+        using (b)
+        {
+            var task = await CaptureTaskAsync(a);
+            var commands = new SpaceStateCommands(a.Store, a.Ids, a.Clock);
+            var first = (await commands.CreateAsync(new(Op(), task.SpaceId, "First", TaskItemStatus.NeedsReview))).State;
+            var second = (await commands.CreateAsync(new(Op(), task.SpaceId, "Second", TaskItemStatus.InProgress))).State;
+            await ExchangeAsync(a, b);
+            async Task Rename(DataHost host, string id) => await host.Store.ExecuteAsync(async (session, token) =>
+            {
+                var state = (await session.Spaces.GetStateAsync(id, token))!;
+                await session.Spaces.UpdateStateAsync(state with { Name = "Review", NormalizedName = "review", Version = state.Version + 1 }, state.Version, token);
+                return true;
+            });
+            await Rename(a, first.Id);
+            await Rename(b, second.Id);
+            await ExchangeAsync(a, b);
+            foreach (var host in new[] { a, b })
+            {
+                var states = await host.Store.QueryAsync((session, token) => session.Spaces.ListStatesAsync(task.SpaceId, token));
+                await Assert.That(states.Select(state => state.Name)).IsEquivalentTo(new[] { "Review", "Review (2)" });
+            }
+        }
+    }
+
+    [Test]
+    public async Task RemoteStateBaseChange_UpdatesTasksUsingThatState()
+    {
+        using var host = await StartAsync();
+        var task = await CaptureTaskAsync(host);
+        var state = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new(Op(), task.SpaceId, "Review", TaskItemStatus.NeedsReview))).State;
+        await host.Tasks.SetCustomStateAsync(new(Op(), task.Id, task.Version, state.Id));
+        using var bytes = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(bytes))
+            SyncJson.WriteChange(writer, Guid.NewGuid().ToString("D"), "space_state", state.Id, SyncOp.Upsert,
+                new Dictionary<string, SyncGroupState> { ["base"] = new(Hlc.Create(host.Clock.Now.ToUnixTimeMilliseconds() + 5000, 0, Guid.NewGuid()),
+                    new SyncGroupValues(new Dictionary<string, object?> { ["BaseStatus"] = 1L })) });
+        await new SyncApplier(host.Store, host.Clock, host.Ids).ApplyAsync([Encoding.UTF8.GetString(bytes.ToArray())]);
+        var updated = (await host.Tasks.GetAsync(task.Id))!;
+        await Assert.That(updated.Status).IsEqualTo(TaskItemStatus.InProgress);
+        await Assert.That(updated.CustomStateId).IsEqualTo(state.Id);
+    }
+
+    [Test]
+    public async Task ConcurrentCustomAndBaseStatus_ConvergeAsOneGroup()
+    {
+        var (a, b) = await StartTwoAsync();
+        using (a)
+        using (b)
+        {
+            var task = await CaptureTaskAsync(a);
+            var state = (await new SpaceStateCommands(a.Store, a.Ids, a.Clock)
+                .CreateAsync(new(Op(), task.SpaceId, "Review", TaskItemStatus.NeedsReview))).State;
+            await ExchangeAsync(a, b);
+            await a.Tasks.SetCustomStateAsync(new(Op(), task.Id, (await a.Tasks.GetAsync(task.Id))!.Version, state.Id));
+            await b.Tasks.SetStatusAsync(new(Op(), task.Id, (await b.Tasks.GetAsync(task.Id))!.Version, TaskItemStatus.InProgress, null));
+            await ExchangeAsync(a, b);
+            var first = (await a.Tasks.GetAsync(task.Id))!;
+            var second = (await b.Tasks.GetAsync(task.Id))!;
+            await Assert.That(first.Status).IsEqualTo(second.Status);
+            await Assert.That(first.CustomStateId).IsEqualTo(second.CustomStateId);
+            if (first.CustomStateId is not null)
+                await Assert.That(first.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        }
+    }
+
+    [Test]
+    public async Task OlderStatusChange_ClearsPreviouslySelectedCustomState()
+    {
+        using var host = await StartAsync();
+        var task = await CaptureTaskAsync(host);
+        var state = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new(Op(), task.SpaceId, "Review", TaskItemStatus.NeedsReview))).State;
+        await host.Tasks.SetCustomStateAsync(new(Op(), task.Id, task.Version, state.Id));
+        using var bytes = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(bytes))
+            SyncJson.WriteChange(writer, Guid.NewGuid().ToString("D"), "task", task.Id, SyncOp.Upsert,
+                new Dictionary<string, SyncGroupState> { ["status"] = new(Hlc.Create(host.Clock.Now.ToUnixTimeMilliseconds() + 5000, 0, Guid.NewGuid()),
+                    new SyncGroupValues(new Dictionary<string, object?> { ["Status"] = 1L, ["CompletedAtUtc"] = null, ["CancelledAtUtc"] = null })) });
+        await new SyncApplier(host.Store, host.Clock, host.Ids).ApplyAsync([Encoding.UTF8.GetString(bytes.ToArray())]);
+        var updated = (await host.Tasks.GetAsync(task.Id))!;
+        await Assert.That(updated.Status).IsEqualTo(TaskItemStatus.InProgress);
+        await Assert.That(updated.CustomStateId).IsNull();
+    }
+
     [Test]
     public async Task EachAssignment_OfflineCompletionsConvergeToLatestTimestamp()
     {
@@ -618,6 +709,36 @@ public sealed class SyncConvergenceTests
         await Assert.That(outcome.ParkedChangeIds.Count).IsEqualTo(0);
         await Assert.That(await TextAsync(b, $"SELECT Title FROM Tasks WHERE Id = '{task.Id}';")).IsEqualTo("From a newer client");
         await Assert.That(await CountAsync(b, $"SELECT count(*) FROM SyncClocks WHERE Kind = 'task' AND EntityKey = '{task.Id}' AND GroupName = 'future';")).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task DuplicateSpaceTagsCreatedOfflineMergeWithoutTouchingPersonalTag()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var space = Guid.NewGuid().ToString("D");
+        foreach (var host in new[] { a, b })
+            await host.Store.ExecuteAsync(async (session, token) =>
+            {
+                var profile = (await session.Profiles.GetPrimaryAsync(token))!;
+                using var command = session.Connection().CreateCommand();
+                command.CommandText = "INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',$now,$now); INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row,$space,$profile,1,'Me',1,$now);";
+                command.Parameters.AddWithValue("$space", space);
+                command.Parameters.AddWithValue("$profile", profile.Id);
+                command.Parameters.AddWithValue("$row", Guid.NewGuid().ToString("D"));
+                command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
+                await command.ExecuteNonQueryAsync(token);
+                return 0;
+            });
+        await new TagCommands(a.Store, a.Ids, a.Clock).CreateAsync(new(Op(), "review", null, null));
+        await new TagCommands(a.Store, a.Ids, a.Clock).CreateAsync(new(Op(), "review", null, null, space));
+        await new TagCommands(b.Store, b.Ids, b.Clock).CreateAsync(new(Op(), "review", null, null, space));
+        await ExchangeAsync(a, b);
+        foreach (var host in new[] { a, b })
+        {
+            await Assert.That(await CountAsync(host, "SELECT count(*) FROM Tags WHERE SpaceId IS NOT NULL AND DeletedAtUtc IS NULL AND NormalizedName='review';")).IsEqualTo(1L);
+            await Assert.That(await CountAsync(host, "SELECT count(*) FROM Tags WHERE OwnerProfileId IS NOT NULL AND DeletedAtUtc IS NULL AND NormalizedName='review';")).IsEqualTo(1L);
+        }
     }
 
     [Test]

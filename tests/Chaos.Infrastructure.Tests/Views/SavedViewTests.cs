@@ -2,6 +2,7 @@ using Chaos.Application.Abstractions;
 using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
+using Chaos.Application.Spaces;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Application.Views;
@@ -20,6 +21,66 @@ namespace Chaos.Infrastructure.Tests.Views;
 /// </summary>
 public sealed class SavedViewTests
 {
+    [Test]
+    public async Task CustomStateFilter_ReturnsOnlyMatchingTasks()
+    {
+        using var host = await DataHost.StartAsync();
+        var w = new World(host);
+        var first = await w.TaskAsync("In review");
+        await w.TaskAsync("Other");
+        var state = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new(DataHost.Op(), first.SpaceId, "Review", TaskItemStatus.NeedsReview))).State;
+        await host.Tasks.SetCustomStateAsync(new(DataHost.Op(), first.Id, first.Version, state.Id));
+        var definition = Def($"{{\"field\":\"customState\",\"op\":\"is\",\"value\":\"{state.Id}\"}}");
+        await Assert.That(await w.IdsAsync(definition)).IsEquivalentTo(new[] { first.Id });
+    }
+
+    [Test]
+    public async Task Share_CopiesIntoSpace_ConstrainsRows_AndKeepsAlertsPersonal()
+    {
+        using var host = await DataHost.StartAsync();
+        var w = new World(host);
+        var personal = await w.TaskAsync("Personal task");
+        var shared = await w.TaskAsync("Shared task");
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                    SELECT 'team',Id,2,'Team','2026-11-10T09:00:00Z','2026-11-10T09:00:00Z' FROM Profiles LIMIT 1;
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                    SELECT 'member','team',Id,1,'Me',2,'2026-11-10T09:00:00Z' FROM Profiles LIMIT 1;
+                INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ('team-list','team',1,'Team','team',0,'2026-11-10T09:00:00Z','2026-11-10T09:00:00Z');
+                UPDATE Tasks SET SpaceId='team',ContainerId='team-list' WHERE Id=$task;
+                """;
+            command.Parameters.AddWithValue("$task", shared.Id);
+            await command.ExecuteNonQueryAsync(token);
+            return true;
+        });
+        var source = (await w.Views.SaveAsync(NewView("Open", alerts: true))).View;
+        var operation = DataHost.Op();
+        var copy = (await w.Views.ShareAsync(operation, source.Id, "team")).View;
+        await Assert.That((await w.Views.ShareAsync(operation, source.Id, "team")).View.Id).IsEqualTo(copy.Id);
+        await Assert.That(copy.Id).IsNotEqualTo(source.Id);
+        await Assert.That(copy.AlertsEnabled).IsFalse();
+        await Assert.That((await w.Views.ListAsync()).Select(view => view.Id)).Contains(copy.Id);
+        var run = await new SavedViewQueries(host.Store, w.Queries, host.Clock).RunAsync(copy.Id, null, 100, null);
+        await Assert.That(run.Page.Rows.Select(row => row.Task.Id)).IsEquivalentTo([shared.Id]);
+        await Assert.That(run.Page.Rows.Select(row => row.Task.Id)).DoesNotContain(personal.Id);
+        var enabled = (await w.Views.SaveAsync(new(DataHost.Op(), copy.Id, copy.Version, copy.Name, copy.Icon, copy.Color,
+            copy.DefinitionJson, copy.LayoutJson, copy.Pinned, true))).View;
+        await Assert.That(enabled.AlertsEnabled).IsTrue();
+        await host.Store.QueryAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "SELECT AlertsEnabled FROM SavedViews WHERE Id=$id";
+            command.Parameters.AddWithValue("$id", copy.Id);
+            await Assert.That(Convert.ToInt64(await command.ExecuteScalarAsync(token))).IsEqualTo(0L);
+            return true;
+        });
+    }
+
     // The test clock is 2026-11-10 09:00 UTC; the profile uses the machine zone, which has the same date at that hour.
     private static readonly DateOnly Today = new(2026, 11, 10);
 

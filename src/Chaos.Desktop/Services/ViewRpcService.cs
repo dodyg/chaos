@@ -19,7 +19,8 @@ public sealed record ViewDto(
     string LayoutJson,
     bool AlertsEnabled,
     string Version,
-    bool Deleted);
+    bool Deleted,
+    string? SpaceId = null);
 
 public sealed record ViewListRequest(bool IncludeDeleted = false);
 public sealed record ViewListResponse(bool Ok, IReadOnlyList<ViewDto> Views, IReadOnlyList<string> Icons, TaskErrorResponse? Error);
@@ -37,6 +38,7 @@ public sealed record ViewSaveRequest(
     bool AlertsEnabled);
 public sealed record ViewResponse(bool Ok, ViewDto? View, TaskErrorResponse? Error);
 public sealed record ViewDuplicateRequest(string OperationId, string ViewId);
+public sealed record ViewShareRequest(string OperationId, string ViewId, string SpaceId);
 public sealed record ViewPinRequest(string OperationId, string ViewId, string ExpectedVersion, bool Pinned);
 public sealed record ViewDeleteRequest(string OperationId, string ViewId, string ExpectedVersion);
 public sealed record ViewReorderRequest(string OperationId, IReadOnlyList<string> ViewIds);
@@ -98,6 +100,13 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
     {
         using var rpcScope = ActivityScope.Rpc("views.duplicate");
         return await Run(async () => (await commands.DuplicateAsync(request.OperationId, request.ViewId, ct)).View);
+    }
+
+    [NeoRpcMethod("share")]
+    public async ValueTask<ViewResponse> ShareAsync(ViewShareRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("views.share");
+        return await Run(async () => (await commands.ShareAsync(request.OperationId, request.ViewId, request.SpaceId, ct)).View);
     }
 
     [NeoRpcMethod("setPinned")]
@@ -223,7 +232,7 @@ public sealed class ViewRpcService(SavedViewCommands commands, SavedViewQueries 
 
     private static ViewDto Map(SavedViewRecord view) => new(
         view.Id, view.Name, view.Icon, view.Color, view.Pinned, view.Position, view.DefinitionJson, view.LayoutJson,
-        view.AlertsEnabled, view.Version.ToString(CultureInfo.InvariantCulture), view.DeletedAtUtc is not null);
+        view.AlertsEnabled, view.Version.ToString(CultureInfo.InvariantCulture), view.DeletedAtUtc is not null, view.SpaceId);
 
     private static CapacityCategory? Category(string? value) =>
         string.IsNullOrEmpty(value) ? null

@@ -6,13 +6,15 @@ using Chaos.Domain.Validation;
 
 namespace Chaos.Application.Tags;
 
-public sealed record CreateTagCommand(string OperationId, string Path, string? ParentTagId, string? ColorKey);
+public sealed record CreateTagCommand(string OperationId, string Path, string? ParentTagId, string? ColorKey, string? SpaceId = null);
 public sealed record RenameTagCommand(string OperationId, string TagId, long ExpectedVersion, string Name);
 public sealed record SetTagColorCommand(string OperationId, string TagId, long ExpectedVersion, string? ColorKey);
 public sealed record MoveTagCommand(string OperationId, string TagId, long ExpectedVersion, string? ParentTagId);
 public sealed record MergeTagCommand(string OperationId, string SourceTagId, long SourceVersion, string TargetTagId, long TargetVersion);
 public sealed record DeleteTagCommand(string OperationId, string TagId, long ExpectedVersion);
 public sealed record RestoreTagCommand(string OperationId, string TagId, long ExpectedVersion);
+public sealed record ShareListTagsCommand(string OperationId, string ContainerId);
+public sealed record ShareListTagsResult(int TagsShared, int LinksShared, bool Replayed);
 
 /// <summary>What a tag is attached to.</summary>
 public enum TagTargetKind

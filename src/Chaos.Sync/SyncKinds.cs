@@ -37,12 +37,14 @@ public static class SyncKinds
         new("container", 1, 30, true, ["create", "name", "position", "deadline", "archived", "category", "deleted"]),
         new("task_template", 1, 35, true, ["create", "name", "payload", "deleted"]),
         new("section", 1, 40, false, ["create", "title", "position", "deleted"]),
+        new("space_state", 1, 45, true, new SyncGroupInfo[] { new("create", 7), new("name", 7), new("base", 7), new("position", 7), new("deleted", 7) }),
         new("tag", 1, 50, false, ["create", "name", "parent", "color", "position", "deleted"]),
         new("google_account", 1, 54, false, ["create", "deleted"]),
         new("board_setting", 1, 55, false, ["create", "grouping", "limits", "deleted"]),
         new("saved_view", 1, 56, true, ["create", "name", "look", "pinned", "position", "definition", "layout", "alerts", "deleted"]),
         new("calendar_source", 1, 57, false, ["create", "name", "look", "busy", "enabled", "owner", "position", "deleted"]),
         new("space_notification_setting", 1, 58, false, new SyncGroupInfo[] { new("create", 6), new("settings", 6) }),
+        new("view_alert_setting", 1, 59, false, new SyncGroupInfo[] { new("create", 8), new("settings", 8) }),
         new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1) }),
         new("task_assignee", 2, 61, false, new SyncGroupInfo[] { new("create", 5), new("done", 5), new("deleted", 5) }),
         new("calendar_event_link", 1, 65, false, ["create", "deleted"]),
@@ -92,11 +94,11 @@ public static class SyncKinds
     {
         var route = kind.Kind switch
         {
-            "profile" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
+            "profile" or "view_alert_setting" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
             "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
-            "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"), // Q9 adds this nullable column.
-            "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
+            "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
+            "space_state" or "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
             "section" => Parent("container", "ContainerId"),
             "subtask" or "diary_entry" => Parent("task", "TaskId"),
             "task_assignee" => KeyParent("task", 0),
@@ -117,6 +119,7 @@ public static class SyncKinds
         IReadOnlyList<OverlayRef> overlays = kind.Kind switch
         {
             "space_notification_setting" => [new("space", "SpaceId", Group: "create")],
+            "view_alert_setting" => [new("saved_view", "ViewId", Group: "create")],
             "calendar_event_link" or "reminder_rule" or "waiting_detail" or "follow_up" or "day_plan_item" or "week_assignment" => [new("task", "TaskId", Group: "create")],
             "week_goal_task" or "task_tag" => [new("task", KeyPart: kind.Kind == "week_goal_task" ? 1 : 0)],
             "subtask_tag" => [new("subtask", KeyPart: 0)],
@@ -131,7 +134,7 @@ public static class SyncKinds
     private static SyncRoute KeyParent(string kind, int part) => new(SyncRouteKind.Parent, kind, KeyPart: part);
     private static SyncWrite WriteFor(string kind, string group) => kind switch
     {
-        "space" => SyncWrite.Owner,
+        "space" or "space_state" => SyncWrite.Owner,
         "space_member" => SyncWrite.Server,
         "diary_entry" when group == "create" => SyncWrite.Commenter,
         "diary_entry" => SyncWrite.Author,

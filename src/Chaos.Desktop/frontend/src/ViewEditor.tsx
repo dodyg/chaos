@@ -1,5 +1,5 @@
 import React from "react";
-import { peopleRpc, viewRpc, type ContainerResponse, type PersonResponse, type TagResponse, type ViewDto } from "#neoastra";
+import { peopleRpc, spaceRpc, viewRpc, type ContainerResponse, type PersonResponse, type TagResponse, type ViewDto } from "#neoastra";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -512,6 +512,7 @@ function ValueEditor({
   switch (info.type) {
     case "id": {
       if (condition.field === "space") return <SpaceConditionValue condition={condition} onChange={onChange} />;
+      if (condition.field === "customState") return <CustomStateConditionValue condition={condition} onChange={onChange} />;
       if (condition.field === "assignee") return <AssigneeConditionValue condition={condition} onChange={onChange} />;
       if (condition.field === "githubRepository") return <GitHubRepositoryPicker condition={condition} onChange={onChange} />;
       const many = condition.op === "in";
@@ -662,6 +663,65 @@ function ValueEditor({
     case "date":
       return <DateEditor condition={condition} date={condition.date} onChange={(date) => set({ date })} />;
   }
+}
+
+function CustomStateConditionValue({ condition, onChange }: { condition: ConditionNode; onChange: (condition: ConditionNode) => void }) {
+  const { spaces } = useSpaces();
+  const [states, setStates] = React.useState<readonly { id: string; name: string }[]>([]);
+  React.useEffect(() => {
+    let active = true;
+    void Promise.all(spaces.map(async (space) => ({ space, result: await spaceRpc.states({ spaceId: space.spaceId }) })))
+      .then((results) => {
+        if (active)
+          setStates(
+            results.flatMap(({ space, result }) =>
+              result.ok ? result.states.map((state) => ({ id: state.id, name: `${space.name}: ${state.name}` })) : [],
+            ),
+          );
+      })
+      .catch(() => {
+        if (active) setStates([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [spaces]);
+  if (condition.op === "in")
+    return (
+      <div role="group" aria-label="Space states">
+        {states.map((state) => (
+          <label key={state.id} className="mr-3 text-sm">
+            <input
+              type="checkbox"
+              checked={condition.values.includes(state.id)}
+              onChange={() =>
+                onChange({
+                  ...condition,
+                  values: condition.values.includes(state.id)
+                    ? condition.values.filter((id) => id !== state.id)
+                    : [...condition.values, state.id],
+                })
+              }
+            />{" "}
+            {state.name}
+          </label>
+        ))}
+      </div>
+    );
+  return (
+    <NativeSelect
+      aria-label="Space state"
+      value={condition.values[0] ?? ""}
+      onChange={(event) => onChange({ ...condition, values: event.target.value ? [event.target.value] : [] })}
+    >
+      <NativeSelectOption value="">Choose…</NativeSelectOption>
+      {states.map((state) => (
+        <NativeSelectOption key={state.id} value={state.id}>
+          {state.name}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
 }
 
 function SpaceConditionValue({ condition, onChange }: { condition: ConditionNode; onChange: (condition: ConditionNode) => void }) {

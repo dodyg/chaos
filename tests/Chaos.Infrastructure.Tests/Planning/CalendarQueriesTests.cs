@@ -7,6 +7,7 @@ using Chaos.Application.Views;
 using Chaos.Domain.Recurrence;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Tests.DataProtection;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Infrastructure.Tests.Planning;
 
@@ -148,6 +149,49 @@ public sealed class CalendarQueriesTests
 
         var past = await QueriesOf(host).RangeAsync(today.AddDays(-10), today.AddDays(-1), new CalendarFilters());
         await Assert.That(past.Entries.Any(entry => entry.Kind == CalendarEntryKind.Repeat)).IsFalse();
+    }
+
+    [Test]
+    public async Task Repeats_ProjectForSelectedSharedSpaceOnlyWhileMembershipIsLive()
+    {
+        using var host = await DataHost.StartAsync();
+        var today = (await QueriesOf(host).RangeAsync(Monday, Monday, new CalendarFilters())).Today;
+        var task = await TaskAsync(host, "Shared repeat", today);
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Day, 2, today, null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        var series = (await new RecurrenceCommands(host.Store, host.Ids, host.Clock).StartAsync(new(DataHost.Op(), task.Id, task.Version, rule))).Series;
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                    SELECT 'team',Id,2,'Team','2026-11-10T09:00:00Z','2026-11-10T09:00:00Z' FROM Profiles LIMIT 1;
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                    SELECT 'member','team',Id,1,'Me',2,'now' FROM Profiles LIMIT 1;
+                INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ('team-list','team',1,'Team','team',0,'2026-11-10T09:00:00Z','2026-11-10T09:00:00Z');
+                UPDATE Tasks SET SpaceId='team',ContainerId='team-list' WHERE Id=$task;
+                UPDATE RecurrenceSeries SET SpaceId='team' WHERE Id=$series;
+                """;
+            command.Parameters.AddWithValue("$task", task.Id);
+            command.Parameters.AddWithValue("$series", series.Id);
+            await command.ExecuteNonQueryAsync(token);
+            return true;
+        });
+        var queries = QueriesOf(host);
+        var team = await queries.RangeAsync(today, today.AddDays(4), new CalendarFilters { SpaceId = "team" });
+        await Assert.That(team.Entries.Where(entry => entry.Kind == CalendarEntryKind.Repeat).Select(entry => entry.Date))
+            .IsEquivalentTo([today.AddDays(2), today.AddDays(4)]);
+        var personal = await queries.RangeAsync(today, today.AddDays(4), new CalendarFilters { SpaceId = task.SpaceId });
+        await Assert.That(personal.Entries.Any(entry => entry.TaskId == task.Id)).IsFalse();
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "UPDATE SpaceMembers SET RemovedAtUtc='2026-11-10T10:00:00Z' WHERE Id='member';";
+            await command.ExecuteNonQueryAsync(token);
+            return true;
+        });
+        var removed = await queries.RangeAsync(today, today.AddDays(4), new CalendarFilters { SpaceId = "team" });
+        await Assert.That(removed.Entries).IsEmpty();
     }
 
     [Test]

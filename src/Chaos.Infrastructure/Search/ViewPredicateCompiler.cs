@@ -72,6 +72,7 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
             "container" => List("t.ContainerId", c, nullable: false),
             "section" => List("t.SectionId", c, nullable: true),
             "status" => List("t.Status", c, nullable: false),
+            "customState" => List("t.CustomStateId", c, nullable: true),
             "priority" => c.Operator switch
             {
                 "atLeast" => $"t.Priority >= {p(c.Numbers[0])}",

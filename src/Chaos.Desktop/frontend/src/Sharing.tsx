@@ -2,11 +2,14 @@ import React from "react";
 import {
   collaborationRpc,
   spaceRpc,
+  tagRpc,
   type ContainerResponse,
   type SpaceInviteResponseItem,
   type SpaceMemberResponse,
   type SpaceResponse,
   type SpaceNotificationPreference,
+  type SpaceStateDto,
+  type TagResponse,
 } from "#neoastra";
 import { ChevronRight, FolderKanban, Home, ListTodo, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -63,6 +66,10 @@ const SpacesContext = React.createContext<readonly SpaceResponse[]>([]);
 
 export function SpacesProvider({ spaces, children }: { spaces: readonly SpaceResponse[]; children: React.ReactNode }) {
   return <SpacesContext.Provider value={spaces}>{children}</SpacesContext.Provider>;
+}
+
+export function useAvailableSpaces() {
+  return React.useContext(SpacesContext);
 }
 
 /** The one place a screen asks what the current person may do in a space (PLAN3 Q5 step 3). */
@@ -429,6 +436,18 @@ export function MoveToSpaceDialog({
 }) {
   const targets = spaces.filter((space) => space.kind === "Shared" && (space.role === OWNER || space.role === EDITOR));
   const [spaceId, setSpaceId] = React.useState(targets[0]?.spaceId ?? "");
+  const [personalTags, setPersonalTags] = React.useState<readonly string[]>([]);
+  const [shareTags, setShareTags] = React.useState(false);
+  const [moved, setMoved] = React.useState(false);
+  const [tagError, setTagError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    void tagRpc
+      .listPersonalOnList({ containerId: list.id })
+      .then((result) => {
+        if (result.ok) setPersonalTags(result.tags.map((tag) => tag.path));
+      })
+      .catch(() => undefined);
+  }, [list.id]);
   const target = targets.find((space) => space.spaceId === spaceId);
   const { busy, error, run } = useAction();
   return (
@@ -447,13 +466,27 @@ export function MoveToSpaceDialog({
           className="grid gap-3"
           onSubmit={(event) => {
             event.preventDefault();
-            void run(() => api.move({ containerId: list.id, spaceId })).then((result) => {
-              if (result) onMoved(spaceId);
-            });
+            void (async () => {
+              if (!moved) {
+                const result = await run(() => api.move({ containerId: list.id, spaceId }));
+                if (!result) return;
+                setMoved(true);
+              }
+              if (shareTags) {
+                try {
+                  const result = await tagRpc.shareList({ operationId: crypto.randomUUID(), containerId: list.id });
+                  if (!result.ok) throw new Error(result.error?.message ?? "Could not share tags.");
+                } catch (cause) {
+                  setTagError(`The list moved, but its tags were not shared: ${String(cause)}`);
+                  return;
+                }
+              }
+              onMoved(spaceId);
+            })();
           }}
         >
           <Field label="Shared space">
-            <NativeSelect value={spaceId} onChange={(e) => setSpaceId(e.target.value)}>
+            <NativeSelect value={spaceId} disabled={moved} onChange={(e) => setSpaceId(e.target.value)}>
               {targets.map((space) => (
                 <NativeSelectOption key={space.spaceId} value={space.spaceId}>
                   {space.name}
@@ -466,12 +499,19 @@ export function MoveToSpaceDialog({
             <strong>{target?.name}</strong>. Its members will see them. Your My Day, reminders and personal tags stay yours.
           </p>
           <p className="text-xs text-muted-foreground">Moving needs a connection to the online service.</p>
+          {personalTags.length > 0 && (
+            <label className="text-sm">
+              <input type="checkbox" checked={shareTags} onChange={(event) => setShareTags(event.target.checked)} /> Also share these tags
+              with the space: {personalTags.map((tag) => `#${tag}`).join(", ")}
+            </label>
+          )}
           {error && <InlineError>{error}</InlineError>}
+          {tagError && <InlineError>{tagError}</InlineError>}
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
+            <Button type="button" variant="ghost" onClick={() => (moved ? onMoved(spaceId) : onClose())}>
+              {moved ? "Done" : "Cancel"}
             </Button>
-            <Button disabled={busy || !spaceId}>Move</Button>
+            <Button disabled={busy || !spaceId}>{moved ? "Retry sharing tags" : "Move"}</Button>
           </div>
         </form>
       )}
@@ -569,7 +609,7 @@ export function DeleteSpaceDialog({
   );
 }
 
-type HomeTab = "overview" | "members" | "notifications" | "settings";
+type HomeTab = "overview" | "members" | "notifications" | "tags" | "settings";
 
 function SpaceNotifications({ spaceId }: { spaceId: string }) {
   const [settings, setSettings] = React.useState<SpaceNotificationPreference | null>(null);
@@ -738,6 +778,204 @@ function SpaceDefaultReminder({ spaceId }: { spaceId: string }) {
   );
 }
 
+function SpaceStateSettings({ spaceId }: { spaceId: string }) {
+  const [states, setStates] = React.useState<SpaceStateDto[]>([]);
+  const [name, setName] = React.useState("");
+  const [baseStatus, setBaseStatus] = React.useState("NeedsReview");
+  const [error, setError] = React.useState<string | null>(null);
+  const [ownerOnly, setOwnerOnly] = React.useState(false);
+  const refresh = React.useCallback(async () => {
+    const result = await spaceRpc.states({ spaceId });
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not load states.");
+    setStates([...result.states]);
+  }, [spaceId]);
+  React.useEffect(() => {
+    void refresh().catch((e: unknown) => setError(String(e)));
+  }, [refresh]);
+  React.useEffect(() => {
+    void spaceRpc
+      .tagPolicy({ spaceId })
+      .then((result) => {
+        if (result.ok) setOwnerOnly(result.ownerOnly);
+      })
+      .catch((e: unknown) => setError(String(e)));
+  }, [spaceId]);
+  return (
+    <section className="grid gap-2" aria-label="Space states">
+      <h3 className="font-semibold">Space states</h3>
+      <ul>
+        {states.map((state) => (
+          <li key={state.id} className="flex items-center gap-2 text-sm">
+            <span className="flex-1">
+              {state.name} ({state.baseStatus})
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (!window.confirm(`Delete ${state.name}? Tasks return to its base status.`)) return;
+                void spaceRpc
+                  .deleteState({ operationId: crypto.randomUUID(), stateId: state.id, expectedVersion: state.version })
+                  .then((result) => {
+                    if (!result.ok) throw new Error(result.error?.message ?? "Could not delete state.");
+                    return refresh();
+                  })
+                  .catch((e: unknown) => setError(String(e)));
+              }}
+            >
+              Delete
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <form
+        className="grid gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void spaceRpc
+            .createState({ operationId: crypto.randomUUID(), spaceId, name, baseStatus })
+            .then((result) => {
+              if (!result.ok) throw new Error(result.error?.message ?? "Could not create state.");
+              setName("");
+              return refresh();
+            })
+            .catch((e: unknown) => setError(String(e)));
+        }}
+      >
+        <Field label="New state">
+          <Input value={name} onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="Base status">
+          <NativeSelect value={baseStatus} onChange={(event) => setBaseStatus(event.target.value)}>
+            <NativeSelectOption value="NotStarted">Not started</NativeSelectOption>
+            <NativeSelectOption value="InProgress">In progress</NativeSelectOption>
+            <NativeSelectOption value="WaitingOnSomeone">Waiting on someone</NativeSelectOption>
+            <NativeSelectOption value="NeedsReview">Needs review</NativeSelectOption>
+          </NativeSelect>
+        </Field>
+        <Button className="w-fit" disabled={!name.trim()}>
+          Add state
+        </Button>
+      </form>
+      <label className="text-sm">
+        <input
+          type="checkbox"
+          checked={ownerOnly}
+          onChange={(event) => {
+            const next = event.target.checked;
+            void spaceRpc
+              .setTagPolicy({ spaceId, ownerOnly: next })
+              .then((result) => {
+                if (!result.ok) throw new Error(result.error?.message ?? "Could not update tag settings.");
+                setOwnerOnly(next);
+              })
+              .catch((e: unknown) => setError(String(e)));
+          }}
+        />{" "}
+        Only owners can change the space tag list
+      </label>
+      {error && <InlineError>{error}</InlineError>}
+    </section>
+  );
+}
+
+function SpaceTagSettings({ spaceId }: { spaceId: string }) {
+  const [tags, setTags] = React.useState<readonly TagResponse[]>([]);
+  const [name, setName] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const refresh = React.useCallback(async () => {
+    const result = await tagRpc.listSpace({ spaceId });
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not load space tags.");
+    setTags(result.tags);
+  }, [spaceId]);
+  React.useEffect(() => {
+    void refresh().catch((cause: unknown) => setError(String(cause)));
+  }, [refresh]);
+  const perform = (action: () => Promise<{ ok: boolean; error: { message: string } | null }>) => {
+    void action()
+      .then((result) => {
+        if (!result.ok) throw new Error(result.error?.message ?? "Could not change tag.");
+        return refresh();
+      })
+      .catch((cause: unknown) => setError(String(cause)));
+  };
+  return (
+    <section className="grid gap-2" aria-label="Space tags">
+      <h3 className="font-semibold">Space tags</h3>
+      <ul>
+        {tags.map((tag) => (
+          <li key={tag.id} className="flex items-center gap-1 text-sm">
+            <span className="flex-1">#{tag.path}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const next = window.prompt("Rename tag", tag.name);
+                if (next?.trim())
+                  perform(() =>
+                    tagRpc.rename({ operationId: crypto.randomUUID(), tagId: tag.id, expectedVersion: tag.version, name: next }),
+                  );
+              }}
+            >
+              Rename
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const targetPath = window.prompt("Merge into which space tag? Enter its full path.");
+                const target = tags.find((row) => row.path.toLocaleLowerCase() === targetPath?.trim().toLocaleLowerCase());
+                if (target)
+                  perform(() =>
+                    tagRpc.merge({
+                      operationId: crypto.randomUUID(),
+                      sourceId: tag.id,
+                      sourceVersion: tag.version,
+                      targetId: target.id,
+                      targetVersion: target.version,
+                    }),
+                  );
+                else if (targetPath) setError("Choose an existing space tag path.");
+              }}
+            >
+              Merge
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (window.confirm(`Delete #${tag.path}?`))
+                  perform(() => tagRpc.delete({ operationId: crypto.randomUUID(), tagId: tag.id, expectedVersion: tag.version }));
+              }}
+            >
+              Delete
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          perform(async () => {
+            const result = await tagRpc.createSpace({ operationId: crypto.randomUUID(), spaceId, path: name });
+            if (result.ok) setName("");
+            return result;
+          });
+        }}
+      >
+        <Input aria-label="New space tag" value={name} onChange={(event) => setName(event.target.value)} />
+        <Button disabled={!name.trim()}>Add tag</Button>
+      </form>
+      {error && <InlineError>{error}</InlineError>}
+    </section>
+  );
+}
+
 /** A shared space's home (§9.1): Overview, Members and, for an owner, Settings. */
 export function SpaceHome({
   space,
@@ -783,6 +1021,7 @@ export function SpaceHome({
     ["overview", "Overview"],
     ["members", "Members"],
     ["notifications", "Notifications"],
+    ...(access.canEdit ? ([["tags", "Tags"]] as [HomeTab, string][]) : []),
     ...(access.isOwner ? ([["settings", "Settings"]] as [HomeTab, string][]) : []),
   ];
   const projects = lists.filter((list) => list.kind === "Project");
@@ -937,9 +1176,15 @@ export function SpaceHome({
       )}
 
       {tab === "notifications" && <SpaceNotifications spaceId={space.spaceId} />}
+      {tab === "tags" && access.canEdit && (
+        <div role="tabpanel" aria-label="Tags">
+          <SpaceTagSettings spaceId={space.spaceId} />
+        </div>
+      )}
       {tab === "settings" && access.isOwner && (
         <div role="tabpanel" aria-label="Settings" className="grid max-w-lg gap-3">
           <SpaceDefaultReminder spaceId={space.spaceId} />
+          <SpaceStateSettings spaceId={space.spaceId} />
           <h3 className="font-semibold">Delete this space</h3>
           <p className="text-sm">
             Deleting removes the space for everyone. You can restore it within 30 days. After that it and everything in it is deleted for

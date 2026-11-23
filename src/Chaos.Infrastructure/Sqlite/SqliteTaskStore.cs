@@ -82,11 +82,11 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Tasks (Id, SpaceId, ContainerId, SectionId, Title, Notes, Status, Priority,
+            INSERT INTO Tasks (Id, SpaceId, ContainerId, SectionId, Title, Notes, Status, CustomStateId, Priority,
                 EstimateMinutes, CapacityCategory, PlannedDate, PlannedTime, PlannedZoneId,
                 DueDate, DueTime, DueZoneId, CompletedAtUtc, CancelledAtUtc, Position,
                 RecurrenceOccurrenceKey, AssignMode, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-            VALUES ($id, $space, $container, $section, $title, $notes, $status, $priority,
+            VALUES ($id, $space, $container, $section, $title, $notes, $status, $customState, $priority,
                 $estimate, $category, $plannedDate, $plannedTime, $plannedZone,
                 $dueDate, $dueTime, $dueZone, $completed, $cancelled, $position,
                 $occurrenceKey, $assignMode, $version, $created, $updated, $deleted);
@@ -98,6 +98,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$title", task.Title);
         command.Parameters.AddWithValue("$notes", task.Notes);
         command.Parameters.AddWithValue("$status", (long)task.Status);
+        command.Parameters.AddWithValue("$customState", SqliteProfileStore.OptionalValue(task.CustomStateId));
         command.Parameters.AddWithValue("$priority", (long)task.Priority);
         command.Parameters.AddWithValue("$estimate", task.EstimateMinutes is null ? System.DBNull.Value : (object)(long)task.EstimateMinutes.Value);
         command.Parameters.AddWithValue("$category", (long)task.CapacityCategory);
@@ -130,7 +131,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE Tasks SET
-                ContainerId = $container, SectionId = $section, Position = $position, Title = $title, Notes = $notes, Status = $status, Priority = $priority,
+                ContainerId = $container, SectionId = $section, Position = $position, Title = $title, Notes = $notes, Status = $status, CustomStateId = $customState, Priority = $priority,
                 EstimateMinutes = $estimate, CapacityCategory = $category,
                 PlannedDate = $plannedDate, PlannedTime = $plannedTime, PlannedZoneId = $plannedZone,
                 DueDate = $dueDate, DueTime = $dueTime, DueZoneId = $dueZone,
@@ -145,6 +146,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$title", updated.Title);
         command.Parameters.AddWithValue("$notes", updated.Notes);
         command.Parameters.AddWithValue("$status", (long)updated.Status);
+        command.Parameters.AddWithValue("$customState", SqliteProfileStore.OptionalValue(updated.CustomStateId));
         command.Parameters.AddWithValue("$priority", (long)updated.Priority);
         command.Parameters.AddWithValue("$estimate", updated.EstimateMinutes is null ? System.DBNull.Value : (object)(long)updated.EstimateMinutes.Value);
         command.Parameters.AddWithValue("$category", (long)updated.CapacityCategory);
@@ -192,6 +194,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         Title = r.S("Title"),
         Notes = r.S("Notes"),
         Status = (TaskItemStatus)(int)r.L("Status"),
+        CustomStateId = r.Sn("CustomStateId"),
         AssignMode = (TaskAssignMode)(int)r.L("AssignMode"),
         Priority = (TaskPriority)(int)r.L("Priority"),
         EstimateMinutes = r.Ln("EstimateMinutes") is { } minutes ? (int)minutes : null,

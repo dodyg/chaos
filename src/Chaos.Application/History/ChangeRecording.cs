@@ -24,6 +24,31 @@ public enum ChangeKind
     FollowUp = 13,
     Page = 14,
     Attachment = 15,
+    SpaceState = 16,
+}
+
+internal sealed class RecordingSpaceStore(RecordingDataSession recorder, ISpaceStore inner) : ISpaceStore
+{
+    public Task<SpaceRecord?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+    public Task<SpaceRecord?> GetPersonalByOwnerAsync(string id, CancellationToken ct) => inner.GetPersonalByOwnerAsync(id, ct);
+    public Task AddAsync(SpaceRecord space, CancellationToken ct) => inner.AddAsync(space, ct);
+    public Task<IReadOnlyList<SpaceRecord>> ListAsync(CancellationToken ct) => inner.ListAsync(ct);
+    public Task<IReadOnlyList<SpaceStateRecord>> ListStatesAsync(string id, CancellationToken ct) => inner.ListStatesAsync(id, ct);
+    public Task<SpaceStateRecord?> GetStateAsync(string id, CancellationToken ct) => inner.GetStateAsync(id, ct);
+    public Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct) => inner.ListTasksInStateAsync(id, ct);
+    public Task SetTagsOwnerOnlyAsync(string id, bool ownerOnly, DateTimeOffset now, CancellationToken ct) => inner.SetTagsOwnerOnlyAsync(id, ownerOnly, now, ct);
+    public async Task AddStateAsync(SpaceStateRecord state, CancellationToken ct)
+    {
+        await inner.AddStateAsync(state, ct);
+        recorder.RecordEntity<SpaceStateRecord>(ChangeKind.SpaceState, state.Id, null, state.Version);
+    }
+    public async Task<SpaceStateRecord?> UpdateStateAsync(SpaceStateRecord state, long expectedVersion, CancellationToken ct)
+    {
+        var before = recorder.IsRecorded(ChangeKind.SpaceState, state.Id) ? null : await inner.GetStateAsync(state.Id, ct);
+        var applied = await inner.UpdateStateAsync(state, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.SpaceState, state.Id, before, state.Version);
+        return applied;
+    }
 }
 
 internal sealed class RecordingRecurrenceStore(RecordingDataSession recorder, IRecurrenceStore inner) : IRecurrenceStore
@@ -175,6 +200,7 @@ public sealed class RecordingDataSession : IDataSession
     {
         _inner = inner;
         Tasks = new RecordingTaskStore(this, inner.Tasks);
+        Spaces = new RecordingSpaceStore(this, inner.Spaces);
         Subtasks = new RecordingSubtaskStore(this, inner.Subtasks);
         Containers = new RecordingContainerStore(this, inner.Containers);
         Sections = new RecordingSectionStore(this, inner.Sections);
@@ -190,7 +216,7 @@ public sealed class RecordingDataSession : IDataSession
     private IReminderRuleStore? _reminderRules;
     private IAttachmentStore? _attachments;
     public IProfileStore Profiles => _inner.Profiles;
-    public ISpaceStore Spaces => _inner.Spaces;
+    public ISpaceStore Spaces { get; }
     public IPeopleStore People => _inner.People;
     public IContainerStore Containers { get; }
     public ISectionStore Sections { get; }
@@ -826,6 +852,7 @@ internal sealed class RecordingTemplateStore(RecordingDataSession recorder, ITem
 
 internal sealed class RecordingTagStore(RecordingDataSession recorder, ITagStore inner) : ITagStore
 {
+    public Task<IReadOnlyList<TagRecord>> ListBySpaceAsync(string id, CancellationToken ct) => inner.ListBySpaceAsync(id, ct);
     public Task<TagRecord?> GetAsync(string tagId, CancellationToken ct) => inner.GetAsync(tagId, ct);
     public Task<TagRecord?> GetIncludingDeletedAsync(string tagId, CancellationToken ct) => inner.GetIncludingDeletedAsync(tagId, ct);
     public Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string ownerProfileId, CancellationToken ct) => inner.ListByOwnerAsync(ownerProfileId, ct);

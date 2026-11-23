@@ -9,6 +9,7 @@ import { TodayContext } from "./dates";
 import { SyncIndicator } from "./SyncStatus";
 import {
   taskRpc,
+  boardRpc,
   recurrenceRpc,
   subtaskRpc,
   containerRpc,
@@ -148,6 +149,7 @@ type Api = {
   summaryRpc?: typeof summaryRpc;
   shellRpc?: typeof shellRpc;
   viewRpc?: typeof viewRpc;
+  boardRpc?: typeof boardRpc;
   spaceRpc?: typeof spaceRpc;
 };
 type View =
@@ -1480,7 +1482,7 @@ export function App({
         <PageHeader
           eyebrow="View"
           title={openedView?.name ?? "View"}
-          subtitle={openedView ? "Your own view. Counts and rows come from the same conditions." : "This view is no longer available."}
+          subtitle={openedView ? "Counts and rows come from the same conditions." : "This view is no longer available."}
           actions={
             openedView && (
               <div className="flex flex-wrap gap-2">
@@ -1500,6 +1502,31 @@ export function App({
                 >
                   Duplicate
                 </Button>
+                {(!openedView.spaceId || spaces.some((space) => space.spaceId === openedView.spaceId && space.kind === "Personal")) &&
+                  spaces.some((space) => space.kind === "Shared" && (space.role === 1 || space.role === 2)) && (
+                    <NativeSelect
+                      aria-label="Share with space"
+                      value=""
+                      disabled={busy}
+                      onChange={(event) => {
+                        const target = event.target.value;
+                        if (target)
+                          void viewAction(
+                            () => viewApi.share({ operationId: operationId(), viewId: openedView.id, spaceId: target }),
+                            "Could not share the view.",
+                          );
+                      }}
+                    >
+                      <NativeSelectOption value="">Share with space…</NativeSelectOption>
+                      {spaces
+                        .filter((space) => space.kind === "Shared" && (space.role === 1 || space.role === 2))
+                        .map((space) => (
+                          <NativeSelectOption key={space.spaceId} value={space.spaceId}>
+                            {space.name}
+                          </NativeSelectOption>
+                        ))}
+                    </NativeSelect>
+                  )}
                 <Button
                   type="button"
                   variant="outline"
@@ -2366,6 +2393,7 @@ export function App({
                   api={queryApi}
                   recurrenceApi={recurrenceApi}
                   viewApi={viewApi}
+                  boardApi={api.boardRpc}
                   tagApi={tagApi}
                   onChanged={changed}
                   onTaskUpdated={() => changed()}

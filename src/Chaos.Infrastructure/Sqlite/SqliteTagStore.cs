@@ -17,12 +17,15 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     public async Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string ownerProfileId, CancellationToken ct) =>
         await ListAsync($"SELECT * FROM Tags WHERE OwnerProfileId = $owner AND DeletedAtUtc IS NULL {ActiveOrder};", ct, ("$owner", ownerProfileId));
 
+    public async Task<IReadOnlyList<TagRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct) =>
+        await ListAsync($"SELECT * FROM Tags WHERE SpaceId = $space AND DeletedAtUtc IS NULL {ActiveOrder};", ct, ("$space", spaceId));
+
     public async Task<IReadOnlyList<TagRecord>> ListDeletedByOwnerAsync(string ownerProfileId, CancellationToken ct) =>
         await ListAsync("SELECT * FROM Tags WHERE OwnerProfileId = $owner AND DeletedAtUtc IS NOT NULL ORDER BY DeletedAtUtc DESC, Id;", ct, ("$owner", ownerProfileId));
 
     public async Task<TagRecord?> FindChildAsync(string ownerProfileId, string? parentTagId, string normalizedName, CancellationToken ct) =>
         await SingleAsync(
-            "SELECT * FROM Tags WHERE OwnerProfileId = $owner AND COALESCE(ParentTagId, '') = $parent AND NormalizedName = $name AND DeletedAtUtc IS NULL;",
+            "SELECT * FROM Tags WHERE COALESCE(SpaceId, OwnerProfileId) = $owner AND COALESCE(ParentTagId, '') = $parent AND NormalizedName = $name AND DeletedAtUtc IS NULL;",
             ct, ("$owner", ownerProfileId), ("$parent", parentTagId ?? string.Empty), ("$name", normalizedName));
 
     public async Task<IReadOnlyList<TagRecord>> ListChildrenAsync(string tagId, CancellationToken ct) =>
@@ -32,9 +35,9 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Tags (Id, OwnerProfileId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position,
+            INSERT INTO Tags (Id, OwnerProfileId, SpaceId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position,
                 Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-            VALUES ($id, $owner, $display, $normalized, $parent, $color, $position,
+            VALUES ($id, $owner, $space, $display, $normalized, $parent, $color, $position,
                 $version, $created, $updated, $deleted);
             """;
         Bind(command, tag);
@@ -63,7 +66,7 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT COALESCE(MAX(Position), -1024) + 1024 FROM Tags
-            WHERE OwnerProfileId = $owner AND COALESCE(ParentTagId, '') = $parent AND DeletedAtUtc IS NULL;
+            WHERE COALESCE(SpaceId, OwnerProfileId) = $owner AND COALESCE(ParentTagId, '') = $parent AND DeletedAtUtc IS NULL;
             """;
         command.Parameters.AddWithValue("$owner", ownerProfileId);
         command.Parameters.AddWithValue("$parent", parentTagId ?? string.Empty);
@@ -185,7 +188,8 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     private static void Bind(SqliteCommand command, TagRecord tag)
     {
         command.Parameters.AddWithValue("$id", tag.Id);
-        command.Parameters.AddWithValue("$owner", tag.OwnerProfileId);
+        command.Parameters.AddWithValue("$owner", SqliteProfileStore.OptionalValue(tag.OwnerProfileId));
+        command.Parameters.AddWithValue("$space", SqliteProfileStore.OptionalValue(tag.SpaceId));
         command.Parameters.AddWithValue("$display", tag.DisplayName);
         command.Parameters.AddWithValue("$normalized", tag.NormalizedName);
         command.Parameters.AddWithValue("$parent", SqliteProfileStore.OptionalValue(tag.ParentTagId));
@@ -198,7 +202,8 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
     internal static TagRecord ReadTag(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),
-        OwnerProfileId = r.S("OwnerProfileId"),
+        OwnerProfileId = r.Sn("OwnerProfileId"),
+        SpaceId = r.Sn("SpaceId"),
         DisplayName = r.S("DisplayName"),
         NormalizedName = r.S("NormalizedName"),
         ParentTagId = r.Sn("ParentTagId"),

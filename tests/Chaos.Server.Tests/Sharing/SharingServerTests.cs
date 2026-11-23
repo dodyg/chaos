@@ -543,6 +543,33 @@ public sealed class SharingServerTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task PersonalTagLinkOnSharedTask_StaysInAccountStream()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        await using var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("tag-private-owner@example.com", schema: 7);
+        var member = await world.SignInAsync("tag-private-member@example.com", schema: 7);
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(member, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        var task = Guid.NewGuid().ToString("D");
+        var tag = Guid.NewGuid().ToString("D");
+        var link = task + "|" + tag;
+        var changes = new[]
+        {
+            SharingHarness.Change("task", task, "create", new { SpaceId = space.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("tag", tag, "create", new { OwnerProfileId = member.ProfileId.ToString("D"), SpaceId = (string?)null, CreatedAtUtc = Now() }),
+            SharingHarness.Change("task_tag", link, "deleted", new { DeletedAtUtc = (string?)null }),
+        };
+        var response = await world.CallAsync(member, HttpMethod.Post, "/v2/sync/push",
+            System.Text.Json.JsonSerializer.Serialize(new { changes }), schema: 7);
+        await Assert.That(response.Rejections()).IsEmpty();
+        await using var db = ServerDatabase.Open(server.ConnectionString);
+        await Assert.That(db.SyncEntities.Any(row => row.AccountId == member.AccountId && row.Kind == "task_tag" && row.EntityKey == link)).IsTrue();
+        await Assert.That(db.SyncEntities.Any(row => row.AccountId == space && row.Kind == "task_tag" && row.EntityKey == link)).IsFalse();
+        await Assert.That(db.SyncChanges.Any(row => row.AccountId == space && row.Kind == "task_tag" && row.EntityKey == link)).IsFalse();
+    }
+
+    [Test]
     public async Task Move_carries_closure_but_keeps_personal_tags_and_overlays()
     {
         await using var server = await TestServer.StartAsync(postgres);
@@ -571,6 +598,7 @@ public sealed class SharingServerTests(PostgresServer postgres)
                 new { SpaceId = alice.PersonalSpaceId.ToString("D"), Kind = 2L, IsInbox = 0L, CreatedAtUtc = Now() }),
             SharingHarness.Change("task", task, "create",
                 new { SpaceId = alice.PersonalSpaceId.ToString("D"), CreatedAtUtc = Now() }),
+            SharingHarness.Change("task", task, "status", new { Status = 3L, CustomStateId = Guid.NewGuid().ToString("D"), CompletedAtUtc = (string?)null, CancelledAtUtc = (string?)null }),
             SharingHarness.Change("task", task, "place", new { ContainerId = container, SectionId = (string?)null }),
             SharingHarness.Change("subtask", subtask, "create", new { TaskId = task, CreatedAtUtc = Now() }),
             SharingHarness.Change("diary_entry", diary, "create",
@@ -614,6 +642,10 @@ public sealed class SharingServerTests(PostgresServer postgres)
             new MoveRequest(Guid.NewGuid(), inbox));
         await Assert.That(inboxMove.Body).Contains("inbox-cannot-move");
         await using var db = ServerDatabase.Open(server.ConnectionString);
+        var movedTask = db.SyncEntities.Single(e => e.AccountId == space && e.Kind == "task" && e.EntityKey == task);
+        var movedStatus = Chaos.Sync.SyncJson.ReadGroups(movedTask.Groups)["status"].Values.Values;
+        await Assert.That(movedStatus["CustomStateId"]).IsNull();
+        await Assert.That(movedStatus["Status"]).IsEqualTo(3L);
         foreach (var key in new[] { container, task, subtask, diary, attachment, section, history, board, series, occurrence, issue })
         {
             await Assert.That(db.SyncEntities.Any(e => e.AccountId == alice.AccountId && e.EntityKey == key && e.MovedTo == space))
@@ -622,6 +654,10 @@ public sealed class SharingServerTests(PostgresServer postgres)
         }
         await Assert.That(db.SyncEntities.Any(e => e.AccountId == alice.AccountId && e.Kind == "task_tag" && e.EntityKey == link))
             .IsTrue();
+        await Assert.That(db.SyncEntities.Any(e => e.AccountId == space && e.Kind == "task_tag" && e.EntityKey == link))
+            .IsFalse();
+        await Assert.That(db.SyncChanges.Any(c => c.AccountId == space && c.Kind == "task_tag" && c.EntityKey == link))
+            .IsFalse();
         await Assert.That(db.SyncEntities.Any(e => e.AccountId == alice.AccountId && e.Kind == "day_plan_item" && e.EntityKey == dayItem))
             .IsTrue();
         await Assert.That(db.SyncChanges.Count(c => c.AccountId == alice.AccountId && c.ChangeId == moveId)).IsEqualTo(1);

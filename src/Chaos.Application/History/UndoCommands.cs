@@ -132,6 +132,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
     private static async Task<(long? Version, string? Name)> CurrentAsync(IDataSession session, EntityChange change, CancellationToken ct) => change.Kind switch
     {
         ChangeKind.Task => await session.Tasks.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Title) : (null, null),
+        ChangeKind.SpaceState => await session.Spaces.GetStateAsync(change.Id, ct) is { } row ? (row.Version, row.Name) : (null, null),
         ChangeKind.Subtask => await session.Subtasks.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Title) : (null, null),
         ChangeKind.Container => await session.Containers.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Name) : (null, null),
         ChangeKind.Section => await session.Sections.GetIncludingDeletedAsync(change.Id, ct) is { } row ? (row.Version, row.Title) : (null, null),
@@ -173,6 +174,11 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
     {
         switch (change.Kind)
         {
+            case ChangeKind.SpaceState:
+                return await RevertAsync(change, label, row => row.Name,
+                    id => session.Spaces.GetStateAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Spaces.UpdateStateAsync(row, expected, ct));
             case ChangeKind.ReminderRule:
                 return await RevertAsync(change, label, _ => "reminder rule",
                     id => session.ReminderRules.GetAsync(id, ct),

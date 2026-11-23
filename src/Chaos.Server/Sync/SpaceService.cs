@@ -744,6 +744,17 @@ public sealed class SpaceService(
                     var hlc = await changes.NextHlcAsync(spaceId, kind, key, ct);
                     groups["create"] = new SyncGroupState(hlc, new SyncGroupValues(values));
                 }
+                if (kind == "task" && groups.TryGetValue("status", out var status)
+                    && status.Values.Values.GetValueOrDefault("CustomStateId") is not null)
+                {
+                    // States belong to their space and do not move with a list. Keep the base
+                    // status, and issue a clock that also wins over the mover's local status.
+                    var values = status.Values.Values.ToDictionary();
+                    values["CustomStateId"] = null;
+                    var hybrid = new HybridClock(ServerChangeWriter.DeviceId, clock);
+                    hybrid.Receive(status.Hlc);
+                    groups["status"] = new SyncGroupState(hybrid.TickLocal(), new SyncGroupValues(values));
+                }
                 await changes.AppendAsync(spaceId, current.MemberId,
                     SyncChange.Upsert(Guid.NewGuid().ToString("D"), kind, key, groups), ct);
                 if (kind == "attachment" && groups.TryGetValue("file", out var file))
@@ -878,7 +889,7 @@ public sealed class SpaceService(
         {
             group = "removed"; column = "RemovedAtUtc"; return true;
         }
-        if (kind is "week_assignment" or "space_notification_setting")
+        if (kind is "week_assignment" or "space_notification_setting" or "view_alert_setting")
         {
             group = "purge"; column = string.Empty; return true;
         }

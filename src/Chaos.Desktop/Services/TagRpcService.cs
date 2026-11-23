@@ -7,6 +7,11 @@ using NeoAstra.Rpc;
 namespace Chaos.Desktop.Services;
 
 public sealed record TagListRequest();
+public sealed record TagSpaceRequest(string SpaceId);
+public sealed record TagSpaceCreateRequest(string OperationId, string SpaceId, string Path);
+public sealed record TagListContainerRequest(string ContainerId);
+public sealed record TagShareListRequest(string OperationId, string ContainerId);
+public sealed record TagShareListResponse(bool Ok, int TagsShared, int LinksShared, TaskErrorResponse? Error);
 public sealed record TagSuggestRequest(string Text);
 public sealed record TagResponse(string Id, string Name, string Path, string? ParentId, string? Color, string Version, int Depth);
 public sealed record TagListResponse(bool Ok, IReadOnlyList<TagResponse> Tags, TaskErrorResponse? Error);
@@ -29,6 +34,30 @@ public sealed record TagIdsResponse(bool Ok, IReadOnlyList<string> TagIds, TaskE
 [NeoRpcService("tags", Version = 1)]
 public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHubSyncEngine? sync = null)
 {
+    [NeoRpcMethod("createSpace")]
+    public async ValueTask<TagOperationResponse> CreateSpaceAsync(TagSpaceCreateRequest request, CancellationToken ct)
+    {
+        using var scope = ActivityScope.Rpc("tags.createSpace");
+        return await TagResultAsync(() => tags.CreateAsync(new(request.OperationId, request.Path, null, null, request.SpaceId), ct));
+    }
+    [NeoRpcMethod("listPersonalOnList")]
+    public async ValueTask<TagListResponse> ListPersonalOnListAsync(TagListContainerRequest request, CancellationToken ct)
+    {
+        using var scope = ActivityScope.Rpc("tags.listPersonalOnList");
+        return await ListResponseAsync(async () => [.. (await tags.ListPersonalTagsOnListAsync(request.ContainerId, ct)).Select(Map)]);
+    }
+
+    [NeoRpcMethod("shareList")]
+    public ValueTask<TagShareListResponse> ShareListAsync(TagShareListRequest request, CancellationToken ct) =>
+        Rpc.Run("tags.shareList", async () => { var result = await tags.ShareListTagsAsync(new(request.OperationId, request.ContainerId), ct);
+            return new TagShareListResponse(true, result.TagsShared, result.LinksShared, null); },
+            error => new TagShareListResponse(false, 0, 0, error));
+    [NeoRpcMethod("listSpace")]
+    public async ValueTask<TagListResponse> ListSpaceAsync(TagSpaceRequest request, CancellationToken ct)
+    {
+        using var scope = ActivityScope.Rpc("tags.listSpace");
+        return await ListResponseAsync(async () => [.. (await tags.ListSpaceAsync(request.SpaceId, ct)).Select(Map)]);
+    }
     [NeoRpcMethod("list")]
     public async ValueTask<TagListResponse> ListAsync(TagListRequest request, CancellationToken ct)
     {

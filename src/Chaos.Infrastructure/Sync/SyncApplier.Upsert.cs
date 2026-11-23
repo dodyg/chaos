@@ -28,6 +28,59 @@ public sealed partial class SyncApplier
             return StepResult.Skipped; // local is newer, or this exact change came back (equal clocks)
         }
 
+        // A status written by an older client selects a base status. Treat the absent
+        // custom-state field as null so the atomic group never retains a stale state.
+        if (table.Kind == "task" && merge.Winners.TryGetValue("status", out var status)
+            && !status.Values.Values.ContainsKey("CustomStateId"))
+        {
+            var values = new Dictionary<string, object?>(status.Values.Values, StringComparer.OrdinalIgnoreCase)
+            {
+                ["CustomStateId"] = null,
+            };
+            var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal)
+            {
+                ["status"] = status with { Values = new SyncGroupValues(values) },
+            };
+            merge = merge with { Winners = winners };
+        }
+
+        if (table.Kind == "task" && merge.Winners.TryGetValue("status", out status)
+            && status.Values.Values.GetValueOrDefault("CustomStateId") is string stateId)
+        {
+            using var stateQuery = connection.CreateCommand();
+            stateQuery.CommandText = "SELECT SpaceId, BaseStatus, DeletedAtUtc FROM SpaceStates WHERE Id=$id;";
+            stateQuery.Parameters.AddWithValue("$id", stateId);
+            using var stateRow = stateQuery.ExecuteReader();
+            if (stateRow.Read())
+            {
+                var taskSpace = WinnerValues(merge).GetValueOrDefault("SpaceId")?.ToString();
+                if (taskSpace is null && exists)
+                {
+                    using var taskQuery = connection.CreateCommand();
+                    taskQuery.CommandText = "SELECT SpaceId FROM Tasks WHERE Id=$id;";
+                    taskQuery.Parameters.AddWithValue("$id", key["Id"]);
+                    taskSpace = taskQuery.ExecuteScalar()?.ToString();
+                }
+                if (taskSpace is not null && taskSpace != stateRow.GetString(0))
+                {
+                    park.Park("the custom state belongs to another space");
+                    return StepResult.Parked;
+                }
+                var values = new Dictionary<string, object?>(status.Values.Values, StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Status"] = stateRow.GetInt64(1),
+                    ["CustomStateId"] = stateRow.IsDBNull(2) ? stateId : null,
+                    ["CompletedAtUtc"] = null,
+                    ["CancelledAtUtc"] = null,
+                };
+                var winners = new Dictionary<string, SyncGroupState>(merge.Winners, StringComparer.Ordinal)
+                {
+                    ["status"] = status with { Values = new SyncGroupValues(values) },
+                };
+                merge = merge with { Winners = winners };
+            }
+        }
+
         var wall = clock.GetUtcNow();
         foreach (var winner in merge.Winners.Values)
         {
@@ -49,6 +102,28 @@ public sealed partial class SyncApplier
         try
         {
             await WriteWinnersAsync(connection, schema, table, key, exists, merge, wall, change, ct);
+            if (table.Kind == "view_alert_setting" && merge.Winners.ContainsKey("settings"))
+            {
+                using var resetBaseline = connection.CreateCommand();
+                resetBaseline.CommandText = "DELETE FROM ViewAlertBaselineState WHERE ViewId=(SELECT ViewId FROM ViewAlertSettings WHERE Id=$id);";
+                resetBaseline.Parameters.AddWithValue("$id", key["Id"]);
+                resetBaseline.ExecuteNonQuery();
+            }
+            if (table.Kind == "space_state" && merge.Winners.ContainsKey("base"))
+            {
+                using var rebase = connection.CreateCommand();
+                rebase.CommandText = "UPDATE Tasks SET Status=(SELECT BaseStatus FROM SpaceStates WHERE Id=$id), CompletedAtUtc=NULL, CancelledAtUtc=NULL, Version=Version+1 WHERE CustomStateId=$id AND Status<>(SELECT BaseStatus FROM SpaceStates WHERE Id=$id);";
+                rebase.Parameters.AddWithValue("$id", key["Id"]);
+                rebase.ExecuteNonQuery();
+            }
+            if (table.Kind == "space_state" && merge.Winners.TryGetValue("deleted", out var deleted)
+                && deleted.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null)
+            {
+                using var clear = connection.CreateCommand();
+                clear.CommandText = "UPDATE Tasks SET CustomStateId=NULL, Status=(SELECT BaseStatus FROM SpaceStates WHERE Id=$id), Version=Version+1 WHERE CustomStateId=$id;";
+                clear.Parameters.AddWithValue("$id", key["Id"]);
+                clear.ExecuteNonQuery();
+            }
         }
         catch (SqliteException error)
         {
@@ -301,6 +376,9 @@ public sealed partial class SyncApplier
                 }
                 else if (!exists)
                 {
+                    // Older writers do not know the optional custom-state field.
+                    if (table.Kind == "task" && column == "CustomStateId")
+                        continue;
                     complete = false; // a new row the change cannot complete: parked, not committed as ''
                     break;
                 }

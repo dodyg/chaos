@@ -463,6 +463,15 @@ public sealed class SyncService(
     private async Task<string?> PermissionAsync(Account account, SyncKindInfo kind, SyncChange change, Guid streamId,
         IReadOnlyDictionary<Guid, short> roles, CancellationToken ct)
     {
+        if (kind.Kind == "tag" && change.Groups.TryGetValue("create", out var tagCreate))
+        {
+            var owner = tagCreate.Values.Values.GetValueOrDefault("OwnerProfileId")?.ToString();
+            var space = tagCreate.Values.Values.GetValueOrDefault("SpaceId")?.ToString();
+            var valid = streamId == account.Id
+                ? Guid.TryParse(owner, out var ownerId) && ownerId == account.ProfileId && string.IsNullOrEmpty(space)
+                : string.IsNullOrEmpty(owner) && Guid.TryParse(space, out var spaceId) && spaceId == streamId;
+            if (!valid) return SyncRejection.Forbidden;
+        }
         if (streamId == account.Id)
         {
             return kind.Kind == "task_assignee" ? SyncRejection.Forbidden : null;
@@ -500,7 +509,7 @@ public sealed class SyncService(
             var required = kind.Group(group)!.Write;
             var allowed = required switch
             {
-                SyncWrite.Owner => role == SpaceMember.OwnerRole,
+                SyncWrite.Owner => AllowsOwnerWrite(role),
                 SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole || viewerDiaryAttachment,
                 SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
                 SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
@@ -547,6 +556,8 @@ public sealed class SyncService(
         }
         return null;
     }
+
+    internal static bool AllowsOwnerWrite(short role) => role == SpaceMember.OwnerRole;
 
     private async Task<bool> IsViewerDiaryAttachmentAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
     {

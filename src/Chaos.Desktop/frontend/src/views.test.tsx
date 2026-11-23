@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import React from "react";
 import {
+  boardRpc,
   containerRpc,
   queryRpc,
   tagRpc,
   taskRpc,
+  spaceRpc,
   viewRpc,
   type QueryRowResponse,
   type TagResponse,
@@ -158,6 +160,7 @@ function editorApi(options: { previewCount?: number; fail?: boolean } = {}) {
         definitionJson: request.definitionJson,
         layoutJson: request.layoutJson ?? "",
         alertsEnabled: request.alertsEnabled,
+        spaceId: null,
         version: "1",
         deleted: false,
       };
@@ -243,6 +246,7 @@ test("an existing view opens with its conditions and saves with its version", as
     pinned: false,
     position: 0,
     alertsEnabled: true,
+    spaceId: null,
     version: "4",
     deleted: false,
     definitionJson: JSON.stringify({ v: 1, match: "all", items: [{ field: "due", op: "inRange", value: { relative: "next", days: 7 } }] }),
@@ -606,6 +610,7 @@ function savedView(id: string, name: string, pinned: boolean): ViewDto {
     definitionJson: '{"v":1,"match":"all","items":[]}',
     layoutJson: model.layoutToJson(model.defaultLayout),
     alertsEnabled: false,
+    spaceId: null,
     version: "1",
     deleted: false,
   };
@@ -631,5 +636,117 @@ test("only pinned views appear under Views, with their count, and opening one li
     assert.ok(screen.getByRole("heading", { name: "Open bugs" }));
   } finally {
     cleanup();
+  }
+});
+
+test("sharing a personal view copies it into the chosen editable space", async () => {
+  const original = { ...savedView("private", "My view", true), spaceId: "personal" };
+  const base = appApi([original], []);
+  const shares: { viewId: string; spaceId: string }[] = [];
+  const api = {
+    ...base,
+    containerRpc: { ...base.containerRpc, listForSpace: async () => ({ ok: true, containers: [], error: null }) },
+    spaceRpc: {
+      ...spaceRpc,
+      list: async () => ({
+        ok: true,
+        error: null,
+        spaces: [
+          { spaceId: "personal", name: "Personal", kind: "Personal", role: null, memberCount: 1 },
+          { spaceId: "team", name: "Team", kind: "Shared", role: 2, memberCount: 2 },
+        ],
+      }),
+    },
+    viewRpc: {
+      ...base.viewRpc,
+      share: async (request: { operationId: string; viewId: string; spaceId: string }) => {
+        shares.push(request);
+        return { ok: true, view: { ...original, id: "copy", spaceId: request.spaceId }, error: null };
+      },
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App initialView="tasks" templates={<></>} api={api} />, { container: dom.window.document.body });
+  try {
+    await user.click(await screen.findByRole("button", { name: /My view/ }));
+    const selector = await screen.findByLabelText("Share with space");
+    await user.selectOptions(selector, "team");
+    await waitFor(() => assert.equal(shares.length, 1));
+    assert.equal(shares[0].viewId, "private");
+    assert.equal(shares[0].spaceId, "team");
+    assert.ok(screen.getByRole("heading", { name: "My view" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("an open shared board reloads after a remote activity notification without focus", async () => {
+  const { fakeActivity } = await import("./activityTestApi");
+  const { configureActivity } = await import("./activity");
+  const feed = fakeActivity();
+  configureActivity(feed.api);
+  let column = "NotStarted";
+  const getView: typeof boardRpc.getView = async () => ({
+    ok: true,
+    error: null,
+    settings: {
+      groupBy: "Status",
+      swimlaneBy: "None",
+      columnTagId: null,
+      swimlaneTagId: null,
+      wipLimitsJson: "{}",
+      hiddenColumnsJson: "[]",
+      version: "1",
+      isDefault: false,
+    },
+    columns: [
+      { key: "NotStarted", title: "Not started", isNone: false },
+      { key: "InProgress", title: "In progress", isNone: false },
+    ],
+    lanes: [{ key: "", title: "All tasks", isNone: true }],
+    cards: [
+      {
+        task: task("a", "Shared card", { status: column }),
+        tagIds: [],
+        subtasksTotal: 0,
+        subtasksDone: 0,
+        hasIssueLink: false,
+        columnKey: column,
+        laneKey: "",
+      },
+    ],
+    totalCount: 1,
+    truncated: false,
+  });
+  const original = { ...savedView("shared", "Shared board", true), spaceId: "team" };
+  const base = appApi([original], []);
+  const api = {
+    ...base,
+    boardRpc: { ...boardRpc, getView },
+    viewRpc: {
+      ...base.viewRpc,
+      run: async () => ({
+        ok: true,
+        rows: [],
+        totalCount: 0,
+        nextCursor: null,
+        layoutJson: model.layoutToJson({ ...model.defaultLayout, kind: "board" }),
+        error: null,
+      }),
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App initialView="tasks" templates={<></>} api={api} />, { container: dom.window.document.body });
+  try {
+    await user.click(await screen.findByRole("button", { name: /Shared board/ }));
+    await waitFor(() => assert.ok(within(screen.getByLabelText("Not started cards")).getByLabelText("Shared card")));
+    await waitFor(() => assert.equal(feed.subscribed, true));
+    column = "InProgress";
+    feed.push(["task"], "sync", "sync.apply");
+    feed.emit();
+    await waitFor(() => assert.ok(within(screen.getByLabelText("In progress cards")).getByLabelText("Shared card")));
+  } finally {
+    cleanup();
+    configureActivity();
   }
 });

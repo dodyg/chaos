@@ -32,6 +32,7 @@ public sealed record SetTaskStatusCommand(
     long ExpectedVersion,
     TaskItemStatus Status,
     OpenSubtaskChoice? OpenSubtaskChoice);
+public sealed record SetTaskCustomStateCommand(string OperationId, string TaskId, long ExpectedVersion, string CustomStateId);
 
 public sealed record ChangeAssigneeCommand(string OperationId, string TaskId, long ExpectedVersion, string MemberId, bool Assigned);
 public sealed record SetAssignModeCommand(string OperationId, string TaskId, long ExpectedVersion, TaskAssignMode Mode);
@@ -310,6 +311,26 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         }, ct);
     }
 
+    public Task<TaskMutationResult> SetCustomStateAsync(SetTaskCustomStateCommand command, CancellationToken ct = default) =>
+        InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId,
+                "task.set-custom-state", command, now, async inner =>
+                {
+                    var task = await RequireTaskAsync(session, command.TaskId, inner);
+                    RequireCurrentVersion(task, command.ExpectedVersion);
+                    var state = (await session.Spaces.ListStatesAsync(task.SpaceId, inner)).FirstOrDefault(row => row.Id == command.CustomStateId)
+                        ?? throw AppException.Validation("customStateId", "Choose a state from this task's space.");
+                    if (task.Status == state.BaseStatus && task.CustomStateId == state.Id)
+                        return new TaskMutationResult(task, false, null);
+                    var updated = task with { Status = state.BaseStatus, CustomStateId = state.Id, CompletedAtUtc = null,
+                        CancelledAtUtc = null, Version = task.Version + 1, UpdatedAtUtc = now };
+                    var applied = await ApplyTaskUpdateAsync(session, updated, task.Version, inner);
+                    return new TaskMutationResult(applied, false, null);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+
     public async Task<TaskMutationResult> SetStatusAsync(SetTaskStatusCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -322,7 +343,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var task = await RequireTaskAsync(session, normalized.TaskId, inner);
                     RequireCurrentVersion(task, normalized.ExpectedVersion);
-                    if (task.Status == normalized.Status)
+                    if (task.Status == normalized.Status && task.CustomStateId is null)
                     {
                         return new TaskMutationResult(task, Replayed: false, Warning: null); // nothing to change
                     }
@@ -765,6 +786,7 @@ public sealed class TaskCommands(IApplicationStore store, IIdGenerator ids, Time
         var updated = task with
         {
             Status = targetStatus,
+            CustomStateId = null,
             CompletedAtUtc = targetStatus == TaskItemStatus.Done ? eachCompletedAt ?? now : null,
             CancelledAtUtc = targetStatus == TaskItemStatus.Cancelled ? now : null,
             Version = task.Version + 1,

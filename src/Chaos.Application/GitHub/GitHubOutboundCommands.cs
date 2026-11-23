@@ -198,7 +198,11 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
             if (link is not { State: 0, TaskId: not null }) return Array.Empty<TagWithPath>();
             var ids = (await s.Tags.ListTaskTagIdsAsync(link.TaskId, token)).ToHashSet(StringComparer.Ordinal);
             var mapped = (await s.GitHub.ListLabelTagsAsync(repo.Id, token)).Select(m => m.TagId).ToHashSet(StringComparer.Ordinal);
-            return TagCommands.TreeOrder(await s.Tags.ListByOwnerAsync(connection.ProfileId, token)).Where(t => ids.Contains(t.Tag.Id) && !mapped.Contains(t.Tag.Id)).ToArray();
+            var task = await s.Tasks.GetAsync(link.TaskId, token);
+            if (task is null) return Array.Empty<TagWithPath>();
+            var shared = (await s.Spaces.GetAsync(task.SpaceId, token))?.Kind == Chaos.Domain.Tasks.SpaceKind.Shared;
+            var tags = shared ? await s.Tags.ListBySpaceAsync(task.SpaceId, token) : await s.Tags.ListByOwnerAsync(connection.ProfileId, token);
+            return TagCommands.TreeOrder(tags).Where(t => ids.Contains(t.Tag.Id) && !mapped.Contains(t.Tag.Id)).ToArray();
         }, ct);
         if (unmapped.Length == 0) return;
         var account = new GitHubAccount(connection.AccountId, connection.AccountLogin);

@@ -8,6 +8,22 @@ namespace Chaos.Application.Tags;
 
 public sealed partial class TagCommands
 {
+    public Task<IReadOnlyList<TagWithPath>> ListPersonalTagsOnListAsync(string containerId, CancellationToken ct = default) =>
+        store.QueryAsync(async (session, token) =>
+        {
+            var profile = await RequireProfileAsync(session, token);
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var task in await session.Tasks.ListByContainerAsync(containerId, token))
+            {
+                ids.UnionWith(await session.Tags.ListTaskTagIdsAsync(task.Id, token));
+                foreach (var subtask in await session.Subtasks.ListByTaskAsync(task.Id, token))
+                    ids.UnionWith(await session.Tags.ListSubtaskTagIdsAsync(subtask.Id, token));
+            }
+            return (IReadOnlyList<TagWithPath>)[.. TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, token)).Where(row => ids.Contains(row.Tag.Id))];
+        }, ct);
+
+    public Task<IReadOnlyList<TagWithPath>> ListSpaceAsync(string spaceId, CancellationToken ct = default) =>
+        store.QueryAsync(async (session, token) => TreeOrder(await session.Tags.ListBySpaceAsync(spaceId, token)), ct);
     /// <summary>Counts what a merge would change, without changing anything (PLAN §6: preview affected counts).</summary>
     public async Task<TagMergePreview> PreviewMergeAsync(string sourceTagId, string targetTagId, CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) =>
@@ -16,7 +32,8 @@ public sealed partial class TagCommands
             var target = await RequireTagAsync(session, targetTagId, token);
             await RequireMergeableAsync(session, source, target, token);
             var counter = new MergeCounter();
-            await MergeIntoAsync(session, source, target, counter, apply: false, ownerId: source.OwnerProfileId, now: default, token);
+            var profile = await RequireProfileAsync(session, token);
+            await MergeIntoAsync(session, source, target, counter, apply: false, ownerId: source.SpaceId ?? profile.Id, now: default, token);
             return counter.ToPreview();
         }, ct);
 

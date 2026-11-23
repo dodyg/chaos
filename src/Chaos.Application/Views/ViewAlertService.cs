@@ -38,13 +38,18 @@ public sealed class ViewAlertService(IApplicationStore store, IIdGenerator ids, 
             var context = await TaskQueries.ContextAsync(session, now, token);
             var zone = ReminderSync.ProfileZone(profile);
             var raised = 0;
-            foreach (var view in await session.SavedViews.ListAsync(context.Space.Id, includeDeleted: false, token))
+            foreach (var view in await SavedViewCommands.ListVisibleAsync(session, context, includeDeleted: false, token))
             {
                 if (!view.AlertsEnabled || !SavedViewCommands.CanParseDefinition(view.DefinitionJson))
                 {
                     continue;
                 }
 
+                if (!await session.SavedViews.HasAlertBaselineAsync(view.Id, token))
+                {
+                    await ViewAlertBaseline.StoreAsync(session, view, now, token);
+                    continue;
+                }
                 var current = await ViewAlertBaseline.CurrentMatchesAsync(session, view, now, token);
                 var fresh = await ApplyBaselineAsync(session, view, current, now, token);
                 if (fresh.Count == 0)

@@ -15,12 +15,14 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         container=create,name,position,deadline,archived,category,deleted
         task_template=create,name,payload,deleted
         section=create,title,position,deleted
+        space_state=create,name,base,position,deleted
         tag=create,name,parent,color,position,deleted
         google_account=create,deleted
         board_setting=create,grouping,limits,deleted
         saved_view=create,name,look,pinned,position,definition,layout,alerts,deleted
         calendar_source=create,name,look,busy,enabled,owner,position,deleted
         space_notification_setting=create,settings
+        view_alert_setting=create,settings
         task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted
         task_assignee=create,done,deleted
         calendar_event_link=create,deleted
@@ -63,6 +65,33 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         page_tag=deleted
         attachment=create,name,file,deleted
         """);
+
+    [Test]
+    public async Task SpaceStates_OnlyOwnerCanWrite()
+    {
+        await Assert.That(SyncService.AllowsOwnerWrite(SpaceMember.AgentRole)).IsFalse();
+        await Assert.That(SyncKinds.Find("space_state")!.Groups.All(group => group.Write == SyncWrite.Owner)).IsTrue();
+        await using var server = await TestServer.StartAsync(postgres);
+        await using var world = new SharingHarness(server);
+        var owner = await world.SignInAsync("states-owner@example.com", schema: 7);
+        var editor = await world.SignInAsync("states-editor@example.com", schema: 7);
+        var viewer = await world.SignInAsync("states-viewer@example.com", schema: 7);
+        var outsider = await world.SignInAsync("states-outsider@example.com", schema: 7);
+        var space = await world.CreateSpaceAsync(owner);
+        await world.JoinAsync(editor, await world.InviteLinkAsync(owner, space, SpaceMember.EditorRole));
+        await world.JoinAsync(viewer, await world.InviteLinkAsync(owner, space, SpaceMember.ViewerRole));
+        foreach (var actor in new[] { owner, editor, viewer, outsider })
+        {
+            var change = SharingHarness.Change("space_state", Guid.NewGuid().ToString("D"), "create",
+                new { SpaceId = space.ToString("D"), CreatedAtUtc = Instant() });
+            var response = await world.CallAsync(actor, HttpMethod.Post, "/v2/sync/push",
+                System.Text.Json.JsonSerializer.Serialize(new { changes = new[] { change } }), schema: 7);
+            if (actor == owner)
+                await Assert.That(response.Rejections()).IsEmpty();
+            else
+                await Assert.That(response.Rejections()).Contains(actor == outsider ? SyncRejection.NotMember : SyncRejection.Forbidden);
+        }
+    }
 
     [Test]
     public async Task PermissionMatrix_EveryKindGroupHasARow()
@@ -248,7 +277,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
 
     private static RawChange NewSharedTag(Guid space, SharingCaller actor) =>
         SharingHarness.Change("tag", Guid.NewGuid().ToString("D"), "create",
-            new { SpaceId = space.ToString("D"), OwnerProfileId = actor.ProfileId.ToString("D"), CreatedAtUtc = Instant() });
+            new { SpaceId = space.ToString("D"), OwnerProfileId = (string?)null, CreatedAtUtc = Instant() });
 
     private static string Instant() => DateTimeOffset.UtcNow.ToString("o");
 

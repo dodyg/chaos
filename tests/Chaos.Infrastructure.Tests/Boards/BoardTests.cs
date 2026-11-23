@@ -4,6 +4,7 @@ using Chaos.Application.Containers;
 using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Settings;
+using Chaos.Application.Spaces;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Tests.DataProtection;
@@ -18,6 +19,41 @@ namespace Chaos.Infrastructure.Tests.Boards;
 /// </summary>
 public sealed class BoardTests
 {
+    [Test]
+    public async Task DeleteState_MovesTasksToBaseAndUndoRestoresBoth()
+    {
+        using var host = await DataHost.StartAsync();
+        var task = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Review", null))).Task;
+        var states = new SpaceStateCommands(host.Store, host.Ids, host.Clock);
+        var state = (await states.CreateAsync(new(DataHost.Op(), task.SpaceId, "In review", TaskItemStatus.NeedsReview))).State;
+        await host.Tasks.SetCustomStateAsync(new(DataHost.Op(), task.Id, task.Version, state.Id));
+        var operation = DataHost.Op();
+        await states.DeleteAsync(new(operation, state.Id, state.Version));
+        var moved = (await host.Tasks.GetAsync(task.Id))!;
+        await Assert.That(moved.CustomStateId).IsNull();
+        await Assert.That(moved.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        await new UndoCommands(host.Store, host.Ids, host.Clock).UndoAsync(new(DataHost.Op(), operation));
+        await Assert.That((await host.Tasks.GetAsync(task.Id))!.CustomStateId).IsEqualTo(state.Id);
+        await Assert.That((await states.ListAsync(task.SpaceId)).Select(row => row.Id)).Contains(state.Id);
+    }
+
+    [Test]
+    public async Task CustomState_ColumnFollowsBaseAndCardMovesIntoIt()
+    {
+        using var host = await DataHost.StartAsync();
+        var task = (await host.Tasks.CaptureAsync(new(DataHost.Op(), string.Empty, "Review", null))).Task;
+        var state = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new(DataHost.Op(), task.SpaceId, "In review", TaskItemStatus.NeedsReview))).State;
+        var board = await new BoardQueries(host.Store).GetAsync(task.ContainerId);
+        var keys = board.Columns.Select(column => column.Key).ToList();
+        await Assert.That(keys.IndexOf("state:" + state.Id)).IsEqualTo(keys.IndexOf(nameof(TaskItemStatus.NeedsReview)) + 1);
+        var moved = await new BoardCommands(host.Store, host.Ids, host.Clock).MoveAsync(new(DataHost.Op(), task.Id,
+            task.Version, BoardGrouping.Status, nameof(TaskItemStatus.NotStarted), "state:" + state.Id, null, null));
+        await Assert.That(moved.Task.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        var updated = await new BoardQueries(host.Store).GetAsync(task.ContainerId);
+        await Assert.That(updated.Cards.Single(card => card.Task.Id == task.Id).ColumnKey).IsEqualTo("state:" + state.Id);
+    }
+
     [Test]
     public async Task MoveAsync_StatusColumnToDone_PersistsAcrossRestartAndUndoRestores()
     {

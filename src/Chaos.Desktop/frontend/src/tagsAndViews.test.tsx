@@ -81,6 +81,31 @@ function resultRow(item: TaskResponse, tagIds: string[] = [], matches: string[] 
   };
 }
 
+test("shared tag picker shows space suggestions first and marks personal links private", async () => {
+  const personal = tag("personal", "review");
+  const shared = tag("shared", "review");
+  const api = {
+    ...tagRpc,
+    listSpace: async () => ({ ok: true, tags: [shared], error: null }),
+    targetTags: async () => ({ ok: true, tagIds: [personal.id], error: null }),
+    suggest: async () => ({ ok: true, tags: [personal], error: null }),
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <TagPicker targetKind="Task" targetId="task" label="Tags" tags={[personal]} api={api} shared spaceId="team" onChanged={() => {}} />,
+    { container: dom.window.document.body },
+  );
+  try {
+    assert.ok(await screen.findByLabelText("Only you see this tag"));
+    await user.type(screen.getByLabelText("Tags"), "review");
+    const suggestions = await screen.findByRole("list", { name: "Tag suggestions" });
+    await waitFor(() => assert.equal(within(suggestions).getAllByText(/Space tag|Your tag/).length, 1));
+    assert.ok(within(suggestions).getByText("Space tag"));
+  } finally {
+    cleanup();
+  }
+});
+
 const tags = [tag("home", "home"), tag("garden", "home/garden", "home"), tag("work", "work")];
 
 test("a task context menu changes its status without offering Done", async () => {

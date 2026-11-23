@@ -870,6 +870,7 @@ public sealed partial class MyWeekCommands(IApplicationStore store, IIdGenerator
         var updated = await session.Tasks.UpdateAsync(task with
         {
             Status = TaskItemStatus.Cancelled,
+            CustomStateId = null,
             CancelledAtUtc = now,
             CompletedAtUtc = null,
             Version = task.Version + 1,

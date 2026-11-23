@@ -35,6 +35,9 @@ public sealed record TaskQuerySpec
 {
     public required TaskView View { get; init; }
     public string? ContainerId { get; init; }
+    /// <summary>Restrict a shared saved view to its owning space.</summary>
+    public string? SharedViewSpaceId { get; init; }
+    public string? FilterSpaceId { get; init; }
     /// <summary>Tag filter; always includes descendant tags.</summary>
     public string? TagId { get; init; }
     public string? Text { get; init; }
@@ -76,6 +79,8 @@ public sealed record TaskQueryCriteria
 {
     public required string SpaceId { get; init; }
     public required string ProfileId { get; init; }
+    public string? SharedViewSpaceId { get; init; }
+    public string? FilterSpaceId { get; init; }
     public required TaskView View { get; init; }
     public string? ContainerId { get; init; }
     public string? TagId { get; init; }

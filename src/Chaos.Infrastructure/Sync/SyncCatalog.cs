@@ -143,10 +143,24 @@ public static class SyncCatalog
                 "Invariant: one row per entity id; a second (Id, ContainerId) pair cannot arise because applies are upserts keyed by Id.")],
             ApplyOrder: 40),
 
+        new SyncTable("SpaceStates", "space_state", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "CreatedAtUtc"]),
+                new("name", ["Name", "NormalizedName"]),
+                new("base", ["BaseStatus"]),
+                new("position", ["Position"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            UniqueRules: [new("UX_SpaceStates_ActiveName", SyncUniqueRuleKind.RenameLoser,
+                "States with the same name remain separate; the loser is renamed.")],
+            ApplyOrder: 45),
+
         new SyncTable("Tags", "tag", SyncMode.Merge, ["Id"],
             Groups:
             [
-                new("create", ["OwnerProfileId", "CreatedAtUtc"]),
+                new("create", ["OwnerProfileId", "SpaceId", "CreatedAtUtc"]),
                 new("name", ["DisplayName", "NormalizedName"]),
                 new("parent", ["ParentTagId"]),
                 new("color", ["ColorKey"]),
@@ -190,6 +204,9 @@ public static class SyncCatalog
             ],
             LocalColumns: ["Version"],
             ApplyOrder: 56),
+        new SyncTable("ViewAlertSettings", "view_alert_setting", SyncMode.Merge, ["Id"],
+            Groups: [new("create", ["ProfileId", "ViewId", "CreatedAtUtc"]), new("settings", ["Enabled"])],
+            LocalColumns: ["Version"], ApplyOrder: 59),
         // P6 Google accounts. The refresh token is NOT a column: it lives in the secret store by account id.
         new SyncTable("GoogleAccounts", "google_account", SyncMode.Merge, ["Id"],
             Groups:
@@ -238,7 +255,7 @@ public static class SyncCatalog
                 new("create", ["SpaceId", "CreatedAtUtc", "RecurrenceOccurrenceKey"]),
                 new("title", ["Title"]),
                 new("notes", ["Notes"]),
-                new("status", ["Status", "CompletedAtUtc", "CancelledAtUtc"]),
+                new("status", ["Status", "CustomStateId", "CompletedAtUtc", "CancelledAtUtc"]),
                 new("assignment", ["AssignMode"]),
                 new("place", ["ContainerId", "SectionId"]),
                 new("position", ["Position"]),
@@ -617,6 +634,7 @@ public static class SyncCatalog
         // ---- Local-only: bookkeeping, per-device state, rebuildable data -----------------------
         new SyncTable("AppliedReminderAcknowledgements", "applied_reminder_acknowledgement", SyncMode.LocalOnly, ["Id"], ApplyOrder: 499),
         new SyncTable("NotificationJobs", "notification_job", SyncMode.LocalOnly, ["Id"], ApplyOrder: 500), // derived per device (§7.4), OS schedule columns included
+        new SyncTable("ViewAlertBaselineState", "view_alert_baseline_state", SyncMode.LocalOnly, ["ViewId"], ApplyOrder: 529),
         new SyncTable("SavedViewMatches", "saved_view_match", SyncMode.LocalOnly, ["ViewId", "TaskId"], ApplyOrder: 530), // each device evaluates its own alerts (PLAN2 §11.2)
         new SyncTable("ViewAlerts", "view_alert", SyncMode.LocalOnly, ["Id"], ApplyOrder: 531), // raised and delivered per device (PLAN2 §11.2)
         new SyncTable("UndoEntries", "undo_entry", SyncMode.LocalOnly, ["Id"], ApplyOrder: 501), // undo stays local (§7.10)

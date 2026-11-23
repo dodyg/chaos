@@ -1200,3 +1200,15 @@ plan provides one, and each blocking package stays unticked until the owner conf
 
 - Due-soon notices are offered within 24 hours of the due instant for tasks assigned to the member or without assignees; they are off by default.
 - The owner default deadline reminder stores an offset in minutes in `DefaultDeadlineReminderJson`. Derived jobs use a separate local notification source and never create reminder rules.
+
+## 2026-11-22 (Q9 state and tag routing)
+
+- Client schema 7 adds `space_state` and makes a tag's space nullable. A status group from a pre-Q9 client clears the custom state because it selects a base status; a received custom state uses that state's base status. Deleting a state clears its task references on each applying device, including when a concurrent task change arrives after the deletion.
+- A shared list's optional tag-sharing step runs after the server move in one local operation. It copies matching personal tag paths to the destination space, relinks task and subtask tags, and is undoable. If the space list is locked, an editor can reuse an existing space tag but cannot create a missing one. The move dialog reports a failed tag-sharing step separately because the server move has already succeeded.
+- When a list moves to another space, a task's original custom state is cleared while its base status is preserved. The server writes a status clock newer than the original so the mover's desktop and the destination members receive the same result.
+- The server validates that a personal tag names the caller's profile and a shared tag names the target space, with exactly one scope. GitHub label mappings for shared tasks use space tags; a personal tag on a moved task is not treated as a shared label.
+
+## 2026-11-22 (Q10 shared view fields and alerts)
+
+- D7's Personal-only restriction is lifted: GitHub fields can be used in a shared view, based on the GitHub data available in that space.
+- Migration 043 moves each member's view-alert preference to an account-stream overlay. Shared views retain a disabled legacy alert field; per-device matches and delivered alerts remain local. Existing Personal view settings are seeded into overlays.

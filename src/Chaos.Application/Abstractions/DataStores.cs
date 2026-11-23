@@ -336,6 +336,12 @@ public interface ISpaceStore
     Task<SpaceRecord?> GetPersonalByOwnerAsync(string ownerProfileId, CancellationToken ct);
     Task AddAsync(SpaceRecord space, CancellationToken ct);
     Task<IReadOnlyList<SpaceRecord>> ListAsync(CancellationToken ct);
+    Task<IReadOnlyList<SpaceStateRecord>> ListStatesAsync(string spaceId, CancellationToken ct);
+    Task AddStateAsync(SpaceStateRecord state, CancellationToken ct);
+    Task<SpaceStateRecord?> GetStateAsync(string id, CancellationToken ct);
+    Task<SpaceStateRecord?> UpdateStateAsync(SpaceStateRecord state, long expectedVersion, CancellationToken ct);
+    Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct);
+    Task SetTagsOwnerOnlyAsync(string spaceId, bool ownerOnly, DateTimeOffset now, CancellationToken ct);
 }
 
 public interface IPeopleStore
@@ -427,6 +433,7 @@ public interface ITagStore
     Task<TagRecord?> GetIncludingDeletedAsync(string tagId, CancellationToken ct);
     /// <summary>Active tags of one owner, ordered by (Position, NormalizedName, Id).</summary>
     Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string ownerProfileId, CancellationToken ct);
+    Task<IReadOnlyList<TagRecord>> ListBySpaceAsync(string spaceId, CancellationToken ct);
     Task<IReadOnlyList<TagRecord>> ListDeletedByOwnerAsync(string ownerProfileId, CancellationToken ct);
     /// <summary>The active child of <paramref name="parentTagId"/> (null = root) with this identity key.</summary>
     Task<TagRecord?> FindChildAsync(string ownerProfileId, string? parentTagId, string normalizedName, CancellationToken ct);
@@ -521,6 +528,8 @@ public interface ISavedViewStore
     Task AddAsync(SavedViewRecord view, CancellationToken ct);
     /// <returns>The stored row, or null when the expected version no longer matches.</returns>
     Task<SavedViewRecord?> UpdateAsync(SavedViewRecord updated, long expectedVersion, CancellationToken ct);
+    Task<bool> HasAlertBaselineAsync(string viewId, CancellationToken ct);
+    Task SetAlertBaselineAsync(string viewId, bool initialized, CancellationToken ct);
     Task<IReadOnlyList<SavedViewMatchRecord>> ListMatchesAsync(string viewId, CancellationToken ct);
     /// <summary>Replaces one view's baseline with exactly these rows.</summary>
     Task ReplaceMatchesAsync(string viewId, IReadOnlyList<SavedViewMatchRecord> matches, CancellationToken ct);

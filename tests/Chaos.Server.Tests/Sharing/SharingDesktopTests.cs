@@ -8,8 +8,12 @@ using Chaos.Application.Containers;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Spaces;
+using Chaos.Application.Tags;
+using Chaos.Application.Views;
+using Chaos.Application.Boards;
 using Chaos.Domain.Tasks;
 using Chaos.Infrastructure.Sync;
+using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Attachments;
 using Chaos.Server.Tests.Sync;
@@ -210,6 +214,116 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task SharedView_AlertsStayPersonalAndFollowTheMembersOtherDevice()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var owner = await world.AddPersonAsync("q10-view-owner@example.com", "Ada");
+        var editor = await world.AddPersonAsync("q10-view-editor@example.com", "Bo", devices: 2);
+        var (space, list, taskId) = await ShareAsync(world, owner, editor);
+        editor.Devices[1].Engine.RequestDiscovery();
+        await world.SettleAsync();
+        var ownerViews = new SavedViewCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock);
+        const string definition = "{\"v\":1,\"match\":\"all\",\"items\":[]}";
+        var source = (await ownerViews.SaveAsync(new(Op(), null, 0, "Team work", "list", null, definition, null, true, false))).View;
+        var shared = (await ownerViews.ShareAsync(Op(), source.Id, space)).View;
+        await world.SettleAsync();
+        var editorViews = new SavedViewCommands(editor.Desktop.Store, editor.Desktop.Ids, editor.Desktop.Clock);
+        var received = await editorViews.GetAsync(shared.Id);
+        await Assert.That(received.AlertsEnabled).IsFalse();
+        var run = await new SavedViewQueries(editor.Desktop.Store, new TaskQueries(editor.Desktop.Store, editor.Desktop.Clock), editor.Desktop.Clock)
+            .RunAsync(shared.Id, null, 100, null);
+        await Assert.That(run.Page.Rows.Select(row => row.Task.Id)).Contains(taskId);
+        await editorViews.SaveAsync(new(Op(), received.Id, received.Version, received.Name, received.Icon, received.Color,
+            received.DefinitionJson, received.LayoutJson, received.Pinned, true));
+        await world.SettleAsync();
+        var otherViews = new SavedViewCommands(editor.Devices[1].Store, editor.Devices[1].Ids, editor.Devices[1].Clock);
+        await Assert.That((await otherViews.GetAsync(shared.Id)).AlertsEnabled).IsTrue();
+        await Assert.That((await ownerViews.GetAsync(shared.Id)).AlertsEnabled).IsFalse();
+        var secondAlerts = new ViewAlertService(editor.Devices[1].Store, editor.Devices[1].Ids, editor.Devices[1].Clock);
+        await Assert.That(await secondAlerts.EvaluateAsync()).IsEqualTo(0);
+        await CaptureAsync(owner.Desktop, list, "New shared task");
+        await world.SettleAsync();
+        await Assert.That(await secondAlerts.EvaluateAsync()).IsEqualTo(1);
+        await Assert.That(await new ViewAlertService(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock).EvaluateAsync()).IsEqualTo(0);
+        await using var db = ServerDatabase.Open(world.Server.ConnectionString);
+        await Assert.That(await db.SyncEntities.CountAsync(row => row.AccountId == Guid.Parse(space) && row.Kind == "view_alert_setting")).IsEqualTo(0);
+        await Assert.That(await db.SyncEntities.CountAsync(row => row.AccountId == editor.AccountId && row.Kind == "view_alert_setting")).IsEqualTo(1);
+        await editor.Spaces().LeaveAsync(space);
+        editor.Devices[1].Engine.RequestDiscovery();
+        await world.SettleAsync();
+        foreach (var device in editor.Devices)
+            await Assert.That(await device.CountAsync($"SELECT count(*) FROM ViewAlertSettings WHERE ViewId='{shared.Id}';")).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task MoveList_ClearsPersonalStateButKeepsItsBaseStatus()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var owner = await world.AddPersonAsync("state-move-owner@example.com", "Ada");
+        var editor = await world.AddPersonAsync("state-move-editor@example.com", "Bo");
+        var personal = await owner.Desktop.Store.QueryAsync(async (session, token) =>
+        {
+            var profile = (await session.Profiles.GetPrimaryAsync(token))!;
+            return (await session.Spaces.GetPersonalByOwnerAsync(profile.Id, token))!;
+        });
+        var list = await CreateListAsync(owner.Desktop, personal.Id, "Move me");
+        var id = await CaptureAsync(owner.Desktop, list, "Review");
+        var state = (await new SpaceStateCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock)
+            .CreateAsync(new(Op(), personal.Id, "Personal review", TaskItemStatus.NeedsReview))).State;
+        var task = (await owner.Desktop.Tasks.GetAsync(id))!;
+        await owner.Desktop.Tasks.SetCustomStateAsync(new(Op(), id, task.Version, state.Id));
+        var shared = await owner.Spaces().CreateAsync("Team");
+        await editor.Spaces().JoinWithLinkAsync(await InviteAsync(owner, shared.SpaceId));
+        await world.SettleAsync();
+        await owner.Spaces().MoveAsync(list, shared.SpaceId);
+        await world.SettleAsync();
+        foreach (var person in new[] { owner, editor })
+        {
+            var moved = (await person.Desktop.Tasks.GetAsync(id))!;
+            await Assert.That(moved.CustomStateId).IsNull();
+            await Assert.That(moved.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        }
+    }
+
+    [Test]
+    public async Task SharedStatesAndTags_ReachAnotherMemberWhilePersonalTagsStayPrivate()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var owner = await world.AddPersonAsync("q9-owner@example.com", "Ada");
+        var editor = await world.AddPersonAsync("q9-editor@example.com", "Bo");
+        var (space, list, taskId) = await ShareAsync(world, owner, editor);
+        var state = (await new SpaceStateCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock)
+            .CreateAsync(new(Op(), space, "In review", TaskItemStatus.NeedsReview))).State;
+        var task = (await owner.Desktop.Tasks.GetAsync(taskId))!;
+        await owner.Desktop.Tasks.SetCustomStateAsync(new(Op(), taskId, task.Version, state.Id));
+        await world.SettleAsync();
+        var board = await new BoardQueries(editor.Desktop.Store).GetAsync(list);
+        await Assert.That(board.Columns.Select(column => column.Title)).Contains("In review");
+        await Assert.That(board.Cards.Single(card => card.Task.Id == taskId).ColumnKey).IsEqualTo("state:" + state.Id);
+
+        var editorTags = new TagCommands(editor.Desktop.Store, editor.Desktop.Ids, editor.Desktop.Clock);
+        var shared = (await editorTags.CreateAsync(new(Op(), "team", null, null, space))).Tag;
+        var personal = (await editorTags.CreateAsync(new(Op(), "private", null, null))).Tag;
+        await editorTags.LinkAsync(new(Op(), TagTargetKind.Task, taskId, shared.Id, null));
+        await editorTags.LinkAsync(new(Op(), TagTargetKind.Task, taskId, personal.Id, null));
+        await world.SettleAsync();
+        var ownerTags = new TagCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock);
+        var links = await ownerTags.ListTargetTagsAsync(TagTargetKind.Task, taskId);
+        await Assert.That(links).Contains(shared.Id);
+        await Assert.That(links.Contains(personal.Id)).IsFalse();
+        await new TagCommands(owner.Desktop.Store, owner.Desktop.Ids, owner.Desktop.Clock).CreateAsync(new(Op(), "duplicate", null, null, space));
+        await editorTags.CreateAsync(new(Op(), "duplicate", null, null, space));
+        await world.SettleAsync();
+        foreach (var person in new[] { owner, editor })
+        {
+            var tags = await new TagCommands(person.Desktop.Store, person.Desktop.Ids, person.Desktop.Clock).ListSpaceAsync(space);
+            await Assert.That(tags.Count(row => row.Tag.NormalizedName == "duplicate")).IsEqualTo(1);
+        }
+        await using var db = ServerDatabase.Open(world.Server.ConnectionString);
+        await Assert.That(db.SyncEntities.Any(row => row.AccountId == Guid.Parse(space) && row.Kind == "task_tag" && row.EntityKey == taskId + "|" + personal.Id)).IsFalse();
+    }
+
+    [Test]
     public async Task SharedPull_ReportsTheAuthenticatedChangeActor()
     {
         await using var world = await SharingWorld.StartAsync(postgres);
@@ -395,6 +509,75 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
 
         await Assert.That(arrived).IsTrue();
         await Assert.That(watch.Elapsed < TimeSpan.FromSeconds(3)).IsTrue();
+    }
+
+    [Test]
+    public async Task SharedCalendar_ShowsSharedDatesWithoutOtherMembersPersonalPlans()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("q10-calendar-a@example.com", "Ada");
+        var b = await world.AddPersonAsync("q10-calendar-b@example.com", "Bo");
+        var (space, _, taskId) = await ShareAsync(world, a, b);
+        var date = new DateOnly(2026, 11, 20);
+        var task = (await b.Desktop.Tasks.GetAsync(taskId))!;
+        await b.Desktop.Tasks.UpdateDetailsAsync(new(Op(), task.Id, task.Version, task.Title, task.Notes,
+            date, null, null, date, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        var privateTask = (await b.Desktop.Tasks.CaptureAsync(new(Op(), string.Empty, "Bo private", null))).Task;
+        await b.Desktop.Tasks.UpdateDetailsAsync(new(Op(), privateTask.Id, privateTask.Version, privateTask.Title, null,
+            date, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
+        await b.Desktop.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO CalendarSources (Id,Provider,ExternalId,Name,Color,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ('private-calendar',1,'private','Bo calendar','#000000','2026-11-20T09:00:00Z','2026-11-20T09:00:00Z');
+                INSERT INTO CalendarEvents (SourceId,ExternalId,StartUtc,EndUtc,AllDay,Title,Busy,FetchedUtc)
+                    VALUES ('private-calendar','meeting','2026-11-20T12:00:00Z','2026-11-20T13:00:00Z',0,'Bo private meeting',1,'2026-11-20T09:00:00Z');
+                """;
+            await command.ExecuteNonQueryAsync(token);
+            return true;
+        });
+        var day = new MyDayCommands(b.Desktop.Store, b.Desktop.Clock);
+        await day.OpenAsync(date);
+        await day.AddAsync(new DayItemCommand(Op(), date, taskId));
+        await world.SettleAsync();
+        var filters = new CalendarFilters { SpaceId = space };
+        var aCalendar = await new CalendarQueries(a.Desktop.Store, new TaskQueries(a.Desktop.Store, a.Desktop.Clock), a.Desktop.Clock)
+            .RangeAsync(date, date, filters);
+        var bCalendar = await new CalendarQueries(b.Desktop.Store, new TaskQueries(b.Desktop.Store, b.Desktop.Clock), b.Desktop.Clock)
+            .RangeAsync(date, date, filters);
+        await Assert.That(aCalendar.Entries.Select(entry => entry.TaskId)).IsEquivalentTo([taskId, taskId]);
+        await Assert.That(bCalendar.Entries.Select(entry => entry.TaskId)).IsEquivalentTo([taskId, taskId]);
+        await Assert.That(bCalendar.Meetings.Select(meeting => meeting.Title)).Contains("Bo private meeting");
+        await Assert.That(aCalendar.Meetings.Any(meeting => meeting.Title == "Bo private meeting")).IsFalse();
+        await Assert.That(await a.Desktop.CountAsync($"SELECT count(*) FROM DayPlanItems WHERE TaskId='{taskId}';")).IsEqualTo(0L);
+        await Assert.That(await a.Desktop.Tasks.GetAsync(privateTask.Id)).IsNull();
+    }
+
+    [Test]
+    public async Task BoardMove_ReachesOtherDeviceAndPublishesActivityWithoutFocus()
+    {
+        var realtime = new SyncEngineOptions { Jitter = () => 0, PollInterval = TimeSpan.FromHours(1), Debounce = TimeSpan.FromMilliseconds(100) };
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var a = await world.AddPersonAsync("q10-board-a@example.com", "Ada", options: realtime);
+        var b = await world.AddPersonAsync("q10-board-b@example.com", "Bo", options: realtime);
+        var (_, list, taskId) = await ShareAsync(world, a, b);
+        var board = new BoardQueries(a.Desktop.Store);
+        await Assert.That((await board.GetAsync(list)).Cards.Single(card => card.Task.Id == taskId).ColumnKey).IsEqualTo("NotStarted");
+        a.Desktop.Engine.Start();
+        b.Desktop.Engine.Start();
+        var engines = new[] { a.Desktop.Engine, b.Desktop.Engine };
+        await Assert.That(await SyncRealtimeTests.WaitForRuntimeAsync(engines,
+            () => a.Desktop.Engine.Runtime.Streaming && b.Desktop.Engine.Runtime.Streaming, TimeSpan.FromSeconds(10))).IsTrue();
+        var previous = await a.Desktop.CountAsync($"SELECT COUNT(*) FROM ActivityLogEntities WHERE Kind='task' AND EntityKey='{taskId}';");
+        var task = (await b.Desktop.Tasks.GetAsync(taskId))!;
+        await new BoardCommands(b.Desktop.Store, b.Desktop.Ids, b.Desktop.Clock)
+            .MoveAsync(new(Op(), taskId, task.Version, BoardGrouping.Status, "NotStarted", "InProgress", null, null));
+        var arrived = await SyncRealtimeTests.WaitForCycleAsync(a.Desktop.Engine,
+            async () => await a.Desktop.CountAsync($"SELECT COUNT(*) FROM ActivityLogEntities WHERE Kind='task' AND EntityKey='{taskId}';") > previous,
+            TimeSpan.FromSeconds(5));
+        await Assert.That(arrived).IsTrue();
+        await Assert.That((await board.GetAsync(list)).Cards.Single(card => card.Task.Id == taskId).ColumnKey).IsEqualTo("InProgress");
     }
 
     [Test]

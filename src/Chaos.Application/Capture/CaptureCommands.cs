@@ -91,13 +91,16 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
                 knownPeople.AddRange(members.Where(member => member.ActorId.StartsWith("person:", StringComparison.Ordinal) && !member.Former && member.Role is 1 or 2)
                     .Select(member => new KnownPerson(candidate.Id, member.ActorId[7..], member.DisplayName)));
             }
-            var tags = TagCommands.TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, token));
+            var tags = TagCommands.TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, token)).Select(tag => tag.Path).ToList();
+            foreach (var candidate in spaces.Where(candidate => candidate.Kind == SpaceKind.Shared && knownSpaces.Any(known => known.Id == candidate.Id)))
+                tags.AddRange(TagCommands.TreeOrder(await session.Tags.ListBySpaceAsync(candidate.Id, token)).Select(tag => tag.Path));
             return new QuickAddContext(clock.GetUtcNow(), profile.ZoneId, profile.DateFormat, profile.FirstWeekday, profile.DefaultReminderTime,
-                containers, [.. tags.Select(tag => tag.Path)], []) { Spaces = knownSpaces, People = knownPeople, DefaultContainerId = defaultContainerId };
+                containers, tags, []) { Spaces = knownSpaces, People = knownPeople, DefaultContainerId = defaultContainerId };
         }, ct);
 
         var split = BatchCapture.Split(text);
-        var items = split.Items.Select(item =>
+        var items = new List<CaptureItemPreview>();
+        foreach (var item in split.Items)
         {
             var line = item.Task;
             var shifted = excluded
@@ -113,8 +116,31 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
                         : "The task waits on this person privately; nothing is sent to them.")] };
             }
 
-            return new CaptureItemPreview(line.LineNumber, line.SourceStart, parse, [.. item.Subtasks.Select(sub => new CaptureSubtask(sub.Text, sub.Checked))]);
-        }).ToList();
+            var containerId = parse.Draft.ContainerId ?? defaultContainerId;
+            if (containerId is not null && parse.Draft.Tags.Count > 0)
+            {
+                var createsPersonal = await store.QueryAsync(async (session, token) =>
+                {
+                    var profile = await RequireProfileAsync(session, token);
+                    var container = await session.Containers.GetAsync(containerId, token);
+                    var selectedSpace = container is null ? null : await session.Spaces.GetAsync(container.SpaceId, token);
+                    if (selectedSpace is not { Kind: SpaceKind.Shared, TagsOwnerOnly: true }) return false;
+                    var isOwner = (await session.People.ListAsync(selectedSpace.Id, token)).Any(person =>
+                        !person.Former && person.Role == 1 && person.ActorId == "person:" + profile.Id);
+                    if (isOwner) return false;
+                    foreach (var tag in parse.Draft.Tags)
+                    {
+                        var path = TagName.Path(tag.Path);
+                        if (await TagCommands.FindPathAsync(session, selectedSpace.Id, null, path, token) is null
+                            && await TagCommands.FindPathAsync(session, profile.Id, null, path, token) is null) return true;
+                    }
+                    return false;
+                }, ct);
+                if (createsPersonal)
+                    parse = parse with { Warnings = [.. parse.Warnings, new CaptureWarning("personalTag", "New tags will be personal; only you can see them because the space tag list is locked.")] };
+            }
+            items.Add(new CaptureItemPreview(line.LineNumber, line.SourceStart, parse, [.. item.Subtasks.Select(sub => new CaptureSubtask(sub.Text, sub.Checked))]));
+        }
         return new CapturePreview(split.IsBatch, items, split.Errors, context.NowUtc, context.ZoneId);
     }
 
@@ -280,7 +306,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         foreach (var tagId in draft.TagIds)
         {
             var tag = await session.Tags.GetAsync(tagId, ct);
-            if (tag is null || tag.OwnerProfileId != profile.Id)
+            if (tag is null || (tag.OwnerProfileId != profile.Id && tag.SpaceId != task.SpaceId))
             {
                 throw AppException.NotFound("A chosen tag no longer exists. Refresh and try again.");
             }
@@ -291,7 +317,17 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         foreach (var tagPath in draft.TagPaths)
         {
             var segments = TagName.Path(tagPath);
-            var (leaf, _) = await TagCommands.EnsurePathAsync(session, ids, profile.Id, null, segments, now, ct);
+            var space = await session.Spaces.GetAsync(task.SpaceId, ct);
+            var shared = space?.Kind == SpaceKind.Shared;
+            var leaf = shared ? await TagCommands.FindPathAsync(session, task.SpaceId, null, segments, ct) : null;
+            leaf ??= await TagCommands.FindPathAsync(session, profile.Id, null, segments, ct);
+            if (leaf is null)
+            {
+                var canCreateShared = shared && (!space!.TagsOwnerOnly || (await session.People.ListAsync(task.SpaceId, ct))
+                    .Any(person => !person.Former && person.Role == 1 && person.ActorId == "person:" + profile.Id));
+                (leaf, _) = await TagCommands.EnsurePathAsync(session, ids, canCreateShared ? task.SpaceId : profile.Id,
+                    null, segments, now, ct, canCreateShared);
+            }
             await session.Tags.AddTaskLinkAsync(task.Id, leaf.Id, ct);
         }
 

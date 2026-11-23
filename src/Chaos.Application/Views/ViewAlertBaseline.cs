@@ -20,6 +20,7 @@ internal static class ViewAlertBaseline
         var spec = new TaskQuerySpec
         {
             View = Chaos.Application.Contracts.TaskView.Custom,
+            SharedViewSpaceId = view.SpaceId,
             Definition = SavedViewCommands.ParseDefinition(view.DefinitionJson),
         };
         var criteria = await TaskQueries.ResolveAsync(session, context, spec, token);
@@ -31,5 +32,6 @@ internal static class ViewAlertBaseline
     {
         var ids = await CurrentMatchesAsync(session, view, now, token);
         await session.SavedViews.ReplaceMatchesAsync(view.Id, [.. ids.Select(id => new SavedViewMatchRecord(view.Id, id, now, null))], token);
+        await session.SavedViews.SetAlertBaselineAsync(view.Id, true, token);
     }
 }

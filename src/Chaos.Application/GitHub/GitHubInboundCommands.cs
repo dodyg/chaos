@@ -104,7 +104,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 {
                     var move = link!.PlacementManaged && (transferred || (baseline.RepositorySubscriptionId is not null && baseline.RepositorySubscriptionId != repo.Id) || baseline.MilestoneNumber != remote.MilestoneNumber);
                     var due = task.DueDate == baseline.MilestoneDue && task.DueTime is null && task.DueZoneId is null ? remote.MilestoneDue : task.DueDate;
-                    var next = task with { Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, DueDate = due,
+                    var next = task with { Title = merge.Value.Title, Notes = merge.Value.Body, Status = status, CustomStateId = status == task.Status ? task.CustomStateId : null, DueDate = due,
                         ContainerId = move ? placement.ContainerId : task.ContainerId, SectionId = move ? placement.SectionId : task.SectionId,
                         Position = move ? await s.Tasks.GetNextPositionAsync(placement.ContainerId, token) : task.Position,
                         CompletedAtUtc = status == TaskItemStatus.Done ? task.CompletedAtUtc ?? now : null,
@@ -158,6 +158,11 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         var body = IssueBody.Rewrite(task.Notes, edits, additions);
         var tags = (await s.Tags.ListTaskTagIdsAsync(task.Id, ct)).ToHashSet(StringComparer.Ordinal);
         var labelMappings = await s.GitHub.ListLabelTagsAsync(repo.Id, ct);
+        if ((await s.Spaces.GetAsync(task.SpaceId, ct))?.Kind == SpaceKind.Shared)
+        {
+            var spaceTagIds = (await s.Tags.ListBySpaceAsync(task.SpaceId, ct)).Select(tag => tag.Id).ToHashSet(StringComparer.Ordinal);
+            labelMappings = [.. labelMappings.Where(mapping => spaceTagIds.Contains(mapping.TagId))];
+        }
         var labels = baseline.LabelIds.Where(id => !labelMappings.Any(m => m.LabelId == id)).ToHashSet();
         foreach (var mapping in labelMappings) if (tags.Contains(mapping.TagId)) labels.Add(mapping.LabelId);
         var assignees = baseline.AssigneeIds.ToHashSet();
@@ -201,23 +206,31 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
     private async Task Labels(IDataSession s, string profile, GitHubRepositoryRecord repo, string task, IReadOnlyList<GitHubLabel> remote, IReadOnlySet<long> merged, DateTimeOffset now, CancellationToken ct)
     {
         var mappings = (await s.GitHub.ListLabelTagsAsync(repo.Id, ct)).ToList();
+        var taskRow = await s.Tasks.GetAsync(task, ct) ?? throw AppException.NotFound("That task no longer exists.");
+        var shared = (await s.Spaces.GetAsync(taskRow.SpaceId, ct))?.Kind == SpaceKind.Shared;
         foreach (var label in remote)
         {
             var mapping = mappings.FirstOrDefault(m => m.LabelId == label.Id);
-            if (mapping is null)
+            var existingTag = mapping is null ? null : await s.Tags.GetAsync(mapping.TagId, ct);
+            if (mapping is null || (shared && existingTag?.SpaceId != taskRow.SpaceId))
             {
                 IReadOnlyList<Chaos.Domain.Tags.TagSegment> path;
                 try { path = LabelNames.ToTagPath(label.Name); }
                 catch (DomainValidationException) { continue; } // Keep unsupported labels in the remote baseline; never remove them as a local edit.
-                var (tag, _) = await TagCommands.EnsurePathAsync(s, ids, profile, null, path, now, ct);
+                var (tag, _) = await TagCommands.EnsurePathAsync(s, ids, shared ? taskRow.SpaceId : profile, null, path, now, ct, shared);
                 mapping = new GitHubLabelTagRecord { RepositorySubscriptionId = repo.Id, LabelId = label.Id, LabelName = label.Name, LabelColor = label.Color, TagId = tag.Id };
+                mappings.RemoveAll(item => item.LabelId == label.Id);
                 mappings.Add(mapping);
             }
             await s.GitHub.UpsertLabelTagAsync(mapping with { LabelName = label.Name, LabelColor = label.Color }, ct);
         }
         foreach (var mapping in mappings)
-            if (merged.Contains(mapping.LabelId) && await s.Tags.GetAsync(mapping.TagId, ct) is not null) await s.Tags.AddTaskLinkAsync(task, mapping.TagId, ct);
+        {
+            var tag = await s.Tags.GetAsync(mapping.TagId, ct);
+            if (shared && tag?.SpaceId != taskRow.SpaceId) continue;
+            if (merged.Contains(mapping.LabelId) && tag is not null) await s.Tags.AddTaskLinkAsync(task, mapping.TagId, ct);
             else await s.Tags.RemoveTaskLinkAsync(task, mapping.TagId, now, ct);
+        }
     }
 
     private async Task<(string ContainerId, string? SectionId)> Placement(IDataSession s, GitHubRepositoryRecord repo, GitHubMilestone? milestone, string space, DateTimeOffset now, CancellationToken ct)

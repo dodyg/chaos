@@ -5,13 +5,71 @@ using Chaos.Application.GitHub;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Recurrence;
 using Chaos.Application.Tasks;
+using Chaos.Application.Spaces;
 using Chaos.Infrastructure.Tests.DataProtection;
 using Chaos.Infrastructure.Tests.Testing;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Infrastructure.Tests.GitHub;
 
 public sealed class GitHubInboundCommandsTests
 {
+    [Test]
+    public async Task SharedIssueLabels_CreateSpaceTags()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue()]);
+        var shared = Guid.NewGuid().ToString("D");
+        var list = Guid.NewGuid().ToString("D");
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            var profile = (await session.Profiles.GetPrimaryAsync(token))!;
+            var link = (await session.GitHub.FindLinkByIssueAsync(connection.Id, 1, token))!;
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',$now,$now); INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ($list,$space,1,'Team','team',0,$now,$now); UPDATE Tasks SET SpaceId=$space, ContainerId=$list WHERE Id=$task;";
+            command.Parameters.AddWithValue("$space", shared);
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$list", list);
+            command.Parameters.AddWithValue("$task", link.TaskId!);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(DataHost.Start));
+            await command.ExecuteNonQueryAsync(token);
+            return true;
+        });
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue(updated: DataHost.Start.AddMinutes(1))]);
+        await host.Store.QueryAsync(async (session, token) =>
+        {
+            var link = (await session.GitHub.FindLinkByIssueAsync(connection.Id, 1, token))!;
+            var task = (await session.Tasks.GetAsync(link.TaskId!, token))!;
+            var tagIds = await session.Tags.ListTaskTagIdsAsync(task.Id, token);
+            await Assert.That(tagIds.Count > 0).IsTrue();
+            var spaceTags = await session.Tags.ListBySpaceAsync(shared, token);
+            await Assert.That(spaceTags.Any(tag => tagIds.Contains(tag.Id))).IsTrue();
+            return true;
+        });
+    }
+
+    [Test]
+    public async Task CustomState_LeavesGitHubStatusMappingIntact()
+    {
+        using var host = await DataHost.StartAsync();
+        var (repo, connection, inbound) = await Setup(host);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue()]);
+        var link = (await host.Store.QueryAsync((session, token) => session.GitHub.FindLinkByIssueAsync(connection.Id, 1, token)))!;
+        var task = (await host.Tasks.GetAsync(link.TaskId!))!;
+        var state = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new(DataHost.Op(), task.SpaceId, "Review", TaskItemStatus.NeedsReview))).State;
+        await host.Tasks.SetCustomStateAsync(new(DataHost.Op(), task.Id, task.Version, state.Id));
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue(title: "Updated", updated: DataHost.Start.AddMinutes(1))]);
+        var open = (await host.Tasks.GetAsync(task.Id))!;
+        await Assert.That(open.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        await Assert.That(open.CustomStateId).IsEqualTo(state.Id);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [Issue(state: "closed", updated: DataHost.Start.AddMinutes(2))]);
+        var closed = (await host.Tasks.GetAsync(task.Id))!;
+        await Assert.That(closed.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That(closed.CustomStateId).IsNull();
+    }
+
     [Test]
     public async Task UpdateDetails_ConnectedIssue_EnforcesTitleAndMilestoneDueLimits()
     {

@@ -3,6 +3,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tags;
+using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
 using Chaos.Domain.Views;
 
@@ -44,8 +45,22 @@ public sealed class SavedViewCommands(IApplicationStore store, IIdGenerator ids,
         await store.QueryAsync(async (session, token) =>
         {
             var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
-            return await session.SavedViews.ListAsync(context.Space.Id, includeDeleted, token);
+            return await ListVisibleAsync(session, context, includeDeleted, token);
         }, ct);
+
+    internal static async Task<IReadOnlyList<SavedViewRecord>> ListVisibleAsync(
+        IDataSession session, TaskQueries.QueryContext context, bool includeDeleted, CancellationToken token)
+    {
+        var views = new List<SavedViewRecord>(await session.SavedViews.ListAsync(context.Space.Id, includeDeleted, token));
+        foreach (var space in await session.Spaces.ListAsync(token))
+        {
+            if (space.Id == context.Space.Id || space.DeletedAtUtc is not null) continue;
+            if ((await session.People.ListAsync(space.Id, token)).Any(person =>
+                !person.Former && person.ActorId == $"person:{context.Profile.Id}"))
+                views.AddRange(await session.SavedViews.ListAsync(space.Id, includeDeleted, token));
+        }
+        return views;
+    }
 
     public async Task<SavedViewRecord> GetAsync(string viewId, CancellationToken ct = default) =>
         await store.QueryAsync(async (session, token) => await RequireAsync(session, viewId, token), ct);
@@ -132,6 +147,7 @@ public sealed class SavedViewCommands(IApplicationStore store, IIdGenerator ids,
                     else if (!saved.AlertsEnabled && existing is { AlertsEnabled: true })
                     {
                         await session.SavedViews.ReplaceMatchesAsync(saved.Id, [], inner);
+                        await session.SavedViews.SetAlertBaselineAsync(saved.Id, false, inner);
                     }
 
                     return new SavedViewResult(saved, Replayed: false);
@@ -160,6 +176,31 @@ public sealed class SavedViewCommands(IApplicationStore store, IIdGenerator ids,
         return await SaveAsync(new SaveViewCommand(
             operationId, null, 0, copyName, source.Icon, source.Color, source.DefinitionJson, source.LayoutJson, source.Pinned, AlertsEnabled: false), ct);
     }
+
+    public async Task<SavedViewResult> ShareAsync(string operationId, string viewId, string spaceId, CancellationToken ct = default) =>
+        await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, operationId,
+                "view.share", new { viewId, spaceId }, now, async inner =>
+                {
+                    var source = await RequireAsync(session, viewId, inner);
+                    var sourceSpace = await session.Spaces.GetAsync(source.SpaceId, inner);
+                    if (source.DeletedAtUtc is not null || sourceSpace is not { Kind: SpaceKind.Personal } || sourceSpace.OwnerProfileId != profile.Id)
+                        throw AppException.Validation("viewId", "Choose one of your personal views.");
+                    var target = await session.Spaces.GetAsync(spaceId, inner);
+                    if (target is not { Kind: SpaceKind.Shared } || !(await session.People.ListAsync(spaceId, inner)).Any(person =>
+                        !person.Former && person.ActorId == $"person:{profile.Id}" && person.Role is 1 or 2))
+                        throw AppException.Validation("spaceId", "Choose a shared space where you can edit.");
+                    var all = await session.SavedViews.ListAsync(spaceId, false, inner);
+                    if (all.Count >= MaxViews) throw AppException.Validation("name", $"A space can keep at most {MaxViews} views.");
+                    var copy = source with { Id = StorageFormats.Id(ids.NewId()), SpaceId = spaceId,
+                        Position = all.Count == 0 ? 0 : all.Max(view => view.Position) + 1, AlertsEnabled = false,
+                        Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now, DeletedAtUtc = null };
+                    await session.SavedViews.AddAsync(copy, inner);
+                    return new SavedViewResult(copy, false);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
 
     public async Task<SavedViewResult> SetPinnedAsync(string operationId, string viewId, long expectedVersion, bool pinned, CancellationToken ct = default) =>
         await MutateAsync(operationId, "view.pin", new { viewId, expectedVersion, pinned }, viewId, expectedVersion, requireActive: true,

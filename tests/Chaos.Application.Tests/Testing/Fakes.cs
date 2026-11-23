@@ -27,6 +27,7 @@ public sealed class InMemoryStore : IApplicationStore
 {
     public readonly List<ProfileRecord> Profiles = [];
     public readonly List<SpaceRecord> Spaces = [];
+    public readonly List<SpaceStateRecord> SpaceStates = [];
     public readonly List<ContainerRecord> Containers = [];
     public readonly List<TaskRecord> Tasks = [];
     public readonly List<TaskAssigneeRecord> TaskAssignees = [];
@@ -61,7 +62,7 @@ public sealed class InMemoryStore : IApplicationStore
     private sealed class Session(InMemoryStore owner) : IDataSession
     {
         public IProfileStore Profiles { get; } = new FakeProfileStore(owner.Profiles);
-        public ISpaceStore Spaces { get; } = new FakeSpaceStore(owner.Spaces);
+        public ISpaceStore Spaces { get; } = new FakeSpaceStore(owner.Spaces, owner.SpaceStates, owner.Tasks);
         public IPeopleStore People => throw new NotSupportedException("This test store does not implement people.");
         public IContainerStore Containers { get; } = new FakeContainerStore(owner.Containers, owner.Tasks);
         public ISectionStore Sections { get; } = new FakeSectionStore(owner.Sections);
@@ -342,8 +343,24 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
     }
 }
 
-public sealed class FakeSpaceStore(List<SpaceRecord> rows) : ISpaceStore
+public sealed class FakeSpaceStore(List<SpaceRecord> rows, List<SpaceStateRecord> states, List<TaskRecord> tasks) : ISpaceStore
 {
+    public Task SetTagsOwnerOnlyAsync(string id, bool ownerOnly, DateTimeOffset now, CancellationToken ct)
+    {
+        var index = rows.FindIndex(row => row.Id == id);
+        if (index >= 0) rows[index] = rows[index] with { TagsOwnerOnly = ownerOnly, Version = rows[index].Version + 1, UpdatedAtUtc = now };
+        return Task.CompletedTask;
+    }
+    public Task<SpaceStateRecord?> GetStateAsync(string id, CancellationToken ct) => Task.FromResult(states.FirstOrDefault(state => state.Id == id));
+    public Task<SpaceStateRecord?> UpdateStateAsync(SpaceStateRecord state, long expectedVersion, CancellationToken ct) => FakeUpdate.Apply(states, state, expectedVersion);
+    public Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>([.. tasks.Where(task => task.CustomStateId == id)]);
+    public Task<IReadOnlyList<SpaceStateRecord>> ListStatesAsync(string spaceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SpaceStateRecord>>([.. states.Where(state => state.SpaceId == spaceId && state.DeletedAtUtc is null)]);
+    public Task AddStateAsync(SpaceStateRecord state, CancellationToken ct)
+    {
+        states.Add(state);
+        return Task.CompletedTask;
+    }
     public Task<SpaceRecord?> GetAsync(string spaceId, CancellationToken ct) =>
         Task.FromResult(rows.FirstOrDefault(row => row.Id == spaceId));
 
@@ -503,6 +520,7 @@ public sealed class FakeBackupCatalogStore(List<BackupCatalogRecord> rows) : IBa
 
 public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, string TagId)> taskLinks, HashSet<(string SubtaskId, string TagId)> subtaskLinks, HashSet<(string PadItemId, string TagId)> padLinks) : ITagStore
 {
+    public Task<IReadOnlyList<TagRecord>> ListBySpaceAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TagRecord>>([.. rows.Where(row => row.SpaceId == id && row.DeletedAtUtc is null)]);
     private IEnumerable<TagRecord> Active => rows.Where(x => x.DeletedAtUtc is null);
     private static IReadOnlyList<TagRecord> Ordered(IEnumerable<TagRecord> tags) => tags.OrderBy(x => x.Position).ThenBy(x => x.NormalizedName, StringComparer.Ordinal).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
     private IEnumerable<string> ActiveIds => Active.Select(x => x.Id);
@@ -510,11 +528,11 @@ public sealed class FakeTagStore(List<TagRecord> rows, HashSet<(string TaskId, s
     public Task<TagRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == id));
     public Task<IReadOnlyList<TagRecord>> ListByOwnerAsync(string owner, CancellationToken ct) => Task.FromResult(Ordered(Active.Where(x => x.OwnerProfileId == owner)));
     public Task<IReadOnlyList<TagRecord>> ListDeletedByOwnerAsync(string owner, CancellationToken ct) => Task.FromResult<IReadOnlyList<TagRecord>>(rows.Where(x => x.OwnerProfileId == owner && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
-    public Task<TagRecord?> FindChildAsync(string owner, string? parent, string name, CancellationToken ct) => Task.FromResult(Active.FirstOrDefault(x => x.OwnerProfileId == owner && x.ParentTagId == parent && x.NormalizedName == name));
+    public Task<TagRecord?> FindChildAsync(string owner, string? parent, string name, CancellationToken ct) => Task.FromResult(Active.FirstOrDefault(x => (x.SpaceId ?? x.OwnerProfileId) == owner && x.ParentTagId == parent && x.NormalizedName == name));
     public Task<IReadOnlyList<TagRecord>> ListChildrenAsync(string id, CancellationToken ct) => Task.FromResult(Ordered(Active.Where(x => x.ParentTagId == id)));
     public Task AddAsync(TagRecord row, CancellationToken ct) { rows.Add(row); return Task.CompletedTask; }
     public Task<TagRecord?> UpdateAsync(TagRecord row, long version, CancellationToken ct) => FakeUpdate.Apply(rows, row, version);
-    public Task<long> GetNextPositionAsync(string owner, string? parent, CancellationToken ct) => Task.FromResult(Active.Where(x => x.OwnerProfileId == owner && x.ParentTagId == parent).Select(x => x.Position + 1024).DefaultIfEmpty(0).Max());
+    public Task<long> GetNextPositionAsync(string owner, string? parent, CancellationToken ct) => Task.FromResult(Active.Where(x => (x.SpaceId ?? x.OwnerProfileId) == owner && x.ParentTagId == parent).Select(x => x.Position + 1024).DefaultIfEmpty(0).Max());
     public Task<IReadOnlyList<string>> ListTaskTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TaskId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListSubtaskTagIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(subtaskLinks.Where(x => x.SubtaskId == id && ActiveIds.Contains(x.TagId)).Select(x => x.TagId).Order(StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<string>> ListTaskIdsAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(taskLinks.Where(x => x.TagId == id).Select(x => x.TaskId).Order(StringComparer.Ordinal).ToList());

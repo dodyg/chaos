@@ -10,6 +10,12 @@ internal static class SyncPurgeSql
     /// <summary>The delete statements for one entity, in dependency order; <c>$k</c> is the first key column's value.</summary>
     public static IReadOnlyList<string> For(string kind, IReadOnlyList<string> key) => kind switch
     {
+        "saved_view" =>
+        [
+            "DELETE FROM SavedViewMatches WHERE ViewId = $k0;",
+            "DELETE FROM ViewAlertBaselineState WHERE ViewId = $k0;",
+            "DELETE FROM ViewAlerts WHERE ViewId = $k0;",
+        ],
         "task" =>
         [
             "DELETE FROM SearchIndex WHERE rowid IN (SELECT RowId FROM SearchDocuments WHERE TaskId = $k0);",
@@ -79,6 +85,11 @@ internal static class SyncPurgeSql
             "DELETE FROM PageRevisions WHERE PageId = $k0;",
             "UPDATE Pages SET ParentPageId = NULL WHERE ParentPageId = $k0;",
             "DELETE FROM Pages WHERE Id = $k0;",
+        ],
+        "space_state" =>
+        [
+            "UPDATE Tasks SET CustomStateId = NULL WHERE CustomStateId = $k0;",
+            "DELETE FROM SpaceStates WHERE Id = $k0;",
         ],
         "tag" =>
         [

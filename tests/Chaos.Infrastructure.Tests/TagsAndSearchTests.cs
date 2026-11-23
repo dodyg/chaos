@@ -1,7 +1,9 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Containers;
+using Chaos.Application.Capture;
 using Chaos.Application.Contracts;
 using Chaos.Application.Queries;
+using Chaos.Application.Spaces;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
@@ -14,6 +16,71 @@ namespace Chaos.Infrastructure.Tests;
 /// <summary>Package 3 behavior on real file-backed SQLite: tag integrity, built-in views, search, counts and paging.</summary>
 public sealed class TagsAndSearchTests
 {
+    [Test]
+    public async Task SharedTags_UseSeparateScopeAndLockedListRejectsEditor()
+    {
+        using var host = await Host.StartAsync();
+        var profile = (await host.Storage.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token)))!;
+        var spaceId = Guid.NewGuid().ToString("D");
+        await host.Storage.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = ((Chaos.Infrastructure.Sqlite.SqliteDataSession)session).Connection.CreateCommand();
+            command.CommandText = "INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,TagsOwnerOnly,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',0,$now,$now); INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($member,$space,$profile,1,'Me',1,$now);";
+            command.Parameters.AddWithValue("$space", spaceId);
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$member", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(Now));
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        });
+        await new SpaceStateCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now)).SetTagsOwnerOnlyAsync(spaceId, true);
+        Execute(host.Storage.DatabasePath, $"UPDATE SpaceMembers SET Role=2 WHERE SpaceId='{spaceId}';");
+        var personal = await host.TagAsync("review");
+        await Assert.That(async () => await host.Tags.CreateAsync(new(Op(), "review", null, null, spaceId))).Throws<AppException>();
+        Execute(host.Storage.DatabasePath, $"UPDATE SpaceMembers SET Role=1 WHERE SpaceId='{spaceId}';");
+        var shared = (await host.Tags.CreateAsync(new(Op(), "review", null, null, spaceId))).Tag;
+        await Assert.That(shared.SpaceId).IsEqualTo(spaceId);
+        await Assert.That(shared.OwnerProfileId).IsNull();
+        await Assert.That(shared.Id).IsNotEqualTo(personal.Id);
+        var container = (await host.Containers.CreateAsync(new(Op(), "Team list", ContainerKind.List, spaceId))).Container;
+        var capture = new CaptureCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        var selected = (await capture.CreateAsync(new(Op(), [new CaptureTaskDraft { Title = "Shared", ContainerId = container.Id, TagPaths = ["review"] }]))).Tasks.Single();
+        var selectedIds = await host.Tags.ListTargetTagsAsync(TagTargetKind.Task, selected.Id);
+        await Assert.That(selectedIds).Contains(shared.Id);
+        await Assert.That(selectedIds.Contains(personal.Id)).IsFalse();
+        Execute(host.Storage.DatabasePath, $"UPDATE SpaceMembers SET Role=2 WHERE SpaceId='{spaceId}';");
+        var fallback = (await capture.CreateAsync(new(Op(), [new CaptureTaskDraft { Title = "Private", ContainerId = container.Id, TagPaths = ["new private"] }]))).Tasks.Single();
+        var fallbackId = (await host.Tags.ListTargetTagsAsync(TagTargetKind.Task, fallback.Id)).Single();
+        var fallbackTag = (await host.Tags.ListAsync()).Single(row => row.Tag.Id == fallbackId).Tag;
+        await Assert.That(fallbackTag.OwnerProfileId).IsEqualTo(profile.Id);
+        await host.Tags.LinkAsync(new(Op(), TagTargetKind.Task, fallback.Id, personal.Id, null));
+        Execute(host.Storage.DatabasePath, $"UPDATE SpaceMembers SET Role=1 WHERE SpaceId='{spaceId}';");
+        var operation = Op();
+        var copied = await host.Tags.ShareListTagsAsync(new(operation, container.Id));
+        await Assert.That(copied.TagsShared).IsEqualTo(2);
+        var sharedIds = await host.Tags.ListTargetTagsAsync(TagTargetKind.Task, fallback.Id);
+        await Assert.That(sharedIds.Contains(personal.Id)).IsFalse();
+        await Assert.That(sharedIds).Contains(shared.Id);
+        await new Chaos.Application.History.UndoCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now))
+            .UndoAsync(new(Op(), operation));
+        await Assert.That(await host.Tags.ListTargetTagsAsync(TagTargetKind.Task, fallback.Id)).Contains(personal.Id);
+    }
+
+    [Test]
+    public async Task CustomState_UsesBaseStatusAndCanReturnToBaseColumn()
+    {
+        using var host = await Host.StartAsync();
+        var task = await host.TaskAsync("Review this");
+        var commands = new SpaceStateCommands(host.Storage.Store, new GuidIds(), new FixedTimeProvider(Now));
+        var state = (await commands.CreateAsync(new(Op(), task.SpaceId, "In review", TaskItemStatus.NeedsReview))).State;
+        var selected = (await host.Tasks.SetCustomStateAsync(new(Op(), task.Id, task.Version, state.Id))).Task;
+        await Assert.That(selected.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        await Assert.That(selected.CustomStateId).IsEqualTo(state.Id);
+        var ordinary = (await host.Tasks.SetStatusAsync(new(Op(), task.Id, selected.Version, TaskItemStatus.NeedsReview, null))).Task;
+        await Assert.That(ordinary.Status).IsEqualTo(TaskItemStatus.NeedsReview);
+        await Assert.That(ordinary.CustomStateId).IsNull();
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 11, 10, 9, 0, 0, TimeSpan.Zero);
 
     /// <summary>One storage session plus the commands under test; the profile zone is pinned to UTC for deterministic dates.</summary>
@@ -520,6 +587,13 @@ public sealed class TagsAndSearchTests
         await Assert.That(page.Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Personal", "Mine"]);
         await Assert.That(page.TotalCount).IsEqualTo(2L);
         await Assert.That(await host.Queries.CountAsync(spec)).IsEqualTo(page.TotalCount);
+        var calendar = new Chaos.Application.Planning.CalendarQueries(host.Storage.Store, host.Queries, new FixedTimeProvider(Now));
+        var sharedCalendar = await calendar.RangeAsync(new DateOnly(2026, 11, 9), new DateOnly(2026, 11, 9),
+            new Chaos.Application.Planning.CalendarFilters { SpaceId = "shared" });
+        await Assert.That(sharedCalendar.Entries.Select(entry => entry.Title)).IsEquivalentTo(["Mine", "Removed"]);
+        var personalCalendar = await calendar.RangeAsync(new DateOnly(2026, 11, 9), new DateOnly(2026, 11, 9),
+            new Chaos.Application.Planning.CalendarFilters { SpaceId = (await host.Queries.RunAsync(new TaskQuerySpec { View = TaskView.Search })).Rows.Single(row => row.Task.Title == "Personal").Task.SpaceId });
+        await Assert.That(personalCalendar.Entries).IsEmpty();
         var day = new Chaos.Application.Planning.MyDayCommands(host.Storage.Store, new FixedTimeProvider(Now));
         var suggestions = await day.SuggestAsync();
         await Assert.That(suggestions.Select(suggestion => suggestion.Task.Title)).Contains("Mine");
@@ -541,6 +615,13 @@ public sealed class TagsAndSearchTests
         var mineView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
             "{\"v\":1,\"items\":[{\"field\":\"assignee\",\"op\":\"isMe\"}]}") };
         await Assert.That((await host.Queries.RunAsync(mineView)).Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Personal", "Mine"]);
+        var scopedView = mineView with { SharedViewSpaceId = "shared" };
+        var scopedPage = await host.Queries.RunAsync(scopedView);
+        await Assert.That(scopedPage.Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Mine"]);
+        await Assert.That(await host.Queries.CountAsync(scopedView)).IsEqualTo(1L);
+        var personalSpaceId = (await host.Queries.RunAsync(mineView)).Rows.Single(row => row.Task.Title == "Personal").Task.SpaceId;
+        await Assert.That((await host.Queries.RunAsync(mineView with { SharedViewSpaceId = personalSpaceId })).Rows.Select(row => row.Task.Title))
+            .IsEquivalentTo(["Personal", "Mine"]);
         var noneView = new TaskQuerySpec { View = TaskView.Custom, Definition = Chaos.Domain.Views.ViewDefinition.Parse(
             "{\"v\":1,\"items\":[{\"field\":\"assignee\",\"op\":\"isEmpty\"}]}") };
         await Assert.That((await host.Queries.RunAsync(noneView)).Rows.Select(row => row.Task.Title)).IsEquivalentTo(["Removed"]);

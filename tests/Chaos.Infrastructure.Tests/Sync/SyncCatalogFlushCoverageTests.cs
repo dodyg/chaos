@@ -13,6 +13,7 @@ using Chaos.Application.Pages;
 using Chaos.Application.Planning;
 using Chaos.Application.Reminders;
 using Chaos.Application.Settings;
+using Chaos.Application.Spaces;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
@@ -57,6 +58,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["profile"] = Structure,
         ["container"] = Structure,
         ["section"] = Structure,
+        ["space_state"] = Structure,
         ["tag"] = Structure,
         ["task_template"] = Structure,
         ["subtask_tag"] = Structure,
@@ -109,6 +111,7 @@ public sealed class SyncCatalogFlushCoverageTests
 
         ["board_setting"] = Board,
         ["saved_view"] = Board,
+        ["view_alert_setting"] = Board,
 
         ["calendar_source"] = Calendars,
         ["calendar_event_link"] = Calendars,
@@ -257,6 +260,13 @@ public sealed class SyncCatalogFlushCoverageTests
         expected["profile"] = (await TextsAsync(host, "SELECT Id FROM Profiles;"))[0];
 
         var containers = new ContainerCommands(host.Store, host.Ids, host.Clock);
+        var personal = await host.Store.QueryAsync(async (session, token) =>
+        {
+            var person = await session.Profiles.GetPrimaryAsync(token);
+            return await session.Spaces.GetPersonalByOwnerAsync(person!.Id, token);
+        });
+        expected["space_state"] = (await new SpaceStateCommands(host.Store, host.Ids, host.Clock)
+            .CreateAsync(new CreateSpaceStateCommand(Op(), personal!.Id, "In review", TaskItemStatus.NeedsReview))).State.Id;
         var project = (await containers.CreateAsync(new CreateContainerCommand(Op(), "Flush project", ContainerKind.Project, null))).Container;
         var section = (await containers.CreateSectionAsync(new CreateSectionCommand(Op(), project.Id, "Planning"))).Section;
         expected["container"] = project.Id;
@@ -466,6 +476,7 @@ public sealed class SyncCatalogFlushCoverageTests
             Op(), null, 0, "Flush view", "bug", "blue",
             "{\"v\":1,\"items\":[{\"field\":\"priority\",\"op\":\"atLeast\",\"value\":\"High\"}]}", null, Pinned: true, AlertsEnabled: false));
         expected["saved_view"] = view.View.Id;
+        expected["view_alert_setting"] = (await TextsAsync(host, "SELECT Id FROM ViewAlertSettings"))[0];
     }
 
     /// <summary>A calendar feed source and a task made from one of its meetings (P5).</summary>

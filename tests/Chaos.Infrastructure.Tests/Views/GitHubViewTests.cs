@@ -6,6 +6,7 @@ using Chaos.Application.Views;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Views;
 using Chaos.Infrastructure.Tests.DataProtection;
+using Chaos.Infrastructure.Sqlite;
 
 namespace Chaos.Infrastructure.Tests.Views;
 
@@ -88,6 +89,39 @@ public sealed class GitHubViewTests
     }
 
     private static string Sorted(params string[] ids) => string.Join(",", ids.Order(StringComparer.Ordinal));
+
+    [Test]
+    public async Task SharedView_OffersGitHubRepositoriesAndScopesGitHubConditions()
+    {
+        using var host = await DataHost.StartAsync();
+        var seed = await SeedAsync(host);
+        await host.Store.ExecuteAsync(async (session, ct) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                    SELECT 'team',Id,2,'Team','2026-11-10T09:00:00Z','2026-11-10T09:00:00Z' FROM Profiles LIMIT 1;
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                    SELECT 'member','team',Id,1,'Me',1,'now' FROM Profiles LIMIT 1;
+                INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ('team-list','team',1,'Team','team',0,'2026-11-10T09:00:00Z','2026-11-10T09:00:00Z');
+                UPDATE Tasks SET SpaceId='team',ContainerId='team-list' WHERE Id=$task;
+                UPDATE GitHubConnections SET SpaceId='team' WHERE Id=(SELECT ConnectionId FROM GitHubRepositories WHERE Id=$repo);
+                """;
+            command.Parameters.AddWithValue("$task", seed.BugTask);
+            command.Parameters.AddWithValue("$repo", seed.RepoA);
+            await command.ExecuteNonQueryAsync(ct);
+            return true;
+        });
+        var commands = new SavedViewCommands(host.Store, host.Ids, host.Clock);
+        const string definition = "{\"v\":1,\"match\":\"all\",\"items\":[{\"field\":\"githubState\",\"op\":\"is\",\"value\":\"Open\"}]}";
+        var personal = (await commands.SaveAsync(new(DataHost.Op(), null, 0, "Open issues", "github", null, definition, null, true, false))).View;
+        var shared = (await commands.ShareAsync(DataHost.Op(), personal.Id, "team")).View;
+        var queries = new SavedViewQueries(host.Store, new TaskQueries(host.Store, host.Clock), host.Clock);
+        await Assert.That((await queries.GitHubRepositoriesAsync()).Select(repo => repo.Id)).Contains(seed.RepoA);
+        var rows = await queries.RunAsync(shared.Id, null, 100, null);
+        await Assert.That(rows.Page.Rows.Select(row => row.Task.Id)).IsEquivalentTo([seed.BugTask]);
+    }
 
     [Test]
     public async Task Repository_IsAndIsNot_UseTheSubscription_AndIsNotKeepsNonGitHubTasks()

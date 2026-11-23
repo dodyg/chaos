@@ -12,6 +12,39 @@ namespace Chaos.Infrastructure.Tests.Migrations;
 public sealed class SqliteMigrationRunnerTests
 {
     [Test]
+    public async Task Migration042_PreservesPersonalTagsAndScopesSharedNames()
+    {
+        using var connection = NewConnection(TestPaths.NewDataRoot());
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 41);
+        using var setup = connection.CreateCommand();
+        setup.CommandText = """
+            INSERT INTO Profiles (Id, DisplayName, ZoneId, Locale, DateFormat, FirstWeekday, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('profile', 'Person', 'UTC', 'en', 'YMD', 1, 'now', 'now');
+            INSERT INTO Spaces (Id, OwnerProfileId, Kind, Name, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('space', 'profile', 1, 'Personal', 'now', 'now');
+            INSERT INTO Tags (Id, OwnerProfileId, DisplayName, NormalizedName, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('personal', 'profile', 'Review', 'review', 'now', 'now');
+            """;
+        await setup.ExecuteNonQueryAsync();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        using var shared = connection.CreateCommand();
+        shared.CommandText = """
+            INSERT INTO Tags (Id, SpaceId, DisplayName, NormalizedName, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('shared', 'space', 'Review', 'review', 'now', 'now');
+            """;
+        await shared.ExecuteNonQueryAsync();
+        using var check = connection.CreateCommand();
+        check.CommandText = "SELECT count(*) FROM Tags WHERE Id = 'personal' AND OwnerProfileId = 'profile' AND SpaceId IS NULL;";
+        await Assert.That(Convert.ToInt64(await check.ExecuteScalarAsync())).IsEqualTo(1L);
+        using var invalid = connection.CreateCommand();
+        invalid.CommandText = "INSERT INTO Tags (Id, DisplayName, NormalizedName, CreatedAtUtc, UpdatedAtUtc) VALUES ('invalid', 'x', 'x', 'now', 'now');";
+        await Assert.That(async () => await invalid.ExecuteNonQueryAsync()).Throws<SqliteException>();
+        using var duplicate = connection.CreateCommand();
+        duplicate.CommandText = "INSERT INTO Tags (Id, SpaceId, DisplayName, NormalizedName, CreatedAtUtc, UpdatedAtUtc) VALUES ('duplicate', 'space', 'Review', 'review', 'now', 'now');";
+        await Assert.That(async () => await duplicate.ExecuteNonQueryAsync()).Throws<SqliteException>();
+    }
+
+    [Test]
     public async Task RecurrenceOccurrences_SecondActiveSlot_IsRejected()
     {
         using var connection = NewConnection(TestPaths.NewDataRoot());
@@ -57,10 +90,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var version = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(version).IsEqualTo(41L);
+        await Assert.That(version).IsEqualTo(43L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(41L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(43L);
         using var checksum = connection.CreateCommand();
         checksum.CommandText = "SELECT Checksum FROM SchemaMigrations WHERE Version = 1;";
         var storedChecksum = await checksum.ExecuteScalarAsync() as string;
@@ -83,10 +116,10 @@ public sealed class SqliteMigrationRunnerTests
 
         var second = await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
 
-        await Assert.That(second).IsEqualTo(41L);
+        await Assert.That(second).IsEqualTo(43L);
         using var rows = connection.CreateCommand();
         rows.CommandText = "SELECT count(*) FROM SchemaMigrations;";
-        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(41L);
+        await Assert.That(Convert.ToInt64(await rows.ExecuteScalarAsync())).IsEqualTo(43L);
     }
 
     [Test]
@@ -214,7 +247,7 @@ public sealed class SqliteMigrationRunnerTests
                 await set.ExecuteNonQueryAsync();
             }
 
-            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(41L);
+            await Assert.That(await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None)).IsEqualTo(43L);
         }
 
         // A real content change is still refused.

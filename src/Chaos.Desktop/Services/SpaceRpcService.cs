@@ -1,5 +1,6 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Spaces;
+using Chaos.Domain.Tasks;
 using NeoAstra.Rpc;
 
 namespace Chaos.Desktop.Services;
@@ -26,14 +27,43 @@ public sealed record SpaceInviteResponse(bool Ok, SpaceInviteResponseItem? Invit
 public sealed record SpaceInvitesResponse(bool Ok, IReadOnlyList<SpaceInviteResponseItem> Invites, TaskErrorResponse? Error);
 public sealed record SpaceRevokeInviteRequest(string SpaceId, string InviteId);
 public sealed record SpaceDoneResponse(bool Ok, TaskErrorResponse? Error);
+public sealed record SpaceStateDto(string Id, string Name, string BaseStatus, string Version);
+public sealed record SpaceStatesResponse(bool Ok, IReadOnlyList<SpaceStateDto> States, TaskErrorResponse? Error);
+public sealed record CreateSpaceStateRequest(string OperationId, string SpaceId, string Name, string BaseStatus);
+public sealed record DeleteSpaceStateRequest(string OperationId, string StateId, string ExpectedVersion);
+public sealed record SpaceTagPolicyRequest(string SpaceId, bool OwnerOnly);
+public sealed record SpaceTagPolicyResponse(bool Ok, bool OwnerOnly, TaskErrorResponse? Error);
 
 /// <summary>
 /// Shared spaces for the window (PLAN3 Q5). Every method that changes membership needs the service and says so offline;
 /// the sidebar list and the people shown are what this device already holds.
 /// </summary>
 [NeoRpcService("spaces", Version = 1)]
-public sealed class SpaceRpcService(SpaceQueries queries, SpaceCommands commands)
+public sealed class SpaceRpcService(SpaceQueries queries, SpaceCommands commands, SpaceStateCommands states)
 {
+    [NeoRpcMethod("tagPolicy")]
+    public ValueTask<SpaceTagPolicyResponse> TagPolicyAsync(SpaceIdRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.tagPolicy", async () => new SpaceTagPolicyResponse(true, await states.GetTagsOwnerOnlyAsync(request.SpaceId, ct), null),
+            error => new SpaceTagPolicyResponse(false, false, error));
+
+    [NeoRpcMethod("setTagPolicy")]
+    public ValueTask<SpaceDoneResponse> SetTagPolicyAsync(SpaceTagPolicyRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.setTagPolicy", async () => { await states.SetTagsOwnerOnlyAsync(request.SpaceId, request.OwnerOnly, ct); return new SpaceDoneResponse(true, null); }, Failed);
+    [NeoRpcMethod("states")]
+    public ValueTask<SpaceStatesResponse> StatesAsync(SpaceIdRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.states", async () => new SpaceStatesResponse(true,
+            [.. (await states.ListAsync(request.SpaceId, ct)).Select(state => new SpaceStateDto(state.Id, state.Name, state.BaseStatus.ToString(), state.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)))], null),
+            error => new SpaceStatesResponse(false, [], error));
+
+    [NeoRpcMethod("createState")]
+    public ValueTask<SpaceDoneResponse> CreateStateAsync(CreateSpaceStateRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.createState", async () => { await states.CreateAsync(new(request.OperationId, request.SpaceId, request.Name,
+            RpcParse.Enum<TaskItemStatus>(request.BaseStatus, "baseStatus")), ct); return new SpaceDoneResponse(true, null); }, Failed);
+
+    [NeoRpcMethod("deleteState")]
+    public ValueTask<SpaceDoneResponse> DeleteStateAsync(DeleteSpaceStateRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.deleteState", async () => { await states.DeleteAsync(new(request.OperationId, request.StateId,
+            RpcParse.Version(request.ExpectedVersion)), ct); return new SpaceDoneResponse(true, null); }, Failed);
     [NeoRpcMethod("list")]
     public ValueTask<SpaceListResponse> ListAsync(SpaceListRequest request, CancellationToken ct) =>
         Rpc.Run("spaces.list", async () => new SpaceListResponse(true, [.. (await queries.ListAsync(ct)).Select(Map)], null),

@@ -275,7 +275,8 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddTagRpcService(new TagRpcService(new TagCommands(store, ids, clock), _githubEngine));
         rpc.AddPeopleRpcService(new PeopleRpcService(new PeopleQueries(store)));
         rpc.AddSpaceRpcService(new SpaceRpcService(new Chaos.Application.Spaces.SpaceQueries(store),
-            new Chaos.Application.Spaces.SpaceCommands(store, _serviceClient, new Chaos.Infrastructure.Sync.SyncSpaceStreams(store, _syncEngine), ids)));
+            new Chaos.Application.Spaces.SpaceCommands(store, _serviceClient, new Chaos.Infrastructure.Sync.SyncSpaceStreams(store, _syncEngine), ids),
+            new Chaos.Application.Spaces.SpaceStateCommands(store, ids, clock)));
         rpc.AddQueryRpcService(new QueryRpcService(_taskQueries));
         rpc.AddViewRpcService(new ViewRpcService(_viewCommands, _viewQueries, _viewAlerts));
         rpc.AddBoardRpcService(new BoardRpcService(_boards, _boardQueries, _viewBoardQueries, _githubEngine));

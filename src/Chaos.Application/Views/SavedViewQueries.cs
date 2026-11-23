@@ -22,7 +22,7 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
     {
         var view = await LoadAsync(viewId, ct);
         var layout = ParseLayout(view.LayoutJson);
-        var page = await queries.RunAsync(Spec(view.DefinitionJson, layout, category, limit, cursor), ct);
+        var page = await queries.RunAsync(Spec(view.DefinitionJson, layout, category, limit, cursor, view.SpaceId), ct);
         return new ViewRunResult(page, layout);
     }
 
@@ -39,7 +39,7 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
         var views = await store.QueryAsync(async (session, token) =>
         {
             var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
-            return await session.SavedViews.ListAsync(context.Space.Id, includeDeleted: false, token);
+            return await SavedViewCommands.ListVisibleAsync(session, context, includeDeleted: false, token);
         }, ct);
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var view in views.Where(view => view.Pinned))
@@ -50,7 +50,7 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
                 continue;
             }
 
-            counts[view.Id] = await queries.CountAsync(Spec(view.DefinitionJson, ViewLayout.Default, category, 1, null), ct);
+            counts[view.Id] = await queries.CountAsync(Spec(view.DefinitionJson, ViewLayout.Default, category, 1, null, view.SpaceId), ct);
         }
 
         return counts;
@@ -61,17 +61,21 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
         await store.QueryAsync(async (session, token) =>
         {
             var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
-            var connection = await session.GitHub.GetConnectionForSpaceAsync(context.Space.Id, token);
-            if (connection is null)
+            var spaceIds = new List<string> { context.Space.Id };
+            foreach (var space in await session.Spaces.ListAsync(token))
+                if (space.Id != context.Space.Id && space.DeletedAtUtc is null && (await session.People.ListAsync(space.Id, token))
+                    .Any(person => !person.Former && person.ActorId == $"person:{context.Profile.Id}"))
+                    spaceIds.Add(space.Id);
+            var options = new List<(string Id, string FullName)>();
+            foreach (var spaceId in spaceIds)
             {
-                return (IReadOnlyList<(string Id, string FullName)>)[];
+                var connection = await session.GitHub.GetConnectionForSpaceAsync(spaceId, token);
+                if (connection is null) continue;
+                var repositories = await session.GitHub.ListSubscriptionsAsync(connection.Id, token);
+                options.AddRange(repositories.Where(repository => repository.DeletedAtUtc is null)
+                    .Select(repository => (repository.Id, repository.FullName)));
             }
-
-            var repositories = await session.GitHub.ListSubscriptionsAsync(connection.Id, token);
-            return [.. repositories
-                .Where(repository => repository.DeletedAtUtc is null)
-                .OrderBy(repository => repository.FullName, StringComparer.OrdinalIgnoreCase)
-                .Select(repository => (repository.Id, repository.FullName))];
+            return (IReadOnlyList<(string Id, string FullName)>)[.. options.OrderBy(item => item.FullName, StringComparer.OrdinalIgnoreCase)];
         }, ct);
 
     /// <summary>Builds the CSV for a view's layout columns (rows up to <see cref="MaxExportRows"/>).</summary>
@@ -83,7 +87,7 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
         string? cursor = null;
         do
         {
-            var page = await queries.RunAsync(Spec(view.DefinitionJson, layout, category, TaskQueries.MaxLimit, cursor), ct);
+            var page = await queries.RunAsync(Spec(view.DefinitionJson, layout, category, TaskQueries.MaxLimit, cursor, view.SpaceId), ct);
             rows.AddRange(page.Rows);
             cursor = page.NextCursor;
         }
@@ -117,9 +121,10 @@ public sealed class SavedViewQueries(IApplicationStore store, TaskQueries querie
         }
     }
 
-    private static TaskQuerySpec Spec(string definitionJson, ViewLayout layout, CapacityCategory? category, int limit, string? cursor) => new()
+    private static TaskQuerySpec Spec(string definitionJson, ViewLayout layout, CapacityCategory? category, int limit, string? cursor, string? viewSpaceId = null) => new()
     {
         View = TaskView.Custom,
+        SharedViewSpaceId = viewSpaceId,
         Definition = SavedViewCommands.ParseDefinition(definitionJson),
         Sort = new ViewSort(layout.SortField, layout.SortDescending),
         Category = category,

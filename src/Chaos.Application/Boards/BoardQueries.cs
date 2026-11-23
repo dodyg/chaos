@@ -62,7 +62,8 @@ public sealed class BoardQueries(IApplicationStore store)
 
             var people = settings.GroupBy == BoardGrouping.Assignee || settings.SwimlaneBy == BoardSwimlane.Assignee
                 ? await session.People.ListAsync(container.SpaceId, token) : [];
-            var columns = ColumnsFor(settings, sections, columnTags, showCancelled, people);
+            var states = settings.GroupBy == BoardGrouping.Status ? await session.Spaces.ListStatesAsync(container.SpaceId, token) : [];
+            var columns = ColumnsFor(settings, sections, columnTags, showCancelled, people, states);
             var lanes = LanesFor(settings, laneTags, people: people);
 
             var rows = await session.Boards.ListCardsAsync(container.Id, token);
@@ -82,7 +83,7 @@ public sealed class BoardQueries(IApplicationStore store)
                 var assigned = settings.GroupBy == BoardGrouping.Assignee || settings.SwimlaneBy == BoardSwimlane.Assignee
                     ? await session.Tasks.ListAssigneesAsync(row.Task.Id, token) : [];
                 cards.AddRange(PlaceCards(settings, sections, columnTags, laneTags, row.Task, tagIds,
-                    row.SubtasksTotal, row.SubtasksDone, row.HasIssueLink, assigned, people));
+                    row.SubtasksTotal, row.SubtasksDone, row.HasIssueLink, assigned, people, states: states));
             }
 
             return new BoardDto(settings, columns, lanes, cards, visible.Count, truncated);
@@ -94,7 +95,8 @@ public sealed class BoardQueries(IApplicationStore store)
         IReadOnlyList<SectionRecord> sections,
         IReadOnlyList<TagRecord> columnTags,
         bool showCancelled,
-        IReadOnlyList<SpacePerson>? people = null)
+        IReadOnlyList<SpacePerson>? people = null,
+        IReadOnlyList<SpaceStateRecord>? states = null)
     {
         switch (settings.GroupBy)
         {
@@ -133,7 +135,11 @@ public sealed class BoardQueries(IApplicationStore store)
                     statusColumns.Add(new(nameof(TaskItemStatus.Cancelled), "Cancelled", IsNone: false));
                 }
 
-                return statusColumns;
+                if (states is null || states.Count == 0) return statusColumns;
+                return [.. statusColumns.SelectMany(column => new[] { column }.Concat(
+                    states.Where(state => state.BaseStatus.ToString() == column.Key)
+                        .OrderBy(state => state.Position).ThenBy(state => state.Id, StringComparer.Ordinal)
+                        .Select(state => new BoardColumnDto("state:" + state.Id, state.Name, false))))];
         }
     }
 
@@ -168,12 +174,15 @@ public sealed class BoardQueries(IApplicationStore store)
 
     internal static IReadOnlyList<BoardCardDto> PlaceCards(BoardSettingsRecord settings, IReadOnlyList<SectionRecord> sections,
         IReadOnlyList<TagRecord> columnTags, IReadOnlyList<TagRecord> laneTags, TaskRecord task, IReadOnlyList<string> tagIds,
-        int total, int done, bool issue, IReadOnlyList<TaskAssigneeRecord> assignments, IReadOnlyList<SpacePerson> people, bool containerLanes = false)
+        int total, int done, bool issue, IReadOnlyList<TaskAssigneeRecord> assignments, IReadOnlyList<SpacePerson> people, bool containerLanes = false,
+        IReadOnlyList<SpaceStateRecord>? states = null)
     {
         var eligible = EligiblePeople(people).Select(person => person.ActorId[7..]).ToHashSet(StringComparer.Ordinal);
         var ids = assignments.Where(a => a.DeletedAtUtc is null && eligible.Contains(a.MemberId)).Select(a => a.MemberId).ToList();
         if (ids.Count == 0) ids.Add(string.Empty);
-        var columns = settings.GroupBy == BoardGrouping.Assignee ? ids : [ColumnKeyFor(settings, sections, columnTags, task, tagIds)];
+        var columns = settings.GroupBy == BoardGrouping.Assignee ? ids :
+            [settings.GroupBy == BoardGrouping.Status && task.CustomStateId is { } stateId && (states?.Any(state => state.Id == stateId) ?? false)
+                ? "state:" + stateId : ColumnKeyFor(settings, sections, columnTags, task, tagIds)];
         var lanes = settings.SwimlaneBy == BoardSwimlane.Assignee ? ids : [LaneKeyFor(settings, laneTags, task, tagIds, containerLanes)];
         return [.. columns.SelectMany(column => lanes.Select(lane => new BoardCardDto(task, tagIds, total, done, issue, column, lane)))];
     }

@@ -16,6 +16,7 @@ internal sealed class RenameLoserRule : IUniqueRule
 
     public MergeResult ResolveLoser(UniqueConflict conflict, MergeResult merge)
     {
+        if (!conflict.IncomingWins) return merge;
         var (connection, table) = (conflict.Connection, conflict.Table);
         var loser = ParseKey(table, conflict.LoserKey);
         using var read = connection.CreateCommand();
@@ -42,7 +43,21 @@ internal sealed class RenameLoserRule : IUniqueRule
     public async Task WriteIncomingLoserAsync(UniqueConflict conflict, MergeResult merge, CancellationToken ct)
     {
         var values = WinnerValues(merge);
-        if (values.GetValueOrDefault("Name") is not string name || values.GetValueOrDefault("SpaceId") is not string space)
+        var name = values.GetValueOrDefault("Name") as string;
+        var space = values.GetValueOrDefault("SpaceId") as string;
+        if (name is null || space is null)
+        {
+            using var read = conflict.Connection.CreateCommand();
+            read.CommandText = $"SELECT Name, SpaceId FROM {SyncSql.Quote(conflict.Table.Table)} WHERE {Where(conflict.Table, conflict.Key)};";
+            BindKey(read, conflict.Table, conflict.Key);
+            using var row = read.ExecuteReader();
+            if (row.Read())
+            {
+                name ??= row.GetString(0);
+                space ??= row.GetString(1);
+            }
+        }
+        if (name is null || space is null)
         {
             return;
         }

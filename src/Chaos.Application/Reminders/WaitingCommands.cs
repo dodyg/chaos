@@ -89,7 +89,7 @@ public sealed class WaitingCommands(IApplicationStore store, IIdGenerator ids, T
 
             if (task.Status != TaskItemStatus.WaitingOnSomeone)
             {
-                _ = await session.Tasks.UpdateAsync(task with { Status = TaskItemStatus.WaitingOnSomeone, Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token)
+                _ = await session.Tasks.UpdateAsync(task with { Status = TaskItemStatus.WaitingOnSomeone, CustomStateId = null, Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token)
                     ?? throw AppException.VersionConflict("This task changed elsewhere. Refresh and try again.");
             }
 
@@ -177,7 +177,7 @@ public sealed class WaitingCommands(IApplicationStore store, IIdGenerator ids, T
 
             if (task.Status == TaskItemStatus.WaitingOnSomeone)
             {
-                _ = await session.Tasks.UpdateAsync(task with { Status = next, Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token)
+                _ = await session.Tasks.UpdateAsync(task with { Status = next, CustomStateId = null, Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token)
                     ?? throw AppException.VersionConflict("This task changed elsewhere. Refresh and try again.");
             }
 

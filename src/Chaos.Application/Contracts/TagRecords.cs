@@ -6,7 +6,8 @@ namespace Chaos.Application.Contracts;
 /// </summary>
 public sealed record TagRecord : AggregateRecord
 {
-    public required string OwnerProfileId { get; init; }
+    public string? OwnerProfileId { get; init; }
+    public string? SpaceId { get; init; }
     public required string DisplayName { get; init; }
     public required string NormalizedName { get; init; }
     public string? ParentTagId { get; init; }

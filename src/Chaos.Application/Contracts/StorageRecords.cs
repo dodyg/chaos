@@ -47,6 +47,16 @@ public sealed record SpaceRecord : AggregateRecord
     public required SpaceKind Kind { get; init; }
     public required string Name { get; init; }
     public string? DefaultDeadlineReminderJson { get; init; }
+    public bool TagsOwnerOnly { get; init; }
+}
+
+public sealed record SpaceStateRecord : AggregateRecord
+{
+    public required string SpaceId { get; init; }
+    public required string Name { get; init; }
+    public required string NormalizedName { get; init; }
+    public required TaskItemStatus BaseStatus { get; init; }
+    public required long Position { get; init; }
 }
 
 public sealed record ContainerRecord : AggregateRecord
@@ -71,6 +81,7 @@ public sealed record TaskRecord : AggregateRecord
     public required string Title { get; init; }
     public string Notes { get; init; } = string.Empty;
     public required TaskItemStatus Status { get; init; }
+    public string? CustomStateId { get; init; }
     public TaskAssignMode AssignMode { get; init; }
     public TaskPriority Priority { get; init; } = TaskPriority.Normal;
     public int? EstimateMinutes { get; init; }

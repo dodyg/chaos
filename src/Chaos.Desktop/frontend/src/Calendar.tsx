@@ -30,6 +30,7 @@ import { friendlyDate } from "./dates";
 import { minutesText } from "./MyWeek";
 import type { Focus } from "./category";
 import { busyText, meetingLink, meetingTime } from "./meetings";
+import { useAvailableSpaces } from "./Sharing";
 
 const operationId = () => crypto.randomUUID();
 
@@ -397,6 +398,8 @@ export function Calendar({
   const [showDue, setShowDue] = React.useState(true);
   const [showMeetings, setShowMeetings] = React.useState(true);
   const [showCompleted, setShowCompleted] = React.useState(false);
+  const spaces = useAvailableSpaces();
+  const [spaceId, setSpaceId] = React.useState("");
   const [tagId, setTagId] = React.useState("");
   const [containerId, setContainerId] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -412,6 +415,7 @@ export function Calendar({
   const filters = React.useMemo<CalendarFiltersDto>(
     () => ({
       category: focus,
+      spaceId: spaceId || null,
       tagId: tagId || null,
       containerId: containerId || null,
       viewId: viewId ?? null,
@@ -420,7 +424,7 @@ export function Calendar({
       showMeetings,
       showCompleted,
     }),
-    [focus, tagId, containerId, viewId, showPlanned, showDue, showMeetings, showCompleted],
+    [focus, spaceId, tagId, containerId, viewId, showPlanned, showDue, showMeetings, showCompleted],
   );
   const today = data?.today ?? todayProp ?? localDate(new Date());
 
@@ -682,8 +686,13 @@ export function Calendar({
         </label>
         <label className="inline-flex items-center gap-1.5">
           Space
-          <NativeSelect aria-label="Space" disabled value="personal">
-            <NativeSelectOption value="personal">Personal</NativeSelectOption>
+          <NativeSelect aria-label="Space" value={spaceId} onChange={(event) => setSpaceId(event.target.value)}>
+            <NativeSelectOption value="">All spaces</NativeSelectOption>
+            {spaces.map((space) => (
+              <NativeSelectOption key={space.spaceId} value={space.spaceId}>
+                {space.name}
+              </NativeSelectOption>
+            ))}
           </NativeSelect>
         </label>
         <label className="inline-flex items-center gap-1.5">

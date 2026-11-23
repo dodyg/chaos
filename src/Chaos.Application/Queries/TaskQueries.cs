@@ -178,6 +178,8 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
         {
             SpaceId = context.Space.Id,
             ProfileId = context.Profile.Id,
+            SharedViewSpaceId = spec.SharedViewSpaceId == context.Space.Id ? null : spec.SharedViewSpaceId,
+            FilterSpaceId = spec.FilterSpaceId,
             View = spec.View,
             ContainerId = string.IsNullOrWhiteSpace(spec.ContainerId) ? null : spec.ContainerId,
             TagId = string.IsNullOrWhiteSpace(spec.TagId) ? null : spec.TagId,

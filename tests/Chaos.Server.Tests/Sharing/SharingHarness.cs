@@ -25,7 +25,7 @@ internal sealed class SharingHarness(TestServer server) : IAsyncDisposable
 {
     private readonly List<DesktopFlow> _flows = [];
 
-    public async Task<SharingCaller> SignInAsync(string email, Guid? profile = null, bool bind = true)
+    public async Task<SharingCaller> SignInAsync(string email, Guid? profile = null, bool bind = true, int schema = 4)
     {
         var flow = new DesktopFlow(server);
         _flows.Add(flow);
@@ -33,7 +33,7 @@ internal sealed class SharingHarness(TestServer server) : IAsyncDisposable
         using var http = server.Factory.CreateClient();
         using var register = DesktopFlow.Api(HttpMethod.Post, "/v1/devices", tokens.AccessToken, new
         {
-            deviceId = flow.DeviceId, name = "Q3 raw client", platform = "windows", clientVersion = "test", clientSchema = 4,
+            deviceId = flow.DeviceId, name = "Q3 raw client", platform = "windows", clientVersion = "test", clientSchema = schema,
         });
         (await http.SendAsync(register)).EnsureSuccessStatusCode();
         await using var db = ServerDatabase.Open(server.ConnectionString);

@@ -63,6 +63,7 @@ public sealed record CalendarFilters
 {
     /// <summary>Work/Personal focus; null shows both.</summary>
     public CapacityCategory? Category { get; init; }
+    public string? SpaceId { get; init; }
     public string? TagId { get; init; }
     public string? ContainerId { get; init; }
     /// <summary>A custom view whose conditions the calendar is filtered by.</summary>
@@ -111,8 +112,8 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
 
         var custom = await DefinitionAsync(filters.ViewId, ct);
         var focusOnly = BaseSpec(new CalendarFilters { Category = filters.Category }, null, TaskView.Search);
-        var filtered = BaseSpec(filters, custom, custom is null ? TaskView.Search : TaskView.Custom);
-        var narrowed = filters.TagId is not null || filters.ContainerId is not null || custom is not null;
+        var filtered = BaseSpec(filters, custom?.Definition, custom is null ? TaskView.Search : TaskView.Custom) with { SharedViewSpaceId = custom?.SpaceId };
+        var narrowed = filters.SpaceId is not null || filters.TagId is not null || filters.ContainerId is not null || custom is not null;
 
         // Day totals: open tasks planned on each day under the focus only; a filter must not hide load.
         var loadRows = await FetchAsync(focusOnly with { Planned = new LocalDateRange(from, to), IncludeCompleted = false }, ct);
@@ -188,8 +189,9 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
     {
         ct.ThrowIfCancellationRequested();
         var custom = await DefinitionAsync(filters.ViewId, ct);
-        var spec = BaseSpec(filters, custom, custom is null ? TaskView.Search : TaskView.Custom) with
+        var spec = BaseSpec(filters, custom?.Definition, custom is null ? TaskView.Search : TaskView.Custom) with
         {
+            SharedViewSpaceId = custom?.SpaceId,
             Unscheduled = true,
             Text = text,
             Cursor = cursor,
@@ -200,7 +202,7 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
         return await queries.RunAsync(spec, ct);
     }
 
-    private async Task<Chaos.Domain.Views.ViewDefinition?> DefinitionAsync(string? viewId, CancellationToken ct)
+    private async Task<(Chaos.Domain.Views.ViewDefinition Definition, string SpaceId)?> DefinitionAsync(string? viewId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(viewId))
         {
@@ -209,13 +211,14 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
 
         var view = await store.QueryAsync(async (session, token) =>
             await session.SavedViews.GetAsync(viewId, token) ?? throw AppException.NotFound("That view no longer exists. Refresh and try again."), ct);
-        return view.DeletedAtUtc is null ? SavedViewCommands.ParseDefinition(view.DefinitionJson) : throw AppException.NotFound("That view was deleted.");
+        return view.DeletedAtUtc is null ? (SavedViewCommands.ParseDefinition(view.DefinitionJson), view.SpaceId) : throw AppException.NotFound("That view was deleted.");
     }
 
     private static TaskQuerySpec BaseSpec(CalendarFilters filters, Chaos.Domain.Views.ViewDefinition? definition, TaskView view) => new()
     {
         View = view,
         Category = filters.Category,
+        FilterSpaceId = filters.SpaceId,
         TagId = filters.TagId,
         ContainerId = filters.ContainerId,
         Definition = definition,
@@ -268,7 +271,15 @@ public sealed class CalendarQueries(IApplicationStore store, TaskQueries queries
             return result;
         }
 
-        foreach (var active in await session.Recurrence.ListActiveBySpaceAsync(context.Space.Id, token))
+        var spaceIds = new List<string> { context.Space.Id };
+        foreach (var space in await session.Spaces.ListAsync(token))
+        {
+            if (space.Id != context.Space.Id && (await session.People.ListAsync(space.Id, token))
+                .Any(person => person.ActorId == $"person:{context.Profile.Id}" && !person.Former))
+                spaceIds.Add(space.Id);
+        }
+        foreach (var spaceId in spaceIds.Where(id => filters.SpaceId is null || id == filters.SpaceId))
+        foreach (var active in await session.Recurrence.ListActiveBySpaceAsync(spaceId, token))
         {
             var series = await session.Recurrence.GetSeriesAsync(active.SeriesId, token);
             var rule = series is null ? null : StoredJsonFormats.ReadSnapshot<RecurrenceRule>(series.RuleJson);

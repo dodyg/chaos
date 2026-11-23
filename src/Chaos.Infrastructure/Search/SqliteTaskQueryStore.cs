@@ -244,6 +244,16 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                 "c.DeletedAtUtc IS NULL",
             };
 
+            if (criteria.FilterSpaceId is { } filterSpaceId)
+            {
+                where.Add($"t.SpaceId = {builder.P(filterSpaceId)}");
+            }
+
+            if (criteria.SharedViewSpaceId is { } sharedViewSpaceId)
+            {
+                where.Add($"t.SpaceId = {builder.P(sharedViewSpaceId)}");
+            }
+
             var join = string.Empty;
             var kinds = "NULL";
             if (criteria.Text is not null)

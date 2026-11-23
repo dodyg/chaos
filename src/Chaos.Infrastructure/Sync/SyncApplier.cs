@@ -198,7 +198,7 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
                 var rows = await session.Tasks.ListAssigneesAsync(taskId, token);
                 var completed = TaskAssignment.EachCompletion(rows.Select(row => new AssignmentCompletion(row.CompletedAtUtc, row.DeletedAtUtc)));
                 if (completed is not { } at || (task.Status == TaskItemStatus.Done && task.CompletedAtUtc == at)) continue;
-                var updated = task with { Status = TaskItemStatus.Done, CompletedAtUtc = at, CancelledAtUtc = null,
+                var updated = task with { Status = TaskItemStatus.Done, CustomStateId = null, CompletedAtUtc = at, CancelledAtUtc = null,
                     UpdatedAtUtc = clock.GetUtcNow(), Version = task.Version + 1 };
                 if (await session.Tasks.UpdateAsync(updated, task.Version, token) is not null)
                     session.Activity.Note("task", taskId, ActivityOp.Upsert);

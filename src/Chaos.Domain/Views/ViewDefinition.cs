@@ -30,6 +30,7 @@ public static class ViewFieldCatalog
         new("container", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("section", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("status", ViewFieldType.StatusSet, ["in", "notIn"]),
+        new("customState", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("priority", ViewFieldType.Ordinal, ["is", "atLeast", "atMost"]),
         new("tag", ViewFieldType.TagSet, ["hasAnyOf", "hasAllOf", "hasNone"]),
         new("category", ViewFieldType.Category, ["is"]),

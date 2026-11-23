@@ -22,6 +22,7 @@ Object.defineProperties(globalThis, {
 const { render, screen, waitFor, cleanup, within } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { Calendar, toEvent, addDays, dayBadge, localDate } = await import("./Calendar");
+const { SpacesProvider } = await import("./Sharing");
 
 afterEach(() => cleanup());
 
@@ -270,4 +271,31 @@ test("turning off Planned and Due is sent as filters, and the grid keys move a h
   grid.focus();
   await user.keyboard("{ArrowRight}");
   await waitFor(() => assert.ok(document.querySelector(".chaos-cursor")));
+});
+
+test("selecting a space filters both calendar and unscheduled requests", async () => {
+  const { api, taskApi, calls } = fakes([]);
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <SpacesProvider spaces={[{ spaceId: "team", name: "Team", kind: "Shared", role: 2, memberCount: 2 }]}>
+      <Calendar
+        tags={[]}
+        containers={[]}
+        focus={null}
+        busy={false}
+        revision={0}
+        today={today}
+        onOpen={() => {}}
+        onChanged={() => {}}
+        api={api}
+        taskApi={taskApi}
+      />
+    </SpacesProvider>,
+    { container: dom.window.document.body },
+  );
+  await user.selectOptions(screen.getByLabelText("Space"), "team");
+  await waitFor(() => {
+    assert.ok(calls.some((call) => call.method === "range" && (call.request.filters as { spaceId?: string }).spaceId === "team"));
+    assert.ok(calls.some((call) => call.method === "unscheduled" && (call.request.filters as { spaceId?: string }).spaceId === "team"));
+  });
 });

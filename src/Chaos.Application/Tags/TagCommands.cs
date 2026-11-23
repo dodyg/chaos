@@ -17,6 +17,56 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
 {
     private const string Conflict = "This tag changed elsewhere while you were working. Refresh and try again.";
 
+    public Task<ShareListTagsResult> ShareListTagsAsync(ShareListTagsCommand command, CancellationToken ct = default) =>
+        InWriteAsync(async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId,
+                "tag.share-list", command, now, async inner =>
+                {
+                    var container = await session.Containers.GetAsync(command.ContainerId, inner)
+                        ?? throw AppException.NotFound("That list no longer exists.");
+                    var space = await session.Spaces.GetAsync(container.SpaceId, inner);
+                    if (space?.Kind != Chaos.Domain.Tasks.SpaceKind.Shared)
+                        throw AppException.Validation("containerId", "Move this list into a shared space first.");
+                    var tasks = await session.Tasks.ListByContainerAsync(container.Id, inner);
+                    var paths = TreeOrder(await session.Tags.ListByOwnerAsync(profile.Id, inner)).ToDictionary(row => row.Tag.Id, StringComparer.Ordinal);
+                    var links = new List<(bool Subtask, string Target, string Tag)>();
+                    foreach (var task in tasks)
+                    {
+                        links.AddRange((await session.Tags.ListTaskTagIdsAsync(task.Id, inner)).Where(paths.ContainsKey).Select(tag => (false, task.Id, tag)));
+                        foreach (var subtask in await session.Subtasks.ListByTaskAsync(task.Id, inner))
+                            links.AddRange((await session.Tags.ListSubtaskTagIdsAsync(subtask.Id, inner)).Where(paths.ContainsKey).Select(tag => (true, subtask.Id, tag)));
+                    }
+                    var copies = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (var id in links.Select(link => link.Tag).Distinct(StringComparer.Ordinal))
+                    {
+                        var segments = TagName.Path(paths[id].Path);
+                        var existing = await FindPathAsync(session, space.Id, null, segments, inner);
+                        if (existing is null)
+                        {
+                            await RequireSpaceTagWriteAsync(session, profile, space.Id, inner);
+                            (existing, _) = await EnsurePathAsync(session, ids, space.Id, null, segments, now, inner, true);
+                        }
+                        copies[id] = existing.Id;
+                    }
+                    foreach (var (subtask, target, tag) in links)
+                    {
+                        if (subtask)
+                        {
+                            await session.Tags.AddSubtaskLinkAsync(target, copies[tag], inner);
+                            await session.Tags.RemoveSubtaskLinkAsync(target, tag, now, inner);
+                        }
+                        else
+                        {
+                            await session.Tags.AddTaskLinkAsync(target, copies[tag], inner);
+                            await session.Tags.RemoveTaskLinkAsync(target, tag, now, inner);
+                        }
+                    }
+                    return new ShareListTagsResult(copies.Count, links.Count, false);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+
     public async Task<TagMutationResult> CreateAsync(CreateTagCommand command, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -28,20 +78,25 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
             var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(
                 session, profile.Id, command.OperationId, "tag.create", command, now, async inner =>
                 {
+                    var scope = command.SpaceId ?? profile.Id;
+                    if (command.SpaceId is { } spaceId)
+                        await RequireSpaceTagWriteAsync(session, profile, spaceId, inner);
                     TagRecord? parent = null;
                     if (command.ParentTagId is { } parentId)
                     {
                         parent = await RequireTagAsync(session, parentId, inner);
+                        if ((parent.SpaceId ?? parent.OwnerProfileId) != scope)
+                            throw AppException.Validation("parentTagId", "Choose a parent from the same tag list.");
                     }
 
-                    var existingLeaf = await FindPathAsync(session, profile.Id, parent?.Id, segments, inner);
+                    var existingLeaf = await FindPathAsync(session, scope, parent?.Id, segments, inner);
                     if (existingLeaf is not null)
                     {
                         throw AppException.Validation("path", $"A tag named \"{existingLeaf.DisplayName}\" already exists here. Pick it instead of creating another.");
                     }
 
                     await RequireDepthAsync(session, parent, segments.Count, inner);
-                    var (leaf, created) = await EnsurePathAsync(session, ids, profile.Id, parent?.Id, segments, now, inner);
+                    var (leaf, created) = await EnsurePathAsync(session, ids, scope, parent?.Id, segments, now, inner, command.SpaceId is not null);
                     if (color is not null && leaf.ColorKey != color)
                     {
                         leaf = await ApplyUpdateAsync(session, leaf with { ColorKey = color, Version = leaf.Version + 1, UpdatedAtUtc = now }, leaf.Version, inner);
@@ -62,7 +117,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
 
         return await MutateTagAsync(command.OperationId, "tag.rename", command, command.TagId, command.ExpectedVersion, async (session, profile, tag, now, inner) =>
         {
-            await RequireFreeSiblingNameAsync(session, profile.Id, tag.ParentTagId, segment.NormalizedName, tag.Id, inner);
+            await RequireFreeSiblingNameAsync(session, tag.SpaceId ?? profile.Id, tag.ParentTagId, segment.NormalizedName, tag.Id, inner);
             // Identity changes in place: links keep pointing at the same tag ID (PLAN §6).
             return tag.DisplayName == segment.DisplayName && tag.NormalizedName == segment.NormalizedName
                 ? tag
@@ -95,6 +150,8 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
             if (command.ParentTagId is { } parentId)
             {
                 parent = await RequireTagAsync(session, parentId, inner);
+                if ((parent.SpaceId ?? parent.OwnerProfileId) != (tag.SpaceId ?? tag.OwnerProfileId))
+                    throw AppException.Validation("parentTagId", "Choose a parent from the same tag list.");
                 var subtree = await ListSubtreeAsync(session, tag, inner);
                 if (subtree.Any(row => row.Id == parent.Id))
                 {
@@ -105,11 +162,11 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 await RequireDepthAsync(session, parent, height, inner);
             }
 
-            await RequireFreeSiblingNameAsync(session, profile.Id, parent?.Id, tag.NormalizedName, tag.Id, inner);
+            await RequireFreeSiblingNameAsync(session, tag.SpaceId ?? profile.Id, parent?.Id, tag.NormalizedName, tag.Id, inner);
             return tag with
             {
                 ParentTagId = parent?.Id,
-                Position = await session.Tags.GetNextPositionAsync(profile.Id, parent?.Id, inner),
+                Position = await session.Tags.GetNextPositionAsync(tag.SpaceId ?? profile.Id, parent?.Id, inner),
                 Version = tag.Version + 1,
                 UpdatedAtUtc = now,
             };
@@ -137,7 +194,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                     await RequireMergeableAsync(session, source, target, inner);
 
                     var counter = new MergeCounter();
-                    await MergeIntoAsync(session, source, target, counter, apply: true, profile.Id, now, inner);
+                    await MergeIntoAsync(session, source, target, counter, apply: true, source.SpaceId ?? profile.Id, now, inner);
                     var current = await session.Tags.GetAsync(target.Id, inner) ?? target;
                     return new TagMergeResult(current, counter.ToPreview(), Replayed: false);
                 }, token);
@@ -157,6 +214,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 session, profile.Id, command.OperationId, "tag.delete", command, now, async inner =>
                 {
                     var tag = await RequireTagAsync(session, command.TagId, inner);
+                    await RequireTagWriteAsync(session, profile, tag, inner);
                     RequireCurrentVersion(tag, command.ExpectedVersion);
 
                     var before = new List<TagRecord>();
@@ -211,6 +269,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 {
                     var tag = await session.Tags.GetIncludingDeletedAsync(command.TagId, inner)
                         ?? throw AppException.NotFound("That tag no longer exists.");
+                    await RequireTagWriteAsync(session, profile, tag, inner);
                     RequireCurrentVersion(tag, command.ExpectedVersion);
                     if (tag.DeletedAtUtc is null)
                     {
@@ -228,7 +287,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                         throw AppException.Validation("tagId", "Restore the parent tag first, then this one.");
                     }
 
-                    await RequireFreeSiblingNameAsync(session, profile.Id, tag.ParentTagId, tag.NormalizedName, tag.Id, inner);
+                    await RequireFreeSiblingNameAsync(session, tag.SpaceId ?? profile.Id, tag.ParentTagId, tag.NormalizedName, tag.Id, inner);
                     foreach (var deleted in recovery.TagsAfter)
                     {
                         var current = await session.Tags.GetIncludingDeletedAsync(deleted.Id, inner)
@@ -295,16 +354,30 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 session, profile.Id, command.OperationId, "tag.link", command, now, async inner =>
                 {
                     await RequireTargetAsync(session, command.TargetKind, command.TargetId, inner);
+                    var targetSpace = await TargetSpaceAsync(session, command.TargetKind, command.TargetId, inner);
                     TagRecord tag;
                     IReadOnlyList<TagRecord> created = [];
                     if (segments is null)
                     {
                         tag = await RequireTagAsync(session, command.TagId!, inner);
+                        if (tag.OwnerProfileId != profile.Id && tag.SpaceId != targetSpace)
+                            throw AppException.Validation("tagId", "Choose a tag from this space or your own tags.");
                     }
                     else
                     {
                         await RequireDepthAsync(session, null, segments.Count, inner);
-                        (tag, created) = await EnsurePathAsync(session, ids, profile.Id, null, segments, now, inner);
+                        var space = targetSpace is null ? null : await session.Spaces.GetAsync(targetSpace, inner);
+                        var shared = space?.Kind == Chaos.Domain.Tasks.SpaceKind.Shared;
+                        tag = (shared ? await FindPathAsync(session, targetSpace!, null, segments, inner) : null)
+                            ?? (await FindPathAsync(session, profile.Id, null, segments, inner))!;
+                        if (tag is null)
+                        {
+                            var members = shared ? await session.People.ListAsync(targetSpace!, inner) : [];
+                            var role = members.FirstOrDefault(person => !person.Former && person.ActorId == "person:" + profile.Id)?.Role;
+                            var createShared = shared && role is 1 or 2 && (!space!.TagsOwnerOnly || role == 1);
+                            (tag, created) = await EnsurePathAsync(session, ids, createShared ? targetSpace! : profile.Id,
+                                null, segments, now, inner, createShared);
+                        }
                     }
 
                     var changed = command.TargetKind switch
@@ -358,6 +431,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 session, profile.Id, operationId, kind, command, now, async inner =>
                 {
                     var tag = await RequireTagAsync(session, tagId, inner);
+                    await RequireTagWriteAsync(session, profile, tag, inner);
                     RequireCurrentVersion(tag, expectedVersion);
                     var updated = await change(session, profile, tag, now, inner);
                     var applied = ReferenceEquals(updated, tag) ? tag : await ApplyUpdateAsync(session, updated, tag.Version, inner);
@@ -445,6 +519,11 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
 
     private static async Task RequireMergeableAsync(IDataSession session, TagRecord source, TagRecord target, CancellationToken token)
     {
+        var profile = await RequireProfileAsync(session, token);
+        await RequireTagWriteAsync(session, profile, source, token);
+        await RequireTagWriteAsync(session, profile, target, token);
+        if (source.SpaceId != target.SpaceId || source.OwnerProfileId != target.OwnerProfileId)
+            throw AppException.Validation("targetTagId", "Choose a tag from the same tag list.");
         if (source.Id == target.Id)
         {
             throw AppException.Validation("targetTagId", "Choose a different tag to merge into.");
@@ -511,7 +590,7 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
         }
     }
 
-    private static async Task<TagRecord?> FindPathAsync(IDataSession session, string ownerId, string? parentId, IReadOnlyList<TagSegment> segments, CancellationToken token)
+    internal static async Task<TagRecord?> FindPathAsync(IDataSession session, string ownerId, string? parentId, IReadOnlyList<TagSegment> segments, CancellationToken token)
     {
         TagRecord? current = null;
         foreach (var segment in segments)
@@ -534,7 +613,8 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
         string? parentId,
         IReadOnlyList<TagSegment> segments,
         DateTimeOffset now,
-        CancellationToken token)
+        CancellationToken token,
+        bool spaceScoped = false)
     {
         var created = new List<TagRecord>();
         TagRecord? current = null;
@@ -547,7 +627,8 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 existing = new TagRecord
                 {
                     Id = ids.NewId().ToString(),
-                    OwnerProfileId = ownerId,
+                    OwnerProfileId = spaceScoped ? null : ownerId,
+                    SpaceId = spaceScoped ? ownerId : null,
                     DisplayName = segment.DisplayName,
                     NormalizedName = segment.NormalizedName,
                     ParentTagId = under,
@@ -564,6 +645,20 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
         }
 
         return (current!, created);
+    }
+
+    private static async Task RequireSpaceTagWriteAsync(IDataSession session, ProfileRecord profile, string spaceId, CancellationToken token)
+    {
+        var space = await session.Spaces.GetAsync(spaceId, token) ?? throw AppException.NotFound("That space is unavailable.");
+        var member = (await session.People.ListAsync(spaceId, token)).FirstOrDefault(person => !person.Former && person.ActorId == $"person:{profile.Id}");
+        if (member is null || member.Role is not (1 or 2) || (space.TagsOwnerOnly && member.Role != 1))
+            throw AppException.Validation("spaceId", "You cannot change this space's tag list.");
+    }
+
+    private static async Task RequireTagWriteAsync(IDataSession session, ProfileRecord profile, TagRecord tag, CancellationToken token)
+    {
+        if (tag.SpaceId is { } spaceId) await RequireSpaceTagWriteAsync(session, profile, spaceId, token);
+        else if (tag.OwnerProfileId != profile.Id) throw AppException.Validation("tagId", "That tag belongs to another person.");
     }
 
     private static async Task RequireFreeSiblingNameAsync(IDataSession session, string ownerId, string? parentId, string normalizedName, string selfId, CancellationToken token)
@@ -592,6 +687,14 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
                 _ => "That pad note no longer exists. Refresh and try again.",
             });
         }
+    }
+
+    private static async Task<string?> TargetSpaceAsync(IDataSession session, TagTargetKind kind, string targetId, CancellationToken token)
+    {
+        if (kind == TagTargetKind.Task) return (await session.Tasks.GetAsync(targetId, token))?.SpaceId;
+        if (kind == TagTargetKind.Pad) return (await session.Pad.GetAsync(targetId, token))?.SpaceId;
+        var subtask = await session.Subtasks.GetAsync(targetId, token);
+        return subtask is null ? null : (await session.Tasks.GetAsync(subtask.TaskId, token))?.SpaceId;
     }
 
     private static async Task<IReadOnlyList<string>> ListTargetTagIdsAsync(IDataSession session, TagTargetKind kind, string targetId, CancellationToken token) =>

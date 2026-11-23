@@ -5,6 +5,7 @@ import type { PageRequest } from "./Pages";
 import {
   gitHubRpc,
   peopleRpc,
+  spaceRpc,
   subtaskRpc,
   type taskRpc as TaskRpc,
   type containerRpc as ContainerRpc,
@@ -31,6 +32,7 @@ import {
   type TaskResponse,
   type PersonResponse,
   type TaskAssignmentsResponse,
+  type SpaceStateDto,
 } from "#neoastra";
 import {
   ArrowDown,
@@ -162,6 +164,29 @@ export function TaskEditor({
   const { taskRpc, containerRpc, tagApi, markdownApi, padApi, pageApi, journalApi, reminderApi, waitingApi, recurrenceApi } = api;
   // A viewer of a shared space only ever gets the read-only view (PLAN3 §9.1).
   const spaceAccess = useSpaceRole(editing.spaceId);
+  const [spaceStates, setSpaceStates] = React.useState<readonly SpaceStateDto[]>([]);
+  const [selectedState, setSelectedState] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    setSpaceStates([]);
+    setSelectedState(null);
+    void spaceRpc
+      .states({ spaceId: editing.spaceId })
+      .then((result) => {
+        if (active && result.ok) setSpaceStates(result.states);
+      })
+      .catch(() => undefined);
+    if (taskRpc.customState)
+      void taskRpc
+        .customState({ taskId: editing.id })
+        .then((result) => {
+          if (active && result.ok) setSelectedState(result.customStateId);
+        })
+        .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [editing.id, editing.spaceId, taskRpc]);
   const [mentionMembers, setMentionMembers] = React.useState<readonly { id: string; name: string }[]>([]);
   const [journalPeople, setJournalPeople] = React.useState<readonly PersonResponse[]>([]);
   React.useEffect(() => {
@@ -844,10 +869,27 @@ export function TaskEditor({
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Status">
                     <NativeSelect
-                      value={editing.status}
+                      value={selectedState ? `state:${selectedState}` : editing.status}
                       disabled={busy}
                       onChange={(e) => {
                         const status = e.target.value;
+                        if (status.startsWith("state:")) {
+                          const customStateId = status.slice(6);
+                          void run(
+                            () =>
+                              taskRpc.setCustomState({
+                                operationId: operationId(),
+                                taskId: editing.id,
+                                expectedVersion: editing.version,
+                                customStateId,
+                              }),
+                            (saved) => {
+                              setSelectedState(customStateId);
+                              setEditing((current) => (current ? { ...current, status: saved.status, version: saved.version } : null));
+                            },
+                          );
+                          return;
+                        }
                         const hasOpen = subtasks.some((s) => !isFinished(s.status));
                         const choice =
                           status === "Done" && hasOpen
@@ -865,6 +907,7 @@ export function TaskEditor({
                               subtaskChoice: choice,
                             }),
                           (saved) => {
+                            setSelectedState(null);
                             setEditing((current) => (current ? { ...current, status: saved.status, version: saved.version } : null));
                             void refreshSubtasks(saved.id)
                               .then(setSubtasks)
@@ -874,9 +917,16 @@ export function TaskEditor({
                       }}
                     >
                       {statuses.map((s) => (
-                        <NativeSelectOption key={s} value={s}>
-                          {label(s)}
-                        </NativeSelectOption>
+                        <React.Fragment key={s}>
+                          <NativeSelectOption value={s}>{label(s)}</NativeSelectOption>
+                          {spaceStates
+                            .filter((state) => state.baseStatus === s)
+                            .map((state) => (
+                              <NativeSelectOption key={state.id} value={`state:${state.id}`}>
+                                {state.name}
+                              </NativeSelectOption>
+                            ))}
+                        </React.Fragment>
                       ))}
                     </NativeSelect>
                   </Field>
@@ -969,6 +1019,8 @@ export function TaskEditor({
                 <TagPicker
                   targetKind="Task"
                   targetId={editing.id}
+                  spaceId={editing.spaceId}
+                  shared={spaceAccess.shared}
                   label="Tags"
                   tags={tags}
                   api={tagApi}
@@ -1239,6 +1291,8 @@ export function TaskEditor({
                     <TagPicker
                       targetKind="Subtask"
                       targetId={subtaskEdit.id}
+                      spaceId={editing.spaceId}
+                      shared={spaceAccess.shared}
                       label={`Tags on “${subtaskEdit.title}”`}
                       tags={tags}
                       api={tagApi}

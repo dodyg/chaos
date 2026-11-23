@@ -365,8 +365,18 @@ public sealed class BoardCommands(IApplicationStore store, IIdGenerator ids, Tim
         IDataSession session, IIdGenerator ids, TaskRecord task, MoveBoardCardCommand command,
         IReadOnlyList<SubtaskRecord> subtasks, DateTimeOffset now, CancellationToken token)
     {
+        if (command.ToColumn is { } column && column.StartsWith("state:", StringComparison.Ordinal))
+        {
+            var state = (await session.Spaces.ListStatesAsync(task.SpaceId, token))
+                .FirstOrDefault(row => row.Id == column[6..])
+                ?? throw AppException.Validation("toColumn", "Choose a state from this task's space.");
+            if (task.CustomStateId == state.Id && task.Status == state.BaseStatus) return ColumnChange.None(task);
+            var custom = await ApplyAsync(session, now, task with { Status = state.BaseStatus, CustomStateId = state.Id,
+                CompletedAtUtc = null, CancelledAtUtc = null }, token);
+            return new(custom, "task.updated", "Status");
+        }
         var status = ParseColumn<TaskItemStatus>(command.ToColumn, "toColumn", "Choose a status column.");
-        if (status == task.Status)
+        if (status == task.Status && task.CustomStateId is null)
         {
             return ColumnChange.None(task);
         }

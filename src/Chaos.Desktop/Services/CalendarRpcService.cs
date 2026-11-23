@@ -17,7 +17,8 @@ public sealed record CalendarFiltersDto(
     bool ShowPlanned = true,
     bool ShowDue = true,
     bool ShowMeetings = true,
-    bool ShowCompleted = false);
+    bool ShowCompleted = false,
+    string? SpaceId = null);
 
 /// <summary>From and To are inclusive yyyy-MM-dd local dates, at most 62 days apart.</summary>
 public sealed record CalendarRangeRequest(string From, string To, CalendarFiltersDto? Filters = null);
@@ -95,6 +96,7 @@ public sealed class CalendarRpcService(CalendarQueries queries)
         Category = string.IsNullOrEmpty(dto.Category) ? null
             : Enum.TryParse<CapacityCategory>(dto.Category, out var category) && Enum.IsDefined(category) ? category
             : throw AppException.Validation("category", "Choose Work or Personal."),
+        SpaceId = string.IsNullOrWhiteSpace(dto.SpaceId) ? null : dto.SpaceId,
         TagId = string.IsNullOrWhiteSpace(dto.TagId) ? null : dto.TagId,
         ContainerId = string.IsNullOrWhiteSpace(dto.ContainerId) ? null : dto.ContainerId,
         ViewId = string.IsNullOrWhiteSpace(dto.ViewId) ? null : dto.ViewId,

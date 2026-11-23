@@ -35,6 +35,7 @@ public sealed class ViewBoardQueries(IApplicationStore store, TaskQueries querie
             var page = await queries.RunAsync(new TaskQuerySpec
             {
                 View = TaskView.Custom,
+                SharedViewSpaceId = view.SpaceId,
                 Definition = definition,
                 Sort = new ViewSort(layout.SortField, layout.SortDescending),
                 Category = category,

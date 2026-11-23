@@ -128,7 +128,7 @@ public sealed partial class SyncApplier
             return RuleOutcome.Parked;
         }
 
-        var otherKey = FindConflictingKey(connection, schema, table, catalogRule.Index, columns, merge);
+        var otherKey = FindConflictingKey(connection, schema, table, catalogRule.Index, columns, merge, key);
         if (otherKey is null)
         {
             park.Park($"the colliding row of {table.Table} could not be found");
@@ -140,7 +140,7 @@ public sealed partial class SyncApplier
             connection, schema, table, change, key,
             LocalKey: string.Join("|", table.Key.Select(column => otherKey[column])),
             wall,
-            WriteNewRowAsync: (written, token) => WriteWinnersAsync(connection, schema, table, key, exists: false, written, wall, change, token),
+            WriteNewRowAsync: (written, token) => WriteWinnersAsync(connection, schema, table, key, RowExists(connection, table, key), written, wall, change, token),
             Attention: (category, kind, entityKey, message) => Attention(connection, category, kind, entityKey, message));
 
         merge = rule.ResolveLoser(conflict, merge);
@@ -190,8 +190,31 @@ public sealed partial class SyncApplier
         }
     }
     private static IReadOnlyDictionary<string, string>? FindConflictingKey(
-        SqliteConnection connection, SyncSchema schema, SyncTable table, string index, IReadOnlyList<string> columns, MergeResult merge)
+        SqliteConnection connection, SyncSchema schema, SyncTable table, string index, IReadOnlyList<string> columns, MergeResult merge,
+        IReadOnlyDictionary<string, string> key)
     {
+        if (table.Kind == "tag" && index == "UX_Tags_ActiveSiblingName")
+        {
+            var tag = new Dictionary<string, object?>(WinnerValues(merge), StringComparer.OrdinalIgnoreCase);
+            using (var existing = connection.CreateCommand())
+            {
+                existing.CommandText = "SELECT SpaceId, OwnerProfileId, ParentTagId, NormalizedName FROM Tags WHERE Id=$id;";
+                existing.Parameters.AddWithValue("$id", key["Id"]);
+                using var row = existing.ExecuteReader();
+                if (row.Read())
+                    for (var ordinal = 0; ordinal < row.FieldCount; ordinal++)
+                        if (!tag.ContainsKey(row.GetName(ordinal))) tag[row.GetName(ordinal)] = row.IsDBNull(ordinal) ? null : row.GetValue(ordinal);
+            }
+            var scope = tag.GetValueOrDefault("SpaceId") ?? tag.GetValueOrDefault("OwnerProfileId");
+            if (scope is null || tag.GetValueOrDefault("NormalizedName") is not string name)
+                return null;
+            using var lookup = connection.CreateCommand();
+            lookup.CommandText = "SELECT Id FROM Tags WHERE COALESCE(SpaceId, OwnerProfileId) = $scope AND COALESCE(ParentTagId, '') = $parent AND NormalizedName = $name AND DeletedAtUtc IS NULL LIMIT 1;";
+            lookup.Parameters.AddWithValue("$scope", scope);
+            lookup.Parameters.AddWithValue("$parent", tag.GetValueOrDefault("ParentTagId") ?? string.Empty);
+            lookup.Parameters.AddWithValue("$name", name);
+            return lookup.ExecuteScalar() is string id ? new Dictionary<string, string> { ["Id"] = id } : null;
+        }
         // An expression index column (the tag sibling index's COALESCE) reaches us as its
         // expression text; only real columns can be looked up, and they identify the row.
         columns = [.. columns.Where(column => schema.HasColumn(table.Table, column))];
@@ -201,7 +224,12 @@ public sealed partial class SyncApplier
         {
             if (!winnerValues.TryGetValue(column, out var value))
             {
-                return null; // the incoming change does not even carry the conflicting column
+                using var current = connection.CreateCommand();
+                current.CommandText = $"SELECT {SyncSql.Quote(column)} FROM {SyncSql.Quote(table.Table)} WHERE {Where(table, key)} LIMIT 1;";
+                BindKey(current, table, key);
+                var stored = current.ExecuteScalar();
+                if (stored is null or DBNull) return null;
+                value = stored;
             }
 
             values.Add(value);

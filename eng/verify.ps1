@@ -1,6 +1,6 @@
 # Full verification. -NoServer skips the PostgreSQL suite and must be reported.
 # Supply CHAOS_TEST_PG or use the configured wslc container runtime; Docker is not required.
-param([switch]$NoServer)
+param([switch]$NoServer, [int]$MaxParallelTests = 0)
 
 $ErrorActionPreference = "Stop"
 $env:DOTNET_NOLOGO = "1"
@@ -35,6 +35,8 @@ try {
         Invoke-VerifyStep "tests: $project" {
             if ($project -eq "Server") {
                 dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1 --maximum-parallel-tests 1
+            } elseif ($MaxParallelTests -gt 0) {
+                dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1 --maximum-parallel-tests $MaxParallelTests
             } else {
                 dotnet test "tests/Chaos.$project.Tests" -c Release --no-build --output Minimal -- --minimum-expected-tests 1
             }

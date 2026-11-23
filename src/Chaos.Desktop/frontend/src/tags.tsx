@@ -1,6 +1,6 @@
 import React from "react";
 import { tagRpc, type TagResponse } from "#neoastra";
-import { Hash, Plus, Trash2, X } from "lucide-react";
+import { Hash, LockKeyhole, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,10 +33,21 @@ export function TagDot({ color }: { color: string | null }) {
   );
 }
 
-export function TagChip({ tag, onRemove, disabled }: { tag: TagResponse; onRemove?: () => void; disabled?: boolean }) {
+export function TagChip({
+  tag,
+  onRemove,
+  disabled,
+  personal,
+}: {
+  tag: TagResponse;
+  onRemove?: () => void;
+  disabled?: boolean;
+  personal?: boolean;
+}) {
   return (
     <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-background py-0.5 pr-1 pl-2 text-xs">
       <TagDot color={tag.color} />
+      {personal && <LockKeyhole className="size-3" aria-label="Only you see this tag" />}
       <span className="truncate">{tag.path}</span>
       {onRemove && (
         <button
@@ -68,6 +79,8 @@ export function TagPicker({
   api = tagRpc,
   revision = 0,
   onChanged,
+  spaceId,
+  shared = false,
 }: {
   targetKind: "Task" | "Subtask" | "Pad";
   targetId: string;
@@ -76,13 +89,29 @@ export function TagPicker({
   api?: TagApi;
   revision?: number;
   onChanged: () => void;
+  spaceId?: string;
+  shared?: boolean;
 }) {
   const [ids, setIds] = React.useState<string[]>([]);
   const [text, setText] = React.useState("");
   const [suggestions, setSuggestions] = React.useState<TagResponse[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const [spaceTags, setSpaceTags] = React.useState<TagResponse[]>([]);
   const inputId = React.useId();
+  const refreshSpaceTags = React.useCallback(async () => {
+    if (!shared || !spaceId || !api.listSpace) {
+      setSpaceTags([]);
+      return [];
+    }
+    const result = await api.listSpace({ spaceId });
+    if (result.ok) setSpaceTags([...result.tags]);
+    return result.ok ? [...result.tags] : [];
+  }, [api, shared, spaceId]);
+  React.useEffect(() => {
+    void refreshSpaceTags().catch(() => undefined);
+  }, [refreshSpaceTags, revision]);
 
   React.useEffect(() => {
     let current = true;
@@ -131,6 +160,11 @@ export function TagPicker({
       setIds([...result.tagIds]);
       setText("");
       setSuggestions([]);
+      const freshSpaceTags = await refreshSpaceTags();
+      const added = result.tagIds.filter((id) => !ids.includes(id));
+      setNotice(
+        shared && added.some((id) => !freshSpaceTags.some((tag) => tag.id === id)) ? "Your tag was added; only you can see it." : null,
+      );
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The tag could not be saved.");
@@ -140,14 +174,21 @@ export function TagPicker({
   }
 
   const typed = text.trim().replace(/^#/, "");
-  const exact = suggestions.find((tag) => tag.path.toLocaleLowerCase() === typed.toLocaleLowerCase());
+  const matchingSpaceTags = spaceTags.filter((tag) => tag.path.toLocaleLowerCase().includes(typed.toLocaleLowerCase()));
+  const matches = [...matchingSpaceTags, ...suggestions];
+  const exact = matches.find((tag) => tag.path.toLocaleLowerCase() === typed.toLocaleLowerCase());
   const link = (tag?: TagResponse) =>
     void apply(() => api.link({ operationId: operationId(), targetKind, targetId, tagId: tag?.id ?? null, path: tag ? null : typed }));
-  const byId = new Map(tags.map((tag) => [tag.id, tag]));
+  const byId = new Map([...spaceTags, ...tags].map((tag) => [tag.id, tag]));
   const attached = ids.map((id) => byId.get(id)).filter((tag): tag is TagResponse => tag !== undefined);
 
   return (
     <div className="grid gap-2">
+      {notice && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {notice}
+        </p>
+      )}
       <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
         {label}
       </label>
@@ -157,6 +198,7 @@ export function TagPicker({
             <li key={tag.id} className="max-w-full">
               <TagChip
                 tag={tag}
+                personal={shared && !spaceTags.some((spaceTag) => spaceTag.id === tag.id)}
                 disabled={busy}
                 onRemove={() => void apply(() => api.unlink({ operationId: operationId(), targetKind, targetId, tagId: tag.id }))}
               />
@@ -180,7 +222,7 @@ export function TagPicker({
       />
       {typed && (
         <ul className="grid gap-0.5" aria-label="Tag suggestions">
-          {suggestions
+          {matches
             .filter((tag) => !ids.includes(tag.id))
             .map((tag) => (
               <li key={tag.id}>
@@ -192,6 +234,11 @@ export function TagPicker({
                 >
                   <TagDot color={tag.color} />
                   <span className="truncate">Add #{tag.path}</span>
+                  {shared && (
+                    <span className="text-xs text-muted-foreground">
+                      {spaceTags.some((row) => row.id === tag.id) ? "Space tag" : "Your tag (only you see this)"}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}

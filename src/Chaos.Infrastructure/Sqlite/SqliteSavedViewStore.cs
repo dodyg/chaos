@@ -10,7 +10,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
     public async Task<SavedViewRecord?> GetAsync(string id, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT * FROM SavedViews WHERE Id = $id;";
+        command.CommandText = ViewSelect + " WHERE v.Id = $id;";
         command.Parameters.AddWithValue("$id", id);
         using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? Read(reader) : null;
@@ -19,10 +19,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
     public async Task<IReadOnlyList<SavedViewRecord>> ListAsync(string spaceId, bool includeDeleted, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT * FROM SavedViews WHERE SpaceId = $space{(includeDeleted ? string.Empty : " AND DeletedAtUtc IS NULL")}
-            ORDER BY Position, Id;
-            """;
+        command.CommandText = ViewSelect + $" WHERE v.SpaceId = $space{(includeDeleted ? string.Empty : " AND v.DeletedAtUtc IS NULL")} ORDER BY v.Position, v.Id;";
         command.Parameters.AddWithValue("$space", spaceId);
         using var reader = await command.ExecuteReaderAsync(ct);
         var rows = new List<SavedViewRecord>();
@@ -39,7 +36,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO SavedViews (Id, SpaceId, Name, Icon, Color, Pinned, Position, DefinitionJson, LayoutJson, AlertsEnabled, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
-            VALUES ($id, $space, $name, $icon, $color, $pinned, $position, $definition, $layout, $alerts, $version, $created, $updated, $deleted);
+            VALUES ($id, $space, $name, $icon, $color, $pinned, $position, $definition, $layout, CASE WHEN (SELECT Kind FROM Spaces WHERE Id=$space)=1 THEN $alerts ELSE 0 END, $version, $created, $updated, $deleted);
             """;
         command.Parameters.AddWithValue("$id", view.Id);
         command.Parameters.AddWithValue("$space", view.SpaceId);
@@ -47,6 +44,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
         command.Parameters.AddWithValue("$version", view.Version);
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(view.CreatedAtUtc));
         await command.ExecuteNonQueryAsync(ct);
+        await SetAlertSettingAsync(view, ct);
     }
 
     public async Task<SavedViewRecord?> UpdateAsync(SavedViewRecord updated, long expectedVersion, CancellationToken ct)
@@ -54,7 +52,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE SavedViews SET Name = $name, Icon = $icon, Color = $color, Pinned = $pinned, Position = $position,
-                DefinitionJson = $definition, LayoutJson = $layout, AlertsEnabled = $alerts, Version = $version,
+                DefinitionJson = $definition, LayoutJson = $layout, AlertsEnabled = CASE WHEN (SELECT Kind FROM Spaces WHERE Id=SavedViews.SpaceId)=1 THEN $alerts ELSE 0 END, Version = $version,
                 UpdatedAtUtc = $updated, DeletedAtUtc = $deleted
             WHERE Id = $id AND Version = $expected;
             """;
@@ -67,7 +65,48 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
             return null;
         }
 
+        await SetAlertSettingAsync(updated, ct);
         return await GetAsync(updated.Id, ct);
+    }
+
+    private const string ViewSelect = """
+        SELECT v.*, COALESCE((SELECT a.Enabled FROM ViewAlertSettings a
+            WHERE a.ProfileId=(SELECT Id FROM Profiles WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc LIMIT 1)
+              AND a.ViewId=v.Id), CASE WHEN s.Kind=1 THEN v.AlertsEnabled ELSE 0 END) AS EffectiveAlertsEnabled
+        FROM SavedViews v JOIN Spaces s ON s.Id=v.SpaceId
+        """;
+
+    private async Task SetAlertSettingAsync(SavedViewRecord view, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO ViewAlertSettings (Id, ProfileId, ViewId, Enabled, CreatedAtUtc, UpdatedAtUtc)
+            SELECT 'viewalert:' || Id || ':' || $view, Id, $view, $enabled, $now, $now
+            FROM Profiles WHERE DeletedAtUtc IS NULL ORDER BY CreatedAtUtc LIMIT 1
+            ON CONFLICT(Id) DO UPDATE SET Enabled=excluded.Enabled, Version=Version+1, UpdatedAtUtc=excluded.UpdatedAtUtc
+            WHERE Enabled <> excluded.Enabled;
+            """;
+        command.Parameters.AddWithValue("$view", view.Id);
+        command.Parameters.AddWithValue("$enabled", view.AlertsEnabled ? 1 : 0);
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(view.UpdatedAtUtc));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> HasAlertBaselineAsync(string viewId, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM ViewAlertBaselineState WHERE ViewId=$id);";
+        command.Parameters.AddWithValue("$id", viewId);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(ct)) != 0;
+    }
+
+    public async Task SetAlertBaselineAsync(string viewId, bool initialized, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = initialized ? "INSERT OR IGNORE INTO ViewAlertBaselineState (ViewId) VALUES ($id);"
+            : "DELETE FROM ViewAlertBaselineState WHERE ViewId=$id;";
+        command.Parameters.AddWithValue("$id", viewId);
+        await command.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<IReadOnlyList<SavedViewMatchRecord>> ListMatchesAsync(string viewId, CancellationToken ct)
@@ -265,7 +304,7 @@ public sealed class SqliteSavedViewStore(SqliteConnection connection, Chaos.Appl
         Position = (int)r.L("Position"),
         DefinitionJson = r.S("DefinitionJson"),
         LayoutJson = r.S("LayoutJson"),
-        AlertsEnabled = r.B("AlertsEnabled"),
+        AlertsEnabled = r.B("EffectiveAlertsEnabled"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

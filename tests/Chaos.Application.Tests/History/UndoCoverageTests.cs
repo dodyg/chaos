@@ -15,7 +15,7 @@ public sealed class UndoCoverageTests
     private static readonly string[] Recorded =
     [
         "Containers", "Sections", "Tasks", "Subtasks", "Templates", "Tags", "Diary", "Pad", "Pages", "Recurrence",
-        "ReminderRules", "Waiting", "Attachments",
+        "ReminderRules", "Waiting", "Attachments", "Spaces",
     ];
 
     /// <summary>
@@ -24,7 +24,7 @@ public sealed class UndoCoverageTests
     /// </summary>
     private static readonly string[] PassThroughOnPurpose =
     [
-        "Profiles", "Spaces", "People", "Queries", "History", "Undo", "ChecklistConversions", "Notifications", "DayPlans", "Weeks",
+        "Profiles", "People", "Queries", "History", "Undo", "ChecklistConversions", "Notifications", "DayPlans", "Weeks",
         "Summaries", "Receipts", "Backups", "Imports", "GitHub", "Boards", "SavedViews", "Calendars", "Activity",
     ];
 
