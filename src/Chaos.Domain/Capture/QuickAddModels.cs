@@ -104,6 +104,8 @@ public sealed record QuickAddDraft
     public string? WaitingOn { get; init; }
     public DateOnly? FollowUpDate { get; init; }
     public TimeOnly? FollowUpTime { get; init; }
+    /// <summary>Q13: <c>+name follow up …</c> in a shared space delegates to that member instead of assigning.</summary>
+    public string? DelegateToId { get; init; }
     /// <summary>Set by ~work/~personal; null leaves the choice to the list default or focus.</summary>
     public CapacityCategory? Category { get; init; }
 }

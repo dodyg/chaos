@@ -38,11 +38,12 @@ public sealed class DelegationTransitionTests
         [.. from source in States from target in States select (source, target)];
 
     [Test]
-    public async Task IsLive_OnlyPendingAcceptedAndQuestion()
+    public async Task IsActive_IncludesDoneWhileIsAwaitingRecipientDoesNot()
     {
         foreach (var state in States)
         {
-            await Assert.That(DelegationTransitions.IsLive(state)).IsEqualTo(state is DelegationState.Pending or DelegationState.Accepted or DelegationState.Question);
+            await Assert.That(DelegationTransitions.IsActive(state)).IsEqualTo(state is not (DelegationState.Declined or DelegationState.Closed or DelegationState.Withdrawn));
+            await Assert.That(DelegationTransitions.IsAwaitingRecipient(state)).IsEqualTo(state is DelegationState.Pending or DelegationState.Accepted or DelegationState.Question);
         }
         await Assert.That(DelegationTransitions.IsDefined((DelegationState)7)).IsFalse();
         await Assert.That(DelegationTransitions.IsDefined((DelegationState)(-1))).IsFalse();

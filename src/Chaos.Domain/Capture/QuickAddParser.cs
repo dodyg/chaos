@@ -344,6 +344,7 @@ public static class QuickAddParser
         }
 
         var assignees = new List<string>();
+        string? delegateTo = null;
         foreach (var candidate in Of(CaptureTokenKind.Delegation))
         {
             var name = (string)candidate.Payload;
@@ -354,12 +355,19 @@ public static class QuickAddParser
                 summaries[candidate] = $"Waiting on {name}";
                 continue;
             }
-            if (Of(CaptureTokenKind.FollowUp).Any()) { Keep(candidate, "delegationLater", "Delegating with a follow-up is not available yet."); continue; }
+            if (assignees.Count > 0 || delegateTo is not null) { Keep(candidate, "conflict", $"There is already a person, so “{Text(candidate)}” stays in the title."); continue; }
             var key = FoldedText.FoldWord(name);
             var matches = context.People.Where(person => person.SpaceId == selectedSpace.Id
                 && FoldedText.FoldWord(person.DisplayName).StartsWith(key, StringComparison.Ordinal)).ToList();
             if (matches.Count != 1) { Keep(candidate, matches.Count == 0 ? "unknownPerson" : "ambiguousPerson", $"Choose a unique member for “{Text(candidate)}”."); continue; }
-            if (!assignees.Contains(matches[0].MemberId)) assignees.Add(matches[0].MemberId);
+            if (Of(CaptureTokenKind.FollowUp).Any())
+            {
+                // +name with a follow-up delegates (PLAN3 9.11): the delegator's follow-up travels with the delegation.
+                delegateTo = matches[0].MemberId;
+                summaries[candidate] = $"Delegated to {matches[0].DisplayName}";
+                continue;
+            }
+            assignees.Add(matches[0].MemberId);
             summaries[candidate] = $"Assigned to {matches[0].DisplayName}";
         }
 
@@ -367,11 +375,6 @@ public static class QuickAddParser
         TimeOnly? followUpTime = null;
         foreach (var candidate in Of(CaptureTokenKind.FollowUp))
         {
-            if (selectedSpace is { Personal: false } && Of(CaptureTokenKind.Delegation).Any())
-            {
-                Keep(candidate, "delegationLater", "Delegating with a follow-up is not available yet.");
-                continue;
-            }
             if (followUpDate is not null) { Keep(candidate, "conflict", $"There is already a follow-up, so “{Text(candidate)}” stays in the title."); continue; }
             var moment = (Moment)candidate.Payload;
             followUpTime = moment.Time;
@@ -403,6 +406,7 @@ public static class QuickAddParser
             AssigneeIds = assignees,
             ContainerCandidates = containerCandidates,
             WaitingOn = waitingOn,
+            DelegateToId = delegateTo,
             FollowUpDate = followUpDate,
             FollowUpTime = followUpTime,
             Category = category,

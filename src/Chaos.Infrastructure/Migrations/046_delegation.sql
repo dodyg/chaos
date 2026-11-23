@@ -18,7 +18,7 @@ CREATE TABLE TaskDelegations (
     DeletedAtUtc      TEXT NULL,
     CHECK (FromMemberId <> ToMemberId)
 );
-CREATE UNIQUE INDEX UX_TaskDelegations_ActiveTask ON TaskDelegations (TaskId) WHERE DeletedAtUtc IS NULL AND State IN (0,1,2);
+CREATE UNIQUE INDEX UX_TaskDelegations_ActiveTask ON TaskDelegations (TaskId) WHERE DeletedAtUtc IS NULL AND State IN (0,1,2,4);
 CREATE INDEX IX_TaskDelegations_From ON TaskDelegations (FromMemberId, State) WHERE DeletedAtUtc IS NULL;
 CREATE INDEX IX_TaskDelegations_To ON TaskDelegations (ToMemberId, State) WHERE DeletedAtUtc IS NULL;
 

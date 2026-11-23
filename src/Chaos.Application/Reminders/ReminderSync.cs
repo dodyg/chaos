@@ -53,10 +53,10 @@ public static class ReminderSync
         }
     }
 
-    /// <summary>Tombstones the active waiting details and resolves the active follow-up of one task.</summary>
+    /// <summary>Tombstones the active waiting details and resolves the active follow-up of one task. A delegator's follow-up of a live delegation (Q13) is not about waiting and stays.</summary>
     internal static async Task EndWaitingAsync(IDataSession session, string taskId, DateTimeOffset now, CancellationToken ct)
     {
-        if (await session.Waiting.FindActiveFollowUpAsync(taskId, ct) is { } followUp)
+        if (await session.Waiting.FindActiveFollowUpAsync(taskId, ct) is { DelegationId: null } followUp)
         {
             _ = await session.Waiting.UpdateFollowUpAsync(followUp with { ResolvedAtUtc = now, Version = followUp.Version + 1, UpdatedAtUtc = now }, followUp.Version, ct)
                 ?? throw AppException.VersionConflict("The follow-up changed elsewhere. Refresh and try again.");

@@ -43,13 +43,14 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
         command.CommandText = $"""
             {plan.With}
             SELECT t.*, c.Name AS ContainerName, c.ArchivedAtUtc AS ContainerArchivedAtUtc, x.GroupDate AS GroupDate, x.Kinds AS Kinds,
-                w.Person AS WaitingPerson, f.DueAtUtc AS FollowUpDueAtUtc,
+                w.Person AS WaitingPerson, f.DueAtUtc AS FollowUpDueAtUtc, {(plan.DelegationJoins.Length == 0 ? "NULL" : "dm.DisplayName")} AS DelegatedTo,
                 (SELECT MAX(h.EffectiveAtUtc) FROM TaskHistory h WHERE h.TaskId = t.Id) AS LastActivityAtUtc, {keyColumns}
             FROM Candidates x
             JOIN Tasks t ON t.Id = x.Id
             JOIN Containers c ON c.Id = t.ContainerId
             LEFT JOIN WaitingDetails w ON w.TaskId = t.Id AND w.DeletedAtUtc IS NULL
             LEFT JOIN FollowUps f ON f.TaskId = t.Id AND f.DeletedAtUtc IS NULL AND f.ResolvedAtUtc IS NULL
+            {plan.DelegationJoins}
             WHERE {seek}
             ORDER BY {order}, x.Id
             LIMIT $limit;
@@ -72,7 +73,8 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                     reader.Dn("GroupDate"),
                     reader.Sn("WaitingPerson"),
                     reader.In("FollowUpDueAtUtc"),
-                    reader.In("LastActivityAtUtc")), keys));
+                    reader.In("LastActivityAtUtc"),
+                    reader.Sn("DelegatedTo")), keys));
             }
         }
 
@@ -192,6 +194,8 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
 
         public required string With { get; init; }
         public required IReadOnlyList<SortKey> Keys { get; init; }
+        /// <summary>The joins the Delegated by me view orders by; empty for every other view.</summary>
+        public string DelegationJoins { get; init; } = string.Empty;
 
         public void Bind(SqliteCommand command)
         {
@@ -233,10 +237,13 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
         {
             var ctes = new List<string>();
             var builder = new PlanBuilder();
+            var delegationJoins = string.Empty;
             var where = new List<string>
             {
                 criteria.View == TaskView.AssignedToMe
                     ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM TaskAssignees a JOIN SpaceMembers m ON m.SpaceId = t.SpaceId AND m.MemberId = a.MemberId JOIN Spaces s ON s.Id=m.SpaceId WHERE a.TaskId = t.Id AND a.MemberId = {builder.P(criteria.ProfileId)} AND a.DeletedAtUtc IS NULL AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
+                    : criteria.View == TaskView.DelegatedByMe
+                    ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM SpaceMembers m JOIN Spaces s ON s.Id=m.SpaceId WHERE m.SpaceId=t.SpaceId AND m.MemberId={builder.P(criteria.ProfileId)} AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
                     : criteria.View is TaskView.Custom or TaskView.Search or TaskView.MyDay
                     ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM SpaceMembers m JOIN Spaces s ON s.Id=m.SpaceId WHERE m.SpaceId=t.SpaceId AND m.MemberId={builder.P(criteria.ProfileId)} AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
                     : $"t.SpaceId = {builder.P(criteria.SpaceId)}",
@@ -331,6 +338,13 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
 
             if (!criteria.IncludeArchived) where.Add("c.ArchivedAtUtc IS NULL");
             if (criteria.ContainerId is not null) where.Add($"t.ContainerId = {builder.P(criteria.ContainerId)}");
+            if (criteria.View == TaskView.DelegatedByMe)
+            {
+                var delegator = builder.P(criteria.ProfileId);
+                where.Add($"EXISTS (SELECT 1 FROM TaskDelegations d WHERE d.TaskId = t.Id AND d.DeletedAtUtc IS NULL AND d.State IN (0,1,2,4) AND d.FromMemberId = {delegator})");
+                delegationJoins = $"LEFT JOIN TaskDelegations dg ON dg.TaskId = t.Id AND dg.DeletedAtUtc IS NULL AND dg.State IN (0,1,2,4) AND dg.FromMemberId = {delegator}"
+                    + " LEFT JOIN SpaceMembers dm ON dm.SpaceId = t.SpaceId AND dm.MemberId = dg.ToMemberId";
+            }
 
             if (criteria.Statuses.Count > 0) where.Add($"t.Status IN ({string.Join(", ", criteria.Statuses.Select(status => builder.P((long)status)))})");
             else if (criteria.OpenOnly) where.Add("t.Status NOT IN (4,5)");
@@ -389,6 +403,7 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                 TaskView.Overdue => [new("COALESCE(t.DueDate, t.PlannedDate)", false), new("COALESCE(t.DueTime, t.PlannedTime, '24:00:00')", false)],
                 TaskView.RecentlyCompleted => [new("t.CompletedAtUtc", true)],
                 TaskView.Waiting => [new("(w.PersonNormalized IS NULL)", false), new("COALESCE(w.PersonNormalized, '')", false), new("COALESCE(f.DueAtUtc, '9999-12-31')", false)],
+        TaskView.DelegatedByMe => [new("COALESCE(dm.DisplayName, '')", false), new("COALESCE(t.DueDate, '9999-12-31')", false), new("t.Title", false)],
                 TaskView.Search when criteria.Text is not null => [new("h.Rank", false)],
                 TaskView.Search => [new("t.UpdatedAtUtc", true)],
                 _ => [new("c.Position", false), new("t.Position", false)],
@@ -402,11 +417,12 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                     JOIN Containers c ON c.Id = t.ContainerId
                     LEFT JOIN WaitingDetails w ON w.TaskId = t.Id AND w.DeletedAtUtc IS NULL
                     LEFT JOIN FollowUps f ON f.TaskId = t.Id AND f.DeletedAtUtc IS NULL AND f.ResolvedAtUtc IS NULL
+                    {delegationJoins}
                     {join}
                     WHERE {string.Join("\n      AND ", where)})
                 """);
 
-            var plan = new Plan { With = $"WITH RECURSIVE {string.Join(",\n", ctes)}", Keys = keys };
+            var plan = new Plan { With = $"WITH RECURSIVE {string.Join(",\n", ctes)}", Keys = keys, DelegationJoins = delegationJoins };
             plan._parameters.AddRange(builder.Parameters);
             return plan;
         }

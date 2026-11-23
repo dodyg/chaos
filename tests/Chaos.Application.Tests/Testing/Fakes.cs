@@ -112,11 +112,11 @@ public sealed class FakeDelegationStore(List<TaskDelegationRecord> delegations, 
     public Task<IReadOnlyList<TaskDelegationRecord>> ListByTaskAsync(string taskId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.TaskId == taskId && row.DeletedAtUtc is null).ToList());
     public Task<TaskDelegationRecord?> FindLiveForTaskAsync(string taskId, CancellationToken ct) =>
-        Task.FromResult(delegations.FirstOrDefault(row => row.TaskId == taskId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsLive(row.State)));
+        Task.FromResult(delegations.FirstOrDefault(row => row.TaskId == taskId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)));
     public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveFromAsync(string memberId, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.FromMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsLive(row.State)).ToList());
+        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.FromMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)).ToList());
     public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveToAsync(string memberId, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.ToMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsLive(row.State)).ToList());
+        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.ToMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)).ToList());
     public Task AddAsync(TaskDelegationRecord row, CancellationToken ct)
     {
         delegations.RemoveAll(existing => existing.Id == row.Id);

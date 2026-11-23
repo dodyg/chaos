@@ -599,7 +599,7 @@ public sealed class SyncService(
             if (delegation is null) return SyncRejection.ParentUnknown;
             var owner = delegation.GetValueOrDefault("create")?.Values.Values.GetValueOrDefault("FromMemberId")?.ToString();
             var state = delegation.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State");
-            if (!string.Equals(owner, from, StringComparison.OrdinalIgnoreCase) || state is not long current || !DelegationTransitions.IsLive((DelegationState)current))
+            if (!string.Equals(owner, from, StringComparison.OrdinalIgnoreCase) || state is not long current || !DelegationTransitions.IsAwaitingRecipient((DelegationState)current))
                 return SyncRejection.Forbidden;
 
             var since = clock.GetUtcNow() - DelegationTransitions.NudgeWindow;

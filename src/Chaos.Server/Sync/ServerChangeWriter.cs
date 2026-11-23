@@ -41,7 +41,7 @@ public sealed class ServerChangeWriter(ChaosDbContext db, TimeProvider clock, Sy
             var from = create.GetValueOrDefault("FromMemberId")?.ToString();
             var to = create.GetValueOrDefault("ToMemberId")?.ToString();
             var state = groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long current ? (DelegationState)current : DelegationState.Pending;
-            if (!DelegationTransitions.IsLive(state)) continue;
+            if (!DelegationTransitions.IsActive(state)) continue;
             var leftAsDelegator = string.Equals(from, memberId.ToString("D"), StringComparison.OrdinalIgnoreCase);
             var leftAsRecipient = string.Equals(to, memberId.ToString("D"), StringComparison.OrdinalIgnoreCase);
             if (!leftAsDelegator && !leftAsRecipient) continue;

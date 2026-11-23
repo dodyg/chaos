@@ -75,8 +75,8 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             var profile = await ReminderCommands.RequireProfileAsync(session, token);
             var delegations = await session.Delegations.ListByTaskAsync(taskId, token);
             return new TaskDelegationView(task,
-                await ItemsAsync(session, profile, people, delegations.Where(d => DelegationTransitions.IsLive(d.State)), token),
-                await ItemsAsync(session, profile, people, delegations.Where(d => !DelegationTransitions.IsLive(d.State)), token));
+                await ItemsAsync(session, profile, people, delegations.Where(d => DelegationTransitions.IsActive(d.State)), token),
+                await ItemsAsync(session, profile, people, delegations.Where(d => !DelegationTransitions.IsActive(d.State)), token));
         }, ct);
 
     /// <summary>The person's live delegations: the ones they handed out ("Delegated by me") or the ones waiting on them.</summary>
@@ -127,79 +127,93 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             {
                 var task = await RequireOpenSharedTaskAsync(session, normalized.TaskId, inner);
                 TaskCommands.RequireCurrentVersion(task, normalized.ExpectedVersion);
-                var people = await session.People.ListAsync(task.SpaceId, inner);
-                RequireEditor(people, profile.Id, "Only owners and editors can delegate work in this space.");
-                if (string.Equals(normalized.ToMemberId, profile.Id, StringComparison.OrdinalIgnoreCase))
-                    throw AppException.Validation("toMemberId", "Choose someone else. To keep the task, leave it assigned to you.");
-                var to = people.FirstOrDefault(p => p.ActorId == "person:" + normalized.ToMemberId && !p.Former && p.Role is 1 or 2)
-                    ?? throw AppException.Validation("toMemberId", "Choose a current owner or editor of this space.");
-                if (normalized.FollowUp is { Kind: FollowUpKind.BeforeDue } && task.DueDate is null)
-                    throw AppException.Validation("followUp", "This task has no due date. Add one first, or choose another kind of follow-up.");
-
-                var before = new TaskAggregateSnapshot(task, await session.Subtasks.ListByTaskAsync(task.Id, inner));
-                if (await session.Delegations.FindLiveForTaskAsync(task.Id, inner) is { } live)
-                {
-                    // Handing the work to someone else: the earlier delegation ends.
-                    _ = await session.Delegations.UpdateAsync(live with { State = DelegationState.Withdrawn, StateChangedAtUtc = now, Version = live.Version + 1, UpdatedAtUtc = now }, live.Version, inner)
-                        ?? throw AppException.VersionConflict("The delegation changed elsewhere. Refresh and try again.");
-                    await ResolveDelegationFollowUpAsync(session, live, now, inner);
-                }
-
-                await MakeSoleAssigneeAsync(session, task.Id, to, now, inner);
-                var updated = await TaskCommands.ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, inner);
-                var delegation = new TaskDelegationRecord
-                {
-                    Id = ids.NewId().ToString(),
-                    TaskId = task.Id,
-                    FromMemberId = profile.Id,
-                    ToMemberId = MemberId(to),
-                    Message = normalized.Message,
-                    DoneDefinition = normalized.DoneDefinition,
-                    DueDate = normalized.DueDate,
-                    ReviewRequired = normalized.ReviewRequired,
-                    State = DelegationState.Pending,
-                    StateChangedAtUtc = now,
-                    Version = 1,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now,
-                };
-                await session.Delegations.AddAsync(delegation, inner);
-
-                if (normalized.FollowUp is { } followUp)
-                {
-                    // One active follow-up per task: the delegator's earlier rule for it ends here.
-                    if (await session.Waiting.FindActiveFollowUpAsync(task.Id, inner) is { } current)
-                    {
-                        _ = await session.Waiting.UpdateFollowUpAsync(current with { ResolvedAtUtc = now, Version = current.Version + 1, UpdatedAtUtc = now }, current.Version, inner)
-                            ?? throw AppException.VersionConflict("The follow-up changed elsewhere. Refresh and try again.");
-                    }
-                    await session.Waiting.AddFollowUpAsync(new FollowUpRecord
-                    {
-                        Id = ids.NewId().ToString(),
-                        TaskId = task.Id,
-                        ProfileId = profile.Id,
-                        Kind = followUp.Kind,
-                        FixedAtUtc = followUp.FixedAtUtc,
-                        Amount = followUp.Amount,
-                        Unit = followUp.Unit,
-                        DelegationId = delegation.Id,
-                        Version = 1,
-                        CreatedAtUtc = now,
-                        UpdatedAtUtc = now,
-                    }, inner);
-                }
-
-                var head = $"Delegated to {to.DisplayName}" + (delegation.DueDate is { } due ? $" · due {due:yyyy-MM-dd}" : string.Empty) + (delegation.ReviewRequired ? " · review needed" : string.Empty);
-                var entry = head + (delegation.Message.Length > 0 ? "\n\n" + delegation.Message : string.Empty)
-                    + (delegation.DoneDefinition.Length > 0 ? "\n\nDone looks like: " + delegation.DoneDefinition : string.Empty);
-                await session.Diary.AddAsync(NewDiary(task.Id, profile.Id, entry, now), inner);
-
-                await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, normalized.OperationId, before,
-                    new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, inner)), "task.delegated", ["Assignees"], now, inner);
-                return new DelegationMutationResult(delegation, updated, Replayed: false);
+                var delegation = await DelegateInSessionAsync(session, ids, profile, task, normalized.ToMemberId, normalized.Message, normalized.DoneDefinition,
+                    normalized.DueDate, normalized.ReviewRequired, normalized.FollowUp, now, inner);
+                return new DelegationMutationResult(delegation, await session.Tasks.GetAsync(task.Id, inner) ?? task, Replayed: false);
             }, token);
             return replayed ? result with { Replayed = true } : result;
         }, ct);
+    }
+
+    /// <summary>
+    /// Delegates inside the caller's transaction (also used by quick add): the recipient becomes the task's only
+    /// assignee, the brief is recorded as a Pending delegation, the delegator's follow-up is set, and the diary and
+    /// history note it. An earlier live delegation of the task ends, since the work is handed on.
+    /// </summary>
+    internal static async Task<TaskDelegationRecord> DelegateInSessionAsync(
+        IDataSession session, IIdGenerator ids, ProfileRecord profile, TaskRecord task, string toMemberId, string message, string doneDefinition,
+        DateOnly? dueDate, bool reviewRequired, FollowUpSpec? followUp, DateTimeOffset now, CancellationToken inner)
+    {
+        var people = await session.People.ListAsync(task.SpaceId, inner);
+        RequireEditor(people, profile.Id, "Only owners and editors can delegate work in this space.");
+        if (string.Equals(toMemberId, profile.Id, StringComparison.OrdinalIgnoreCase))
+            throw AppException.Validation("toMemberId", "Choose someone else. To keep the task, leave it assigned to you.");
+        var to = people.FirstOrDefault(p => p.ActorId == "person:" + toMemberId && !p.Former && p.Role is 1 or 2)
+            ?? throw AppException.Validation("toMemberId", "Choose a current owner or editor of this space.");
+        if (followUp is { Kind: FollowUpKind.BeforeDue } && task.DueDate is null)
+            throw AppException.Validation("followUp", "This task has no due date. Add one first, or choose another kind of follow-up.");
+
+        var before = new TaskAggregateSnapshot(task, await session.Subtasks.ListByTaskAsync(task.Id, inner));
+        if (await session.Delegations.FindLiveForTaskAsync(task.Id, inner) is { } live)
+        {
+            // Handing the work to someone else: the earlier delegation ends.
+            _ = await session.Delegations.UpdateAsync(live with { State = DelegationState.Withdrawn, StateChangedAtUtc = now, Version = live.Version + 1, UpdatedAtUtc = now }, live.Version, inner)
+                ?? throw AppException.VersionConflict("The delegation changed elsewhere. Refresh and try again.");
+            await ResolveDelegationFollowUpAsync(session, live, now, inner);
+        }
+
+        await MakeSoleAssigneeAsync(session, task.Id, to, now, inner);
+        var updated = await TaskCommands.ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, inner);
+        var delegation = new TaskDelegationRecord
+        {
+            Id = ids.NewId().ToString(),
+            TaskId = task.Id,
+            FromMemberId = profile.Id,
+            ToMemberId = MemberId(to),
+            Message = message,
+            DoneDefinition = doneDefinition,
+            DueDate = dueDate,
+            ReviewRequired = reviewRequired,
+            State = DelegationState.Pending,
+            StateChangedAtUtc = now,
+            Version = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        await session.Delegations.AddAsync(delegation, inner);
+
+        if (followUp is { } rule)
+        {
+            // One active follow-up per task: the delegator's earlier rule for it ends here.
+            if (await session.Waiting.FindActiveFollowUpAsync(task.Id, inner) is { } current)
+            {
+                _ = await session.Waiting.UpdateFollowUpAsync(current with { ResolvedAtUtc = now, Version = current.Version + 1, UpdatedAtUtc = now }, current.Version, inner)
+                    ?? throw AppException.VersionConflict("The follow-up changed elsewhere. Refresh and try again.");
+            }
+            await session.Waiting.AddFollowUpAsync(new FollowUpRecord
+            {
+                Id = ids.NewId().ToString(),
+                TaskId = task.Id,
+                ProfileId = profile.Id,
+                Kind = rule.Kind,
+                FixedAtUtc = rule.FixedAtUtc,
+                Amount = rule.Amount,
+                Unit = rule.Unit,
+                DelegationId = delegation.Id,
+                Version = 1,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            }, inner);
+        }
+
+        var head = $"Delegated to {to.DisplayName}" + (delegation.DueDate is { } due ? $" · due {due:yyyy-MM-dd}" : string.Empty) + (delegation.ReviewRequired ? " · review needed" : string.Empty);
+        var entry = head + (delegation.Message.Length > 0 ? "\n\n" + delegation.Message : string.Empty)
+            + (delegation.DoneDefinition.Length > 0 ? "\n\nDone looks like: " + delegation.DoneDefinition : string.Empty);
+        await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, entry, now, ids.NewId().ToString()), inner);
+
+        await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, string.Empty, before,
+            new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, inner)), "task.delegated", ["Assignees"], now, inner);
+        return delegation;
     }
 
     /// <summary>The recipient's answer: accept, ask (the question goes to the diary) or decline with a reason (the task returns to the delegator).</summary>
@@ -244,7 +258,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
                 fields.Add("Assignees");
                 await ResolveDelegationFollowUpAsync(session, delegation, now, token);
             }
-            await session.Diary.AddAsync(NewDiary(task.Id, profile.Id, entry, now), token);
+            await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, entry, now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, normalized.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), $"task.delegation-{normalized.Response.ToString().ToLowerInvariant()}", fields, now, token);
             return new DelegationMutationResult(moved, updated, Replayed: false);
@@ -268,8 +282,8 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             var status = delegation.ReviewRequired ? TaskItemStatus.NeedsReview : TaskItemStatus.Done;
             var updated = await TaskCommands.ApplyStatusAsync(session, ids, task, status, normalized.OpenSubtaskChoice, now,
                 await session.Subtasks.ListByTaskAsync(task.Id, token), token, restorePreviousStatus: false);
-            await session.Diary.AddAsync(NewDiary(task.Id, profile.Id,
-                (delegation.ReviewRequired ? "Reported done, ready for review" : "Reported done") + (string.IsNullOrEmpty(normalized.Summary) ? "." : $": {normalized.Summary}"), now), token);
+            await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id,
+                (delegation.ReviewRequired ? "Reported done, ready for review" : "Reported done") + (string.IsNullOrEmpty(normalized.Summary) ? "." : $": {normalized.Summary}"), now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, normalized.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), "task.delegation-done", ["Status"], now, token);
             await ResolveDelegationFollowUpAsync(session, delegation, now, token);
@@ -294,7 +308,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
                 updated = await TaskCommands.ApplyStatusAsync(session, ids, task, TaskItemStatus.Done, OpenSubtaskChoice.KeepOpen, now,
                     await session.Subtasks.ListByTaskAsync(task.Id, token), token, restorePreviousStatus: false);
             }
-            await session.Diary.AddAsync(NewDiary(task.Id, profile.Id, "Accepted the result and closed the delegation.", now), token);
+            await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, "Accepted the result and closed the delegation.", now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, command.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), "task.delegation-closed", ["Status"], now, token);
             return new DelegationMutationResult(moved, updated, Replayed: false);
@@ -315,7 +329,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             var updated = task.IsTerminal
                 ? await TaskCommands.ApplyStatusAsync(session, ids, task, TaskItemStatus.InProgress, null, now, await session.Subtasks.ListByTaskAsync(task.Id, token), token)
                 : task;
-            await session.Diary.AddAsync(NewDiary(task.Id, profile.Id, "Sent the result back for more work.", now), token);
+            await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, "Sent the result back for more work.", now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, command.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), "task.delegation-reopened", ["Status"], now, token);
             return new DelegationMutationResult(moved, updated, Replayed: false);
@@ -336,7 +350,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             _ = await session.Delegations.UpdateAsync(moved, delegation.Version, token) ?? throw AppException.VersionConflict("The delegation changed elsewhere. Refresh and try again.");
             await MakeSoleAssigneeAsync(session, task.Id, me, now, token);
             var updated = await TaskCommands.ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token);
-            await session.Diary.AddAsync(NewDiary(task.Id, profile.Id, $"Took the task back from {Person(people, delegation.ToMemberId).DisplayName}.", now), token);
+            await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, $"Took the task back from {Person(people, delegation.ToMemberId).DisplayName}.", now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, command.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), "task.delegation-withdrawn", ["Assignees"], now, token);
             await ResolveDelegationFollowUpAsync(session, delegation, now, token);
@@ -360,7 +374,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             {
                 var (delegation, task, people, _) = await LoadAsync(recording, normalized.DelegationId, inner);
                 RequireParty(delegation, delegation.FromMemberId, profile.Id, "Only the person who delegated this can nudge.");
-                if (!DelegationTransitions.IsLive(delegation.State))
+                if (!DelegationTransitions.IsAwaitingRecipient(delegation.State))
                     throw AppException.Validation("delegationId", $"This delegation is {Describe(delegation.State)}; there is nothing to nudge about.");
                 var to = Person(people, delegation.ToMemberId);
                 var recent = (await recording.Delegations.ListNudgesAsync(delegation.Id, inner)).Count(n => n.SentAtUtc > now - DelegationTransitions.NudgeWindow);
@@ -380,7 +394,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
                     CreatedAtUtc = now,
                     UpdatedAtUtc = now,
                 }, inner);
-                await recording.Diary.AddAsync(NewDiary(task.Id, profile.Id, $"Nudged {to.DisplayName}." + (text == template ? string.Empty : $" {text}"), now), inner);
+                await recording.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, $"Nudged {to.DisplayName}." + (text == template ? string.Empty : $" {text}"), now, ids.NewId().ToString()), inner);
                 await TaskMutationSupport.WriteTaskHistoryAsync(recording, ids, normalized.OperationId, null,
                     new TaskAggregateSnapshot(task, await recording.Subtasks.ListByTaskAsync(task.Id, inner)), "task.nudged", ["Diary"], now, inner);
                 return new DelegationMutationResult(delegation, task, Replayed: false);
@@ -494,9 +508,9 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             ?? throw AppException.VersionConflict("The follow-up changed elsewhere. Refresh and try again.");
     }
 
-    private DiaryEntryRecord NewDiary(string taskId, string authorId, string markdown, DateTimeOffset now) => new()
+    private static DiaryEntryRecord DiaryEntry(string taskId, string authorId, string markdown, DateTimeOffset now, string id) => new()
     {
-        Id = ids.NewId().ToString(),
+        Id = id,
         TaskId = taskId,
         AuthorProfileId = authorId,
         EntryAtUtc = now,

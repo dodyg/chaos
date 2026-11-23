@@ -6,6 +6,7 @@ using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Summaries;
 using Chaos.Domain.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.Summaries;
 
@@ -109,6 +110,7 @@ internal sealed class SummaryFactsBuilder
             OverdueCount = (int)Math.Min(overdue, int.MaxValue),
             FollowUps = await FollowUpsDueAsync(period.EndUtc),
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Week = await WeekProgressAsync(date, period),
             Meetings = await MeetingsAsync(date),
         };
@@ -139,6 +141,7 @@ internal sealed class SummaryFactsBuilder
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Deadlines = deadlines,
             DiaryUpdates = diary,
             DiaryUpdateCount = diaryCount,
@@ -162,6 +165,7 @@ internal sealed class SummaryFactsBuilder
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Deadlines = deadlines,
             DiaryUpdates = diary,
             DiaryUpdateCount = diaryCount,
@@ -431,6 +435,30 @@ internal sealed class SummaryFactsBuilder
         }
 
         return new WeekProgressFact(week.WeekStartDate, week.ConfirmedRevision, assigned, done, cancelled, goals);
+    }
+
+    /// <summary>Live delegations (Q13): the ones this person handed out, then the ones waiting on them, with their follow-up when it is theirs.</summary>
+    private async Task<IReadOnlyList<DelegationFact>> DelegationsAsync()
+    {
+        var facts = new List<DelegationFact>();
+        var followUps = await _session.Waiting.ListActiveFollowUpsAsync(_context.Profile.Id, _token);
+        foreach (var side in new[] { DelegationSide.From, DelegationSide.To })
+        {
+            var rows = side == DelegationSide.From
+                ? await _session.Delegations.ListLiveFromAsync(_context.Profile.Id, _token)
+                : await _session.Delegations.ListLiveToAsync(_context.Profile.Id, _token);
+            foreach (var row in rows)
+            {
+                if (await LiveAsync(row.TaskId) is not { IsTerminal: false } task) continue;
+                var other = side == DelegationSide.From ? row.ToMemberId : row.FromMemberId;
+                var person = (await _session.People.ListAsync(task.SpaceId, _token))
+                    .FirstOrDefault(member => string.Equals(member.ActorId, "person:" + other, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? "Unknown person";
+                var followUp = followUps.FirstOrDefault(rule => string.Equals(rule.DelegationId, row.Id, StringComparison.OrdinalIgnoreCase));
+                facts.Add(new DelegationFact(await FactAsync(task), person, side, row.State, row.DueDate, followUp?.DueAtUtc));
+                if (facts.Count >= ListLimit) return facts;
+            }
+        }
+        return facts;
     }
 
     private async Task<IReadOnlyList<FollowUpFact>> FollowUpsDueAsync(DateTimeOffset before)

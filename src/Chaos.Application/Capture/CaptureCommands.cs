@@ -37,6 +37,8 @@ public sealed record CaptureTaskDraft
     public string? WaitingOn { get; init; }
     public DateOnly? FollowUpDate { get; init; }
     public TimeOnly? FollowUpTime { get; init; }
+    /// <summary>Q13: the member the task is delegated to (<c>+name follow up …</c> in a shared space); the follow-up becomes the delegator's.</summary>
+    public string? DelegateToId { get; init; }
     public IReadOnlyList<CaptureSubtask> Subtasks { get; init; } = [];
     /// <summary>Explicit Work/Personal choice; null takes the container's default category, else Personal.</summary>
     public CapacityCategory? Category { get; init; }
@@ -110,9 +112,11 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             var parse = QuickAddParser.Parse(line.Text, context with { ExcludedSpans = shifted });
             if (parse.Draft.WaitingOn is not null || parse.Draft.FollowUpDate is not null)
             {
-                parse = parse with { Warnings = [.. parse.Warnings, new CaptureWarning(parse.Draft.WaitingOn is null ? "followUpReminder" : "waitingPrivate",
+                parse = parse with { Warnings = [.. parse.Warnings, new CaptureWarning(parse.Draft.WaitingOn is null ? (parse.Draft.DelegateToId is null ? "followUpReminder" : "delegationFollowUp") : "waitingPrivate",
                     parse.Draft.WaitingOn is null
-                        ? "With no person named, the follow-up becomes a reminder at that time."
+                        ? (parse.Draft.DelegateToId is null
+                            ? "With no person named, the follow-up becomes a reminder at that time."
+                            : "The task is delegated; the follow-up stays yours, and nothing about it is sent.")
                         : "The task waits on this person privately; nothing is sent to them.")] };
             }
 
@@ -214,6 +218,12 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             throw AppException.Validation($"{path}.waitingOn", $"A waiting person's name can hold at most {MaxWaitingLength} characters.");
         }
 
+        var delegateTo = string.IsNullOrWhiteSpace(draft.DelegateToId) ? null : draft.DelegateToId.Trim();
+        if (delegateTo is not null && (draft.AssigneeIds.Count > 0 || waiting is not null))
+        {
+            throw AppException.Validation($"{path}.delegateToId", "Delegate to one person, or assign; not both, and not while waiting on someone.");
+        }
+
         if (draft.FollowUpTime is not null && draft.FollowUpDate is null)
         {
             throw AppException.Validation($"{path}.followUpDate", "A follow-up time needs a date.");
@@ -236,6 +246,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             TagIds = [.. draft.TagIds.Distinct(StringComparer.Ordinal)],
             TagPaths = [.. draft.TagPaths.Select(tag => tag.Trim()).Distinct(StringComparer.Ordinal)],
             WaitingOn = waiting,
+            DelegateToId = delegateTo,
             Subtasks = [.. draft.Subtasks.Select((subtask, index) => subtask with { Title = TaskFieldValidation.Title(subtask.Title, $"{path}.subtasks[{index}].title") })],
         };
     }
@@ -358,7 +369,7 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
             var zone = (draft.FollowUpTime is not null && draft.ZoneId is not null ? Queries.TaskQueries.FindZone(draft.ZoneId) : null)
                 ?? Reminders.ReminderSync.ProfileZone(profile);
             var at = Chaos.Domain.Reminders.ReminderTiming.ResolveLocal(zone, followUpDate, draft.FollowUpTime ?? profile.DefaultReminderTime);
-            if (draft.WaitingOn is null)
+            if (draft.WaitingOn is null && draft.DelegateToId is null)
             {
                 await session.ReminderRules.AddAsync(new ReminderRuleRecord
                 {
@@ -373,9 +384,9 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
                     UpdatedAtUtc = now,
                 }, ct);
             }
-            else
+            else if (draft.WaitingOn is { } person)
             {
-                await Reminders.WaitingCommands.SetInSessionAsync(session, ids, profile, task.Id, draft.WaitingOn,
+                await Reminders.WaitingCommands.SetInSessionAsync(session, ids, profile, task.Id, person,
                     new Reminders.FollowUpSpec(Chaos.Domain.Reminders.FollowUpKind.Fixed, at, null, null), now, ct);
             }
         }
@@ -387,6 +398,16 @@ public sealed class CaptureCommands(IApplicationStore store, IIdGenerator ids, T
         if (draft.Recurrence is { } rule)
         {
             await RecurrenceCommands.StartInSessionAsync(session, ids, task, rule, operationId, now, ct);
+            task = await session.Tasks.GetAsync(task.Id, ct) ?? throw AppException.NotFound("That task no longer exists.");
+        }
+
+        if (draft.DelegateToId is { } delegateTo)
+        {
+            var delegationFollowUp = draft.FollowUpDate is { } date
+                ? new Reminders.FollowUpSpec(Chaos.Domain.Reminders.FollowUpKind.Fixed,
+                    Chaos.Domain.Reminders.ReminderTiming.ResolveLocal(Reminders.ReminderSync.ProfileZone(profile), date, draft.FollowUpTime ?? profile.DefaultReminderTime), null, null)
+                : null;
+            await DelegationCommands.DelegateInSessionAsync(session, ids, profile, task, delegateTo, string.Empty, string.Empty, null, false, delegationFollowUp, now, ct);
             task = await session.Tasks.GetAsync(task.Id, ct) ?? throw AppException.NotFound("That task no longer exists.");
         }
 

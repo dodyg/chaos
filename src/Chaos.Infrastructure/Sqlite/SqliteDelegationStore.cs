@@ -14,17 +14,17 @@ public sealed class SqliteDelegationStore(SqliteConnection connection) : IDelega
     public Task<IReadOnlyList<TaskDelegationRecord>> ListByTaskAsync(string taskId, CancellationToken ct) =>
         ReadAsync("""
             SELECT * FROM TaskDelegations WHERE TaskId=$id AND DeletedAtUtc IS NULL
-            ORDER BY CASE WHEN State IN (0,1,2) THEN 0 ELSE 1 END, StateChangedAtUtc DESC, Id
+            ORDER BY CASE WHEN State IN (0,1,2,4) THEN 0 ELSE 1 END, StateChangedAtUtc DESC, Id
             """, taskId, ct);
 
     public Task<TaskDelegationRecord?> FindLiveForTaskAsync(string taskId, CancellationToken ct) =>
-        ReadOneAsync("SELECT * FROM TaskDelegations WHERE TaskId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2)", taskId, ct);
+        ReadOneAsync("SELECT * FROM TaskDelegations WHERE TaskId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2,4)", taskId, ct);
 
     public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveFromAsync(string memberId, CancellationToken ct) =>
-        ReadAsync("SELECT * FROM TaskDelegations WHERE FromMemberId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2) ORDER BY StateChangedAtUtc DESC, Id", memberId, ct);
+        ReadAsync("SELECT * FROM TaskDelegations WHERE FromMemberId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2,4) ORDER BY StateChangedAtUtc DESC, Id", memberId, ct);
 
     public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveToAsync(string memberId, CancellationToken ct) =>
-        ReadAsync("SELECT * FROM TaskDelegations WHERE ToMemberId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2) ORDER BY StateChangedAtUtc DESC, Id", memberId, ct);
+        ReadAsync("SELECT * FROM TaskDelegations WHERE ToMemberId=$id AND DeletedAtUtc IS NULL AND State IN (0,1,2,4) ORDER BY StateChangedAtUtc DESC, Id", memberId, ct);
 
     public async Task AddAsync(TaskDelegationRecord row, CancellationToken ct)
     {

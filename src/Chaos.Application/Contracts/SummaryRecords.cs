@@ -1,5 +1,7 @@
+using Chaos.Application.Tasks;
 using Chaos.Domain.Summaries;
 using Chaos.Domain.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.Contracts;
 
@@ -102,6 +104,8 @@ public sealed record MeetingFact(string Title, DateOnly Date, TimeOnly? Start, T
 
 public sealed record FollowUpFact(SummaryTaskFact Task, string? Person, DateTimeOffset DueAtUtc);
 
+public sealed record DelegationFact(SummaryTaskFact Task, string Person, DelegationSide Side, DelegationState State, DateOnly? DueDate, DateTimeOffset? FollowUpDueAtUtc);
+
 /// <summary>
 /// The structured facts of one summary (PLAN §12). Rendering is lists and counts in the UI
 /// resource language; there is no generated narrative. Lists not used by a kind are empty.
@@ -125,12 +129,14 @@ public sealed record SummaryFacts
     public IReadOnlyList<SummaryTaskFact> Selected { get; init; } = [];
     public int OverdueCount { get; init; }
     public IReadOnlyList<FollowUpFact> FollowUps { get; init; } = [];
+    /// <summary>Live delegations (Q13): the ones the person handed out and the ones waiting on them.</summary>
+    public IReadOnlyList<DelegationFact> Delegations { get; init; } = [];
     /// <summary>Morning: today's meetings; daily: tomorrow's. Empty unless "Include meetings in summaries" is on.</summary>
     public IReadOnlyList<MeetingFact> Meetings { get; init; } = [];
     /// <summary>True when every list above is empty: shown as a quiet period, not an error.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsQuiet =>
         Completions.Count == 0 && Projects.Count == 0 && Unfinished.Count == 0 && Waiting.Count == 0 && Deadlines.Count == 0
-        && DiaryUpdates.Count == 0 && Suggested.Count == 0 && Selected.Count == 0 && OverdueCount == 0 && FollowUps.Count == 0 && Meetings.Count == 0
+        && DiaryUpdates.Count == 0 && Suggested.Count == 0 && Selected.Count == 0 && OverdueCount == 0 && FollowUps.Count == 0 && Meetings.Count == 0 && Delegations.Count == 0
         && (Week is null || Week.AssignedCount == 0 && Week.Goals.Count == 0);
 }

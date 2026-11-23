@@ -65,6 +65,8 @@ public sealed class SyncCatalogFlushCoverageTests
 
         ["task"] = Work,
         ["task_assignee"] = "assignment",
+        ["task_delegation"] = "delegation",
+        ["nudge"] = "delegation",
         ["space_notification_setting"] = "assignment",
         ["subtask"] = Work,
         ["task_tag"] = Work,
@@ -180,30 +182,26 @@ public sealed class SyncCatalogFlushCoverageTests
         {
             case "assignment":
                 var profile = await host.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token));
-                var space = Guid.NewGuid().ToString("D");
-                var container = Guid.NewGuid().ToString("D");
-                await host.Store.ExecuteAsync(async (session, token) =>
-                {
-                    using var command = session.Connection().CreateCommand();
-                    command.CommandText = """
-                        INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',$now,$now);
-                        INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($memberRow,$space,$profile,1,'Me',1,$now);
-                        INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ($container,$space,1,'Team','team',0,$now,$now);
-                        """;
-                    command.Parameters.AddWithValue("$space", space);
-                    command.Parameters.AddWithValue("$profile", profile!.Id);
-                    command.Parameters.AddWithValue("$memberRow", Guid.NewGuid().ToString("D"));
-                    command.Parameters.AddWithValue("$container", container);
-                    command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
-                    await command.ExecuteNonQueryAsync(token);
-                    return 0;
-                });
+                var (space, container) = await SharedTeamAsync(host, profile!.Id, "Me");
                 var assignedTask = (await host.Tasks.CaptureAsync(new(Op(), container, "Assign", null))).Task;
                 await host.Tasks.ChangeAssigneeAsync(new(Op(), assignedTask.Id, assignedTask.Version, profile!.Id, true));
                 await new SpaceNotificationPreferences(host.Store, host.Clock).SetAsync(space, new SpaceNotificationPreference(Nothing: true));
                 expected["space_notification_setting"] = $"spacenotify:{profile.Id}:{space}";
                 expected["task_assignee"] = $"{assignedTask.Id}|{profile.Id}";
                 break;
+            case "delegation":
+            {
+                var me = await host.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token));
+                var omar = Guid.NewGuid().ToString("D");
+                var (_, list) = await SharedTeamAsync(host, me!.Id, omar);
+                var delegated = (await host.Tasks.CaptureAsync(new(Op(), list, "Send the quote", null))).Task;
+                var delegations = new DelegationCommands(host.Store, host.Ids, host.Clock);
+                var result = await delegations.DelegateAsync(new(Op(), delegated.Id, delegated.Version, omar, "Please", null, null, false,
+                    new FollowUpSpec(Chaos.Domain.Reminders.FollowUpKind.Fixed, host.Clock.Now.AddDays(1), null, null)));
+                await delegations.NudgeAsync(new(Op(), result.Delegation.Id, result.Delegation.Version, null));
+                expected["task_delegation"] = result.Delegation.Id;
+                break;
+            }
             case "reminder_ack":
                 var task = await SyncTestHelpers.CaptureTaskAsync(host);
                 var reminders = new ReminderCommands(host.Store, host.Ids, host.Clock, host.Tasks, new CoveragePresenter());
@@ -247,6 +245,33 @@ public sealed class SyncCatalogFlushCoverageTests
     }
 
     // ---- Scenarios --------------------------------------------------------------------------
+
+    /// <summary>A shared space the profile owns, with one more editor and a list; sync is on, so every write flushes.</summary>
+    private static async Task<(string Space, string Container)> SharedTeamAsync(DataHost host, string ownerId, string editorId)
+    {
+        var space = Guid.NewGuid().ToString("D");
+        var container = Guid.NewGuid().ToString("D");
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$owner,2,'Team',$now,$now);
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row,$space,$owner,1,'Me',1,$now);
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row2,$space,$editor,1,'Editor',2,$now);
+                INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ($container,$space,1,'Team','team',0,$now,$now);
+                """;
+            command.Parameters.AddWithValue("$space", space);
+            command.Parameters.AddWithValue("$owner", ownerId);
+            command.Parameters.AddWithValue("$editor", editorId);
+            command.Parameters.AddWithValue("$row", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$row2", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$container", container);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        });
+        return (space, container);
+    }
 
     /// <summary>Profile settings, a project with a section, nested tags, a template, and a
     /// subtask tag link: the structure a single person sets up once.</summary>

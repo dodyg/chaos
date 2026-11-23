@@ -11,12 +11,16 @@ using Chaos.Application.Spaces;
 using Chaos.Application.Tags;
 using Chaos.Application.Views;
 using Chaos.Application.Boards;
+using Chaos.Domain.Reminders;
 using Chaos.Domain.Tasks;
+using Chaos.Application.Reminders;
+using Chaos.Application.Tasks;
 using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Attachments;
 using Chaos.Server.Tests.Sync;
+using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
 
 namespace Chaos.Server.Tests.Sharing;
@@ -171,6 +175,68 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
             await Assert.That(task.Status).IsEqualTo(TaskItemStatus.Done);
             await Assert.That(task.CompletedAtUtc).IsEqualTo(c.Desktop.Clock.Now);
         }
+    }
+
+    [Test]
+    public async Task Delegation_OfflineAcceptAndNudgeConverge_ThenReviewAndClose()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var sara = await world.AddPersonAsync("delegation-sara@example.com", "Sara");
+        var omar = await world.AddPersonAsync("delegation-omar@example.com", "Omar");
+        var (_, _, taskId) = await ShareAsync(world, sara, omar);
+        var saraDelegations = new DelegationCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock);
+        var omarDelegations = new DelegationCommands(omar.Desktop.Store, omar.Desktop.Ids, omar.Desktop.Clock);
+        var task = (await sara.Desktop.Tasks.GetAsync(taskId))!;
+        var delegated = await saraDelegations.DelegateAsync(new(Op(), taskId, task.Version, omar.ProfileId.ToString("D"), "Please send the quote", "Quote attached", null, true,
+            new FollowUpSpec(FollowUpKind.Fixed, sara.Desktop.Clock.Now.AddHours(2), null, null)));
+        await world.SettleAsync();
+
+        // Omar's device learns of the delegation and derives its notice; Sara's follow-up lands in her My Day.
+        await new CollaborationNoticeDeriver(omar.Desktop.Store, omar.Desktop.Clock).DeriveAsync();
+        var inbox = new CollaborationInbox(omar.Desktop.Store, omar.Desktop.Clock);
+        await Assert.That((await inbox.ListAsync()).Select(notice => notice.Kind)).Contains("delegated");
+        await Assert.That((await omarDelegations.ListAsync(DelegationSide.To)).Select(item => item.Delegation.Id)).Contains(delegated.Delegation.Id);
+        await Assert.That((await omar.Desktop.Tasks.ListAssigneesAsync(taskId)).Select(row => row.MemberId)).Contains(omar.ProfileId.ToString("D"));
+        var due = await new WaitingCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock).DueAsync(null);
+        var allFollowUps = await sara.Desktop.Store.QueryAsync((session, token) => session.Waiting.ListActiveFollowUpsAsync(sara.ProfileId.ToString("D"), token));
+        await Assert.That(string.Join(";", allFollowUps.Select(rule => $"{rule.Kind}:{rule.DueAtUtc:o}:{rule.DelegationId}"))).IsEqualTo($"Fixed:{sara.Desktop.Clock.Now.AddHours(2):o}:{delegated.Delegation.Id}");
+        await Assert.That(due.Single().Delegation!.Id).IsEqualTo(delegated.Delegation.Id);
+        await Assert.That(due.Single().DelegatedTo).IsEqualTo("Omar");
+
+        // Offline: Omar accepts while Sara, not yet knowing, nudges him. Both moves converge; each diary keeps both.
+        var omarView = (await omarDelegations.GetForTaskAsync(taskId)).Live.Single().Delegation;
+        await omarDelegations.RespondAsync(new(Op(), omarView.Id, omarView.Version, DelegationResponse.Accept, null));
+        var saraView = (await saraDelegations.GetForTaskAsync(taskId)).Live.Single().Delegation;
+        await saraDelegations.NudgeAsync(new(Op(), saraView.Id, saraView.Version, null));
+        await world.SettleAsync();
+        foreach (var device in new[] { sara.Desktop, omar.Desktop })
+        {
+            var view = await new DelegationCommands(device.Store, device.Ids, device.Clock).GetForTaskAsync(taskId);
+            await Assert.That(view.Live.Single().Delegation.State).IsEqualTo(DelegationState.Accepted);
+            await Assert.That(view.Live.Single().Nudges.Single().Text).IsEqualTo("Hi Omar, any news on \"Write the plan\"?");
+            var diary = await device.Store.QueryAsync((session, token) => session.Diary.ListByTaskAsync(taskId, false, token));
+            await Assert.That(diary.Select(entry => entry.RawMarkdown)).Contains(entry => entry.StartsWith("Accepted the delegation"));
+            await Assert.That(diary.Select(entry => entry.RawMarkdown)).Contains(entry => entry.StartsWith("Nudged Omar"));
+        }
+        await new CollaborationNoticeDeriver(omar.Desktop.Store, omar.Desktop.Clock).DeriveAsync();
+        await new CollaborationNoticeDeriver(sara.Desktop.Store, sara.Desktop.Clock).DeriveAsync();
+        await Assert.That((await inbox.ListAsync()).Select(notice => notice.Kind)).Contains("nudge");
+        await Assert.That((await new CollaborationInbox(sara.Desktop.Store, sara.Desktop.Clock).ListAsync()).Select(notice => notice.Kind)).Contains("delegation-response");
+
+        // Review: Omar reports done, Sara is asked to review, and closing completes the task everywhere.
+        omarView = (await omarDelegations.GetForTaskAsync(taskId)).Live.Single().Delegation;
+        await omarDelegations.DoneAsync(new(Op(), omarView.Id, omarView.Version, "Quote sent", null));
+        await world.SettleAsync();
+        await new CollaborationNoticeDeriver(sara.Desktop.Store, sara.Desktop.Clock).DeriveAsync();
+        var saraInbox = new CollaborationInbox(sara.Desktop.Store, sara.Desktop.Clock);
+        await Assert.That((await saraInbox.ListAsync()).Select(notice => notice.Kind)).Contains("review-requested");
+        saraView = (await saraDelegations.GetForTaskAsync(taskId)).Live.Single().Delegation;
+        var closed = await saraDelegations.CloseAsync(new(Op(), saraView.Id, saraView.Version));
+        await Assert.That(closed.Task.Status).IsEqualTo(TaskItemStatus.Done);
+        await world.SettleAsync();
+        await Assert.That((await omar.Desktop.Tasks.GetAsync(taskId))!.Status).IsEqualTo(TaskItemStatus.Done);
+        await Assert.That((await omarDelegations.GetForTaskAsync(taskId)).Live).IsEmpty();
+        await Assert.That((await new WaitingCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock).DueAsync(null)).Select(item => item.Delegation?.Id)).DoesNotContain(delegated.Delegation.Id);
     }
 
     private static async Task<string> CreateListAsync(SyncDevice device, string spaceId, string name) =>

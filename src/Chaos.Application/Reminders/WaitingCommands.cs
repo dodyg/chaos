@@ -33,8 +33,9 @@ public sealed record WaitingView(
 
 public sealed record WaitingMutationResult(WaitingView View, bool Replayed);
 
-/// <summary>A follow-up shown in My Day: a separate item that refers to the original task.</summary>
-public sealed record FollowUpItem(TaskRecord Task, string ContainerName, string? Person, FollowUpRecord FollowUp, DateTimeOffset DueAtUtc, bool Overdue);
+/// <summary>A follow-up shown in My Day: a separate item that refers to the original task. With a delegation (Q13) it offers nudge, open and take back.</summary>
+public sealed record FollowUpItem(TaskRecord Task, string ContainerName, string? Person, FollowUpRecord FollowUp, DateTimeOffset DueAtUtc, bool Overdue,
+    TaskDelegationRecord? Delegation = null, string? DelegatedTo = null);
 
 /// <summary>
 /// Waiting on people outside the app and following up with them (PLAN §11). Only free text
@@ -284,7 +285,14 @@ public sealed class WaitingCommands(IApplicationStore store, IIdGenerator ids, T
                 }
 
                 var waiting = await session.Waiting.FindActiveAsync(task.Id, token);
-                items.Add(new FollowUpItem(task, container.Name, waiting?.Person, followUp, due, due <= now));
+                var delegation = followUp.DelegationId is { } delegationId ? await session.Delegations.GetAsync(delegationId, token) : null;
+                string? delegatedTo = null;
+                if (delegation is not null)
+                {
+                    delegatedTo = (await session.People.ListAsync(task.SpaceId, token))
+                        .FirstOrDefault(person => string.Equals(person.ActorId, "person:" + delegation.ToMemberId, StringComparison.OrdinalIgnoreCase))?.DisplayName;
+                }
+                items.Add(new FollowUpItem(task, container.Name, waiting?.Person, followUp, due, due <= now, delegation, delegatedTo));
             }
 
             return (IReadOnlyList<FollowUpItem>)[.. items.OrderBy(item => item.DueAtUtc).ThenBy(item => item.Task.Id, StringComparer.Ordinal)];

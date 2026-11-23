@@ -60,7 +60,13 @@ public sealed class QuickAddParserTests
     }
 
     [Test]
-    public async Task Parse_SharedDelegationAndFollowUp_KeepBothUntilDelegationExists()
+    [Arguments("Send quote @team +ana follow up Friday", "Send quote", "en")]
+    [Arguments("Envoyer le devis @team +ana suivi vendredi", "Envoyer le devis", "fr")]
+    [Arguments("Inviare il preventivo @team +ana sollecito venerdì", "Inviare il preventivo", "it")]
+    [Arguments("Enviar el presupuesto @team +ana seguimiento viernes", "Enviar el presupuesto", "es")]
+    [Arguments("Kirim penawaran @team +ana tindak lanjut Jumat", "Kirim penawaran", "id")]
+    [Arguments("أرسل العرض @team +ana متابعة الجمعة", "أرسل العرض", "ar")]
+    public async Task Parse_SharedPersonWithFollowUp_DelegatesInEveryLanguage(string text, string title, string language)
     {
         var context = Context() with
         {
@@ -68,11 +74,32 @@ public sealed class QuickAddParserTests
             Containers = [new("reading", "Reading", "team")],
             People = [new("team", "ana-id", "Ana")],
         };
-        var result = Parse("Send quote @team +ana follow up Friday", context);
-        await Assert.That(result.Draft.Title).IsEqualTo("Send quote +ana follow up Friday");
+        var result = Parse(text, context);
+        await Assert.That(result.Draft.Title).IsEqualTo(title);
+        await Assert.That(result.Draft.DelegateToId).IsEqualTo("ana-id");
         await Assert.That(result.Draft.AssigneeIds).IsEmpty();
-        await Assert.That(result.Draft.FollowUpDate).IsNull();
-        await Assert.That(result.Warnings.Select(warning => warning.Code)).Contains("delegationLater");
+        await Assert.That(result.Draft.FollowUpDate).IsEqualTo(new DateOnly(2026, 11, 13));
+        await Assert.That(result.Languages).Contains(language);
+        await Assert.That(result.Tokens.Where(token => token.Kind is CaptureTokenKind.Delegation or CaptureTokenKind.FollowUp).All(token => token.State == CaptureTokenState.Applied)).IsTrue();
+        await Assert.That(result.Warnings.Select(warning => warning.Code)).DoesNotContain("delegationLater");
+    }
+
+    [Test]
+    public async Task Parse_SharedDelegation_KeepsASecondPersonAndWithoutFollowUpAssigns()
+    {
+        var context = Context() with
+        {
+            Spaces = [new("personal", "Personal", true), new("team", "Team", false)],
+            Containers = [new("reading", "Reading", "team")],
+            People = [new("team", "ana-id", "Ana"), new("team", "bo-id", "Bo")],
+        };
+        var two = Parse("Send quote @team +ana +bo follow up Friday", context);
+        await Assert.That(two.Draft.Title).IsEqualTo("Send quote +bo");
+        await Assert.That(two.Draft.DelegateToId).IsEqualTo("ana-id");
+        await Assert.That(two.Warnings.Select(warning => warning.Code)).Contains("conflict");
+        var assigned = Parse("Send quote @team +ana", context);
+        await Assert.That(assigned.Draft.AssigneeIds).IsEquivalentTo(["ana-id"]);
+        await Assert.That(assigned.Draft.DelegateToId).IsNull();
     }
 
     [Test]
