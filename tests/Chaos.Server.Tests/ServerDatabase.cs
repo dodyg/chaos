@@ -16,9 +16,6 @@ internal static class ServerDatabase
     /// <summary>A fresh database with every migration applied.</summary>
     public static async Task<string> CreateMigratedAsync(PostgresServer postgres)
     {
-        var connectionString = await postgres.CreateDatabaseAsync();
-        await using var db = Open(connectionString);
-        await ServerSchemaGate.MigrateAsync(db, CancellationToken.None);
-        return connectionString;
+        return await postgres.CreateMigratedDatabaseAsync();
     }
 }

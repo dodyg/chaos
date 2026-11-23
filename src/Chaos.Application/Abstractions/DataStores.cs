@@ -27,6 +27,8 @@ public interface IDataSession
     IRecurrenceStore Recurrence { get; }
     IReminderRuleStore ReminderRules { get; }
     IWaitingStore Waiting { get; }
+    IDelegationStore Delegations { get; }
+    ISpaceUpdateStore SpaceUpdates { get; }
     INotificationJobStore Notifications { get; }
     IDayPlanStore DayPlans { get; }
     IWeekPlanStore Weeks { get; }
@@ -192,6 +194,45 @@ public interface IReminderRuleStore
     Task<IReadOnlyList<ReminderRuleRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
     Task AddAsync(ReminderRuleRecord row, CancellationToken ct);
     Task<ReminderRuleRecord?> UpdateAsync(ReminderRuleRecord row, long expectedVersion, CancellationToken ct);
+}
+
+/// <summary>
+/// Delegations of tasks to members, and the nudges sent about them (PLAN3 9.11), within the
+/// caller's transaction. Delegations are versioned rows (history and undo); nudges are records.
+/// </summary>
+public interface IDelegationStore
+{
+    /// <summary>The row even when tombstoned (history and undo need it).</summary>
+    Task<TaskDelegationRecord?> GetAsync(string id, CancellationToken ct);
+    /// <summary>Every delegation of the task, live first by state change time, then finished ones newest first.</summary>
+    Task<IReadOnlyList<TaskDelegationRecord>> ListByTaskAsync(string taskId, CancellationToken ct);
+    /// <summary>The task's Pending, Accepted or Question delegation, if any.</summary>
+    Task<TaskDelegationRecord?> FindLiveForTaskAsync(string taskId, CancellationToken ct);
+    /// <summary>Live delegations the member handed out, newest state change first.</summary>
+    Task<IReadOnlyList<TaskDelegationRecord>> ListLiveFromAsync(string memberId, CancellationToken ct);
+    /// <summary>Live delegations waiting on the member, newest state change first.</summary>
+    Task<IReadOnlyList<TaskDelegationRecord>> ListLiveToAsync(string memberId, CancellationToken ct);
+    Task AddAsync(TaskDelegationRecord row, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<TaskDelegationRecord?> UpdateAsync(TaskDelegationRecord row, long expectedVersion, CancellationToken ct);
+    /// <summary>Nudges of one delegation, oldest first.</summary>
+    Task<IReadOnlyList<NudgeRecord>> ListNudgesAsync(string delegationId, CancellationToken ct);
+    Task AddNudgeAsync(NudgeRecord row, CancellationToken ct);
+}
+
+/// <summary>
+/// Standups (PLAN3 9.12) within the caller's transaction: versioned rows of a shared space. A deleted
+/// row is a tombstone that stays until the space is purged.
+/// </summary>
+public interface ISpaceUpdateStore
+{
+    /// <summary>The row even when tombstoned.</summary>
+    Task<SpaceUpdateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct);
+    /// <summary>Live standups of the space, newest first (creation time, then id).</summary>
+    Task<IReadOnlyList<SpaceUpdateRecord>> ListAsync(string spaceId, CancellationToken ct);
+    Task AddAsync(SpaceUpdateRecord row, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<SpaceUpdateRecord?> UpdateAsync(SpaceUpdateRecord row, long expectedVersion, CancellationToken ct);
 }
 
 /// <summary>Versioned series and occurrence rows within the caller's transaction.</summary>

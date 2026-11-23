@@ -19,14 +19,23 @@ public sealed record SuggestionDto(SummaryTaskDto Task, string Reason);
 public sealed record GoalFactDto(string GoalId, string Title, string Outcome, int DoneCount, int CountedCount);
 public sealed record WeekProgressDto(string WeekStart, string Revision, int AssignedCount, int DoneCount, int CancelledCount, IReadOnlyList<GoalFactDto> Goals);
 public sealed record FollowUpFactDto(SummaryTaskDto Task, string? Person, string DueAtUtc);
+/// <summary>A live delegation in a summary (Q13): the other party, which side the person is on (From/To), the state name, and the delegator's follow-up when it is theirs.</summary>
+public sealed record DelegationFactDto(SummaryTaskDto Task, string Person, string Side, string State, string? DueDate, string? FollowUpDueAtUtc);
+/// <summary>Something another member did in one of the person's shared spaces (Q14): the task, who, when, and for blocked work why (Waiting or Declined).</summary>
+public sealed record SpaceActivityDto(SummaryTaskDto Task, string Actor, string AtUtc, string? BlockedBy);
+/// <summary>An open task of a shared space due within seven days after the period, with its assignees' names.</summary>
+public sealed record SpaceDeadlineDto(SummaryTaskDto Task, IReadOnlyList<string> Assignees);
+/// <summary>One shared space's news in a summary (Q14): what other members completed, added and blocked, coming deadlines and project progress.</summary>
+public sealed record SpaceSummaryDto(string SpaceId, string Name, IReadOnlyList<SpaceActivityDto> CompletedByOthers, IReadOnlyList<SpaceActivityDto> NewByOthers,
+    IReadOnlyList<SpaceActivityDto> NewlyBlocked, IReadOnlyList<SpaceDeadlineDto> Deadlines, IReadOnlyList<ProjectProgressDto> Projects);
 public sealed record SummaryFactsDto(
     IReadOnlyList<CompletionDto> Completions, IReadOnlyList<ProjectProgressDto> Projects, IReadOnlyList<UnfinishedDto> Unfinished,
     IReadOnlyList<WaitingFactDto> Waiting, IReadOnlyList<SummaryTaskDto> Deadlines, IReadOnlyList<DiaryFactDto> DiaryUpdates, int DiaryUpdateCount,
     IReadOnlyList<SuggestionDto> Suggested, WeekProgressDto? Week, IReadOnlyList<SummaryTaskDto> Selected, int OverdueCount, IReadOnlyList<FollowUpFactDto> FollowUps,
-    IReadOnlyList<MeetingFactDto>? Meetings = null);
+    IReadOnlyList<MeetingFactDto>? Meetings = null, IReadOnlyList<DelegationFactDto>? Delegations = null, IReadOnlyList<SpaceSummaryDto>? Spaces = null);
 /// <summary>A meeting in a summary: Date is yyyy-MM-dd, Start and End are HH:mm (null for all-day).</summary>
 public sealed record MeetingFactDto(string Title, string Date, string? Start, string? End, bool AllDay);
-public sealed record SummaryCountsDto(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, bool Quiet);
+public sealed record SummaryCountsDto(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, int SpaceActivity, bool Quiet);
 /// <param name="Partial">Generated before the period ended; <see cref="CapturedThroughUtc"/> says how far it reaches.</param>
 public sealed record SummaryHeaderDto(string Id, string Kind, string PeriodStart, string PeriodEnd, string Revision, string CapturedThroughUtc, bool Partial,
     string Trigger, string GeneratedAtUtc, string ZoneId, SummaryCountsDto Counts);
@@ -53,6 +62,9 @@ public sealed record SummarySettingsRequest();
 /// <summary>Times are HH:mm; null means that summary is not scheduled.</summary>
 public sealed record SummarySettingsResponse(bool Ok, string? MorningTime, string? EveningTime, string? WeeklyDay, string? FirstWeekday, string? Version, string? ZoneId, TaskErrorResponse? Error, bool IncludeMeetings = false);
 public sealed record SummarySettingsUpdateRequest(string OperationId, string ExpectedVersion, string? MorningTime, string? EveningTime, string? WeeklyDay, bool IncludeMeetings = false);
+/// <summary>The suggested standup for one shared space of a summary (Q14): Markdown the person reviews, edits and posts by hand. ForDate is yyyy-MM-dd.</summary>
+public sealed record SummaryStandupDraftRequest(string SummaryId, string SpaceId);
+public sealed record SummaryStandupDraftResponse(bool Ok, string? SpaceId, string? SpaceName, string? ForDate, string? Markdown, TaskErrorResponse? Error);
 
 /// <summary>Plain summaries, their history, carry-over and the summary schedule (PLAN §12, WP11).</summary>
 [NeoRpcService("summaries", Version = 1)]
@@ -104,6 +116,15 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
         },
             error => new(false, error));
 
+    /// <summary>Prefills a standup; it posts nothing (PLAN3 9.12). Posting is <c>spaceUpdates.post</c> with the text the person kept.</summary>
+    [NeoRpcMethod("standupDraft")]
+    public ValueTask<SummaryStandupDraftResponse> StandupDraftAsync(SummaryStandupDraftRequest request, CancellationToken ct) =>
+        Rpc.Run<SummaryStandupDraftResponse>("summaries.standupDraft", async () => {
+            var draft = await summaries.StandupDraftAsync(request.SummaryId, request.SpaceId, ct);
+            return new(true, draft.SpaceId, draft.SpaceName, StorageFormats.Date(draft.ForDate), draft.Markdown, null);
+        },
+            error => new(false, null, null, null, null, error));
+
     [NeoRpcMethod("previewCarryOver")]
     public ValueTask<CarryOverPreviewResponse> PreviewCarryOverAsync(CarryOverPreviewRequest request, CancellationToken ct) =>
         Rpc.Run<CarryOverPreviewResponse>("summaries.previewCarryOver", async () => {
@@ -153,7 +174,7 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
     internal static SummaryHeaderDto Header(SummaryRecord row, SummaryCounts counts) => new(
         row.Id, row.Kind.ToString(), StorageFormats.Date(row.PeriodStart), StorageFormats.Date(row.PeriodEnd), row.Revision.ToString(CultureInfo.InvariantCulture),
         StorageFormats.Instant(row.CapturedThroughUtc), row.IsPartial, row.Trigger.ToString(), StorageFormats.Instant(row.GeneratedAtUtc), row.ZoneId,
-        new SummaryCountsDto(counts.CompletionEvents, counts.StillDone, counts.Unfinished, counts.DiaryUpdates, counts.Deadlines, counts.Waiting, counts.Selected, counts.Quiet));
+        new SummaryCountsDto(counts.CompletionEvents, counts.StillDone, counts.Unfinished, counts.DiaryUpdates, counts.Deadlines, counts.Waiting, counts.Selected, counts.SpaceActivity, counts.Quiet));
 
     private static SummaryDetailDto Map(SummaryView view) => new(
         Header(view.Summary, view.Counts),
@@ -178,7 +199,16 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
         [.. facts.Selected.Select(Map)],
         facts.OverdueCount,
         [.. facts.FollowUps.Select(item => new FollowUpFactDto(Map(item.Task), item.Person, StorageFormats.Instant(item.DueAtUtc)))],
-        [.. facts.Meetings.Select(item => new MeetingFactDto(item.Title, StorageFormats.Date(item.Date), item.Start?.ToString("HH:mm", CultureInfo.InvariantCulture), item.End?.ToString("HH:mm", CultureInfo.InvariantCulture), item.AllDay))]);
+        [.. facts.Meetings.Select(item => new MeetingFactDto(item.Title, StorageFormats.Date(item.Date), item.Start?.ToString("HH:mm", CultureInfo.InvariantCulture), item.End?.ToString("HH:mm", CultureInfo.InvariantCulture), item.AllDay))],
+        [.. facts.Delegations.Select(item => new DelegationFactDto(Map(item.Task), item.Person, item.Side.ToString(), item.State.ToString(),
+            item.DueDate is { } due ? StorageFormats.Date(due) : null, Optional(item.FollowUpDueAtUtc)))],
+        [.. facts.Spaces.Select(space => new SpaceSummaryDto(space.SpaceId, space.Name,
+            [.. space.CompletedByOthers.Select(item => Activity(item))], [.. space.NewByOthers.Select(item => Activity(item))], [.. space.NewlyBlocked.Select(item => Activity(item))],
+            [.. space.Deadlines.Select(item => new SpaceDeadlineDto(Map(item.Task), item.Assignees))],
+            [.. space.Projects.Select(item => new ProjectProgressDto(item.ProjectId, item.Name, item.DoneBefore, item.CountedBefore, item.DoneAfter, item.CountedAfter))]))]);
+
+    private static SpaceActivityDto Activity(SpaceActivityFact item) =>
+        new(Map(item.Task), item.Actor, StorageFormats.Instant(item.AtUtc), item.BlockedBy?.ToString());
 
     internal static SummaryTaskDto Map(SummaryTaskFact task) => new(
         task.TaskId, task.Title, task.ContainerId, task.ContainerName, task.ContainerKind.ToString(), task.Status.ToString(), task.Priority.ToString(),

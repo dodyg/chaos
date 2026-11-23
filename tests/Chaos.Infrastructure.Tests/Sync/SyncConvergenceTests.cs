@@ -1171,6 +1171,69 @@ public sealed class SyncConvergenceTests
     }
 
     [Test]
+    public async Task ApplyAsync_RemoteDelegationAndNudgeChanges_NoteThePartiesForTheNoticeDeriver()
+    {
+        using var a = await StartAsync();
+        using var b = await StartAsync();
+        var task = await CaptureTaskAsync(a, "Delegated");
+        await ExchangeAsync(a, b);
+        var profile = (await b.Store.QueryAsync((s, ct) => s.Profiles.GetPrimaryAsync(ct)))!;
+        var omar = Guid.NewGuid();
+        var delegation = Guid.NewGuid().ToString("D");
+        var nudge = Guid.NewGuid().ToString("D");
+        await b.Store.ExecuteAsync((s, _) =>
+        {
+            using var command = s.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO TaskDelegations (Id,TaskId,FromMemberId,ToMemberId,Message,State,StateChangedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ($delegation,$task,$omar,$profile,'',0,$now,1,$now,$now);
+                """;
+            command.Parameters.AddWithValue("$delegation", delegation);
+            command.Parameters.AddWithValue("$task", task.Id);
+            command.Parameters.AddWithValue("$omar", omar.ToString("D"));
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(b.Clock.Now));
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        var device = Guid.NewGuid();
+        string Change(string kind, string key, string group, Dictionary<string, object?> values, int offset)
+        {
+            using var bytes = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(bytes))
+                SyncJson.WriteChange(writer, Guid.NewGuid().ToString("D"), kind, key, SyncOp.Upsert,
+                    new Dictionary<string, SyncGroupState> { [group] = new(Hlc.Create(b.Clock.Now.ToUnixTimeMilliseconds() + offset, 0, device), new SyncGroupValues(values)) }, actorId: omar);
+            return Encoding.UTF8.GetString(bytes.ToArray());
+        }
+        var changes = new[]
+        {
+            Change("task_delegation", delegation, "state", new Dictionary<string, object?> { ["State"] = 1L, ["StateChangedAtUtc"] = StorageFormats.Instant(b.Clock.Now) }, 1000),
+            Change("nudge", nudge, "record", new Dictionary<string, object?>
+            {
+                ["TaskId"] = task.Id, ["DelegationId"] = delegation, ["FromMemberId"] = omar.ToString("D"), ["ToMemberId"] = profile.Id,
+                ["Text"] = "Any news?", ["SentAtUtc"] = StorageFormats.Instant(b.Clock.Now), ["CreatedAtUtc"] = StorageFormats.Instant(b.Clock.Now),
+            }, 2000),
+        };
+        var applier = new SyncApplier(b.Store, b.Clock, b.Ids);
+        await applier.ApplyAsync(changes);
+        var json = await TextAsync(b, "SELECT DetailJson FROM ActivityLog WHERE Source='sync' AND DetailJson IS NOT NULL ORDER BY Seq DESC LIMIT 1;");
+        using var details = JsonDocument.Parse(json!);
+        var events = details.RootElement.EnumerateArray().ToArray();
+        await Assert.That(events.Length).IsEqualTo(2);
+        await Assert.That(events[0].GetProperty("Kind").GetString()).IsEqualTo("task_delegation");
+        await Assert.That(events[0].GetProperty("Before").GetString()).IsEqualTo("Pending");
+        await Assert.That(events[0].GetProperty("After").GetString()).IsEqualTo("Accepted");
+        await Assert.That(events[0].GetProperty("FromMemberId").GetString()).IsEqualTo(omar.ToString("D"));
+        await Assert.That(events[0].GetProperty("ToMemberId").GetString()).IsEqualTo(profile.Id);
+        await Assert.That(events[0].GetProperty("TaskId").GetString()).IsEqualTo(task.Id);
+        await Assert.That(events[1].GetProperty("Kind").GetString()).IsEqualTo("nudge");
+        await Assert.That(events[1].GetProperty("Before").ValueKind).IsEqualTo(JsonValueKind.Null);
+        // The same state again is no move: nothing more is noted.
+        await applier.ApplyAsync([Change("task_delegation", delegation, "state", new Dictionary<string, object?> { ["State"] = 1L, ["StateChangedAtUtc"] = StorageFormats.Instant(b.Clock.Now) }, 3000)]);
+        await Assert.That(await CountAsync(b, "SELECT count(*) FROM ActivityLog WHERE Source='sync' AND DetailJson IS NOT NULL;")).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task A_stale_undo_is_refused_after_a_remote_change()
     {
         using var a = await StartAsync();

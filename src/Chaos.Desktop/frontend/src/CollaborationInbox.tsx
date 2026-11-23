@@ -61,7 +61,15 @@ export function CollaborationInbox({ onOpen, alerts = false, api = collaboration
                   ? "mentioned you"
                   : notice.kind === "assigned"
                     ? "assigned you a task"
-                    : notice.kind.replaceAll("-", " ")}
+                    : notice.kind === "delegated"
+                      ? "delegated a task to you"
+                      : notice.kind === "delegation-response"
+                        ? "answered about a task you delegated"
+                        : notice.kind === "review-requested"
+                          ? "reported a delegated task done for your review"
+                          : notice.kind === "nudge"
+                            ? "nudged you about a task"
+                            : notice.kind.replaceAll("-", " ")}
               </>
             )}
             .

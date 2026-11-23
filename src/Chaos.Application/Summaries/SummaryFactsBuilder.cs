@@ -1,11 +1,14 @@
+using System.Text;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.People;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Summaries;
 using Chaos.Domain.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.Summaries;
 
@@ -43,7 +46,7 @@ internal sealed class SummaryFactsBuilder
     private readonly Dictionary<string, TaskRecord?> _current = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ContainerRecord?> _containers = new(StringComparer.Ordinal);
 
-    private SummaryFactsBuilder(IDataSession session, TaskQueries.QueryContext context, IReadOnlyList<TaskHistoryRecord> history, CancellationToken token)
+    internal SummaryFactsBuilder(IDataSession session, TaskQueries.QueryContext context, IReadOnlyList<TaskHistoryRecord> history, CancellationToken token)
     {
         _session = session;
         _context = context;
@@ -109,6 +112,7 @@ internal sealed class SummaryFactsBuilder
             OverdueCount = (int)Math.Min(overdue, int.MaxValue),
             FollowUps = await FollowUpsDueAsync(period.EndUtc),
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Week = await WeekProgressAsync(date, period),
             Meetings = await MeetingsAsync(date),
         };
@@ -139,12 +143,14 @@ internal sealed class SummaryFactsBuilder
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Deadlines = deadlines,
             DiaryUpdates = diary,
             DiaryUpdateCount = diaryCount,
             Suggested = await SuggestAsync(unfinished, deadlines, next, next),
             Week = await WeekProgressAsync(date, period),
             Meetings = await MeetingsAsync(next),
+            Spaces = await SpacesAsync(period),
         };
     }
 
@@ -162,11 +168,13 @@ internal sealed class SummaryFactsBuilder
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
+            Delegations = await DelegationsAsync(),
             Deadlines = deadlines,
             DiaryUpdates = diary,
             DiaryUpdateCount = diaryCount,
             Suggested = await SuggestAsync(unfinished, deadlines, nextStart, nextEnd),
             Week = await WeekProgressAsync(period.Start, period),
+            Spaces = await SpacesAsync(period),
         };
     }
 
@@ -201,14 +209,21 @@ internal sealed class SummaryFactsBuilder
     }
 
     /// <summary>Projects whose progress changed in the period: Done over noncancelled top-level tasks at both ends.</summary>
-    private async Task<IReadOnlyList<ProjectProgressFact>> ProjectsAsync(SummaryPeriod period)
+    private async Task<IReadOnlyList<ProjectProgressFact>> ProjectsAsync(SummaryPeriod period) => await ProjectsAsync(period, null);
+
+    /// <summary>
+    /// Projects whose progress changed in the period: Done over noncancelled top-level tasks at both ends.
+    /// With <paramref name="spaceId"/> only projects of that space count (the spaces section, Q14).
+    /// </summary>
+    private async Task<IReadOnlyList<ProjectProgressFact>> ProjectsAsync(SummaryPeriod period, string? spaceId)
     {
         var touched = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var row in _history.Where(row => row.EffectiveAtUtc < period.Cut))
         {
             foreach (var task in new[] { Read(row.SnapshotBefore)?.Task, Read(row.SnapshotAfter)?.Task })
             {
-                if (task is not null && await ContainerAsync(task.ContainerId) is { Kind: ContainerKind.Project } project)
+                if (task is not null && (spaceId is null || task.SpaceId == spaceId)
+                    && await ContainerAsync(task.ContainerId) is { Kind: ContainerKind.Project } project)
                 {
                     if (!touched.TryGetValue(project.Id, out var ids))
                     {
@@ -248,6 +263,170 @@ internal sealed class SummaryFactsBuilder
         }
 
         return Bounded(projects);
+    }
+
+    /// <summary>
+    /// What happened in each shared space the person belongs to (PLAN3 9.12): completions, new tasks and newly
+    /// blocked work by other members, the open deadlines of the seven days after the period, and how each project
+    /// moved. Only what this device holds; the person's own plans and meetings are never here. A space with
+    /// nothing to say is left out.
+    /// </summary>
+    private async Task<IReadOnlyList<SpaceSummaryFact>> SpacesAsync(SummaryPeriod period)
+    {
+        var me = _context.Profile.Id;
+        var facts = new List<SpaceSummaryFact>();
+        foreach (var space in (await _session.Spaces.ListAsync(_token)).Where(space => space.Kind == SpaceKind.Shared && space.DeletedAtUtc is null))
+        {
+            var people = await _session.People.ListAsync(space.Id, _token);
+            if (!people.Any(member => !member.Former && string.Equals(member.ActorId, $"person:{me}", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            // The space's own history drives a builder of its own, so progress is measured against that space alone.
+            var part = new SummaryFactsBuilder(_session, _context, await _session.Summaries.ListHistorySinceAsync(space.Id, period.StartUtc, _token), _token);
+            var completed = await part.ActivityAsync(period, space.Id, "task.completed", null, people);
+            var added = await part.ActivityAsync(period, space.Id, "task.created", null, people);
+            var blocked = (await part.ActivityAsync(period, space.Id, "task.status-changed", SpaceBlockReason.Waiting, people))
+                .Concat(await part.ActivityAsync(period, space.Id, "task.delegation-decline", SpaceBlockReason.Declined, people))
+                .OrderBy(item => item.AtUtc).ThenBy(item => item.Task.TaskId, StringComparer.Ordinal).ToList();
+            var deadlines = await part.SpaceDeadlinesAsync(space.Id, period.End.AddDays(1), period.End.AddDays(7), people);
+            var projects = await part.ProjectsAsync(period, space.Id);
+            if (completed.Count + added.Count + blocked.Count + deadlines.Count + projects.Count == 0)
+            {
+                continue;
+            }
+
+            facts.Add(new SpaceSummaryFact(space.Id, space.Name, Bounded(completed), Bounded(added), Bounded(blocked), Bounded(deadlines), projects));
+        }
+
+        return Bounded(facts);
+    }
+
+    /// <summary>
+    /// History events of one kind in the space by actors other than the person (other people and agents):
+    /// the task as it was after the event, the actor's name and when. A status change counts only when the
+    /// task is Waiting afterwards; <paramref name="blockedBy"/> marks newly blocked work.
+    /// </summary>
+    private async Task<List<SpaceActivityFact>> ActivityAsync(SummaryPeriod period, string spaceId, string eventKind, SpaceBlockReason? blockedBy, IReadOnlyList<SpacePerson> people)
+    {
+        var myId = Guid.TryParse(_context.Profile.Id, out var parsed) ? parsed : Guid.Empty;
+        var directory = people.Select(member => new DirectoryMember(member.ActorId, member.DisplayName)).ToList();
+        var result = new List<SpaceActivityFact>();
+        foreach (var row in _history.Where(row => row.EventKind == eventKind && row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut))
+        {
+            if (Read(row.SnapshotAfter)?.Task is not { } task || task.SpaceId != spaceId)
+            {
+                continue;
+            }
+
+            if (eventKind == "task.status-changed" && task.Status != TaskItemStatus.WaitingOnSomeone)
+            {
+                continue;
+            }
+
+            // The person's own work is in the personal sections; here only what others did.
+            if (!ActorId.TryParse(row.Actor, out var actor) || actor.Id == myId)
+            {
+                continue;
+            }
+
+            result.Add(new SpaceActivityFact(await FactAsync(task), PeopleDirectory.Resolve(row.Actor, $"person:{_context.Profile.Id}", directory).DisplayName, row.EffectiveAtUtc, blockedBy));
+            if (result.Count == ListLimit)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Open tasks of the space due between two local dates (inclusive), earliest first, with their live assignees' names.</summary>
+    private async Task<List<SpaceDeadlineFact>> SpaceDeadlinesAsync(string spaceId, DateOnly from, DateOnly to, IReadOnlyList<SpacePerson> people)
+    {
+        var deadlines = new List<SpaceDeadlineFact>();
+        foreach (var row in (await RowsAsync(new TaskQuerySpec { View = TaskView.Search, FilterSpaceId = spaceId, Due = new LocalDateRange(from, to) }))
+            .OrderBy(row => row.Task.DueDate).ThenBy(row => row.Task.DueTime ?? TimeOnly.MaxValue).ThenBy(row => row.Task.Id, StringComparer.Ordinal))
+        {
+            var names = new List<string>();
+            foreach (var assignee in await _session.Tasks.ListAssigneesAsync(row.Task.Id, _token))
+            {
+                if (assignee.DeletedAtUtc is null)
+                {
+                    names.Add(people.FirstOrDefault(member => string.Equals(member.ActorId, $"person:{assignee.MemberId}", StringComparison.OrdinalIgnoreCase))?.DisplayName
+                        ?? "Unknown person");
+                }
+            }
+
+            deadlines.Add(new SpaceDeadlineFact(await FactAsync(row.Task), names));
+            if (deadlines.Count == ListLimit)
+            {
+                break;
+            }
+        }
+
+        return deadlines;
+    }
+
+    /// <summary>
+    /// The person's own standup for the space (PLAN3 9.12): what they completed in the period, what is planned
+    /// (open tasks of the space assigned to them, earliest due first) and what is blocked (their Waiting tasks,
+    /// with the person each waits on). Meetings and other people's work stay out. The text is the start of the
+    /// editor; the person reviews and changes it before posting.
+    /// </summary>
+    internal async Task<string> StandupMarkdownAsync(string spaceId, SummaryPeriod period, IReadOnlyList<SpacePerson> people, CancellationToken token)
+    {
+        var me = $"person:{_context.Profile.Id}";
+        var done = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in _history.Where(row => row.EventKind == "task.completed" && row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut
+                 && string.Equals(row.Actor, me, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (Read(row.SnapshotAfter)?.Task is { } task && task.SpaceId == spaceId && seen.Add(task.Id))
+            {
+                done.Add(task.Title);
+            }
+        }
+
+        var planned = new List<SummaryTaskFact>();
+        var blocked = new List<string>();
+        foreach (var row in await RowsAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, FilterSpaceId = spaceId }))
+        {
+            if (row.Task.Status == TaskItemStatus.WaitingOnSomeone)
+            {
+                var person = (await _session.Waiting.FindActiveAsync(row.Task.Id, token))?.Person;
+                blocked.Add(Item(row.Task.Title, person is null ? null : $"waiting on {person}"));
+            }
+            else
+            {
+                planned.Add(await FactAsync(row.Task));
+            }
+        }
+
+        var headings = StandupTemplates.Headings(_context.Profile.Locale);
+        var text = new StringBuilder();
+        void Section(string heading, IEnumerable<string> items)
+        {
+            if (text.Length > 0)
+            {
+                text.AppendLine().AppendLine();
+            }
+
+            text.Append("## ").AppendLine(heading);
+            foreach (var item in items)
+            {
+                text.Append("- ").AppendLine(item);
+            }
+        }
+        Section(headings.Done, done.Select(title => Item(title, null)));
+        Section(headings.Planned, planned.OrderBy(task => task.DueDate ?? DateOnly.MaxValue).ThenBy(task => task.Title, StringComparer.OrdinalIgnoreCase)
+            .Select(task => Item(task.Title, task.DueDate is { } due ? $"due {due:yyyy-MM-dd}" : null)));
+        Section(headings.Blocked, blocked);
+        return text.ToString();
+
+        // One list item: the title on one line, with an optional note after it.
+        static string Item(string title, string? note) => string.Join(' ', title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            + (note is null ? string.Empty : $" — {note}");
     }
 
     /// <summary>
@@ -431,6 +610,30 @@ internal sealed class SummaryFactsBuilder
         }
 
         return new WeekProgressFact(week.WeekStartDate, week.ConfirmedRevision, assigned, done, cancelled, goals);
+    }
+
+    /// <summary>Live delegations (Q13): the ones this person handed out, then the ones waiting on them, with their follow-up when it is theirs.</summary>
+    private async Task<IReadOnlyList<DelegationFact>> DelegationsAsync()
+    {
+        var facts = new List<DelegationFact>();
+        var followUps = await _session.Waiting.ListActiveFollowUpsAsync(_context.Profile.Id, _token);
+        foreach (var side in new[] { DelegationSide.From, DelegationSide.To })
+        {
+            var rows = side == DelegationSide.From
+                ? await _session.Delegations.ListLiveFromAsync(_context.Profile.Id, _token)
+                : await _session.Delegations.ListLiveToAsync(_context.Profile.Id, _token);
+            foreach (var row in rows)
+            {
+                if (await LiveAsync(row.TaskId) is not { IsTerminal: false } task) continue;
+                var other = side == DelegationSide.From ? row.ToMemberId : row.FromMemberId;
+                var person = (await _session.People.ListAsync(task.SpaceId, _token))
+                    .FirstOrDefault(member => string.Equals(member.ActorId, "person:" + other, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? "Unknown person";
+                var followUp = followUps.FirstOrDefault(rule => string.Equals(rule.DelegationId, row.Id, StringComparison.OrdinalIgnoreCase));
+                facts.Add(new DelegationFact(await FactAsync(task), person, side, row.State, row.DueDate, followUp?.DueAtUtc));
+                if (facts.Count >= ListLimit) return facts;
+            }
+        }
+        return facts;
     }
 
     private async Task<IReadOnlyList<FollowUpFact>> FollowUpsDueAsync(DateTimeOffset before)

@@ -273,6 +273,26 @@ public static class SyncCatalog
             Groups: [new("create", ["AddedAtUtc"]), new("done", ["CompletedAtUtc"]), new("deleted", ["DeletedAtUtc"])],
             ApplyOrder: 61),
 
+        // Q13 delegation. The brief (message, done-looks-like, due date, review) is the delegator's;
+        // the state group moves only along the transition table (Chaos.Sync DelegationTransitions),
+        // checked by the server against the party names in the create group.
+        new SyncTable("TaskDelegations", "task_delegation", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["TaskId", "FromMemberId", "ToMemberId", "CreatedAtUtc"]),
+                new("brief", ["Message", "DoneDefinition", "DueDate", "ReviewRequired"]),
+                new("state", ["State", "StateChangedAtUtc", "Response"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            UniqueRules: [new("UX_TaskDelegations_ActiveTask", SyncUniqueRuleKind.KeepLowestRetireOther,
+                "Two devices each delegated the same task; the higher-id delegation retires (§7.6).")],
+            ApplyOrder: 62),
+
+        new SyncTable("Nudges", "nudge", SyncMode.AppendOnly, ["Id"],
+            Groups: [new("record", ["TaskId", "DelegationId", "FromMemberId", "ToMemberId", "Text", "SentAtUtc", "CreatedAtUtc"])],
+            ApplyOrder: 63), // a nudge is a record of what was sent; it leaves with its task (SyncPurgeSql)
+
         new SyncTable("Subtasks", "subtask", SyncMode.Merge, ["Id"],
             Groups:
             [
@@ -312,6 +332,18 @@ public static class SyncCatalog
             ],
             LocalColumns: ["Version", "Revision"], // Revision numbers this device's version rows (DiaryRevisions stay local)
             ApplyOrder: 100),
+
+        // Q14 standups. The author is named in the create group; the server lets only that member write the
+        // entry group, and the author or an owner the deleted group (Chaos.Sync SyncKinds).
+        new SyncTable("SpaceUpdates", "space_update", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "AuthorMemberId", "ForDate", "CreatedAtUtc"]),
+                new("entry", ["RawMarkdown", "EditedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 101),
 
         new SyncTable("ScratchPadItems", "pad", SyncMode.Merge, ["Id"],
             Groups:
@@ -417,6 +449,7 @@ public static class SyncCatalog
                 new("schedule", ["Amount", "Unit", "SnoozedUntilUtc", "DueAtUtc"]),
                 new("resolved", ["ResolvedAtUtc"]),
                 new("deleted", ["DeletedAtUtc"]),
+                new("delegation", ["DelegationId"]), // Q13: the delegator's follow-up of a delegation; its own group so older clients drop it
             ],
             LocalColumns: ["Version"],
             UniqueRules: [new("UX_FollowUps_ActiveTask", SyncUniqueRuleKind.KeepLowestRetireOther,

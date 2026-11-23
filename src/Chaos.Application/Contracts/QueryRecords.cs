@@ -21,6 +21,8 @@ public enum TaskView
     MyDay = 9,
     /// <summary>A saved or draft custom view: the condition tree in <c>Definition</c> (PLAN2 §11.2).</summary>
     Custom = 10,
+    /// <summary>Tasks the person delegated and that are still live (PLAN3 9.11), grouped by recipient then due date.</summary>
+    DelegatedByMe = 11,
 }
 
 /// <summary>An inclusive range of local dates; either end may be open.</summary>
@@ -137,7 +139,9 @@ public sealed record TaskQueryRow(
     DateOnly? GroupDate,
     string? WaitingPerson = null,
     DateTimeOffset? NextFollowUpAtUtc = null,
-    DateTimeOffset? LastActivityAtUtc = null);
+    DateTimeOffset? LastActivityAtUtc = null,
+    /// <summary>The recipient's name in the Delegated by me view (Q13); null elsewhere.</summary>
+    string? DelegatedTo = null);
 
 /// <summary>A page of rows, the total row count for the same criteria, and the next cursor (null at the end).</summary>
 public sealed record TaskQueryPage(IReadOnlyList<TaskQueryRow> Rows, long TotalCount, string? NextCursor);

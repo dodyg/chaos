@@ -4,6 +4,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
+using Chaos.Application.Spaces;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Summaries;
@@ -18,24 +19,24 @@ namespace Chaos.Infrastructure.Tests;
 public sealed class SummaryTests
 {
     // Tuesday 10 November 2026; weeks start on Sunday (8–14 November).
-    private static readonly DateOnly Today = new(2026, 11, 10);
+    internal static readonly DateOnly Today = new(2026, 11, 10);
     private static readonly DateOnly WeekStart = new(2026, 11, 8);
     private static readonly DateTimeOffset Morning = At(Today, 9);
 
-    private static DateTimeOffset At(DateOnly date, int hour, int minute = 0) => new(date.Year, date.Month, date.Day, hour, minute, 0, TimeSpan.Zero);
+    internal static DateTimeOffset At(DateOnly date, int hour, int minute = 0) => new(date.Year, date.Month, date.Day, hour, minute, 0, TimeSpan.Zero);
 
-    private sealed class SettableClock(DateTimeOffset now) : TimeProvider
+    internal sealed class SettableClock(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private sealed class GuidIds : IIdGenerator
+    internal sealed class GuidIds : IIdGenerator
     {
         public Guid NewId() => Guid.NewGuid();
     }
 
-    private sealed class Host : IDisposable
+    internal sealed class Host : IDisposable
     {
         public required ChaosStorageHandle Storage { get; init; }
         public required SettableClock Clock { get; init; }
@@ -45,6 +46,7 @@ public sealed class SummaryTests
         public required MyDayCommands Days { get; init; }
         public required MyWeekCommands Weeks { get; init; }
         public required SummaryCommands Summaries { get; init; }
+        public required SpaceUpdateCommands SpaceUpdates { get; init; }
         public required TaskQueries Queries { get; init; }
 
         public static async Task<Host> StartAsync(DateTimeOffset? start = null, string zone = "UTC")
@@ -63,6 +65,7 @@ public sealed class SummaryTests
                 Days = new MyDayCommands(storage.Store, clock),
                 Weeks = new MyWeekCommands(storage.Store, ids, clock),
                 Summaries = new SummaryCommands(storage.Store, ids, clock),
+                SpaceUpdates = new SpaceUpdateCommands(storage.Store, ids, clock),
                 Queries = new TaskQueries(storage.Store, clock),
             };
         }
@@ -98,12 +101,14 @@ public sealed class SummaryTests
             return Convert.ToInt64(command.ExecuteScalar());
         }
 
+        public void Run(string sql) => Execute(Storage.DatabasePath, sql);
+
         public void Dispose() => Storage.Dispose();
     }
 
-    private static string Op() => Guid.NewGuid().ToString();
+    internal static string Op() => Guid.NewGuid().ToString();
 
-    private static void Execute(string databasePath, string sql)
+    internal static void Execute(string databasePath, string sql)
     {
         using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
         connection.Open();

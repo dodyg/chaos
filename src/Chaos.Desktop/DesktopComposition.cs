@@ -272,6 +272,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddUpdatesRpcService(new UpdatesRpcService(_releaseFeed, new ShellBrowser(), _appVersion));
         rpc.AddTaskRpcService(new TaskRpcService(_tasks, _githubEngine));
         rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(store, ids, clock), _tasks));
+        rpc.AddDelegationRpcService(new DelegationRpcService(new DelegationCommands(store, ids, clock)));
         rpc.AddSubtaskRpcService(new SubtaskRpcService(_tasks, new SubtaskCommands(store, ids, clock), _githubEngine));
         rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(store, ids, clock), _tasks));
         rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(store, ids, clock)));
@@ -304,6 +305,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddReminderRpcService(new ReminderRpcService(_reminders, _reminderEngine));
         rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(store, ids, clock)));
         rpc.AddSummaryRpcService(new SummaryRpcService(_summaries));
+        rpc.AddSpaceUpdateRpcService(new SpaceUpdateRpcService(new Chaos.Application.Spaces.SpaceUpdateCommands(store, ids, clock)));
         rpc.AddDataRpcService(_dataRpc);
         rpc.AddGitHubRpcService(new GitHubRpcService(_github, store, _githubEngine, _githubApi, _githubScheduler));
     }

@@ -40,6 +40,8 @@ public sealed record FollowUpRecord : AggregateRecord
     public Chaos.Domain.Reminders.DurationUnit? Unit { get; init; }
     public DateTimeOffset? SnoozedUntilUtc { get; init; }
     public DateTimeOffset? ResolvedAtUtc { get; init; }
+    /// <summary>The delegation this follow-up is about (Q13), when it is a delegator's follow-up.</summary>
+    public string? DelegationId { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore]
     public DateTimeOffset? DueAtUtc { get; init; }

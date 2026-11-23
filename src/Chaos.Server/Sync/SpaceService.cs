@@ -218,6 +218,7 @@ public sealed class SpaceService(
             target.RemovedAt = now;
             await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
             await changes.TombstoneAssignmentsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
+            await changes.SettleDelegationsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
             if (target.AccountId is { } affected)
             {
                 await TombstoneOverlaysAsync(affected, spaceId, current.MemberId, ct);
@@ -973,7 +974,7 @@ public sealed class SpaceService(
 
     private static bool ReferencesIncluded(Dictionary<string, SyncGroupState> groups, HashSet<(string Kind, string Key)> included) =>
         groups.Values.SelectMany(g => g.Values.Values)
-            .Any(pair => pair.Key != "AuthorProfileId" && pair.Key != "OwnerProfileId"
+            .Any(pair => pair.Key != "AuthorProfileId" && pair.Key != "AuthorMemberId" && pair.Key != "OwnerProfileId"
                 && pair.Value is string id && included.Any(item => item.Key == id));
 
     private static short HigherRole(short current, short invited) => current < invited ? current : invited;

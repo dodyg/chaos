@@ -78,6 +78,7 @@ function resultRow(item: TaskResponse, tagIds: string[] = [], matches: string[] 
     waitingPerson: null,
     nextFollowUpAtUtc: null,
     lastActivityAtUtc: null,
+    delegatedTo: null,
   };
 }
 

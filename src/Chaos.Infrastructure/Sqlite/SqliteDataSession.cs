@@ -32,6 +32,8 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     private IRecurrenceStore? _recurrence;
     private IReminderRuleStore? _reminderRules;
     private IWaitingStore? _waiting;
+    private IDelegationStore? _delegations;
+    private ISpaceUpdateStore? _spaceUpdates;
     private INotificationJobStore? _notifications;
     private IDayPlanStore? _dayPlans;
     private IWeekPlanStore? _weeks;
@@ -67,6 +69,8 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     public IRecurrenceStore Recurrence => _recurrence ??= new SqliteRecurrenceStore(connection);
     public IReminderRuleStore ReminderRules => _reminderRules ??= new SqliteReminderRuleStore(connection);
     public IWaitingStore Waiting => _waiting ??= new SqliteWaitingStore(connection);
+    public IDelegationStore Delegations => _delegations ??= new SqliteDelegationStore(connection);
+    public ISpaceUpdateStore SpaceUpdates => _spaceUpdates ??= new SqliteSpaceUpdateStore(connection);
     public INotificationJobStore Notifications => _notifications ??= new SqliteNotificationJobStore(connection, notes);
     public IDayPlanStore DayPlans => _dayPlans ??= new SqliteDayPlanStore(connection);
     public IWeekPlanStore Weeks => _weeks ??= new SqliteWeekPlanStore(connection);

@@ -1,3 +1,4 @@
+using Chaos.Server.Data;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using TUnit.Core.Interfaces;
@@ -40,14 +41,53 @@ public sealed class PostgresServer : IAsyncInitializer, IAsyncDisposable
         }
     }
 
+    private readonly SemaphoreSlim _templateGate = new(1, 1);
+    private string? _templateName;
+
     /// <summary>Creates an empty database and returns its connection string.</summary>
-    public async Task<string> CreateDatabaseAsync()
+    public Task<string> CreateDatabaseAsync() => CreateAsync(template: null);
+
+    /// <summary>
+    /// Creates a database with every migration applied. The migrations run once per session into a template
+    /// database; each test then gets a file-level copy of it, which is far cheaper than migrating again.
+    /// </summary>
+    public async Task<string> CreateMigratedDatabaseAsync()
     {
-        var name = "chaos_test_" + Guid.NewGuid().ToString("N");
+        if (_templateName is null)
+        {
+            await _templateGate.WaitAsync();
+            try
+            {
+                if (_templateName is null)
+                {
+                    var connectionString = await CreateAsync(template: null, namePrefix: "chaos_template_");
+                    await using (var db = ServerDatabase.Open(connectionString))
+                    {
+                        await ServerSchemaGate.MigrateAsync(db, CancellationToken.None);
+                    }
+
+                    // CREATE DATABASE ... TEMPLATE needs a template with no open connections.
+                    NpgsqlConnection.ClearAllPools();
+                    _templateName = new NpgsqlConnectionStringBuilder(connectionString).Database!;
+                }
+            }
+            finally
+            {
+                _templateGate.Release();
+            }
+        }
+
+        return await CreateAsync(_templateName);
+    }
+
+    private async Task<string> CreateAsync(string? template, string namePrefix = "chaos_test_")
+    {
+        var name = namePrefix + Guid.NewGuid().ToString("N");
         await using (var admin = new NpgsqlConnection(_adminConnectionString))
         {
             await admin.OpenAsync();
-            await using var create = new NpgsqlCommand($"CREATE DATABASE {name};", admin);
+            var sql = template is null ? $"CREATE DATABASE {name};" : $"CREATE DATABASE {name} TEMPLATE {template};";
+            await using var create = new NpgsqlCommand(sql, admin);
             await create.ExecuteNonQueryAsync();
         }
 

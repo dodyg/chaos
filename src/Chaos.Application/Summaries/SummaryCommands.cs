@@ -6,6 +6,7 @@ using Chaos.Application.Reminders;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Planning;
 using Chaos.Domain.Summaries;
+using Chaos.Domain.Tasks;
 using Chaos.Sync;
 
 namespace Chaos.Application.Summaries;
@@ -23,7 +24,7 @@ public sealed record GenerateSummaryCommand(string OperationId, SummaryKind Kind
 public sealed record SummaryRevisionInfo(string Id, long Revision, DateTimeOffset GeneratedAtUtc, DateTimeOffset CapturedThroughUtc, SummaryTrigger Trigger);
 
 /// <summary>Plain counts for the summary list and prompts.</summary>
-public sealed record SummaryCounts(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, bool Quiet)
+public sealed record SummaryCounts(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, int SpaceActivity, bool Quiet)
 {
     public static SummaryCounts Of(SummaryFacts facts) => new(
         facts.Completions.Count,
@@ -33,6 +34,7 @@ public sealed record SummaryCounts(int CompletionEvents, int StillDone, int Unfi
         facts.Deadlines.Count,
         facts.Waiting.Count,
         facts.Selected.Count,
+        facts.SpaceActivityCount,
         facts.IsQuiet);
 }
 
@@ -61,6 +63,9 @@ public sealed record SummaryCarryOverResult(CarryOverTarget Target, DateOnly Tar
 /// <summary>A summary whose "ready" prompt is due: the newest one per kind.</summary>
 public sealed record SummaryPrompt(SummaryRecord Summary, SummaryCounts Counts);
 
+/// <summary>The standup an evening or weekly summary suggests for a shared space (PLAN3 9.12): Markdown the person reviews, edits and posts by hand.</summary>
+public sealed record StandupDraft(string SpaceId, string SpaceName, DateOnly ForDate, string Markdown);
+
 /// <summary>
 /// Plain daily and weekly summaries and their list (PLAN §12, work package 11). Facts are
 /// built in C# from append-only history and stored once per revision; there is no AI and no
@@ -73,8 +78,8 @@ public sealed record SummaryPrompt(SummaryRecord Summary, SummaryCounts Counts);
 /// </summary>
 public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
-    /// <summary>Version of the facts shape and the UI strings that render it.</summary>
-    public const int ResourceVersion = 1;
+    /// <summary>Version of the facts shape and the UI strings that render it (2: the spaces section, Q14).</summary>
+    public const int ResourceVersion = 2;
     public const int MaxListPage = 50;
 
     private readonly MyWeekCommands _weeks = new(store, ids, clock);
@@ -317,6 +322,46 @@ public sealed class SummaryCommands(IApplicationStore store, IIdGenerator ids, T
 
             await session.Summaries.MarkPromptSeenAsync(summary.Id, now, token);
             return 1;
+        }, ct);
+
+    /// <summary>
+    /// Prefills a standup for one shared space from the summary's period (PLAN3 9.12): the person's own
+    /// completed, planned and blocked tasks in that space under headings in their language. Nothing is posted
+    /// here; the text only starts the editor, and posting is the person's own click
+    /// (<see cref="Spaces.SpaceUpdateCommands.PostAsync"/>).
+    /// </summary>
+    public async Task<StandupDraft> StandupDraftAsync(string summaryId, string spaceId, CancellationToken ct = default) =>
+        await store.QueryAsync(async (session, token) =>
+        {
+            var profile = await ReminderCommands.RequireProfileAsync(session, token);
+            var summary = await session.Summaries.GetAsync(summaryId, token);
+            if (summary is null || summary.ProfileId != profile.Id)
+            {
+                throw AppException.NotFound("That summary no longer exists. Refresh the summaries.");
+            }
+
+            if (summary.Kind == SummaryKind.Morning)
+            {
+                throw AppException.Validation("summaryId", "A morning summary looks ahead; post a standup from the evening or weekly summary.");
+            }
+
+            var space = await session.Spaces.GetAsync(spaceId, token);
+            if (space is null || space.Kind != SpaceKind.Shared)
+            {
+                throw AppException.Validation("spaceId", "Standups are posted to a shared space.");
+            }
+
+            var people = await session.People.ListAsync(space.Id, token);
+            if (!people.Any(member => !member.Former && string.Equals(member.ActorId, $"person:{profile.Id}", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw AppException.Validation("spaceId", "You are no longer a member of this space.");
+            }
+
+            var context = await TaskQueries.ContextAsync(session, clock.GetUtcNow(), token);
+            var period = new SummaryPeriod(summary.Kind, summary.PeriodStart, summary.PeriodEnd, summary.PeriodStartUtc, summary.PeriodEndUtc, summary.CapturedThroughUtc);
+            var history = await session.Summaries.ListHistorySinceAsync(space.Id, period.StartUtc, token);
+            var markdown = await new SummaryFactsBuilder(session, context, history, token).StandupMarkdownAsync(space.Id, period, people, token);
+            return new StandupDraft(space.Id, space.Name, summary.PeriodEnd, markdown);
         }, ct);
 
     public async Task<CarryOverPreview> PreviewCarryOverAsync(string summaryId, CancellationToken ct = default) =>

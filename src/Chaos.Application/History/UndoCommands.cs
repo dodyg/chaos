@@ -147,6 +147,7 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
         ChangeKind.ReminderRule => await session.ReminderRules.GetAsync(change.Id, ct) is { } row ? (row.Version, "reminder rule") : (null, null),
         ChangeKind.Waiting => await session.Waiting.GetAsync(change.Id, ct) is { } row ? (row.Version, "waiting details") : (null, null),
         ChangeKind.FollowUp => await session.Waiting.GetFollowUpAsync(change.Id, ct) is { } row ? (row.Version, "follow-up") : (null, null),
+        ChangeKind.Delegation => await session.Delegations.GetAsync(change.Id, ct) is { } row ? (row.Version, "delegation") : (null, null),
         _ => (null, null),
     };
 
@@ -194,6 +195,11 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                     id => session.Waiting.GetFollowUpAsync(id, ct),
                     (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
                     (row, expected) => session.Waiting.UpdateFollowUpAsync(row, expected, ct));
+            case ChangeKind.Delegation:
+                return await RevertAsync(change, label, _ => "delegation",
+                    id => session.Delegations.GetAsync(id, ct),
+                    (current, before) => (before ?? current with { DeletedAtUtc = now }) with { Version = current.Version + 1, UpdatedAtUtc = now },
+                    (row, expected) => session.Delegations.UpdateAsync(row, expected, ct));
             case ChangeKind.RecurrenceSeries:
                 return await RevertAsync(change, label, _ => "recurrence series",
                     id => session.Recurrence.GetSeriesAsync(id, ct),

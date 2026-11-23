@@ -89,6 +89,7 @@ import {
   CircleCheckBig,
   FolderKanban,
   Hourglass,
+  Handshake,
   Inbox,
   LayoutTemplate,
   ListTodo,
@@ -127,6 +128,7 @@ const viewIcons: Record<string, React.ReactNode> = {
   Waiting: <Hourglass />,
   RecentlyCompleted: <CircleCheckBig />,
   AssignedToMe: <UserRound />,
+  DelegatedByMe: <Handshake />,
 };
 
 type Api = {
@@ -2327,6 +2329,7 @@ export function App({
                     api={spaceApi}
                     space={currentSpace}
                     lists={spaceLists.get(currentSpace.spaceId) ?? []}
+                    revision={revision}
                     onOpenList={openContainer}
                     onChanged={() => void refreshContainers().catch((e: unknown) => setError(String(e)))}
                     onLeft={() => {

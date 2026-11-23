@@ -41,6 +41,63 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate047_AddsStandupsAsASyncedTableOfSharedSpaces()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 46);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('space','person',1,'Personal','now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('team','other',2,'Team','now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_SpaceUpdates_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending;"))).IsEqualTo(0L);
+        Execute(connection, """
+            INSERT INTO SpaceUpdates (Id,SpaceId,AuthorMemberId,ForDate,RawMarkdown,Version,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('standup','team','person','2026-11-23','## Done',1,'now','now');
+            UPDATE SpaceUpdates SET RawMarkdown='## Done\n- Ship', EditedAtUtc='now', Version=2 WHERE Id='standup';
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='space_update' AND GroupName IN ('create','entry');"))).IsEqualTo(2L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task Migrate046_AddsDelegationTablesAndLinksExistingFollowUps()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 45);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('space','person',1,'Personal','now','now');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('inbox','space',0,'Inbox','inbox',0,'now','now');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('task','space','inbox','Task',0,0,'now','now');
+            INSERT INTO FollowUps (Id,TaskId,ProfileId,Kind,FixedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc) VALUES ('follow','task','person',0,'2026-11-24T09:00:00.0000000+00:00',1,'now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM FollowUps WHERE Id='follow' AND DelegationId IS NULL;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_TaskDelegations_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending;"))).IsEqualTo(0L);
+        Execute(connection, """
+            INSERT INTO TaskDelegations (Id,TaskId,FromMemberId,ToMemberId,Message,State,StateChangedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('delegation','task','person','other','Please',0,'now',1,'now','now');
+            INSERT INTO Nudges (Id,TaskId,DelegationId,FromMemberId,ToMemberId,Text,SentAtUtc,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('nudge','task','delegation','person','other','Any news?','now','now','now');
+            UPDATE FollowUps SET DelegationId='delegation' WHERE Id='follow';
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='task_delegation' AND GroupName IN ('create','brief','state');"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='nudge' AND GroupName='record';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='follow_up' AND GroupName='delegation';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Migrate043_PreservesPersonalAlertPreferencesAndQueuesThemForSync()
     {
         using var connection = Open();

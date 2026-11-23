@@ -651,6 +651,42 @@ public sealed class TagsAndSearchTests
     }
 
     [Test]
+    public async Task DelegatedByMe_ListsLiveDelegationsGroupedByRecipientThenDueDate()
+    {
+        using var host = await Host.StartAsync();
+        var profile = (await host.Storage.Store.QueryAsync((s, ct) => s.Profiles.GetPrimaryAsync(ct)))!.Id;
+        await host.TaskAsync("Personal");
+        Execute(host.Storage.DatabasePath, $"""
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc)
+                SELECT 'shared',Id,2,'Shared','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z' FROM Profiles LIMIT 1;
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                SELECT 'member','shared',Id,1,'Me',2,'2026-11-10T00:00:00Z' FROM Profiles LIMIT 1;
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc)
+                VALUES ('omar','shared','omar-id',1,'Omar',2,'2026-11-10T00:00:00Z'),('ada','shared','ada-id',1,'Ada',2,'2026-11-10T00:00:00Z');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('shared-list','shared',1,'Shared list','shared list',0,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,DueDate,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('to-omar','shared','shared-list','Quote',0,0,'2026-11-30','2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                       ('to-ada','shared','shared-list','Plan',0,1,NULL,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                       ('declined','shared','shared-list','Declined',0,2,NULL,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                       ('to-me','shared','shared-list','Mine',0,3,NULL,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            INSERT INTO TaskDelegations (Id,TaskId,FromMemberId,ToMemberId,Message,State,StateChangedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc) VALUES
+                ('d1','to-omar','{profile}','omar-id','',0,'2026-11-10T00:00:00Z',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                ('d2','to-ada','{profile}','ada-id','',1,'2026-11-10T00:00:00Z',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                ('d3','declined','{profile}','omar-id','',3,'2026-11-10T00:00:00Z',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z'),
+                ('d4','to-me','omar-id','{profile}','',0,'2026-11-10T00:00:00Z',1,'2026-11-10T00:00:00Z','2026-11-10T00:00:00Z');
+            """);
+        var spec = new TaskQuerySpec { View = TaskView.DelegatedByMe };
+        var page = await host.Queries.RunAsync(spec);
+        await Assert.That(string.Join("|", page.Rows.Select(row => row.Task.Title))).IsEqualTo("Plan|Quote");
+        await Assert.That(string.Join("|", page.Rows.Select(row => row.DelegatedTo))).IsEqualTo("Ada|Omar");
+        await Assert.That(page.TotalCount).IsEqualTo(2L);
+        await Assert.That(await host.Queries.CountAsync(spec)).IsEqualTo(2L);
+        var counts = await host.Queries.CountsAsync();
+        await Assert.That(counts.Views[TaskView.DelegatedByMe]).IsEqualTo(2L);
+    }
+
+    [Test]
     public async Task CountsAndPages_MatchForEveryViewAndFilter()
     {
         using var host = await Host.StartAsync();

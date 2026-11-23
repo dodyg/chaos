@@ -4,7 +4,9 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import {
   summaryRpc,
+  spaceUpdateRpc,
   type CarryOverRequest,
+  type SpaceUpdatePostRequest,
   type SummaryDetailDto,
   type SummaryFactsDto,
   type SummaryHeaderDto,
@@ -19,7 +21,7 @@ Object.defineProperties(globalThis, {
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
   getComputedStyle: { value: dom.window.getComputedStyle.bind(dom.window), configurable: true },
 });
-const { render, screen, waitFor, cleanup } = await import("@testing-library/react");
+const { render, screen, waitFor, within, cleanup } = await import("@testing-library/react");
 const userEvent = (await import("@testing-library/user-event")).default;
 const { Summaries, SummaryPrompts, countsText } = await import("./Summaries");
 
@@ -51,7 +53,17 @@ function header(patch: Partial<SummaryHeaderDto> = {}): SummaryHeaderDto {
     trigger: "Scheduled",
     generatedAtUtc: "2026-11-10T18:00:00Z",
     zoneId: "UTC",
-    counts: { completionEvents: 2, stillDone: 1, unfinished: 1, diaryUpdates: 1, deadlines: 0, waiting: 0, selected: 0, quiet: false },
+    counts: {
+      completionEvents: 2,
+      stillDone: 1,
+      unfinished: 1,
+      diaryUpdates: 1,
+      deadlines: 0,
+      waiting: 0,
+      selected: 0,
+      spaceActivity: 0,
+      quiet: false,
+    },
     ...patch,
   };
 }
@@ -59,6 +71,8 @@ function header(patch: Partial<SummaryHeaderDto> = {}): SummaryHeaderDto {
 function facts(): SummaryFactsDto {
   return {
     meetings: [],
+    delegations: [],
+    spaces: [],
     completions: [
       { task: task("a", "Plant bulbs", "Garden"), completedAtUtc: "2026-11-10T10:00:00Z", reopenedAfter: false, stillDone: true },
       { task: task("b", "Draft report", "Work"), completedAtUtc: "2026-11-10T11:00:00Z", reopenedAfter: true, stillDone: false },
@@ -158,5 +172,106 @@ test("a ready summary prompt opens Summaries and is dismissed", async () => {
   await waitFor(() => assert.deepEqual(dismissed, ["s9"]));
   assert.deepEqual(opened, ["s9"]);
   assert.equal(screen.queryByText(/is ready/), null);
+  cleanup();
+});
+
+test("the spaces section lists what other members did, and a standup is posted only by the Post standup click", async () => {
+  const posted: SpaceUpdatePostRequest[] = [];
+  let changed = 0;
+  const team = {
+    spaceId: "team",
+    name: "Team",
+    completedByOthers: [{ task: task("x", "Write the plan", "Launch"), actor: "Omar", atUtc: "2026-11-10T10:00:00Z", blockedBy: null }],
+    newByOthers: [{ task: task("n", "Call the venue", "Launch"), actor: "Omar", atUtc: "2026-11-10T09:30:00Z", blockedBy: null }],
+    newlyBlocked: [{ task: task("y", "Book the hall", "Launch"), actor: "Omar", atUtc: "2026-11-10T11:00:00Z", blockedBy: "Waiting" }],
+    deadlines: [{ task: task("d", "Ship the quote", "Launch"), assignees: ["Omar", "Sara"] }],
+    projects: [{ projectId: "p2", name: "Website", doneBefore: 1, countedBefore: 4, doneAfter: 2, countedAfter: 4 }],
+  };
+  const api = {
+    ...summaryRpc,
+    list: async () => ({
+      ok: true,
+      entries: [header({ counts: { ...header().counts, spaceActivity: 3 } })],
+      nextCursor: null,
+      error: null,
+    }),
+    get: async () => ({ ok: true, summary: { ...detail, facts: { ...facts(), spaces: [team] } }, error: null }),
+    settings: async () => ({
+      ok: true,
+      morningTime: "08:00",
+      eveningTime: "18:00",
+      weeklyDay: null,
+      firstWeekday: "Sunday",
+      version: "1",
+      zoneId: "UTC",
+      includeMeetings: false,
+      error: null,
+    }),
+    standupDraft: async (request: { summaryId: string; spaceId: string }) => ({
+      ok: true,
+      spaceId: request.spaceId,
+      spaceName: "Team",
+      forDate: "2026-11-10",
+      markdown: "## Done\n- Mine",
+      error: null,
+    }),
+  } as unknown as typeof summaryRpc;
+  const updatesApi = {
+    ...spaceUpdateRpc,
+    post: async (request: SpaceUpdatePostRequest) => {
+      posted.push(request);
+      return { ok: true, update: null, replayed: false, error: null };
+    },
+  } as unknown as typeof spaceUpdateRpc;
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <Summaries
+      api={api}
+      updatesApi={updatesApi}
+      revision={0}
+      today="2026-11-10"
+      openId={null}
+      onOpenTask={() => {}}
+      onChanged={() => {
+        changed++;
+      }}
+    />,
+  );
+
+  await screen.findByRole("heading", { name: /Evening summary · / });
+  assert.ok(screen.getByText(/· 3 team updates/));
+  const section = screen.getByRole("region", { name: "Your spaces" });
+  assert.ok(within(section).getByRole("heading", { name: "Team" }));
+  assert.equal(within(section).getAllByText("by Omar").length, 2, "completed and new both name who");
+  assert.ok(within(section).getByText("waiting · Omar"));
+  assert.ok(within(section).getByText("Omar, Sara"));
+  assert.ok(within(section).getByText(/Website: 1 of 4 → 2 of 4 done/));
+  assert.equal(posted.length, 0, "opening the summary posts nothing");
+
+  // The editor is prefilled; nothing is posted until the person chooses Post standup.
+  await user.click(within(section).getByRole("button", { name: /Post as standup to Team/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Post as standup to Team" });
+  const editor = (await within(dialog).findByRole("textbox", { name: "Your standup" })) as HTMLTextAreaElement;
+  await waitFor(() => assert.equal(editor.value, "## Done\n- Mine"));
+  assert.equal(posted.length, 0, "prefilling posts nothing");
+  await user.clear(editor);
+  await user.type(editor, "## Done\n- Mine\n- Also shipped");
+  await user.click(within(dialog).getByRole("button", { name: "Post standup" }));
+  await within(dialog).findByText(/Posted\./);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].spaceId, "team");
+  assert.equal(posted[0].forDate, "2026-11-10");
+  assert.equal(posted[0].markdown, "## Done\n- Mine\n- Also shipped");
+  assert.ok(posted[0].operationId);
+  assert.equal(changed, 1);
+  await user.click(within(dialog).getByRole("button", { name: "Done" }));
+  assert.equal(screen.queryByRole("dialog"), null);
+
+  // Cancelling posts nothing.
+  await user.click(within(section).getByRole("button", { name: /Post as standup to Team/ }));
+  const again = await screen.findByRole("dialog", { name: "Post as standup to Team" });
+  await user.click(within(again).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
+  assert.equal(posted.length, 1);
   cleanup();
 });

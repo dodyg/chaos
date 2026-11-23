@@ -25,4 +25,10 @@ public sealed class ActivityNotes : IActivityRecorder
 }
 
 /// <summary>A winning remote text change, captured before another change can overwrite its prior value.</summary>
-public sealed record RemoteTextChange(string ChangeId, string Kind, string EntityId, string SpaceId, string ActorId, string? Before, string After);
+public sealed record RemoteTextChange(string ChangeId, string Kind, string EntityId, string SpaceId, string ActorId, string? Before, string After)
+{
+    /// <summary>For a delegation or nudge change (Q13): the parties, and the task the notice opens.</summary>
+    public string? FromMemberId { get; init; }
+    public string? ToMemberId { get; init; }
+    public string? TaskId { get; init; }
+}

@@ -27,7 +27,8 @@ public sealed record WaitingClearRequest(string OperationId, string TaskId, stri
 public sealed record WaitingLogRequest(string OperationId, string TaskId, string Note);
 public sealed record FollowUpSnoozeRequest(string OperationId, string TaskId, string Choice, string? UntilUtc);
 public sealed record FollowUpDueRequest(string? Date);
-public sealed record FollowUpItemResponse(TaskResponse Task, string ContainerName, string? Person, string DueAtUtc, bool Overdue, string Kind);
+public sealed record FollowUpItemResponse(TaskResponse Task, string ContainerName, string? Person, string DueAtUtc, bool Overdue, string Kind,
+    string? DelegationId = null, string? DelegatedTo = null);
 public sealed record FollowUpDueResponse(bool Ok, IReadOnlyList<FollowUpItemResponse> Items, TaskErrorResponse? Error);
 
 /// <summary>
@@ -84,7 +85,7 @@ public sealed class WaitingRpcService(WaitingCommands waiting)
                 : throw AppException.Validation("date", "Enter a valid date.");
             var items = await waiting.DueAsync(date, ct);
             return new(true, [.. items.Select(item => new FollowUpItemResponse(TaskRpcService.ToResponse(item.Task), item.ContainerName, item.Person,
-                StorageFormats.Instant(item.DueAtUtc), item.Overdue, item.FollowUp.Kind.ToString()))], null);
+                StorageFormats.Instant(item.DueAtUtc), item.Overdue, item.FollowUp.Kind.ToString(), item.Delegation?.Id, item.DelegatedTo))], null);
         },
             error => new(false, [], error));
 

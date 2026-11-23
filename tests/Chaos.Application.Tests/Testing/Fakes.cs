@@ -52,6 +52,10 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<ScratchTaskLinkRecord> PadTaskLinks = [];
     public readonly HashSet<(string PadItemId, string TagId)> PadTags = [];
     public readonly List<BoardSettingsRecord> BoardSettings = [];
+    public readonly List<TaskDelegationRecord> Delegations = [];
+    public readonly List<NudgeRecord> Nudges = [];
+    public readonly List<SpaceUpdateRecord> SpaceUpdates = [];
+    public readonly List<(string SpaceId, Chaos.Application.People.SpacePerson Person)> People = [];
 
     public Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default) =>
         operation(new Session(this), ct);
@@ -63,7 +67,7 @@ public sealed class InMemoryStore : IApplicationStore
     {
         public IProfileStore Profiles { get; } = new FakeProfileStore(owner.Profiles);
         public ISpaceStore Spaces { get; } = new FakeSpaceStore(owner.Spaces, owner.SpaceStates, owner.Tasks);
-        public IPeopleStore People => throw new NotSupportedException("This test store does not implement people.");
+        public IPeopleStore People { get; } = new FakePeopleStore(owner.People);
         public IContainerStore Containers { get; } = new FakeContainerStore(owner.Containers, owner.Tasks);
         public ISectionStore Sections { get; } = new FakeSectionStore(owner.Sections);
         public ISubtaskStore Subtasks { get; } = new FakeSubtaskStore(owner.Subtasks);
@@ -84,6 +88,8 @@ public sealed class InMemoryStore : IApplicationStore
         public IRecurrenceStore Recurrence => throw new NotSupportedException("This test store does not implement recurrence.");
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
         public IWaitingStore Waiting { get; } = new FakeWaitingStore(owner.Waiting, owner.FollowUps);
+        public IDelegationStore Delegations { get; } = new FakeDelegationStore(owner.Delegations, owner.Nudges);
+        public ISpaceUpdateStore SpaceUpdates { get; } = new FakeSpaceUpdateStore(owner.SpaceUpdates);
         public INotificationJobStore Notifications { get; } = new FakeNotificationJobStore(owner.Jobs);
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
         public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
@@ -93,6 +99,65 @@ public sealed class InMemoryStore : IApplicationStore
         public Chaos.Application.Activity.IActivityRecorder Activity => Chaos.Application.Activity.NullActivityRecorder.Instance;
         public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
         public IAttachmentStore Attachments => throw new NotSupportedException("This test store does not implement attachments; they are tested against SQLite.");
+    }
+}
+
+public sealed class FakePeopleStore(List<(string SpaceId, Chaos.Application.People.SpacePerson Person)> people) : IPeopleStore
+{
+    public Task<IReadOnlyList<Chaos.Application.People.SpacePerson>> ListAsync(string spaceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<Chaos.Application.People.SpacePerson>>(people.Where(entry => entry.SpaceId == spaceId).Select(entry => entry.Person).ToList());
+}
+
+public sealed class FakeSpaceUpdateStore(List<SpaceUpdateRecord> rows) : ISpaceUpdateStore
+{
+    public Task<SpaceUpdateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(row => row.Id == id));
+    public Task<IReadOnlyList<SpaceUpdateRecord>> ListAsync(string spaceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SpaceUpdateRecord>>(rows.Where(row => row.SpaceId == spaceId && row.DeletedAtUtc is null).OrderByDescending(row => row.CreatedAtUtc).ToList());
+    public Task AddAsync(SpaceUpdateRecord row, CancellationToken ct)
+    {
+        rows.RemoveAll(existing => existing.Id == row.Id);
+        rows.Add(row);
+        return Task.CompletedTask;
+    }
+    public Task<SpaceUpdateRecord?> UpdateAsync(SpaceUpdateRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var index = rows.FindIndex(existing => existing.Id == row.Id);
+        if (index < 0 || rows[index].Version != expectedVersion) return Task.FromResult<SpaceUpdateRecord?>(null);
+        rows[index] = row;
+        return Task.FromResult<SpaceUpdateRecord?>(row);
+    }
+}
+
+public sealed class FakeDelegationStore(List<TaskDelegationRecord> delegations, List<NudgeRecord> nudges) : IDelegationStore
+{
+    public Task<TaskDelegationRecord?> GetAsync(string id, CancellationToken ct) => Task.FromResult(delegations.FirstOrDefault(row => row.Id == id));
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListByTaskAsync(string taskId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.TaskId == taskId && row.DeletedAtUtc is null).ToList());
+    public Task<TaskDelegationRecord?> FindLiveForTaskAsync(string taskId, CancellationToken ct) =>
+        Task.FromResult(delegations.FirstOrDefault(row => row.TaskId == taskId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)));
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveFromAsync(string memberId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.FromMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)).ToList());
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveToAsync(string memberId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TaskDelegationRecord>>(delegations.Where(row => row.ToMemberId == memberId && row.DeletedAtUtc is null && Chaos.Sync.DelegationTransitions.IsActive(row.State)).ToList());
+    public Task AddAsync(TaskDelegationRecord row, CancellationToken ct)
+    {
+        delegations.RemoveAll(existing => existing.Id == row.Id);
+        delegations.Add(row);
+        return Task.CompletedTask;
+    }
+    public Task<TaskDelegationRecord?> UpdateAsync(TaskDelegationRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var index = delegations.FindIndex(existing => existing.Id == row.Id);
+        if (index < 0 || delegations[index].Version != expectedVersion) return Task.FromResult<TaskDelegationRecord?>(null);
+        delegations[index] = row;
+        return Task.FromResult<TaskDelegationRecord?>(row);
+    }
+    public Task<IReadOnlyList<NudgeRecord>> ListNudgesAsync(string delegationId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NudgeRecord>>(nudges.Where(row => row.DelegationId == delegationId).ToList());
+    public Task AddNudgeAsync(NudgeRecord row, CancellationToken ct)
+    {
+        nudges.Add(row);
+        return Task.CompletedTask;
     }
 }
 

@@ -1840,7 +1840,7 @@ nothing is lost.
 
 **Exit:** a monthly book-club host rotates correctly across members and devices.
 
-### [ ] Q13: Delegation, follow-ups and nudges
+### [x] Q13: Delegation, follow-ups and nudges
 
 **Depends on:** Q8. **Migration:** `046_delegation.sql` (`TaskDelegations`, `Nudges`, `FollowUps.DelegationId`).
 **Read:** 9.11.
@@ -1868,7 +1868,11 @@ nothing is lost.
 **Exit:** Sara delegates to Omar, gets reminded to follow up, nudges him, and reviews his result, with everything in
 the diary.
 
-### [ ] Q14: Space and project summaries, and standups
+**Progress note 2026-11-23 (implementation and verification).** Completed the desktop delegation RPC and UI, including follow-up actions, hand-off, summaries and quick-add wiring. Added the AfterWaiting delegation follow-up, based on the delegation's start, and retained a rejected response in the editor. PostgreSQL tests demonstrated offline accept versus withdrawal with both diary entries, and the review and nudge flow; recipient quiet hours were verified. The full gate built successfully and passed Domain 328, Application 136, Infrastructure 787, Sync 82 and Server 221, but stopped in Desktop with 100 passed and one GitHub scheduler timeout. A serial Desktop rerun passed 101; the updated Application suite passed 137; focused delegation, quiet-hours and conflict tests passed; Slopwatch reported 0 issues. Desktop frontend passed 329, web passed 17, and web lint passed with its existing hook-dependency warning. The gate was not a clean pass, so Q13 remains unticked. Smallest next action: run `pwsh -File eng/verify.ps1` against PostgreSQL and tick Q13 only after a clean gate.
+
+**Progress note 2026-11-23 (completion).** Reran the full gate with test concurrency limited to one and disposable PostgreSQL 18.7 via `wslc`. It passed: Domain 328, Application 137, Infrastructure 787, Sync 82, Server 221 and Desktop 101 (1,656 total), no skips; Slopwatch found 0 issues. Desktop frontend passed 329; web passed 17; web lint passed with its existing hook-dependency warning. The test container was removed. Nothing remains open for Q13; smallest next action is Q14.
+
+### [x] Q14: Space and project summaries, and standups
 
 **Depends on:** Q13. **Migration:** `047_space_updates.sql` (`SpaceUpdates`). **Read:** 9.12.
 
@@ -1882,6 +1886,25 @@ the diary.
 
 **Exit:** the evening summary tells Lina what her team finished and what became blocked, and she can post her
 standup after editing it.
+
+**Progress note 2026-11-23 (implementation and verification).** Added the spaces section to the evening and weekly
+summaries (`SummaryFactsBuilder`): for each shared space the person belongs to, completions, new tasks and newly blocked
+work by other members (status moved to Waiting, or a delegation declined) from the space's own history, the open tasks due
+in the seven days after the period with their assignees, and how each project moved; the person's own work and meetings
+stay out, and summary rows stay personal. `summaries.standupDraft` prefills a standup from the person's own completed,
+planned and blocked work in one space (headings in the six languages); `spaceUpdates.post`, `edit` and `delete` are
+separate explicit commands over the new synced kind `space_update` (`SpaceUpdates`, migration 047, client schema 11):
+`create` Commenter with the author as the caller, `entry` Author, `deleted` Author or Owner, refused in the account
+stream. The space Overview lists standups newest first, with edit for the author and delete for the author or an owner.
+Help and `docs/decisions.md` record the choices. PostgreSQL tests cover a viewer posting, forged authors, and the
+two-account flow (Omar completes a task; Lina's evening summary names it; her edited standup reaches every Overview;
+the owner removes it). The full gate (`eng/verify.ps1 -MaxParallelTests 1`) against disposable PostgreSQL 18.7 via
+`wslc` passed: Domain 328, Application 141, Infrastructure 792, Sync 82, Server 224 and Desktop 102 (1,669 total), no
+skips; Slopwatch found 0 issues. Desktop frontend passed 331; web passed 17; web lint passed with its existing
+hook-dependency warning. A first gate run stopped in the Release build on a transient failure (62 cascading type errors
+in `Chaos.Server.Tests`); the same build and the rerun passed without any change, and its cause was not found. The PWA
+shows neither summaries nor spaces yet (Q21), so it is untouched. The test container was removed. Nothing remains open
+for Q14; smallest next action is Q15.
 
 ### [ ] Q15: GitHub in shared spaces and the missing GitHub fields
 
