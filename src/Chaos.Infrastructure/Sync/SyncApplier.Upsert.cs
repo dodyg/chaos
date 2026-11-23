@@ -23,6 +23,8 @@ public sealed partial class SyncApplier
             : ReadClockWatermarks(connection, table, change);
 
         var merge = Merge.Apply(stored, change);
+        var textPlan = PlanText(connection, table, key, change, stored, exists, ref merge);
+        var drawingMerged = PlanDrawing(table, change, stored, exists, ref merge);
         if (!merge.Changed)
         {
             return StepResult.Skipped; // local is newer, or this exact change came back (equal clocks)
@@ -102,6 +104,9 @@ public sealed partial class SyncApplier
         try
         {
             await WriteWinnersAsync(connection, schema, table, key, exists, merge, wall, change, ct);
+            if (textPlan is not null) FinishText(connection, table, key, change, textPlan);
+            if (drawingMerged)
+                SyncSql.Execute(connection, $"INSERT OR IGNORE INTO SyncPending (Kind, EntityKey, GroupName) VALUES ({SyncSql.Literal(table.Kind)}, {SyncSql.Literal(change.EntityKey)}, 'strokes');");
             if (table.Kind == "view_alert_setting" && merge.Winners.ContainsKey("settings"))
             {
                 using var resetBaseline = connection.CreateCommand();

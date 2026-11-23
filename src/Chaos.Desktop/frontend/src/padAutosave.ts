@@ -27,7 +27,14 @@ export type DraftSnapshot = {
   error: string | null;
   /** The note's row version after the latest acknowledged save, for later archive/delete calls. */
   version: string;
+  /** True while the text holds a block that changed in two places (PLAN3 9.9) and still has its marker lines. */
+  conflicted: boolean;
 };
+
+/** Merges the editor's unsaved text with a remote replacement, both derived from the base (the host's three-way merge). */
+export type TextMerger = (base: string, local: string, remote: string) => Promise<string>;
+
+const conflictMarker = /^<<<<<<< /m;
 
 export type DraftSaverOptions = {
   itemId: string;
@@ -48,6 +55,10 @@ export class DraftSaver {
   private status: SaveStatus = "saved";
   private error: string | null = null;
   private version: string;
+  /** The text last agreed with the store: what was loaded, last saved or last merged in. */
+  private base: string;
+  /** The texts of recent save requests, so their own echoes coming back are not taken for a remote change. */
+  private sent: string[];
   private timer: unknown = null;
   private flushing: Promise<boolean> | null = null;
   private readonly listeners = new Set<(snapshot: DraftSnapshot) => void>();
@@ -61,6 +72,8 @@ export class DraftSaver {
     this.revision = options.revision;
     this.acknowledged = options.revision;
     this.version = options.version;
+    this.base = options.text;
+    this.sent = [options.text];
     this.save = options.save;
     this.delayMs = options.delayMs ?? 500;
     this.scheduler = options.scheduler ?? browserScheduler;
@@ -75,6 +88,7 @@ export class DraftSaver {
       status: this.status,
       error: this.error,
       version: this.version,
+      conflicted: conflictMarker.test(this.text),
     };
   }
 
@@ -106,6 +120,30 @@ export class DraftSaver {
     if (this.status !== "saving" && this.status !== "failed") this.status = "pending";
     this.notify();
     return this.flush();
+  }
+
+  /**
+   * The store holds a text this editor did not write (another member's edit arrived). With nothing unsaved the
+   * editor takes it silently; with unsaved typing the two are merged three ways and the result is saved.
+   */
+  async adoptRemote(remote: string, merge: TextMerger): Promise<void> {
+    if (this.flushing) await this.flushing.catch(() => false);
+    if (remote === this.text || remote === this.base || this.sent.includes(remote)) return;
+    if (!this.dirty) {
+      this.text = remote;
+      this.base = remote;
+      this.sent = [remote];
+      this.notify();
+      return;
+    }
+    const merged = await merge(this.base, this.text, remote);
+    this.base = remote;
+    if (merged === this.text) return;
+    this.text = merged;
+    this.revision += 1;
+    if (this.status !== "saving" && this.status !== "failed") this.status = "pending";
+    this.schedule();
+    this.notify();
   }
 
   /** The row version changed through another command (archive, tag, …). */
@@ -149,6 +187,7 @@ export class DraftSaver {
     while (this.acknowledged < this.revision) {
       const revision = this.revision;
       const text = this.text;
+      this.sent = [...this.sent.slice(-15), text];
       this.status = "saving";
       this.notify();
       let outcome: SaveOutcome;
@@ -172,6 +211,7 @@ export class DraftSaver {
         return false;
       }
       this.acknowledged = Math.max(this.acknowledged, revision);
+      this.base = text;
       this.version = outcome.version;
       this.error = null;
     }

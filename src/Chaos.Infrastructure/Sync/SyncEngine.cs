@@ -111,6 +111,9 @@ public sealed class SyncEngine : IDisposable
     /// <summary>Raised after every cycle with what it did; Settings and tests listen.</summary>
     public event Action<SyncCycleResult>? CycleFinished;
 
+    /// <summary>Raised with each presence line the service pushes (PLAN3 9.9). Presence never starts a pull.</summary>
+    public event Action<string>? PresenceReceived;
+
     /// <summary>Starts the background loop. Calling it twice does nothing.</summary>
     public void Start()
     {
@@ -397,7 +400,12 @@ public sealed class SyncEngine : IDisposable
                 {
                     silence.CancelAfter(_options.EventSilenceLimit);
                     SetRuntime(r => r with { Streaming = true });
-                    if (line.StartsWith("data:", StringComparison.Ordinal))
+                    if (line.StartsWith("data:", StringComparison.Ordinal) && line.Contains("\"presence\"", StringComparison.Ordinal))
+                    {
+                        failures = 0;
+                        PresenceReceived?.Invoke(line);
+                    }
+                    else if (line.StartsWith("data:", StringComparison.Ordinal))
                     {
                         failures = 0;
                         if (MembershipVersion(line) is { } version && version != Interlocked.Read(ref _membershipVersionSeen))
@@ -687,10 +695,35 @@ public sealed class SyncEngine : IDisposable
                 command.Parameters.AddWithValue($"$id{index}", changeIds[index]);
             }
 
+            // The server now holds these texts: they become the base of later three-way merges (PLAN3 9.9).
+            RecordAcknowledgedText(connection, $"({string.Join(", ", names)})", command);
             command.CommandText = $"DELETE FROM SyncOutbox WHERE ChangeId COLLATE NOCASE IN ({string.Join(", ", names)});";
             command.ExecuteNonQuery();
             return Task.FromResult(0);
         }, ct);
+    }
+
+    private static void RecordAcknowledgedText(SqliteConnection connection, string idList, SqliteCommand parameters)
+    {
+        var texts = new List<(string Kind, string Key, string Hlc, string Text)>();
+        using (var read = connection.CreateCommand())
+        {
+            read.CommandText = $"SELECT Kind, EntityKey, PayloadJson FROM SyncOutbox WHERE Op = 'upsert' AND Kind IN ('pad','page','task') AND ChangeId COLLATE NOCASE IN {idList};";
+            foreach (SqliteParameter parameter in parameters.Parameters) read.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                var kind = reader.GetString(0);
+                if (SyncApplier.TextGroupOf(kind) is not { } text) continue;
+                using var document = JsonDocument.Parse(reader.GetString(2));
+                if (!document.RootElement.TryGetProperty("groups", out var groups) || !groups.TryGetProperty(text.Group, out var group)
+                    || !group.TryGetProperty("values", out var values) || !values.TryGetProperty(text.Column, out var value)
+                    || group.GetProperty("hlc").GetString() is not { } hlc) continue;
+                texts.Add((kind, reader.GetString(1), hlc, value.ValueKind == JsonValueKind.String ? value.GetString()! : string.Empty));
+            }
+        }
+
+        foreach (var (kind, key, hlc, text) in texts) SyncApplier.WriteTextBase(connection, kind, key, hlc, text);
     }
 
     private static (List<string> Accepted, List<(string ChangeId, string Reason)> Rejected) ReadPushAnswer(string body)

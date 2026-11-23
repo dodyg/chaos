@@ -666,6 +666,7 @@ public static class SyncCatalog
         new SyncTable("SyncOutbox", "sync_outbox", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 524), // outgoing queue
         new SyncTable("SyncInboxParked", "sync_inbox_parked", SyncMode.LocalOnly, ["ChangeId"], ApplyOrder: 525), // parked remote changes (§7.8)
         new SyncTable("SyncAttention", "sync_attention", SyncMode.LocalOnly, ["Id"], ApplyOrder: 526), // notices for the person (§7.9)
+        new SyncTable("TextBase", "text_base", SyncMode.LocalOnly, ["Kind", "EntityKey"], ApplyOrder: 544), // last agreed text for three-way merge (§9.9)
         new SyncTable("CollaborationNotices", "collaboration_notice", SyncMode.LocalOnly, ["Id"], ApplyOrder: 543),
         new SyncTable("ActivityLog", "activity_log", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 535), // system event stream (PLAN2 §6.4)
         new SyncTable("ActivityLogEntities", "activity_log_entity", SyncMode.LocalOnly, ["Seq", "Kind", "EntityKey"], ApplyOrder: 536),

@@ -87,11 +87,13 @@ public static class SyncEvents
             return;
         }
         var response = Start(http);
-        var queue = Channel.CreateUnbounded<(Guid? Stream, long? Seq, long? Membership)>();
+        var queue = Channel.CreateUnbounded<(Guid? Stream, long? Seq, long? Membership, string? Presence)>();
         using var streamSubscription = broadcaster.SubscribeStreams(caller.AccountId,
-            (stream, seq) => queue.Writer.TryWrite((stream, seq, null)));
+            (stream, seq) => queue.Writer.TryWrite((stream, seq, null, null)));
         using var membershipSubscription = broadcaster.SubscribeMembership(caller.AccountId,
-            version => queue.Writer.TryWrite((null, null, version)));
+            version => queue.Writer.TryWrite((null, null, version, null)));
+        using var presenceSubscription = broadcaster.SubscribePresence(caller.AccountId,
+            payload => queue.Writer.TryWrite((null, null, null, payload)));
         var ids = membership.Roles.Keys.Append(caller.AccountId).ToArray();
         var heads = await db.SyncStreams.AsNoTracking().Where(s => ids.Contains(s.Id))
             .Select(s => new { s.Id, Seq = s.NextSeq - 1 }).ToListAsync(ct);
@@ -106,7 +108,7 @@ public static class SyncEvents
             {
                 using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 idle.CancelAfter(options.Value.EventKeepAlive);
-                (Guid? Stream, long? Seq, long? Membership) next;
+                (Guid? Stream, long? Seq, long? Membership, string? Presence) next;
                 try
                 {
                     next = await queue.Reader.ReadAsync(idle.Token);
@@ -117,9 +119,11 @@ public static class SyncEvents
                     continue;
                 }
 
-                var text = next.Membership is { } version
-                    ? $"data: {{\"membership\":{Number(version)}}}\n\n"
-                    : $"data: {{\"stream\":\"{next.Stream:D}\",\"seq\":{Number(next.Seq!.Value)}}}\n\n";
+                var text = next.Presence is { } presence
+                    ? $"data: {presence}\n\n"
+                    : next.Membership is { } version
+                        ? $"data: {{\"membership\":{Number(version)}}}\n\n"
+                        : $"data: {{\"stream\":\"{next.Stream:D}\",\"seq\":{Number(next.Seq!.Value)}}}\n\n";
                 await WriteAsync(response, text, ct);
             }
         }

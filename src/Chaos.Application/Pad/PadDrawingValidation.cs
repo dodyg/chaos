@@ -7,7 +7,8 @@ namespace Chaos.Application.Pad;
 
 /// <summary>
 /// Checks what the drawing canvas sends before it is stored (PLAN2 P10). The stored form is
-/// <c>{"v":1,"strokes":[{"tool":"pen","color":"#112233","size":4,"points":[[x,y,pressure],...]}]}</c>.
+/// <c>{"v":1,"strokes":[{"tool":"pen","color":"#112233","size":4,"points":[[x,y,pressure],...]}]}</c>,
+/// or, since PLAN3 Q11, <c>{"v":2,"strokes":[{"id":"…","createdAt":ms,…}],"erased":["id",...]}</c>.
 /// Only the shape and the size limits are enforced here; the renderer owns how strokes look.
 /// </summary>
 public static class PadDrawingValidation
@@ -15,6 +16,8 @@ public static class PadDrawingValidation
     public const int MaxStrokesBytes = 4 * 1024 * 1024;
     public const int MaxStrokes = 20_000;
     public const int MaxPoints = 1_000_000;
+    public const int MaxStrokeIdLength = 64;
+    public const int MaxErased = 100_000;
     public const int MinSide = 1;
     public const int MaxSide = 20_000;
     public const int DefaultWidth = 1600;
@@ -57,10 +60,19 @@ public static class PadDrawingValidation
         {
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("v", out var version) || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var number) || number != 1
+                || !root.TryGetProperty("v", out var version) || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var number) || number is not (1 or 2)
                 || !root.TryGetProperty("strokes", out var strokes) || strokes.ValueKind != JsonValueKind.Array)
             {
                 throw AppException.Validation("strokes", "The drawing data is not in a format Chaos understands.");
+            }
+
+            if (number == 2 && root.TryGetProperty("erased", out var erased))
+            {
+                if (erased.ValueKind != JsonValueKind.Array || erased.GetArrayLength() > MaxErased
+                    || erased.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String || (item.GetString()?.Length ?? 0) > MaxStrokeIdLength))
+                {
+                    throw AppException.Validation("strokes", "The drawing's erased list is not valid.");
+                }
             }
 
             var count = 0;
@@ -75,6 +87,12 @@ public static class PadDrawingValidation
                 if (stroke.ValueKind != JsonValueKind.Object || !stroke.TryGetProperty("points", out var list) || list.ValueKind != JsonValueKind.Array)
                 {
                     throw AppException.Validation("strokes", "A stroke in the drawing is malformed.");
+                }
+
+                // Version 2 (PLAN3 9.9): every stroke has a stable ID so two members' strokes can be united.
+                if (number == 2 && (!stroke.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(id.GetString()) || id.GetString()!.Length > MaxStrokeIdLength))
+                {
+                    throw AppException.Validation("strokes", "A stroke in the drawing has no valid ID.");
                 }
 
                 points += list.GetArrayLength();

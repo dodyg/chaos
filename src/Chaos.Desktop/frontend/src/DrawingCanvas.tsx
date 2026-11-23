@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   eraseAt,
+  reconcileErased,
+  upgradeDrawing,
   highlighterAlpha,
   isUsableRegion,
   outlinePath,
@@ -163,7 +165,7 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
       onSelectRegion?.(null);
     } else {
       live.current = {
-        stroke: { tool, color, size, points: [[x, y, pressure]] },
+        stroke: { tool, color, size, points: [[x, y, pressure]], id: crypto.randomUUID(), createdAt: Date.now() },
         erasing: false,
         dragFrom: null,
         pointer: event.pointerId,
@@ -209,7 +211,8 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
     live.current = null;
     if (gesture.stroke) {
       const before = drawingRef.current;
-      commit({ v: 1, strokes: [...before.strokes, gesture.stroke] }, before);
+      const upgraded = upgradeDrawing(before);
+      commit({ v: 2, strokes: [...upgraded.strokes, gesture.stroke], erased: upgraded.erased }, before);
     } else if (gesture.erasing && eraseBefore.current) {
       const before = eraseBefore.current;
       eraseBefore.current = null;
@@ -230,8 +233,9 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
   }
 
   function undo() {
-    const previous = history.current.undo(drawingRef.current);
-    if (!previous) return;
+    const restored = history.current.undo(drawingRef.current);
+    if (!restored) return;
+    const previous = reconcileErased(drawingRef.current, restored);
     setDrawing(previous);
     drawingRef.current = previous;
     emit(previous);
@@ -239,8 +243,9 @@ export function DrawingCanvas({ width, height, value, onChange, onSelectRegion, 
   }
 
   function redo() {
-    const next = history.current.redo(drawingRef.current);
-    if (!next) return;
+    const redone = history.current.redo(drawingRef.current);
+    if (!redone) return;
+    const next = reconcileErased(drawingRef.current, redone);
     setDrawing(next);
     drawingRef.current = next;
     emit(next);

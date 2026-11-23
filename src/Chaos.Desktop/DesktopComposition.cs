@@ -71,6 +71,7 @@ internal sealed class DesktopComposition : IDisposable
     private readonly Chaos.Infrastructure.Service.ServiceAddressStore _serviceAddress;
     private readonly Chaos.Infrastructure.Service.ChaosServiceClient _serviceClient;
     private readonly Chaos.Infrastructure.Sync.SyncEngine _syncEngine;
+    private readonly Chaos.Infrastructure.Sync.PresenceClient _presence;
     private readonly Chaos.Infrastructure.Sync.SyncStatusReader _syncStatus;
     private readonly Chaos.Infrastructure.Service.AccountJoinService _accountJoin;
     private readonly Chaos.Infrastructure.Attachments.AttachmentTransfer _attachmentTransfer;
@@ -175,6 +176,8 @@ internal sealed class DesktopComposition : IDisposable
                 images: new Chaos.Infrastructure.Attachments.SkiaImageProcessor(),
                 thumbnails: new Chaos.Infrastructure.Attachments.DirectoryThumbnailCache(_storage.Options.ThumbnailsDirectory),
                 availability: _attachmentTransfer);
+            _presence = new Chaos.Infrastructure.Sync.PresenceClient(store, _serviceClient, clock);
+            _syncEngine.PresenceReceived += line => _presence.Apply(line);
             _syncEngine.CycleFinished += _ => _attachmentTransfer.Wake();
             _syncStatus = new Chaos.Infrastructure.Sync.SyncStatusReader(store, _syncEngine);
             _accountJoin = new Chaos.Infrastructure.Service.AccountJoinService(_serviceClient, new Chaos.Infrastructure.Sync.SyncAccountState(store), protection, clock, _syncEngine.Wake);
@@ -292,6 +295,8 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddPadRpcService(new PadRpcService(new PadCommands(store, ids, clock)));
         rpc.AddSiteRpcService(new SiteRpcService(_siteNotes));
         rpc.AddPageRpcService(new PageRpcService(new PageCommands(store, ids, clock)));
+        rpc.AddTextMergeRpcService(new TextMergeRpcService());
+        rpc.AddPresenceRpcService(new PresenceRpcService(_presence));
         rpc.AddAttachmentRpcService(new AttachmentRpcService(_attachmentCommands, AttachmentRpcService.DefaultOpenedDirectory, () => _dataRpc.ExportDirectory, transfer: _attachmentTransfer));
         rpc.AddCaptureRpcService(new CaptureRpcService(new CaptureCommands(store, ids, clock)));
         rpc.AddMyDayRpcService(new MyDayRpcService(new MyDayCommands(store, clock)));

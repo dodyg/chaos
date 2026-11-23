@@ -139,11 +139,14 @@ public sealed class ScratchPadTests
     {
         using var host = await Host.StartAsync();
         var id = (await host.Pad.CreateDrawingAsync(new(Op()))).Item.Id;
-        foreach (var bad in new[] { "", "not json", "[]", "{\"v\":2,\"strokes\":[]}", "{\"v\":1,\"strokes\":[{\"x\":1}]}" })
+        foreach (var bad in new[] { "", "not json", "[]", "{\"v\":3,\"strokes\":[]}", "{\"v\":2,\"strokes\":[{\"points\":[[1,1,0.5]]}]}", "{\"v\":2,\"strokes\":[],\"erased\":[1]}", "{\"v\":1,\"strokes\":[{\"x\":1}]}" })
         {
             var error = await ThrowsAsync(() => host.Pad.SaveDrawingAsync(new(id, 1, bad)));
             await Assert.That(error.Kind).IsEqualTo(AppErrorKind.Validation);
         }
+
+        var v2 = "{\"v\":2,\"strokes\":[{\"id\":\"a\",\"createdAt\":1,\"points\":[[1,1,0.5]]}],\"erased\":[\"b\"]}";
+        await Assert.That((await host.Pad.SaveDrawingAsync(new(id, 1, v2))).Applied).IsTrue();
 
         var big = "{\"v\":1,\"strokes\":[],\"pad\":\"" + new string('x', PadDrawingValidation.MaxStrokesBytes) + "\"}";
         await Assert.That((await ThrowsAsync(() => host.Pad.SaveDrawingAsync(new(id, 1, big)))).Kind).IsEqualTo(AppErrorKind.Validation);

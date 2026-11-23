@@ -1800,7 +1800,9 @@ rebuild). **Read:** 9.6, 9.7.
 
 **Exit:** members see the same board, calendar and shared views. Alerts stay personal.
 
-### [ ] Q11: Shared pads and pages (live, merged)
+### [x] Q11: Shared pads and pages (live, merged)
+
+**Progress note 2026-11-23 (completion).** Added `Chaos.Domain.Text.Diff3` (20 fixtures, identity, one-sided and order-independence property tests; an oversize comparison becomes a conflict block instead of throwing) and migration 044 (`TextBase`). The applier merges pad text, page text and task notes three ways, including a remote edit with an older clock that is newer than the base, queues the result as a new local change and keeps the remote page text as a version. Added the `text.merge3` RPC, editor merge and a conflict notice in the pad and page editors, drawings v2 (stroke IDs, erased list, union merge, v1 upgrade on first edit, C# validation) and presence (service endpoints, event-stream fan-out, 45 s expiry, client heartbeat and line). Conflict labels are author names on both devices rather than `yours`, so the two devices write identical text (decisions 2026-11-23). PostgreSQL via wslc covers presence arriving within 3 s, expiry at 45 s and nothing recorded for Personal; two-device SQLite tests cover different-paragraph merge, same-line markers and drawings from two members. The full gate passed with all projects serialized: Domain 312, Application 125, Infrastructure 777, Sync 31, Server 216 and Desktop 100 (1,561 total), no skips; Slopwatch found 0 issues. Desktop frontend passed 320; web passed 17 and lint passed with its existing hook-dependency warning. Not done: the task notes editor has no renderer-side merge or presence line (the applier still merges task notes), and presence is per service process. Smallest next action: begin Q12.
 
 **Depends on:** Q8 and E2. **Migration:** `044_text_merge.sql` (`TextBase`). **Read:** 9.9.
 

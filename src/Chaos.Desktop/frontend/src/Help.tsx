@@ -549,6 +549,15 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             Members can open attachments in a shared space. Owners and Editors can add them; Viewers can attach files to their own diary
             entries. Shared files count against the uploader’s storage allowance and remain in the space if that person leaves.
           </p>
+          <h3 className="font-semibold">Writing together</h3>
+          <p>
+            Notes and pages in a shared space appear on other members’ screens within seconds. When two people change the same note or page
+            at once, Chaos combines the changes line by line, so edits to different paragraphs both stay. Where the same lines changed in two
+            places, both versions are kept between marker lines (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>, <code>=======</code>,{" "}
+            <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code>) with a notice; edit the text and delete the marker lines. A page keeps the text it
+            replaced under Versions. On a shared drawing, everyone’s strokes are kept, and a stroke one person erases stays erased. A line under the
+            text says who else has it open (“Omar is editing”). It is never shown for Personal notes.
+          </p>
           <h3 className="font-semibold">Invites</h3>
           <p>
             An owner can invite by email or make a link. A link can expire (1, 7 or 30 days, or never) and can be limited to 1 or 10 uses.

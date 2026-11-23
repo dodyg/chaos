@@ -2,14 +2,15 @@ import { getStroke } from "perfect-freehand";
 
 /**
  * The pad drawing model (PLAN2 P10): pure data and geometry, no DOM. A drawing is stored as
- * `{"v":1,"strokes":[...]}`; each stroke is a point list `[x, y, pressure]` in drawing units, the
+ * `{"v":1,"strokes":[...]}`, or since PLAN3 Q11 `{"v":2,"strokes":[...],"erased":[ids]}` in which each stroke has a stable `id` and a
+ * `createdAt`, so two members drawing on one drawing can be merged by uniting strokes and removing erased ones; each stroke is a point list `[x, y, pressure]` in drawing units, the
  * units of the canvas the strokes were drawn on, so a drawing looks the same at any display size.
  */
 
 export type Point = [x: number, y: number, pressure: number];
 export type InkTool = "pen" | "highlighter";
-export type Stroke = { tool: InkTool; color: string; size: number; points: Point[] };
-export type Drawing = { v: 1; strokes: Stroke[] };
+export type Stroke = { tool: InkTool; color: string; size: number; points: Point[]; id?: string; createdAt?: number };
+export type Drawing = { v: 1 | 2; strokes: Stroke[]; erased?: string[] };
 export type Region = { x: number; y: number; w: number; h: number };
 
 export const emptyDrawing: Drawing = { v: 1, strokes: [] };
@@ -39,7 +40,7 @@ const colorPattern = /^#[0-9a-fA-F]{6}$/;
 export function parseDrawing(json: string | null | undefined): Drawing {
   if (!json) return { v: 1, strokes: [] };
   try {
-    const raw = JSON.parse(json) as { strokes?: unknown };
+    const raw = JSON.parse(json) as { v?: unknown; strokes?: unknown; erased?: unknown };
     if (!raw || !Array.isArray(raw.strokes)) return { v: 1, strokes: [] };
     const strokes: Stroke[] = [];
     for (const item of raw.strokes as Record<string, unknown>[]) {
@@ -53,7 +54,16 @@ export function parseDrawing(json: string | null | undefined): Drawing {
       if (points.length === 0) continue;
       const color = typeof item.color === "string" && colorPattern.test(item.color) ? item.color : palette[0].value;
       const size = typeof item.size === "number" && item.size > 0 && item.size <= 200 ? item.size : penSizes[1].value;
-      strokes.push({ tool: item.tool === "highlighter" ? "highlighter" : "pen", color, size, points });
+      const stroke: Stroke = { tool: item.tool === "highlighter" ? "highlighter" : "pen", color, size, points };
+      if (raw.v === 2 && typeof item.id === "string" && item.id) {
+        stroke.id = item.id;
+        stroke.createdAt = typeof item.createdAt === "number" && Number.isFinite(item.createdAt) ? item.createdAt : 0;
+      }
+      strokes.push(stroke);
+    }
+    if (raw.v === 2) {
+      const erased = Array.isArray(raw.erased) ? (raw.erased as unknown[]).filter((id): id is string => typeof id === "string") : [];
+      return { v: 2, strokes, erased };
     }
     return { v: 1, strokes };
   } catch {
@@ -64,15 +74,41 @@ export function parseDrawing(json: string | null | undefined): Drawing {
 /** Coordinates keep two decimals: enough for any display, and a long drawing stays small. */
 export function serializeDrawing(drawing: Drawing): string {
   const round = (n: number) => Math.round(n * 100) / 100;
-  return JSON.stringify({
-    v: 1,
-    strokes: drawing.strokes.map((s) => ({
-      tool: s.tool,
-      color: s.color,
-      size: s.size,
-      points: s.points.map(([x, y, p]) => [round(x), round(y), round(p)]),
-    })),
-  });
+  const strokes = drawing.strokes.map((s) => ({
+    ...(drawing.v === 2 ? { id: s.id, createdAt: s.createdAt ?? 0 } : {}),
+    tool: s.tool,
+    color: s.color,
+    size: s.size,
+    points: s.points.map(([x, y, p]) => [round(x), round(y), round(p)]),
+  }));
+  return JSON.stringify(drawing.v === 2 ? { v: 2, strokes, erased: drawing.erased ?? [] } : { v: 1, strokes });
+}
+
+/**
+ * A v1 drawing becomes v2 the first time it is edited: its strokes get the IDs `legacy-0`, `legacy-1`, … in order and
+ * `createdAt` 0, the same IDs the host's merge gives a v1 drawing, so both sides agree on which stroke is which.
+ */
+export function upgradeDrawing(drawing: Drawing): Drawing & { v: 2; erased: string[] } {
+  if (drawing.v === 2) return { ...drawing, v: 2, erased: drawing.erased ?? [] };
+  return {
+    v: 2,
+    strokes: drawing.strokes.map((stroke, index) => ({ ...stroke, id: `legacy-${index}`, createdAt: 0 })),
+    erased: [],
+  };
+}
+
+/**
+ * The v2 drawing `next` as an edit of `previous`: a stroke that was in `previous` and is gone from `next` is recorded as erased
+ * (so a copy of it on another device does not bring it back), and one that is back in `next` (a redo) stops being erased.
+ */
+export function reconcileErased(previous: Drawing, next: Drawing): Drawing & { v: 2; erased: string[] } {
+  const before = upgradeDrawing(previous);
+  const after = upgradeDrawing(next);
+  const present = new Set(after.strokes.map((stroke) => stroke.id));
+  const erased = new Set(after.erased);
+  for (const stroke of before.strokes) if (stroke.id && !present.has(stroke.id)) erased.add(stroke.id);
+  for (const id of present) if (id) erased.delete(id);
+  return { v: 2, strokes: after.strokes, erased: [...erased] };
 }
 
 /** The filled outline of a stroke (perfect-freehand), as polygon vertices. */
@@ -127,7 +163,8 @@ export function strokeHit(stroke: Stroke, x: number, y: number, radius: number):
 /** Stroke-level eraser: removes every stroke under the point. Returns the same object when none was hit. */
 export function eraseAt(drawing: Drawing, x: number, y: number, radius: number): Drawing {
   const kept = drawing.strokes.filter((stroke) => !strokeHit(stroke, x, y, radius));
-  return kept.length === drawing.strokes.length ? drawing : { v: 1, strokes: kept };
+  if (kept.length === drawing.strokes.length) return drawing;
+  return reconcileErased(drawing, { ...drawing, strokes: kept });
 }
 
 /** The rectangle between two corner points, whichever way it was dragged, kept inside the drawing. */
@@ -183,4 +220,18 @@ export class StrokeHistory {
     this.past = [];
     this.future = [];
   }
+}
+
+/**
+ * Unites two versions of one drawing, as the host's merge does: strokes by ID, minus the erased IDs of both, ordered by
+ * `(createdAt, id)`. Used when another member's strokes arrive while this window holds strokes of its own.
+ */
+export function mergeDrawings(a: Drawing, b: Drawing): Drawing & { v: 2; erased: string[] } {
+  const left = upgradeDrawing(a);
+  const right = upgradeDrawing(b);
+  const erased = new Set([...left.erased, ...right.erased]);
+  const byId = new Map<string, Stroke>();
+  for (const stroke of [...left.strokes, ...right.strokes]) if (stroke.id && !erased.has(stroke.id) && !byId.has(stroke.id)) byId.set(stroke.id, stroke);
+  const strokes = [...byId.values()].sort((x, y) => (x.createdAt ?? 0) - (y.createdAt ?? 0) || (x.id! < y.id! ? -1 : x.id! > y.id! ? 1 : 0));
+  return { v: 2, strokes, erased: [...erased].sort() };
 }

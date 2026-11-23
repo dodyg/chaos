@@ -12,6 +12,7 @@ public sealed class SyncBroadcaster
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Action<long>>> _subscribers = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Action<Guid, long>>> _streamSubscribers = new();
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Action<long>>> _membershipSubscribers = new();
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Action<string>>> _presenceSubscribers = new();
 
     /// <summary>The accounts that have at least one open event stream in this process.</summary>
     public IReadOnlyList<Guid> SubscribedAccounts() =>
@@ -60,6 +61,35 @@ public sealed class SyncBroadcaster
                 _membershipSubscribers.TryRemove(accountId, out _);
             }
         });
+    }
+
+    /// <summary>Presence lines (PLAN3 9.9): in memory, for this process only, never stored.</summary>
+    public IDisposable SubscribePresence(Guid accountId, Action<string> onPresence)
+    {
+        var token = Guid.NewGuid();
+        var account = _presenceSubscribers.GetOrAdd(accountId, _ => new());
+        account[token] = onPresence;
+        return new Subscription(() =>
+        {
+            account.TryRemove(token, out _);
+            if (account.IsEmpty)
+            {
+                _presenceSubscribers.TryRemove(accountId, out _);
+            }
+        });
+    }
+
+    public void PublishPresence(Guid accountId, string payload)
+    {
+        if (!_presenceSubscribers.TryGetValue(accountId, out var account))
+        {
+            return;
+        }
+
+        foreach (var callback in account.Values)
+        {
+            callback(payload);
+        }
     }
 
     public void Publish(Guid accountId, long seq)

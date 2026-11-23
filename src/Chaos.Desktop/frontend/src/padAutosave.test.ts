@@ -171,3 +171,55 @@ test("the registry keeps unsaved drafts across navigation and flushes them all",
   registry.forget("a");
   assert.equal(registry.get("a"), undefined);
 });
+
+test("a remote text with nothing unsaved replaces the editor text silently", async () => {
+  const store = fakeStore();
+  const saver = new DraftSaver({ itemId: "n1", text: "one\n", revision: 1, version: "2", save: store.save });
+  let merged = 0;
+  await saver.adoptRemote("one\ntwo\n", async () => {
+    merged++;
+    return "";
+  });
+  assert.equal(saver.snapshot.text, "one\ntwo\n");
+  assert.equal(saver.snapshot.status, "saved");
+  assert.equal(merged, 0);
+});
+
+test("a remote text with unsaved typing is merged with it, saved, and a marked block raises the notice", async () => {
+  const store = fakeStore();
+  const saver = new DraftSaver({ itemId: "n1", text: "a\nb\n", revision: 1, version: "2", save: store.save });
+  saver.edit("A\nb\n");
+  const bases: string[] = [];
+  await saver.adoptRemote("a\nB\n", async (base, local, remote) => {
+    bases.push(base, local, remote);
+    return "A\nB\n";
+  });
+  assert.deepEqual(bases, ["a\nb\n", "A\nb\n", "a\nB\n"]);
+  assert.equal(saver.snapshot.text, "A\nB\n");
+  assert.equal(saver.snapshot.conflicted, false);
+  assert.equal(saver.snapshot.status, "pending");
+
+  saver.edit("A\nb\n");
+  await saver.adoptRemote("a\nB2\n", async () => "<<<<<<< yours\nb\n=======\nB2\n>>>>>>> remote\n");
+  assert.equal(saver.snapshot.conflicted, true);
+});
+
+test("the echo of the editor's own save is not taken for a remote change", async () => {
+  const store = fakeStore();
+  const saver = new DraftSaver({ itemId: "n1", text: "a\n", revision: 1, version: "2", save: store.save });
+  saver.edit("a\nb\n");
+  const flushing = saver.flush();
+  saver.edit("a\nb\nc\n");
+  let merged = 0;
+  const adopting = saver.adoptRemote("a\nb\n", async () => {
+    merged++;
+    return "";
+  });
+  store.answer(0);
+  await settle();
+  store.answer(1);
+  await flushing;
+  await adopting;
+  assert.equal(merged, 0);
+  assert.equal(saver.snapshot.text, "a\nb\nc\n");
+});

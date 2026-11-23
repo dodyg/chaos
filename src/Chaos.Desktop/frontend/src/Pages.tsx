@@ -1,4 +1,6 @@
 import React from "react";
+import { mergeText, conflictNotice } from "./textMerge";
+import { PresenceLine, usePresence } from "./presence";
 import {
   attachmentRpc,
   pageRpc,
@@ -756,6 +758,8 @@ function PageEditor({
           registry.forget(loaded.id);
         else existing.updateVersion(loaded.version);
       }
+      // Unsaved typing meets another member's text: merge the two instead of keeping only the draft (PLAN3 9.9).
+      else if (existing) await existing.adoptRemote(encodeDraft(loaded.title, loaded.markdown), mergeText);
     }
     setPage(loaded);
     setLoading(false);
@@ -792,6 +796,7 @@ function PageEditor({
     [page?.id, page?.markdown, page?.title, page?.deleted, registry, api],
   );
   const snapshot = useSnapshot(saver);
+  const others = usePresence(page?.spaceId, "page", page?.id, snapshot !== null && snapshot.status !== "saved");
   const decoded = snapshot ? decodeDraft(snapshot.text) : { title: page?.title ?? "", markdown: page ? page.markdown : draft };
   const title = isDaily ? dailyTitle(selected.date, today) : decoded.title;
   const markdown = decoded.markdown;
@@ -1076,6 +1081,7 @@ function PageEditor({
       ) : (
         <p className="py-2 text-sm text-muted-foreground">This page is empty. Select Edit to start writing.</p>
       )}
+      <PresenceLine members={others} />
       <SaveLine snapshot={snapshot} unwritten={!page} words={words} onRetry={() => void saver?.flush()} onCopy={() => void copyDraft()} />
     </div>
   );
@@ -1575,11 +1581,18 @@ function SaveLine({
         ? "Unsaved changes"
         : "Saved";
   return (
-    <p role="status" aria-live="polite" className="flex gap-2 text-xs text-muted-foreground">
-      <span>{label}</span>
-      <span aria-hidden="true">·</span>
-      {count}
-    </p>
+    <>
+      {snapshot?.conflicted && (
+        <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
+          {conflictNotice}
+        </p>
+      )}
+      <p role="status" aria-live="polite" className="flex gap-2 text-xs text-muted-foreground">
+        <span>{label}</span>
+        <span aria-hidden="true">·</span>
+        {count}
+      </p>
+    </>
   );
 }
 

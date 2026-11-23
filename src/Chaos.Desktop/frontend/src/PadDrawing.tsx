@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
 import { uploadFile, useAttachmentUrl, type AttachmentApi } from "./attachments";
 import { DrawingCanvas, renderDrawingPng } from "./DrawingCanvas";
-import { emptyDrawing, parseDrawing, serializeDrawing, type Drawing, type Region } from "./drawing";
+import { emptyDrawing, mergeDrawings, parseDrawing, serializeDrawing, type Drawing, type Region } from "./drawing";
+import { useActivity } from "./activity";
 
 type PadApi = Pick<typeof padRpc, "getDrawing" | "saveDrawing" | "makeTaskFromRegion">;
 
@@ -100,6 +101,26 @@ export function DrawingNote({
       void finish();
     };
   }, [item.id]);
+
+  // Another member's strokes arrived: unite them with the canvas, and save the union when this window had strokes they lack.
+  useActivity(["pad_drawing"], (entries, reason) => {
+    if (reason === "focus" || data === null) return;
+    const remote = entries.some(
+      (entry) => entry.source !== "user" && entry.entities.some((entity) => entity.kind === "pad_drawing" && entity.key === item.id),
+    );
+    if (!remote && reason !== "reset") return;
+    void api.getDrawing({ itemId: item.id }).then((result) => {
+      if (!mounted.current || !result.ok || !result.drawing) return;
+      const stored = parseDrawing(result.drawing.strokesJson);
+      const united = mergeDrawings(drawingRef.current, stored);
+      if (serializeDrawing(united) === serializeDrawing(drawingRef.current)) return;
+      if (dirty.current || serializeDrawing(united) !== serializeDrawing(stored)) changed(united);
+      else {
+        drawingRef.current = united;
+        setDrawing(united);
+      }
+    });
+  });
 
   /** Saves the strokes now; resolves false (and keeps them on the canvas) when the store refused. */
   async function saveNow(): Promise<boolean> {

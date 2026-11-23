@@ -1,4 +1,6 @@
 import React from "react";
+import { mergeText, conflictNotice } from "./textMerge";
+import { PresenceLine, usePresence } from "./presence";
 import {
   attachmentRpc,
   padRpc,
@@ -219,6 +221,14 @@ export function ScratchPad({
     [open?.id, open?.markdown, open?.kind, registry, api],
   );
   const snapshot = useSnapshot(saver);
+  const others = usePresence(open?.spaceId, "pad", open?.id, snapshot !== null && snapshot.status !== "saved");
+
+  // Another member's text reached a note this window holds unsaved typing for: merge the two (PLAN3 9.9).
+  React.useEffect(() => {
+    if (!open || open.kind === "drawing") return;
+    const existing = registry.get(open.id);
+    if (existing && (existing.dirty || existing.snapshot.status === "saving")) void existing.adoptRemote(open.markdown, mergeText);
+  }, [open?.id, open?.markdown, registry]);
 
   // A site note is written in the background: while one still says so, check back until it is done.
   const pendingSite = items.some((item) => item.markdown.includes("Summarizing in the background"));
@@ -758,6 +768,7 @@ export function ScratchPad({
                 placeholder="Write anything. Markdown works here."
                 areaClassName="min-h-48"
               />
+              {item.id === open?.id && <PresenceLine members={others} />}
               <SaveStatusLine snapshot={snapshot} onRetry={() => void saver.flush()} onCopy={() => void copyDraft(snapshot.text)} />
             </div>
           ) : (
@@ -1295,8 +1306,15 @@ function SaveStatusLine({ snapshot, onRetry, onCopy }: { snapshot: DraftSnapshot
   }
   const label = snapshot.status === "saving" ? "Saving…" : snapshot.status === "pending" ? "Unsaved changes" : "Saved";
   return (
-    <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
-      {label}
-    </p>
+    <>
+      {snapshot.conflicted && (
+        <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
+          {conflictNotice}
+        </p>
+      )}
+      <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
+        {label}
+      </p>
+    </>
   );
 }

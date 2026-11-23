@@ -126,6 +126,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
                 Run("DELETE FROM SyncOutbox;");
                 Run("DELETE FROM SyncPending;");
                 Run("DELETE FROM SyncClocks;");
+                Run("DELETE FROM TextBase;");
                 Run("DELETE FROM SyncInboxParked;");
 
                 using var check = connection.CreateCommand();
@@ -206,6 +207,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
             SyncSql.Execute(connection, "DELETE FROM SyncOutbox;");
             SyncSql.Execute(connection, "DELETE FROM SyncPending;");
             SyncSql.Execute(connection, "DELETE FROM SyncClocks;");
+            SyncSql.Execute(connection, "DELETE FROM TextBase;");
             SyncSql.Execute(connection, "DELETE FROM SyncInboxParked;");
             SyncSql.Execute(connection, "DELETE FROM SyncStreams;");
             ForgetRemoteAttachments(connection);

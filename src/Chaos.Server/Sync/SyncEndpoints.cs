@@ -22,6 +22,8 @@ public static class SyncEndpoints
                 "Sync:ChangeLogHorizon, Sync:HorizonJobInterval and Sync:EventKeepAlive must be greater than zero.")
             .ValidateOnStart();
         services.AddSingleton<SyncBroadcaster>();
+        services.AddSingleton<PresenceService>();
+        services.AddHostedService<PresenceSweepService>();
         services.TryAddSingleton<SyncKindCatalog>();
         services.AddScoped<SyncService>();
         services.AddScoped<CalendarCacheService>();
@@ -61,6 +63,37 @@ public static class SyncEndpoints
         sync.MapGet("/pull", PullV2);
         sync.MapGet("/snapshot", SnapshotV2);
         sync.MapGet("/events", SyncEvents.StreamV2Async);
+        v2.MapPost("/presence", ReportPresence);
+        v2.MapDelete("/presence", LeavePresence);
+    }
+
+    internal sealed record PresenceRequest(Guid SpaceId, string EntityKind, string EntityId, string? State);
+
+    /// <summary>PLAN3 9.9: "I have this open." Members only; a Personal entity is never recorded or sent.</summary>
+    private static async Task<IResult> ReportPresence(HttpContext http, ClaimsPrincipal user, PresenceRequest request, ChaosDbContext db,
+        SpaceMembershipCache memberships, PresenceService presence, CancellationToken ct)
+    {
+        if (!PresenceService.States.Contains(request.State)) return ApiErrors.Problem("invalid-presence", "The presence state must be viewing or editing.", StatusCodes.Status400BadRequest);
+        return await PresenceAsync(http, user, request, db, memberships, ct, (key, account, audience) => presence.Report(key, account, request.State!, audience));
+    }
+
+    private static Task<IResult> LeavePresence(HttpContext http, ClaimsPrincipal user, [AsParameters] PresenceRequest request, ChaosDbContext db,
+        SpaceMembershipCache memberships, PresenceService presence, CancellationToken ct) =>
+        PresenceAsync(http, user, request, db, memberships, ct, (key, account, audience) => presence.Leave(key, account, audience));
+
+    private static async Task<IResult> PresenceAsync(HttpContext http, ClaimsPrincipal user, PresenceRequest request, ChaosDbContext db,
+        SpaceMembershipCache memberships, CancellationToken ct, Action<PresenceKey, Guid, IReadOnlyList<Guid>> apply)
+    {
+        if (IdentifyV2(http, user, out var caller) is { } refusal) return refusal;
+        if (!PresenceService.Kinds.Contains(request.EntityKind) || string.IsNullOrWhiteSpace(request.EntityId) || request.EntityId.Length > 100)
+            return ApiErrors.Problem("invalid-presence", "The presence report names no valid entity.", StatusCodes.Status400BadRequest);
+        // Personal work is private to its owner: there is nobody to tell, so nothing is recorded.
+        if (request.SpaceId == caller.AccountId) return Results.NoContent();
+        var membership = await memberships.GetAsync(db, caller.AccountId, ct);
+        if (!membership.Roles.ContainsKey(request.SpaceId))
+            return ApiErrors.Problem(SyncRejection.NotMember, "You are not a member of this space.", StatusCodes.Status403Forbidden);
+        apply(new PresenceKey(request.SpaceId, request.EntityKind, request.EntityId), caller.AccountId, await PresenceService.AudienceAsync(db, request.SpaceId, ct));
+        return Results.NoContent();
     }
 
     internal sealed record Caller(Guid AccountId, Guid DeviceId, int Schema);

@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   eraseAt,
+  mergeDrawings,
+  reconcileErased,
+  upgradeDrawing,
   isUsableRegion,
   outlinePath,
   parseDrawing,
@@ -133,4 +136,41 @@ test("outlines and paths are produced for strokes of any length", () => {
   const path = outlinePath(strokeOutline(long));
   assert.match(path, /^M .* Q .* Z$/);
   assert.equal(outlinePath([]), "");
+});
+
+test("a v1 drawing upgrades with IDs in order, and the first erase records the stroke as erased", () => {
+  const v1: Drawing = { v: 1, strokes: [line(0, 0, 100, 0), line(0, 50, 100, 50)] };
+  const upgraded = upgradeDrawing(v1);
+  assert.deepEqual(upgraded.strokes.map((stroke) => stroke.id), ["legacy-0", "legacy-1"]);
+  const erased = eraseAt(v1, 50, 3, 5);
+  assert.equal(erased.v, 2);
+  assert.deepEqual(erased.erased, ["legacy-1"]);
+  assert.deepEqual(erased.strokes.map((stroke) => stroke.id), ["legacy-0"]);
+  const round = parseDrawing(serializeDrawing(erased));
+  assert.equal(round.v, 2);
+  assert.deepEqual(round.erased, ["legacy-1"]);
+});
+
+test("drawings from two members unite by stroke ID, minus what either erased, in a stable order", () => {
+  const mine: Stroke = { ...line(0, 0, 1, 1), id: "a", createdAt: 5 };
+  const yours: Stroke = { ...line(2, 2, 3, 3), id: "b", createdAt: 3 };
+  const gone: Stroke = { ...line(4, 4, 5, 5), id: "c", createdAt: 4 };
+  const a: Drawing = { v: 2, strokes: [mine, gone], erased: [] };
+  const b: Drawing = { v: 2, strokes: [yours], erased: ["c"] };
+  const united = mergeDrawings(a, b);
+  assert.deepEqual(united.strokes.map((stroke) => stroke.id), ["b", "a"]);
+  assert.deepEqual(united.erased, ["c"]);
+  assert.deepEqual(mergeDrawings(b, a), united);
+  assert.deepEqual(mergeDrawings(united, united), united);
+});
+
+test("undo records the removed stroke as erased and redo brings it back", () => {
+  const first: Stroke = { ...line(0, 0, 1, 1), id: "a", createdAt: 1 };
+  const second: Stroke = { ...line(2, 2, 3, 3), id: "b", createdAt: 2 };
+  const withBoth: Drawing = { v: 2, strokes: [first, second], erased: [] };
+  const withFirst: Drawing = { v: 2, strokes: [first], erased: [] };
+  const undone = reconcileErased(withBoth, withFirst);
+  assert.deepEqual(undone.erased, ["b"]);
+  const redone = reconcileErased(undone, withBoth);
+  assert.deepEqual(redone.erased, []);
 });
