@@ -25,9 +25,55 @@ public sealed class ServerChangeWriter(ChaosDbContext db, TimeProvider clock, Sy
         }
     }
 
-    /// <summary>Creates a fresh server clock newer than every stored group of the entity.</summary>
-    public async Task<Hlc> NextHlcAsync(Guid streamId, string kind, string key, CancellationToken ct)
+    /// <summary>
+    /// Ends the live delegations of a member who leaves (PLAN3 9.11): ones they delegated are withdrawn; ones
+    /// waiting on them are declined on their behalf, which hands each task back to its delegator while that
+    /// person may still hold it. Written as server changes so every device converges on the same outcome.
+    /// </summary>
+    public async Task SettleDelegationsAsync(Guid spaceId, Guid memberId, Guid actorId, DateTimeOffset now, CancellationToken ct)
     {
+        var rows = await db.SyncEntities.Where(e => e.AccountId == spaceId && e.Kind == "task_delegation" && e.PurgedAt == null && e.MovedTo == null).ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            var groups = SyncJson.ReadGroups(row.Groups);
+            var create = groups.GetValueOrDefault("create")?.Values.Values;
+            if (create is null) continue;
+            var from = create.GetValueOrDefault("FromMemberId")?.ToString();
+            var to = create.GetValueOrDefault("ToMemberId")?.ToString();
+            var state = groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long current ? (DelegationState)current : DelegationState.Pending;
+            if (!DelegationTransitions.IsLive(state)) continue;
+            var leftAsDelegator = string.Equals(from, memberId.ToString("D"), StringComparison.OrdinalIgnoreCase);
+            var leftAsRecipient = string.Equals(to, memberId.ToString("D"), StringComparison.OrdinalIgnoreCase);
+            if (!leftAsDelegator && !leftAsRecipient) continue;
+
+            var hlc = await NextHlcAsync(spaceId, row.Kind, row.EntityKey, ct);
+            var values = new Dictionary<string, object?>
+            {
+                ["State"] = (long)(leftAsDelegator ? DelegationState.Withdrawn : DelegationState.Declined),
+                ["StateChangedAtUtc"] = now.UtcDateTime.ToString("o"),
+            };
+            if (leftAsRecipient) values["Response"] = "Left the space";
+            await AppendAsync(spaceId, actorId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), row.Kind, row.EntityKey,
+                new Dictionary<string, SyncGroupState> { ["state"] = new(hlc, new SyncGroupValues(values)) }), ct);
+
+            if (leftAsRecipient && Guid.TryParse(from, out var delegator)
+                && await db.SpaceMembers.AnyAsync(m => m.SpaceId == spaceId && m.MemberId == delegator && m.RemovedAt == null
+                    && m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole), ct))
+            {
+                var key = $"{create.GetValueOrDefault("TaskId")}|{from}";
+                var existing = await db.SyncEntities.FindAsync([spaceId, "task_assignee", key], ct);
+                var assigneeHlc = await NextHlcAsync(spaceId, "task_assignee", key, ct);
+                var assigneeValues = existing is null
+                    ? new Dictionary<string, object?> { ["AddedAtUtc"] = now.UtcDateTime.ToString("o") }
+                    : new Dictionary<string, object?> { ["DeletedAtUtc"] = null };
+                await AppendAsync(spaceId, actorId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "task_assignee", key,
+                    new Dictionary<string, SyncGroupState> { [existing is null ? "create" : "deleted"] = new(assigneeHlc, new SyncGroupValues(assigneeValues)) }), ct);
+            }
+        }
+    }
+
+    /// <summary>Creates a fresh server clock newer than every stored group of the entity.</summary>
+    public async Task<Hlc> NextHlcAsync(Guid streamId, string kind, string key, CancellationToken ct)    {
         var entity = await db.SyncEntities.FindAsync([streamId, kind, key], ct);
         var hybrid = new HybridClock(DeviceId, clock);
         if (entity is not null)

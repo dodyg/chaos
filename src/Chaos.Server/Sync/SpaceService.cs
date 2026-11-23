@@ -218,6 +218,7 @@ public sealed class SpaceService(
             target.RemovedAt = now;
             await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
             await changes.TombstoneAssignmentsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
+            await changes.SettleDelegationsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
             if (target.AccountId is { } affected)
             {
                 await TombstoneOverlaysAsync(affected, spaceId, current.MemberId, ct);

@@ -474,7 +474,7 @@ public sealed class SyncService(
         }
         if (streamId == account.Id)
         {
-            return kind.Kind == "task_assignee" ? SyncRejection.Forbidden : null;
+            return kind.Kind is "task_assignee" or "task_delegation" or "nudge" ? SyncRejection.Forbidden : null;
         }
         if (!roles.TryGetValue(streamId, out var role))
         {
@@ -496,6 +496,12 @@ public sealed class SyncService(
         if (change.Op == SyncOp.Purge)
         {
             return role == SpaceMember.OwnerRole ? null : SyncRejection.Forbidden;
+        }
+        if (kind.Kind is "task_delegation" or "nudge")
+        {
+            // Author-like rules that depend on the transition, not on a stored author (PLAN3 9.11).
+            if (change.Groups.ContainsKey("deleted") && role is not (SpaceMember.OwnerRole or SpaceMember.EditorRole)) return SyncRejection.Forbidden;
+            return await DelegationRefusalAsync(account, role, kind.Kind, change, streamId, ct);
         }
         if (change.Kind == "space" && change.Groups.ContainsKey("deleted"))
         {
@@ -558,6 +564,91 @@ public sealed class SyncService(
     }
 
     internal static bool AllowsOwnerWrite(short role) => role == SpaceMember.OwnerRole;
+
+    /// <summary>
+    /// Delegations (PLAN3 9.11): the delegator alone creates a delegation (naming a live owner or editor as
+    /// recipient) and owns its brief; the state group moves only along <see cref="DelegationTransitions"/> and
+    /// only by the party the table names; a nudge comes from the delegator of a live delegation, at most
+    /// <see cref="DelegationTransitions.NudgesPerDelegation"/> per window.
+    /// </summary>
+    private async Task<string?> DelegationRefusalAsync(Account account, short role, string kind, SyncChange change, Guid streamId,
+        CancellationToken ct)
+    {
+        var me = account.ProfileId?.ToString("D");
+        change.Groups.TryGetValue("create", out var create);
+        Dictionary<string, SyncGroupState>? stored = null;
+        if (kind == "task_delegation")
+        {
+            var json = await db.SyncEntities.AsNoTracking()
+                .Where(e => e.AccountId == streamId && e.Kind == change.Kind && e.EntityKey == change.EntityKey && e.PurgedAt == null && e.MovedTo == null)
+                .Select(e => (string?)e.Groups).FirstOrDefaultAsync(ct);
+            stored = json is null ? null : SyncJson.ReadGroups(json);
+        }
+
+        if (kind == "nudge")
+        {
+            if (!change.Groups.TryGetValue("record", out var nudge)) return SyncRejection.Forbidden;
+            var values = nudge.Values.Values;
+            var from = values.GetValueOrDefault("FromMemberId")?.ToString();
+            var delegationKey = values.GetValueOrDefault("DelegationId")?.ToString();
+            if (me is null || !string.Equals(from, me, StringComparison.OrdinalIgnoreCase) || !Guid.TryParse(delegationKey, out _)) return SyncRejection.Forbidden;
+            var json = await db.SyncEntities.AsNoTracking()
+                .Where(e => e.AccountId == streamId && e.Kind == "task_delegation" && e.EntityKey == delegationKey && e.PurgedAt == null && e.MovedTo == null)
+                .Select(e => (string?)e.Groups).FirstOrDefaultAsync(ct);
+            var delegation = json is null ? null : SyncJson.ReadGroups(json);
+            if (delegation is null) return SyncRejection.ParentUnknown;
+            var owner = delegation.GetValueOrDefault("create")?.Values.Values.GetValueOrDefault("FromMemberId")?.ToString();
+            var state = delegation.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State");
+            if (!string.Equals(owner, from, StringComparison.OrdinalIgnoreCase) || state is not long current || !DelegationTransitions.IsLive((DelegationState)current))
+                return SyncRejection.Forbidden;
+
+            var since = clock.GetUtcNow() - DelegationTransitions.NudgeWindow;
+            var records = await db.SyncEntities.AsNoTracking()
+                .Where(e => e.AccountId == streamId && e.Kind == "nudge" && e.PurgedAt == null && e.MovedTo == null)
+                .Select(e => e.Groups).ToListAsync(ct);
+            var count = 0;
+            foreach (var json2 in records)
+            {
+                var sentRecord = SyncJson.ReadGroups(json2).GetValueOrDefault("record");
+                if (sentRecord is null || !string.Equals(sentRecord.Values.Values.GetValueOrDefault("DelegationId")?.ToString(), delegationKey, StringComparison.OrdinalIgnoreCase)) continue;
+                if (sentRecord.Values.Values.GetValueOrDefault("SentAtUtc") is string sent && DateTimeOffset.TryParse(sent, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out var at) && at > since) count++;
+            }
+            return count >= DelegationTransitions.NudgesPerDelegation ? SyncRejection.RateLimited : null;
+        }
+
+        // task_delegation
+        if (create is { } creation)
+        {
+            if (role is not (SpaceMember.OwnerRole or SpaceMember.EditorRole)) return SyncRejection.Forbidden;
+            var from = creation.Values.Values.GetValueOrDefault("FromMemberId")?.ToString();
+            var to = creation.Values.Values.GetValueOrDefault("ToMemberId")?.ToString();
+            if (me is null || !string.Equals(from, me, StringComparison.OrdinalIgnoreCase)) return SyncRejection.Forbidden;
+            if (!Guid.TryParse(to, out var recipient) || !await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId && m.MemberId == recipient
+                    && m.RemovedAt == null && m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole), ct))
+                return SyncRejection.Forbidden;
+            if (change.Groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long initial && initial != (long)DelegationState.Pending)
+                return SyncRejection.Forbidden;
+        }
+        var storedCreate = stored?.GetValueOrDefault("create")?.Values.Values;
+        var delegator = create?.Values.Values.GetValueOrDefault("FromMemberId")?.ToString() ?? storedCreate?.GetValueOrDefault("FromMemberId")?.ToString();
+        var recipientId = create?.Values.Values.GetValueOrDefault("ToMemberId")?.ToString() ?? storedCreate?.GetValueOrDefault("ToMemberId")?.ToString();
+        if (change.Groups.ContainsKey("brief") && (me is null || !string.Equals(delegator, me, StringComparison.OrdinalIgnoreCase))) return SyncRejection.Forbidden;
+        if (change.Groups.TryGetValue("state", out var stateGroup) && (create is null || stored is not null))
+        {
+            // The initial state of a new delegation was checked above; here a move must follow the table.
+            if (stored is null) return SyncRejection.Forbidden;
+            var current = stored?.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long currentInt ? (DelegationState)currentInt : DelegationState.Pending;
+            var next = stateGroup.Values.Values.GetValueOrDefault("State");
+            if (next is not long nextInt || !DelegationTransitions.IsDefined((DelegationState)nextInt)) return SyncRejection.Invalid;
+            var party = DelegationTransitions.Actor(current, (DelegationState)nextInt);
+            var mine = me is not null && string.Equals(delegator, me, StringComparison.OrdinalIgnoreCase) ? DelegationParty.From
+                : me is not null && string.Equals(recipientId, me, StringComparison.OrdinalIgnoreCase) ? DelegationParty.To
+                : DelegationParty.None;
+            if (party == DelegationParty.None || mine != party) return SyncRejection.Forbidden;
+        }
+        return null;
+    }
 
     private async Task<bool> IsViewerDiaryAttachmentAsync(Account account, Guid streamId, SyncChange change, CancellationToken ct)
     {
