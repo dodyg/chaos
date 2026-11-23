@@ -23,6 +23,7 @@ public sealed class DelegationTransitionTests
             (DelegationState.Question, DelegationState.Accepted) => DelegationParty.To,
             (DelegationState.Question, DelegationState.Declined) => DelegationParty.To,
             (DelegationState.Accepted, DelegationState.Done) => DelegationParty.To,
+            (DelegationState.Accepted, DelegationState.Question) => DelegationParty.To,
             (DelegationState.Pending, DelegationState.Withdrawn) => DelegationParty.From,
             (DelegationState.Question, DelegationState.Withdrawn) => DelegationParty.From,
             (DelegationState.Accepted, DelegationState.Withdrawn) => DelegationParty.From,
@@ -34,7 +35,7 @@ public sealed class DelegationTransitionTests
     }
 
     public static IEnumerable<(DelegationState, DelegationState)> Pairs() =>
-        [.. from from in States from to in States select (from, to)];
+        [.. from source in States from target in States select (source, target)];
 
     [Test]
     public async Task IsLive_OnlyPendingAcceptedAndQuestion()

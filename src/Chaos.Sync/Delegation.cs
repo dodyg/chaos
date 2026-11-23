@@ -37,8 +37,8 @@ public static class DelegationTransitions
     public static DelegationParty Actor(DelegationState from, DelegationState to) => (from, to) switch
     {
         (DelegationState.Pending, DelegationState.Accepted or DelegationState.Question or DelegationState.Declined) => DelegationParty.To,
+        (DelegationState.Accepted, DelegationState.Done or DelegationState.Question) => DelegationParty.To,
         (DelegationState.Question, DelegationState.Accepted or DelegationState.Declined) => DelegationParty.To,
-        (DelegationState.Accepted, DelegationState.Done) => DelegationParty.To,
         (DelegationState.Pending or DelegationState.Question or DelegationState.Accepted, DelegationState.Withdrawn) => DelegationParty.From,
         (DelegationState.Done, DelegationState.Closed or DelegationState.Accepted) => DelegationParty.From,
         _ => DelegationParty.None,
