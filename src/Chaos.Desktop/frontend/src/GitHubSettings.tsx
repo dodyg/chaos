@@ -188,10 +188,13 @@ export function GitHubSettings({
   api = githubRpc,
   onSynced,
   pollIntervalMs = 1000,
+  spaceId = null,
 }: {
   api?: Api;
   onSynced?: () => void;
   pollIntervalMs?: number;
+  /** A shared space's connection (PLAN3 §10.1); null is the Personal space. */
+  spaceId?: string | null;
 }) {
   const onSyncedRef = React.useRef(onSynced);
   onSyncedRef.current = onSynced;
@@ -206,18 +209,26 @@ export function GitHubSettings({
   const [chosen, setChosen] = React.useState<GitHubCandidateDto | null>(null);
   const [editing, setEditing] = React.useState<GitHubRepositoryDto | null>(null);
   const [confirm, setConfirm] = React.useState<GitHubRepositoryDto | "disconnect" | null>(null);
+  // A private repository brought into a space with other members (PLAN3 10.5): the owner confirms first.
+  const [privacyWarning, setPrivacyWarning] = React.useState<{ repository: GitHubCandidateDto; options: Options } | null>(null);
   async function load() {
-    const result = await api.status({});
+    const result = await api.status({ spaceId });
     if (!result.ok) throw new Error(result.error?.message ?? "Could not load GitHub settings.");
     setStatus(result);
   }
   React.useEffect(() => {
+    setStatus(null);
+    setCandidates([]);
+    setChosen(null);
+    setEditing(null);
+    setConfirm(null);
+    setPrivacyWarning(null);
     void load().catch(() => setError("Could not load GitHub settings."));
-  }, [api]);
+  }, [api, spaceId]);
   // A sync run starting or finishing (pushed by the host) refreshes the status; focus does the same only while the stream is unavailable.
   useJobChange("github.sync", () => {
     void api
-      .status({})
+      .status({ spaceId })
       .then((result) => {
         if (result.ok) setStatus(result);
         else setError(result.error?.message ?? "Could not refresh sync status.");
@@ -240,7 +251,7 @@ export function GitHubSettings({
   React.useEffect(() => () => setSyncObserved("github", false), []);
   async function syncNow(repositoryId: string | null = null) {
     await run(async () => {
-      const result = await trackSync("github", api.syncNow({ repositoryId }));
+      const result = await trackSync("github", api.syncNow({ repositoryId, spaceId }));
       if (!result.ok) throw new Error(result.error?.message ?? "Could not start GitHub sync.");
       setStatus((current) => (current ? { ...current, sync: result.sync } : current));
       await load();
@@ -278,7 +289,7 @@ export function GitHubSettings({
   }
   async function discover(next: boolean) {
     await run(async () => {
-      const result = await api.listRepositories({ cursor: next ? cursor : null });
+      const result = await api.listRepositories({ cursor: next ? cursor : null, spaceId });
       if (!result.ok) throw new Error(result.error?.message ?? "Could not list repositories.");
       setCandidates(next ? [...candidates, ...result.repositories] : result.repositories);
       setCursor(result.nextCursor);
@@ -287,6 +298,24 @@ export function GitHubSettings({
   const connection = status?.connection;
   const sync = status?.sync;
   const working = busy || sync?.running === true;
+  const shared = status?.spaceId != null && status.memberCount > 1;
+  async function addRepository(repository: GitHubCandidateDto, options: Options) {
+    await run(async () => {
+      await change(() =>
+        retry("addRepository", api.addRepository, {
+          operationId: crypto.randomUUID(),
+          connectionId: connection!.id,
+          expectedVersion: connection!.version,
+          repositoryId: repository.repositoryId,
+          owner: repository.owner,
+          name: repository.name,
+          ...options,
+        }),
+      );
+      setChosen(null);
+      setPrivacyWarning(null);
+    });
+  }
   const versioned = (r: { id: string; version: string }, paused = false) => ({
     operationId: crypto.randomUUID(),
     id: r.id,
@@ -298,7 +327,9 @@ export function GitHubSettings({
       <div>
         <h2 className="text-lg font-semibold">GitHub</h2>
         <p className="text-sm text-muted-foreground">
-          Connect GitHub issues to your personal tasks. GitHub CLI keeps your login on this computer.
+          {status?.spaceId
+            ? `Connect the issues of a GitHub repository to ${status.spaceName}. Members need no GitHub setup; owners alone manage the connection. GitHub CLI keeps the owner's login on the computer that runs sync.`
+            : "Connect GitHub issues to your personal tasks. GitHub CLI keeps your login on this computer."}
         </p>
       </div>
       <Button variant="outline" className="justify-self-start" disabled={working} onClick={() => void run(load)}>
@@ -311,6 +342,20 @@ export function GitHubSettings({
       )}
       {!status ? (
         <p>Loading GitHub settings…</p>
+      ) : status.isOwner === false ? (
+        <div role="region" className="grid gap-3 rounded-xl border p-4" aria-label="GitHub connection (read-only)">
+          <p>
+            {status.connection ? `Connected as @${status.connection.accountLogin}. ` : "Not connected. "}Only owners of {status.spaceName}{" "}
+            manage its GitHub connection.
+          </p>
+          <ul className="grid gap-1 text-sm">
+            {status.repositories.map((r) => (
+              <li key={r.id}>
+                <span dir="auto">{r.fullName}</span> · {r.state}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : !connection ? (
         <div className="grid gap-3 rounded-xl border p-4">
           <p>
@@ -319,11 +364,12 @@ export function GitHubSettings({
           </p>
           <p className="text-sm text-muted-foreground">
             Connecting verifies the CLI account. Chaos uses its login in memory to call GitHub. Disconnecting leaves GitHub CLI signed in.
+            {status.spaceId ? " Every change sent to GitHub, by any member, is made as the connected account." : ""}
           </p>
           <Button
             className="justify-self-start"
             disabled={working}
-            onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}
+            onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID(), spaceId })))}
           >
             Connect using GitHub CLI
           </Button>
@@ -348,7 +394,7 @@ export function GitHubSettings({
             <Button
               variant="outline"
               disabled={working}
-              onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID() })))}
+              onClick={() => void run(() => change(() => retry("connect", api.connect, { operationId: crypto.randomUUID(), spaceId })))}
             >
               Verify login
             </Button>
@@ -362,7 +408,9 @@ export function GitHubSettings({
                 ? "GitHub sync runs on this device."
                 : connection.runnerDeviceName
                   ? `GitHub sync runs on ${connection.runnerDeviceName}.`
-                  : "Choose a device to run GitHub sync."}
+                  : status.spaceId
+                    ? "GitHub sync has no device. An owner must choose Run on this device."
+                    : "Choose a device to run GitHub sync."}
             </p>
             {!connection.isRunner && (
               <Button
@@ -530,7 +578,7 @@ export function GitHubSettings({
                 void run(async () => {
                   const parts = lookup.trim().split("/");
                   if (parts.length !== 2) throw new Error("Enter owner/repository.");
-                  const result = await api.lookupRepository({ owner: parts[0], name: parts[1] });
+                  const result = await api.lookupRepository({ owner: parts[0], name: parts[1], spaceId });
                   if (!result.ok) throw new Error(result.error?.message ?? "Repository not found.");
                   setCandidates(result.repositories);
                   setCursor(null);
@@ -580,25 +628,28 @@ export function GitHubSettings({
                   busy={working}
                   onCancel={() => setChosen(null)}
                   onSave={(options) =>
-                    void run(async () => {
-                      await change(() =>
-                        retry("addRepository", api.addRepository, {
-                          operationId: crypto.randomUUID(),
-                          connectionId: connection.id,
-                          expectedVersion: connection.version,
-                          repositoryId: chosen.repositoryId,
-                          owner: chosen.owner,
-                          name: chosen.name,
-                          ...options,
-                        }),
-                      );
-                      setChosen(null);
-                    })
+                    chosen.isPrivate && shared ? setPrivacyWarning({ repository: chosen, options }) : void addRepository(chosen, options)
                   }
                 />
               </div>
             )}
           </div>
+          {privacyWarning && (
+            <div role="alertdialog" aria-label="Add a private repository?" className="grid gap-3 rounded-xl border border-amber-500/50 p-4">
+              <p>
+                Everyone in {status.spaceName} will see issues from {privacyWarning.repository.fullName}, including people without access to
+                it on GitHub.
+              </p>
+              <div className="flex gap-2">
+                <Button disabled={working} onClick={() => void addRepository(privacyWarning.repository, privacyWarning.options)}>
+                  Add private repository
+                </Button>
+                <Button variant="outline" disabled={working} onClick={() => setPrivacyWarning(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
           {confirm && (
             <div
               role="alertdialog"

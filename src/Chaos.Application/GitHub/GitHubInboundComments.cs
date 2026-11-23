@@ -11,12 +11,12 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
         if (targets.Count > 200 || !seen.IsSubsetOf(targets)) throw new ArgumentException("Deletion checks use at most 200 mapped comment IDs.");
         return store.ExecuteAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var link = await s.GitHub.GetIssueLinkAsync(issueLinkId, token) ?? throw AppException.NotFound("GitHub issue link was not found.");
             var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
             var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
-            if (link.Version != expectedVersion || link.State != 0 || link.TaskId is null || connection is null || connection.SpaceId != space.Id || connection.ProfileId != profile.Id
-                || connection.State != 0 || connection.DeletedAtUtc is not null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null || repo.Version != expectedRepositoryVersion || await s.Tasks.GetAsync(link.TaskId, token) is null)
+            if (link.Version != expectedVersion || link.State != 0 || link.TaskId is null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null
+                || !await GitHubSpaces.CanRunAsync(s, connection, profile, token) || connection!.State != 0 || repo.Version != expectedRepositoryVersion || await s.Tasks.GetAsync(link.TaskId, token) is null)
                 throw AppException.VersionConflict("The GitHub issue link changed during comment retrieval.");
             var changed = 0;
             var write = await s.GitHub.GetIssueWriteAsync(link.Id, token);
@@ -37,12 +37,12 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
         if (comments.Count > 2000) throw new ArgumentOutOfRangeException(nameof(comments));
         return store.ExecuteAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var link = await s.GitHub.GetIssueLinkAsync(issueLinkId, token) ?? throw AppException.NotFound("GitHub issue link was not found.");
             var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
             var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
-            if (link.Version != expectedVersion || link.State != 0 || link.TaskId is null || connection is null || connection.SpaceId != space.Id || connection.ProfileId != profile.Id
-                || connection.State != 0 || connection.DeletedAtUtc is not null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null || (expectedRepositoryVersion is not null && repo.Version != expectedRepositoryVersion) || await s.Tasks.GetAsync(link.TaskId, token) is null)
+            if (link.Version != expectedVersion || link.State != 0 || link.TaskId is null || repo is null || repo.State != 0 || repo.DeletedAtUtc is not null
+                || !await GitHubSpaces.CanRunAsync(s, connection, profile, token) || connection!.State != 0 || (expectedRepositoryVersion is not null && repo.Version != expectedRepositoryVersion) || await s.Tasks.GetAsync(link.TaskId, token) is null)
                 throw AppException.VersionConflict("The GitHub issue link changed during comment retrieval.");
             var mappings = await s.GitHub.ListCommentLinksAsync(link.Id, token);
             var write = await s.GitHub.GetIssueWriteAsync(link.Id, token);
@@ -64,7 +64,7 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
                     var pendingEntry = await s.Diary.GetIncludingDeletedAsync(pending.DiaryEntryId, token);
                     if (pendingEntry is not null)
                     {
-                        var body = GitHubCommentMarker.Strip(comment.Body, pendingEntry.Id);
+                        var body = GitHubCommentMarker.Strip(comment.Body, pendingEntry.Id, pending.Attribution);
                         await s.GitHub.UpsertCommentLinkAsync(pending with { CommentId = comment.Id, AuthorLogin = comment.User.Login, HtmlUrl = comment.HtmlUrl,
                             BaseBody = body, BaseRemoteUpdatedUtc = comment.UpdatedAt, State = pendingEntry.DeletedAtUtc is not null ? 5 : pendingEntry.RawMarkdown == body ? 0 : 2 }, token);
                         changed++;
@@ -73,7 +73,7 @@ public sealed class GitHubInboundComments(IApplicationStore store, IIdGenerator 
                 }
                 if (mapping is null && !newest.Contains(comment.Id)) continue;
                 if (mapping is { State: 3 or 5 }) continue; // A local delete request or hide must not resurrect the entry.
-                if (mapping is { Origin: 1 }) comment = comment with { Body = GitHubCommentMarker.Strip(comment.Body, mapping.DiaryEntryId) };
+                if (mapping is { Origin: 1 }) comment = comment with { Body = GitHubCommentMarker.Strip(comment.Body, mapping.DiaryEntryId, mapping.Attribution) };
                 if (mapping?.BaseRemoteUpdatedUtc > comment.UpdatedAt) continue;
                 var entry = mapping is null ? null : await s.Diary.GetIncludingDeletedAsync(mapping.DiaryEntryId, token);
                 if (mapping is not null && (entry is null || entry.DeletedAtUtc is not null)) continue;

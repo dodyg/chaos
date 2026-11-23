@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Chaos.Application.Abstractions;
+using Chaos.Application.GitHub;
 
 namespace Chaos.Infrastructure.GitHub;
 
@@ -105,9 +106,12 @@ public sealed class GitHubCliClient : IGitHubApi, IDisposable
     public Task<GitHubLabel> CreateLabelAsync(GitHubAccount account, string owner, string name, string label, CancellationToken ct) =>
         Read(account, HttpMethod.Post, Repo(owner, name) + "/labels", JsonSerializer.Serialize(new LabelBody(label, "cfd3d7"), GitHubRestJson.Default.LabelBody), GitHubRestJson.Default.GitHubLabel, ct);
 
-    public Task SetSelfAssignmentAsync(GitHubAccount account, string owner, string name, long number, bool assign, CancellationToken ct) =>
-        Write(account, assign ? HttpMethod.Post : HttpMethod.Delete, Issue(owner, name, number) + "/assignees",
-            JsonSerializer.Serialize(new AssigneesBody([account.Login]), GitHubRestJson.Default.AssigneesBody), ct);
+    public Task SetAssignmentAsync(GitHubAccount account, string owner, string name, long number, string login, bool assign, CancellationToken ct)
+    {
+        if (!GitHubLogin.IsValid(login)) throw new GitHubApiException(GitHubErrorKind.Validation);
+        return Write(account, assign ? HttpMethod.Post : HttpMethod.Delete, Issue(owner, name, number) + "/assignees",
+            JsonSerializer.Serialize(new AssigneesBody([login]), GitHubRestJson.Default.AssigneesBody), ct);
+    }
 
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<GitHubPullRequestRef>>> GetClosingPullRequestsAsync(GitHubAccount account, IReadOnlyList<string> issueNodeIds, CancellationToken ct)
     {

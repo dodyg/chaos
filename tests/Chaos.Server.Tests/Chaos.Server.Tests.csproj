@@ -15,6 +15,8 @@
     <PackageReference Include="TUnit" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Testcontainers.PostgreSql" />
+    <!-- The fake GitHub API of the infrastructure tests, for the two-account GitHub flows (PLAN3 Q15). -->
+    <Compile Include="..\Chaos.Infrastructure.Tests\Testing\FakeGitHub.cs" Link="Testing\FakeGitHub.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -98,7 +98,7 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
             "hasPadLink" => Flag("EXISTS (SELECT 1 FROM ScratchTaskLinks sl WHERE sl.TaskId = t.Id)", c.Numbers[0] == 1),
             "hasPageMention" => Flag("EXISTS (SELECT 1 FROM PageTaskLinks pl WHERE pl.TaskId = t.Id)", c.Numbers[0] == 1),
             "recurring" => Flag("EXISTS (SELECT 1 FROM RecurrenceOccurrences rc WHERE rc.TaskId = t.Id AND rc.DeletedAtUtc IS NULL)", c.Numbers[0] == 1),
-            "githubRepository" or "githubState" or "githubLabel" or "githubMilestone" or "githubAssignee" => GitHub(c),
+            "githubRepository" or "githubState" or "githubLabel" or "githubMilestone" or "githubAssignee" or "githubAuthor" or "githubLinkedPr" or "githubPrReview" or "githubIssueType" => GitHub(c),
             _ => throw new InvalidOperationException($"No SQL for view field {c.Field}."),
         };
     }
@@ -160,12 +160,36 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
                 return c.Operator == "isEmpty"
                     ? $"EXISTS ({link} AND json_extract({payload}, '$.payload.milestoneNumber') IS NULL)"
                     : $"EXISTS ({link} AND EXISTS (SELECT 1 FROM GitHubMilestoneProjects mp WHERE mp.RepositorySubscriptionId = {gl}.RepositorySubscriptionId AND mp.MilestoneNumber = json_extract({payload}, '$.payload.milestoneNumber') AND instr(lower(mp.BaseTitle), {p(c.Text!.ToLowerInvariant())}) > 0))";
-            default: // githubAssignee
+            case "githubAssignee":
                 return c.Operator == "isEmpty"
                     ? $"EXISTS ({link} AND json_array_length(COALESCE(json_extract({payload}, '$.payload.assigneeIds'), '[]')) = 0)"
                     : $"EXISTS ({link} AND EXISTS (SELECT 1 FROM json_each({payload}, '$.payload.assigneeLogins') ja WHERE instr(lower(ja.value), {p(c.Text!.ToLowerInvariant())}) > 0))";
+            case "githubAuthor":
+                return BaselineText("authorLogin", c);
+            case "githubIssueType":
+                return BaselineText("issueType", c);
+            case "githubLinkedPr":
+            {
+                var linked = $"EXISTS ({link} AND EXISTS (SELECT 1 FROM GitHubPullRequestLinks gpr WHERE gpr.IssueLinkId = {gl}.Id))";
+                return c.Numbers[0] == 1 ? linked : $"NOT {linked}";
+            }
+            default: // githubPrReview
+            {
+                var reviews = $"EXISTS (SELECT 1 FROM GitHubPullRequestLinks gpr WHERE gpr.IssueLinkId = {gl}.Id AND gpr.ReviewState <> 0)";
+                return c.Ids[0] == "None"
+                    ? $"EXISTS ({link} AND NOT {reviews})"
+                    : $"EXISTS ({link} AND EXISTS (SELECT 1 FROM GitHubPullRequestLinks gpr WHERE gpr.IssueLinkId = {gl}.Id AND gpr.ReviewState = {ReviewLevel(c.Ids[0])}))";
+            }
         }
+
+        // A text kept in the issue baseline (schema 12): a case-insensitive substring, or "is empty" for a missing value.
+        string BaselineText(string property, ResolvedViewCondition c) => c.Operator == "isEmpty"
+            ? $"EXISTS ({link} AND COALESCE(json_extract({payload}, '$.payload.{property}'), '') = '')"
+            : $"EXISTS ({link} AND instr(lower(json_extract({payload}, '$.payload.{property}')), {p(c.Text!.ToLowerInvariant())}) > 0)";
     }
+
+    /// <summary>The stored review state of a pull request (0 none, 1 approved, 2 changes requested, 3 review required).</summary>
+    public static int ReviewLevel(string choice) => choice switch { "Approved" => 1, "Changes requested" => 2, "Review required" => 3, _ => 0 };
 
     private static string Flag(string exists, bool expected) => expected ? exists : $"NOT {exists}";
 

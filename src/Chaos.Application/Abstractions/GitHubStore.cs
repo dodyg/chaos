@@ -26,6 +26,7 @@ public interface IGitHubStore
     Task UpsertMilestoneProjectAsync(GitHubMilestoneProjectRecord row, CancellationToken ct);
     Task AddSyncRunAsync(GitHubSyncRunRecord row, CancellationToken ct);
     Task<GitHubConnectionRecord?> GetConnectionForSpaceAsync(string id, CancellationToken ct);
+    Task<IReadOnlyList<GitHubConnectionRecord>> ListConnectionsAsync(CancellationToken ct);
     Task<IReadOnlyList<GitHubRepositoryRecord>> ListSubscriptionsAsync(string id, CancellationToken ct);
     Task<GitHubIssueLinkRecord?> FindLinkByIssueAsync(string id, long issueId, CancellationToken ct);
     Task<GitHubIssueLinkRecord?> FindLinkByTaskAsync(string id, CancellationToken ct);
@@ -33,6 +34,10 @@ public interface IGitHubStore
     Task<IReadOnlyList<GitHubCommentLinkRecord>> ListCommentLinksAsync(string id, CancellationToken ct);
     Task<IReadOnlyList<GitHubLabelTagRecord>> ListLabelTagsAsync(string id, CancellationToken ct);
     Task<IReadOnlyList<GitHubMilestoneProjectRecord>> ListMilestoneProjectsAsync(string id, CancellationToken ct);
+    Task<IReadOnlyList<GitHubPullRequestLinkRecord>> ListPullRequestLinksAsync(string issueLinkId, CancellationToken ct);
+    Task ReplacePullRequestLinksAsync(string issueLinkId, IReadOnlyList<GitHubPullRequestLinkRecord> rows, CancellationToken ct);
+    /// <summary>Issue links of the repository that hold a pull request still open, last refreshed before <paramref name="olderThan"/>.</summary>
+    Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksStaleForPullRequestsAsync(string repositoryId, DateTimeOffset olderThan, int limit, CancellationToken ct);
     Task<IReadOnlyList<GitHubSyncRunRecord>> ListSyncRunsAsync(string id, CancellationToken ct);
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListDirtyLinksAsync(int limit, CancellationToken ct);
     Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksDueForRetryAsync(DateTimeOffset now, int limit, CancellationToken ct);

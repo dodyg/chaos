@@ -7,7 +7,7 @@ namespace Chaos.Domain.Tests.GitHub;
 public sealed class IssueMergeTests
 {
     private static IssueProjection Original() => new("base title", "base body", new(true, null),
-        new HashSet<long> { 1, 2 }, new HashSet<long> { 10 });
+        new HashSet<long> { 1, 2 }, IssueProjection.Logins(["octocat"]));
 
     [Test]
     public async Task Issue_IndependentEditsAndConflict_ReturnsPushAndLosingValue()
@@ -30,16 +30,27 @@ public sealed class IssueMergeTests
     public async Task Issue_ConcurrentSetEdits_ReturnsOnlyRequiredRemoteDeltas()
     {
         var original = Original();
-        var local = original with { LabelIds = new HashSet<long> { 2, 3 }, AssigneeIds = new HashSet<long>() };
-        var remote = original with { LabelIds = new HashSet<long> { 1, 2, 4 }, AssigneeIds = new HashSet<long> { 10, 11 } };
+        var local = original with { LabelIds = new HashSet<long> { 2, 3 }, Assignees = IssueProjection.Logins(["Omar"]) };
+        var remote = original with { LabelIds = new HashSet<long> { 1, 2, 4 }, Assignees = IssueProjection.Logins(["octocat", "lina"]) };
         var result = SyncMerge.Issue(original, local, remote);
         await Assert.That(result.Value.LabelIds.SetEquals(new long[] { 2, 3, 4 })).IsTrue();
         await Assert.That(result.Push.AddLabels.SetEquals(new long[] { 3 })).IsTrue();
         await Assert.That(result.Push.RemoveLabels.SetEquals(new long[] { 1 })).IsTrue();
-        await Assert.That(result.Value.AssigneeIds.SetEquals(new long[] { 11 })).IsTrue();
-        await Assert.That(result.Push.AddAssignees.Count).IsEqualTo(0);
-        await Assert.That(result.Push.RemoveAssignees.SetEquals(new long[] { 10 })).IsTrue();
+        await Assert.That(result.Value.Assignees.SetEquals(IssueProjection.Logins(["Omar", "lina"]))).IsTrue();
+        await Assert.That(result.Push.AddAssignees.SetEquals(IssueProjection.Logins(["Omar"]))).IsTrue();
+        await Assert.That(result.Push.RemoveAssignees.SetEquals(IssueProjection.Logins(["octocat"]))).IsTrue();
         await Assert.That(original.LabelIds.SetEquals(new long[] { 1, 2 })).IsTrue();
+    }
+
+    [Test]
+    public async Task Issue_AssigneeLoginsDifferByCaseOnly_AreTheSameAssignee()
+    {
+        var original = Original();
+        var remote = original with { Assignees = IssueProjection.Logins(["OctoCat"]) };
+        var result = SyncMerge.Issue(original, original, remote);
+        await Assert.That(result.Push.AddAssignees).IsEmpty();
+        await Assert.That(result.Push.RemoveAssignees).IsEmpty();
+        await Assert.That(result.Value.EquivalentTo(original)).IsTrue();
     }
 
     [Test]

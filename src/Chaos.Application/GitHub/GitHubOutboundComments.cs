@@ -1,13 +1,28 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.People;
+using Chaos.Domain.Tasks;
 
 namespace Chaos.Application.GitHub;
 
 public static class GitHubCommentMarker
 {
     public static string Suffix(string entryId) => "\n\n<!-- chaos:" + entryId + " -->";
-    public static string Body(string text, string entryId) => text + Suffix(entryId);
-    public static string Strip(string text, string entryId) => text.EndsWith(Suffix(entryId), StringComparison.Ordinal) ? text[..^Suffix(entryId).Length] : text;
+
+    /// <summary>The last line of a comment posted for another member (decision E4): the comment is the owner's, the words are the member's.</summary>
+    public static string Attribution(string memberName) => "— " + memberName + " (via Chaos)";
+
+    public static string Body(string text, string entryId, string? attribution = null) =>
+        text + (attribution is null ? "" : "\n\n" + attribution) + Suffix(entryId);
+
+    /// <summary>The text as its author wrote it: without the marker, and without the attribution line it was posted with.</summary>
+    public static string Strip(string text, string entryId, string? attribution = null)
+    {
+        if (!text.EndsWith(Suffix(entryId), StringComparison.Ordinal)) return text;
+        var body = text[..^Suffix(entryId).Length];
+        var line = attribution is null ? null : "\n\n" + attribution;
+        return line is not null && body.EndsWith(line, StringComparison.Ordinal) ? body[..^line.Length] : body;
+    }
 }
 
 /// <summary>Posts explicitly queued diary entries, finding their marker before every retry.</summary>
@@ -15,14 +30,14 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
 {
     public async Task<int> RunAsync(string repositoryId, bool post, CancellationToken ct, string? issueLinkId = null)
     {
-        var (repo, connection) = await store.QueryAsync(async (s, token) =>
+        var (repo, connection, profile) = await store.QueryAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
             var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-            if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id)
+            if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || !await GitHubSpaces.CanRunAsync(s, connection, profile, token))
                 throw AppException.VersionConflict("The GitHub subscription changed during sync.");
-            return (repo, connection);
+            return (repo, connection, profile);
         }, ct);
         var account = new GitHubAccount(connection.AccountId, connection.AccountLogin);
         string? after = null;
@@ -47,18 +62,30 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
                 {
                     var entry = await store.QueryAsync((s, token) => s.Diary.GetIncludingDeletedAsync(mapping.DiaryEntryId, token), ct);
                     if (entry is null || entry.DeletedAtUtc is not null) continue;
+                    // A member's entry is signed before it is posted, so a crash between the two still strips the line on recovery.
+                    var pending = mapping.Attribution is not null ? mapping
+                        : await store.ExecuteAsync(async (s, token) =>
+                        {
+                            var attribution = await AttributionAsync(s, entry, profile.Id, token);
+                            if (attribution is null) return mapping;
+                            var current = (await s.GitHub.ListCommentLinksAsync(link.Id, token)).FirstOrDefault(m => m.DiaryEntryId == mapping.DiaryEntryId);
+                            if (current is null || current.CommentId is not null || current.State != mapping.State) return mapping;
+                            await s.GitHub.UpsertCommentLinkAsync(current with { Attribution = attribution }, token);
+                            return current with { Attribution = attribution };
+                        }, ct);
                     var matches = (await ListComments(repo, account, link.IssueNumber, ct)).Where(c => c.User.Id == account.Id && c.Body.EndsWith(GitHubCommentMarker.Suffix(entry.Id), StringComparison.Ordinal)).ToList();
                     if (matches.Count > 1) throw AppException.Validation("comment", "More than one GitHub comment has this diary entry's marker.");
                     var comment = matches.SingleOrDefault();
                     if (comment is null && post)
                     {
                         if (!await CanWrite(repo, connection, link, mapping, entry.RawMarkdown, ct)) continue;
-                        comment = await api.PostCommentAsync(account, repo.Owner, repo.Name, link.IssueNumber, GitHubCommentMarker.Body(entry.RawMarkdown, entry.Id), ct);
+                        comment = await api.PostCommentAsync(account, repo.Owner, repo.Name, link.IssueNumber,
+                            GitHubCommentMarker.Body(entry.RawMarkdown, entry.Id, pending.Attribution), ct);
                         posted++;
                     }
                     if (comment is not null && (comment.Id <= 0 || comment.User.Id != account.Id || !comment.Body.EndsWith(GitHubCommentMarker.Suffix(entry.Id), StringComparison.Ordinal)))
                         throw new GitHubApiException(GitHubErrorKind.Validation);
-                    if (comment is not null) await Acknowledge(repo, link, mapping, comment, ct);
+                    if (comment is not null) await Acknowledge(repo, link, pending, comment, ct);
                 }
                 if (post)
                 {
@@ -67,7 +94,7 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
                     {
                         var remote = (await ListComments(repo, account, link.IssueNumber, ct)).FirstOrDefault(c => c.Id == mapping.CommentId);
                         if (remote is null || remote.User.Id != account.Id) continue;
-                        var remoteBody = mapping.Origin == 1 ? GitHubCommentMarker.Strip(remote.Body, mapping.DiaryEntryId) : remote.Body;
+                        var remoteBody = mapping.Origin == 1 ? GitHubCommentMarker.Strip(remote.Body, mapping.DiaryEntryId, mapping.Attribution) : remote.Body;
                         if (remoteBody != mapping.BaseBody)
                         {
                             var current = await store.QueryAsync((s, token) => s.GitHub.GetIssueLinkAsync(link.Id, token), ct) ?? throw AppException.VersionConflict("The GitHub link changed during comment sync.");
@@ -87,7 +114,7 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
                             }
                             continue;
                         }
-                        var body = mapping.Origin == 1 ? GitHubCommentMarker.Body(edit, mapping.DiaryEntryId) : edit;
+                        var body = mapping.Origin == 1 ? GitHubCommentMarker.Body(edit, mapping.DiaryEntryId, mapping.Attribution) : edit;
                         await api.EditCommentAsync(account, repo.Owner, repo.Name, mapping.CommentId!.Value, body, ct);
                         posted++;
                         var saved = (await ListComments(repo, account, link.IssueNumber, ct)).FirstOrDefault(c => c.Id == mapping.CommentId);
@@ -164,7 +191,7 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
         var task = await s.Tasks.GetAsync(link.TaskId, token);
         if (task is null) return false;
         var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson) ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
-        var projection = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection.AccountId, token);
+        var projection = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection, token);
         var pending = (await s.GitHub.ListCommentLinksAsync(link.Id, token)).Any(m => m.State is 1 or 2 or 3);
         var dirty = pending || await s.GitHub.GetIssueWriteAsync(link.Id, token) is not null || !projection.EquivalentTo(baseline.Projection());
         if (link.LocalDirty == dirty) return true;
@@ -210,7 +237,7 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
         var entry = intent.CommentEntryId is null ? null : await s.Diary.GetIncludingDeletedAsync(intent.CommentEntryId, token);
         if (mapping is not null && entry is not null && remote is not null && mapping.CommentId == remote.Id)
         {
-            var body = mapping.Origin == 1 ? GitHubCommentMarker.Strip(remote.Body, entry.Id) : remote.Body;
+            var body = mapping.Origin == 1 ? GitHubCommentMarker.Strip(remote.Body, entry.Id, mapping.Attribution) : remote.Body;
             if (StoredJsonFormats.Hash(body) == intent.CommentBodyHash)
                 await s.GitHub.UpsertCommentLinkAsync(mapping with { BaseBody = body, BaseRemoteUpdatedUtc = remote.UpdatedAt,
                     State = mapping.State is 3 or 5 ? mapping.State : entry.RawMarkdown == body ? 0 : 2 }, token);
@@ -227,10 +254,25 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
         var mapping = (await s.GitHub.ListCommentLinksAsync(link.Id, token)).FirstOrDefault(m => m.DiaryEntryId == pending.DiaryEntryId);
         var entry = await s.Diary.GetIncludingDeletedAsync(pending.DiaryEntryId, token);
         if (mapping is null || mapping.CommentId is not null || entry is null) return false;
-        var body = GitHubCommentMarker.Strip(comment.Body, entry.Id);
+        var body = GitHubCommentMarker.Strip(comment.Body, entry.Id, mapping.Attribution);
         var state = mapping.State is 3 or 5 ? mapping.State : entry.DeletedAtUtc is not null ? 5 : entry.RawMarkdown == body ? 0 : 2;
         await s.GitHub.UpsertCommentLinkAsync(mapping with { CommentId = comment.Id, AuthorLogin = comment.User.Login, HtmlUrl = comment.HtmlUrl,
             BaseBody = body, BaseRemoteUpdatedUtc = comment.UpdatedAt, State = state, ErrorAttempts = 0, LastErrorKind = null, LastErrorMessage = null, NextAttemptUtc = null }, token);
         return true;
     }, ct);
+
+    /// <summary>
+    /// The attribution a pending post carries (PLAN3 10.4): none for the runner's own entries. In a shared space an
+    /// entry by another member, found by its marker or posted now, is signed with that member's name.
+    /// </summary>
+    public static async Task<string?> AttributionAsync(IDataSession s, DiaryEntryRecord entry, string profileId, CancellationToken ct)
+    {
+        if (string.Equals(entry.AuthorProfileId, profileId, StringComparison.OrdinalIgnoreCase)) return null;
+        var task = await s.Tasks.GetAsync(entry.TaskId, ct);
+        if (task is null || (await s.Spaces.GetAsync(task.SpaceId, ct))?.Kind != SpaceKind.Shared) return null;
+        var actor = "person:" + entry.AuthorProfileId;
+        var members = await s.People.ListAsync(task.SpaceId, ct);
+        var name = PeopleDirectory.Resolve(actor, null, [.. members.Select(member => new DirectoryMember(member.ActorId, member.DisplayName))]).DisplayName;
+        return GitHubCommentMarker.Attribution(name);
+    }
 }

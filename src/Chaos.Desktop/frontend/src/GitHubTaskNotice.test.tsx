@@ -10,7 +10,7 @@ Object.defineProperties(globalThis, {
   navigator: { value: dom.window.navigator, configurable: true },
   HTMLElement: { value: dom.window.HTMLElement, configurable: true },
 });
-const { render, screen, waitFor, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, waitFor, cleanup, act, fireEvent, within } = await import("@testing-library/react");
 const { fakeActivity } = await import("./activityTestApi");
 const { configureActivity } = await import("./activity");
 const { GitHubTaskNotice } = await import("./GitHubTaskNotice");
@@ -30,6 +30,11 @@ const ordinary: GitHubTaskSyncResponse = {
   dueDateManaged: false,
   syncing: false,
   assignees: null,
+  canManage: false,
+  pullRequests: null,
+  unsentAssignees: null,
+  postedAs: null,
+  commentsSigned: false,
 };
 
 test("ordinary tasks show no GitHub mark and only query local task metadata", async () => {
@@ -62,6 +67,51 @@ test("pending changes say not sent and reload after a saved version changes", as
     await screen.findByText("GitHub · Linked");
     assert.equal(screen.queryByText("Not sent to GitHub yet.") === null, true);
     assert.ok(screen.getByText(/Sync sends issue changes/));
+  } finally {
+    cleanup();
+  }
+});
+
+test("linked pull requests are listed with state and review, and a member sees what is not sent and who signs their comments", async () => {
+  const api = {
+    ...gitHubRpc,
+    taskSync: async () => ({
+      ...ordinary,
+      connected: true,
+      state: "Linked",
+      repository: "person/repo",
+      postedAs: "person",
+      commentsSigned: true,
+      canManage: false,
+      unsentAssignees: ["Omar"],
+      pullRequests: [
+        {
+          number: "7",
+          title: "Fixes #1",
+          state: "Merged",
+          review: "Approved",
+          url: "https://github.com/person/repo/pull/7",
+          repository: "person/repo",
+        },
+        {
+          number: "8",
+          title: "Follow-up",
+          state: "Open",
+          review: "None",
+          url: "https://github.com/person/repo/pull/8",
+          repository: "person/repo",
+        },
+      ],
+    }),
+  };
+  render(<GitHubTaskNotice taskId="t1" version="1" revision={0} api={api} />);
+  try {
+    const list = await screen.findByRole("list", { name: "Linked pull requests" });
+    assert.ok(within(list).getByRole("button", { name: "person/repo#7 · Merged · Approved" }));
+    assert.ok(within(list).getByText("Follow-up"));
+    assert.ok(screen.getByText("Not sent to GitHub: Omar has no GitHub login set."));
+    assert.ok(screen.getByText(/Comments you post go to GitHub as @person, signed with your name\./));
+    assert.equal(screen.queryByRole("button", { name: "Keep as ordinary task" }), null, "only an owner detaches a linked task");
   } finally {
     cleanup();
   }
@@ -158,6 +208,7 @@ test("conflict dismissal, retry and detach refresh versioned local metadata", as
     linkVersion: "7",
     hasConflict: true,
     syncError: "GitHub denied access.",
+    canManage: true,
   };
   const requests: { expectedVersion: string; taskId: string }[] = [];
   const api = {
@@ -200,7 +251,7 @@ test("conflict dismissal, retry and detach refresh versioned local metadata", as
 test("a failed task action keeps the notice and displays its error", async () => {
   const api = {
     ...gitHubRpc,
-    taskSync: async () => ({ ...ordinary, connected: true, state: "Linked", linkVersion: "3" }),
+    taskSync: async () => ({ ...ordinary, connected: true, state: "Linked", linkVersion: "3", canManage: true }),
     keepAsOrdinaryTask: async () => {
       throw new Error("Reload this task and try again.");
     },
@@ -251,7 +302,7 @@ test("issue sync refreshes local status and the task when the pushed job state s
 });
 
 test("an issue sync finishing before status is read still refreshes once", async () => {
-  let response = { ...ordinary, connected: true, state: "Linked", linkVersion: "1" };
+  let response = { ...ordinary, connected: true, state: "Linked", linkVersion: "1", canManage: true };
   let refreshed = 0,
     reads = 0;
   const api = {

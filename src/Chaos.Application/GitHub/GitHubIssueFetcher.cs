@@ -12,6 +12,7 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
     Func<CancellationToken, Task<string>> preImportBackup, TimeProvider clock) : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly GitHubPullRequestLinks pullRequests = new(store, api, inbound, clock);
     public async Task<GitHubIssueFetchResult> PullAsync(string repositoryId, int pageLimit = 20, CancellationToken ct = default)
     {
         if (pageLimit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(pageLimit));
@@ -24,10 +25,10 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
     {
         var (repo, connection, checkpoint) = await store.QueryAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
             var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-            if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id)
+            if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || !await GitHubSpaces.CanRunAsync(s, connection, profile, token))
                 throw AppException.VersionConflict("The GitHub subscription is not active.");
             return (repo, connection, await s.GitHub.GetCheckpointAsync(repo.Id, "issues", token));
         }, ct);
@@ -81,6 +82,7 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
                 {
                     var result = await inbound.ApplyAsync(repo.Id, repo.Version, batch, ct);
                     created += result.Created; updated += result.Updated; conflicts += result.Conflicts;
+                    await pullRequests.RefreshChangedAsync(repo, connection, batch, ct);
                 }
                 catch (AppException error) when (error.Kind == AppErrorKind.Validation && error.Fields.Any(field => field.FieldPath == "issue"))
                 {
@@ -91,6 +93,7 @@ public sealed class GitHubIssueFetcher(IApplicationStore store, IGitHubApi api, 
                         {
                             var result = await inbound.ApplyAsync(repo.Id, repo.Version, [issue], ct);
                             created += result.Created; updated += result.Updated; conflicts += result.Conflicts;
+                            await pullRequests.RefreshChangedAsync(repo, connection, [issue], ct);
                         }
                         catch (AppException issueError) when (issueError.Kind == AppErrorKind.Validation && issueError.Fields.Any(field => field.FieldPath == "issue"))
                         {

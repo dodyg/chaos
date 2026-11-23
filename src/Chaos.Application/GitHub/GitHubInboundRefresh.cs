@@ -96,6 +96,12 @@ public sealed class GitHubInboundRefresh(IApplicationStore store, IGitHubApi api
             updated += applied.Updated; conflicts += applied.Conflicts;
             await SaveLink(link, target, row => row with { IssueEtag = read.Etag }, ct, false);
         }
+        // G9: an open pull request's merge or review need not move the issue's updated_at, so open links are re-read once a day.
+        if (!force)
+        {
+            var stale = await store.QueryAsync((s, token) => s.GitHub.ListLinksStaleForPullRequestsAsync(repo.Id, clock.GetUtcNow().AddDays(-1), 50, token), ct);
+            if (stale.Count > 0) await new GitHubPullRequestLinks(store, api, inbound, clock).RefreshStaleAsync(repo, connection, stale, ct);
+        }
         var moreLinks = links.Count > linkLimit;
         var after = moreLinks ? links[linkLimit - 1].Id : null;
         await store.ExecuteAsync(async (s, token) =>
@@ -151,10 +157,10 @@ public sealed class GitHubInboundRefresh(IApplicationStore store, IGitHubApi api
 
     private Task<(GitHubRepositoryRecord Repo, GitHubConnectionRecord Connection)> Context(string id, CancellationToken ct) => store.QueryAsync(async (s, token) =>
     {
-        var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+        var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
         var repo = await s.GitHub.GetRepositoryAsync(id, token) ?? throw AppException.NotFound("Repository subscription was not found.");
         var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-        if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id) throw Changed();
+        if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || !await GitHubSpaces.CanRunAsync(s, connection, profile, token)) throw Changed();
         return (repo, connection);
     }, ct);
 

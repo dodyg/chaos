@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { containerRpc, spaceRpc, spaceUpdateRpc, taskRpc, type ContainerResponse, type SpaceResponse, type TaskResponse } from "#neoastra";
+import {
+  containerRpc,
+  gitHubRpc,
+  spaceRpc,
+  spaceUpdateRpc,
+  taskRpc,
+  type ContainerResponse,
+  type SpaceResponse,
+  type TaskResponse,
+} from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -388,8 +397,8 @@ function homeApi(role: number) {
     members: async () => ({
       ok: true,
       members: [
-        { memberId: "a", name: "Ana", role: 1, kind: 1, joinedAt: "2026-01-01T00:00:00Z", isMe: role === 1 },
-        { memberId: "b", name: "Bo", role: role, kind: 1, joinedAt: "2026-01-02T00:00:00Z", isMe: role !== 1 },
+        { memberId: "a", name: "Ana", role: 1, kind: 1, joinedAt: "2026-01-01T00:00:00Z", isMe: role === 1, gitHubLogin: null },
+        { memberId: "b", name: "Bo", role: role, kind: 1, joinedAt: "2026-01-02T00:00:00Z", isMe: role !== 1, gitHubLogin: null },
       ],
       error: null,
     }),
@@ -406,11 +415,13 @@ test("the owner manages roles and removal; a viewer only reads the member list a
     assert.ok(screen.getByText(/You are an owner/));
     assert.ok(screen.getByRole("button", { name: "Invite people" }));
     assert.ok(screen.getByRole("tab", { name: "Settings" }));
+    assert.ok(screen.getByRole("tab", { name: "Connections" }));
     await user.click(screen.getByRole("tab", { name: "Members" }));
     assert.ok(await screen.findByRole("combobox", { name: "Role of Bo" }));
     assert.ok(screen.getByRole("button", { name: "Remove Bo" }));
     assert.equal(screen.queryByRole("button", { name: "Remove Ana" }), null, "no removing yourself; use Leave");
     assert.ok(screen.getByRole("textbox", { name: "My name in this space" }));
+    assert.ok(screen.getByRole("textbox", { name: "My GitHub login" }));
     cleanup();
 
     render(<SpaceHome space={space(3)} lists={[]} onOpenList={noop} onLeft={noop} onChanged={noop} api={homeApi(3)} />, {
@@ -419,11 +430,150 @@ test("the owner manages roles and removal; a viewer only reads the member list a
     assert.ok(screen.getByText(/You are a viewer/));
     assert.equal(screen.queryByRole("button", { name: "Invite people" }), null);
     assert.equal(screen.queryByRole("tab", { name: "Settings" }), null);
+    assert.equal(screen.queryByRole("tab", { name: "Connections" }), null);
     await user.click(screen.getByRole("tab", { name: "Members" }));
     await screen.findByText("Ana");
     assert.equal(screen.queryByRole("combobox", { name: /Role of/ }), null);
     assert.equal(screen.queryByRole("button", { name: /Remove/ }), null);
     assert.ok(screen.getByRole("button", { name: "Leave this space" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the Members tab saves and clears a GitHub login, and the owner's Connections tab shows the space's GitHub settings", async () => {
+  const logins: unknown[] = [];
+  const api = {
+    ...homeApi(1),
+    setMyGitHubLogin: async (request: { spaceId: string; gitHubLogin: string | null }) => {
+      logins.push(request);
+      return { ok: true, error: null };
+    },
+  };
+  const connectionsApi = {
+    ...gitHubRpc,
+    status: async () => ({
+      ok: true,
+      connection: null,
+      repositories: [],
+      targets: [],
+      error: null,
+      sync: null,
+      isOwner: true,
+      spaceId: shared,
+      spaceName: "Bins",
+      memberCount: 2,
+    }),
+  };
+  const noop = () => {};
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <SpaceHome space={space(1)} lists={[]} onOpenList={noop} onLeft={noop} onChanged={noop} api={api} connectionsApi={connectionsApi} />,
+    {
+      container: dom.window.document.body,
+    },
+  );
+  try {
+    await user.click(screen.getByRole("tab", { name: "Members" }));
+    const login = await screen.findByRole("textbox", { name: "My GitHub login" });
+    assert.ok(screen.getByText(/Used to match GitHub assignees to you/));
+    await user.type(login, "omar");
+    await user.click(screen.getByRole("button", { name: "Save GitHub login" }));
+    await screen.findByText("Your GitHub login was saved.");
+    assert.deepEqual(logins, [{ spaceId: shared, gitHubLogin: "omar" }]);
+    await user.clear(login);
+    await user.click(screen.getByRole("button", { name: "Clear GitHub login" }));
+    await screen.findByText("Your GitHub login was cleared.");
+    assert.deepEqual(logins[1], { spaceId: shared, gitHubLogin: null });
+
+    await user.click(screen.getByRole("tab", { name: "Connections" }));
+    const panel = await screen.findByRole("tabpanel", { name: "Connections" });
+    assert.ok(await within(panel).findByText(/Connect the issues of a GitHub repository to Bins/));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the invite dialog warns about a private repository connected to the space and needs an acknowledgement", async () => {
+  const requests: unknown[] = [];
+  const api = {
+    invites: async () => ({ ok: true, invites: [], error: null }),
+    invite: async (request: unknown) => {
+      requests.push(request);
+      return { ok: true, invite: null, link: "https://chaos.example/invite/private", error: null };
+    },
+    revokeInvite: async () => ({ ok: true, error: null }),
+  };
+  const githubApi = {
+    ...gitHubRpc,
+    status: async () => ({
+      ok: true,
+      connection: {
+        id: "c1",
+        version: "1",
+        accountId: "3000000000",
+        accountLogin: "person",
+        state: "Active",
+        postDiaryByDefault: true,
+        createLabelsForTags: false,
+        runnerDeviceName: "Desk",
+        isRunner: true,
+      },
+      repositories: [
+        {
+          id: "r1",
+          version: "1",
+          repositoryId: "4000000000",
+          fullName: "acme/secret",
+          state: "Active",
+          targetContainerId: "inbox",
+          targetSectionId: null,
+          filter: { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 },
+          milestonesAsProjects: false,
+          taskCategory: "Personal",
+          isPrivate: true,
+        },
+        {
+          id: "r2",
+          version: "1",
+          repositoryId: "4000000001",
+          fullName: "acme/open",
+          state: "Active",
+          targetContainerId: "inbox",
+          targetSectionId: null,
+          filter: { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 },
+          milestonesAsProjects: false,
+          taskCategory: "Personal",
+          isPrivate: false,
+        },
+      ],
+      targets: [],
+      error: null,
+      sync: null,
+      isOwner: true,
+      spaceId: shared,
+      spaceName: "Bins",
+      memberCount: 1,
+    }),
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<InviteDialog space={{ spaceId: shared, name: "Bins" }} api={api} githubApi={githubApi} onClose={() => {}} />, {
+    container: dom.window.document.body,
+  });
+  try {
+    const warning = await screen.findByRole("alert");
+    assert.match(
+      warning.textContent ?? "",
+      /Everyone in Bins will see issues from acme\/secret, including people without access to it on GitHub\./,
+    );
+    await user.click(screen.getByRole("button", { name: "By link" }));
+    const create = screen.getByRole("button", { name: "Create link" });
+    assert.equal((create as HTMLButtonElement).disabled, true);
+    await user.click(screen.getByRole("checkbox", { name: "I understand; invite anyway" }));
+    assert.equal((create as HTMLButtonElement).disabled, false);
+    await user.click(create);
+    assert.ok(await screen.findByText("https://chaos.example/invite/private"));
+    assert.equal(requests.length, 1);
   } finally {
     cleanup();
   }

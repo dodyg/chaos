@@ -21,7 +21,7 @@ public sealed class PeopleQueries(IApplicationStore store)
             return (IReadOnlyList<PersonDisplay>)[.. directory.Select(m =>
             {
                 var member = members.FirstOrDefault(entry => string.Equals(entry.ActorId, m.ActorId, StringComparison.OrdinalIgnoreCase));
-                return PeopleDirectory.Resolve(m.ActorId, myActor, directory) with { Role = member?.Role, Former = member?.Former ?? false };
+                return PeopleDirectory.Resolve(m.ActorId, myActor, directory) with { Role = member?.Role, Former = member?.Former ?? false, GitHubLogin = member?.GitHubLogin };
             })];
         }, ct);
 

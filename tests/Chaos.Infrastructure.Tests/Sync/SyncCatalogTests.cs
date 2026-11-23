@@ -231,7 +231,7 @@ public sealed class SyncCatalogTests
             ("Pages", "PageTags"), ("Pages", "PageTaskLinks"), ("DayPlans", "DayPlanItems"),
             ("WeekPlans", "WeekGoals"), ("WeekGoals", "WeekGoalTasks"), ("WeekPlans", "WeekAssignments"),
             ("RecurrenceSeries", "RecurrenceOccurrences"), ("GitHubConnections", "GitHubRepositories"),
-            ("GitHubRepositories", "GitHubIssueLinks"), ("DiaryEntries", "GitHubCommentLinks"),
+            ("GitHubRepositories", "GitHubIssueLinks"), ("GitHubIssueLinks", "GitHubPullRequestLinks"), ("DiaryEntries", "GitHubCommentLinks"),
         };
         var problems = pairs.Where(pair => order[pair.Item1] >= order[pair.Item2])
             .Select(pair => $"{pair.Item1} ({order[pair.Item1]}) must come before {pair.Item2} ({order[pair.Item2]})").ToList();

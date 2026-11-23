@@ -124,8 +124,8 @@ export const viewFields: readonly ViewFieldInfo[] = [
   { name: "hasPadLink", label: "Made from a pad note", type: "flag", operators: [{ op: "is", label: "is" }] },
   { name: "hasPageMention", label: "Made from a page", type: "flag", operators: [{ op: "is", label: "is" }] },
   { name: "recurring", label: "Repeats", type: "flag", operators: [{ op: "is", label: "is" }] },
-  // GitHub group (personal views). Answered from what the app already stores about each issue; the
-  // issue author and linked pull requests are not stored, so they are not offered.
+  // GitHub group (personal and shared views). Answered from what the app already stores about each issue: the
+  // baseline, the label and milestone mappings, and the pull requests the runner keeps (Q15).
   {
     name: "githubRepository",
     label: "GitHub repository",
@@ -162,6 +162,32 @@ export const viewFields: readonly ViewFieldInfo[] = [
     operators: [
       { op: "contains", label: "contains" },
       { op: "isEmpty", label: "has none" },
+    ],
+  },
+  {
+    name: "githubAuthor",
+    label: "GitHub author",
+    type: "text",
+    operators: [
+      { op: "contains", label: "contains" },
+      { op: "isEmpty", label: "is empty" },
+    ],
+  },
+  { name: "githubLinkedPr", label: "Has a linked pull request", type: "flag", operators: [{ op: "is", label: "is" }] },
+  {
+    name: "githubPrReview",
+    label: "GitHub pull request review",
+    type: "choice",
+    choices: ["None", "Approved", "Changes requested", "Review required"],
+    operators: [{ op: "is", label: "is" }],
+  },
+  {
+    name: "githubIssueType",
+    label: "GitHub issue type",
+    type: "text",
+    operators: [
+      { op: "contains", label: "contains" },
+      { op: "isEmpty", label: "is empty" },
     ],
   },
 ];

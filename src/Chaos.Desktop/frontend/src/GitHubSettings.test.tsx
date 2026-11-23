@@ -23,6 +23,10 @@ const disconnected: GitHubStatusResponse = {
   repositories: [],
   targets: [{ id: "inbox", name: "Inbox", sections: [] }],
   error: null,
+  isOwner: true,
+  spaceId: null,
+  spaceName: null,
+  memberCount: 1,
 };
 const connected: GitHubStatusResponse = {
   ...disconnected,
@@ -142,6 +146,89 @@ test("browsing and adding a repository sends filters and string identity", async
   }
 });
 
+const teamSpace = "11111111-1111-4111-8111-111111111111";
+
+test("a private repository in a shared space with other members is added only after the owner confirms", async () => {
+  const added: GitHubAddRequest[] = [];
+  const sharedStatus: GitHubStatusResponse = { ...connected, isOwner: true, spaceId: teamSpace, spaceName: "Team", memberCount: 3 };
+  const api = {
+    ...gitHubRpc,
+    status: async () => sharedStatus,
+    listRepositories: async () => ({ ok: true, repositories: [remote], nextCursor: null, error: null }),
+    addRepository: async (request: GitHubAddRequest) => {
+      added.push(request);
+      return { ok: true, error: null };
+    },
+  };
+  render(<GitHubSettings api={api} spaceId={teamSpace} />);
+  const user = userEvent.setup({ document: dom.window.document });
+  try {
+    assert.ok(await screen.findByText(/Members need no GitHub setup; owners alone manage the connection/));
+    await user.click(screen.getByRole("button", { name: "Browse repositories" }));
+    await user.click(await screen.findByRole("button", { name: "Choose" }));
+    await user.click(screen.getByRole("button", { name: "Save repository" }));
+    const warning = await screen.findByRole("alertdialog", { name: "Add a private repository?" });
+    assert.match(
+      warning.textContent ?? "",
+      /Everyone in Team will see issues from person\/repo, including people without access to it on GitHub\./,
+    );
+    assert.equal(added.length, 0);
+    await user.click(within(warning).getByRole("button", { name: "Add private repository" }));
+    await waitFor(() => assert.equal(added.length, 1));
+  } finally {
+    cleanup();
+  }
+});
+
+test("a private repository for an owner alone is added without a warning", async () => {
+  const added: GitHubAddRequest[] = [];
+  const api = {
+    ...gitHubRpc,
+    status: async () => ({ ...connected, isOwner: true, spaceId: teamSpace, spaceName: "Team", memberCount: 1 }),
+    listRepositories: async () => ({ ok: true, repositories: [remote], nextCursor: null, error: null }),
+    addRepository: async (request: GitHubAddRequest) => {
+      added.push(request);
+      return { ok: true, error: null };
+    },
+  };
+  render(<GitHubSettings api={api} spaceId={teamSpace} />);
+  const user = userEvent.setup({ document: dom.window.document });
+  try {
+    await user.click(await screen.findByRole("button", { name: "Browse repositories" }));
+    await user.click(await screen.findByRole("button", { name: "Choose" }));
+    await user.click(screen.getByRole("button", { name: "Save repository" }));
+    await waitFor(() => assert.equal(added.length, 1));
+    assert.equal(screen.queryByRole("alertdialog", { name: "Add a private repository?" }), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a member who is not an owner sees the space's connection read-only", async () => {
+  const api = {
+    ...gitHubRpc,
+    status: async () => ({
+      ...connected,
+      repositories: [repository],
+      isOwner: false,
+      spaceId: teamSpace,
+      spaceName: "Team",
+      memberCount: 3,
+    }),
+  };
+  render(<GitHubSettings api={api} spaceId={teamSpace} />);
+  try {
+    const panel = await screen.findByRole("region", { name: "GitHub connection (read-only)" });
+    assert.match(panel.textContent ?? "", /Connected as @person\. Only owners of Team manage its GitHub connection\./);
+    assert.ok(within(panel).getByText("person/repo"));
+    assert.equal(screen.queryByRole("button", { name: "Disconnect" }), null);
+    assert.equal(screen.queryByRole("button", { name: "Run GitHub sync on this device" }), null);
+    assert.equal(screen.queryByRole("button", { name: "Sync now" }), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("disconnect requires confirmation and explains the preserved CLI login", async () => {
   let status = connected,
     calls = 0;
@@ -209,6 +296,7 @@ const repository = {
   filter: { labels: [], labelMode: "any", assignee: "any", milestone: null, noMilestone: false, includeClosedDays: 0 },
   milestonesAsProjects: false,
   taskCategory: "Work",
+  isPrivate: false,
 };
 const idleSync = {
   running: false,

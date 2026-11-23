@@ -160,6 +160,22 @@ public sealed class SpaceCommands(IApplicationStore store, IChaosServiceClient s
         await streams.SyncAsync(ct);
     }
 
+    /// <summary>
+    /// The person's GitHub login in this space (PLAN3 10.3): used to match GitHub assignees to them. It is not
+    /// verified against GitHub, because the token belongs to the owner's device. Null or blank clears it.
+    /// </summary>
+    public async Task SetMyGitHubLoginAsync(string spaceId, string? login, CancellationToken ct = default)
+    {
+        var normalized = GitHub.GitHubLogin.Normalize(login);
+        if (normalized is not null && !GitHub.GitHubLogin.IsValid(normalized))
+        {
+            throw AppException.Validation("gitHubLogin", "Enter a GitHub login: 1–39 letters, digits or hyphens.");
+        }
+        await CallAsync(HttpMethod.Patch, $"v2/spaces/{SpaceId(spaceId):D}/members/me", JsonSerializer.Serialize(new { gitHubLogin = normalized ?? "" }),
+            "Connect to change your GitHub login in this space.", ct);
+        await streams.SyncAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ServiceInvite>> InvitesAsync(string spaceId, CancellationToken ct = default)
     {
         var response = await CallAsync(HttpMethod.Get, $"v2/spaces/{SpaceId(spaceId):D}/invites", null, "Connect to see the invitations.", ct);

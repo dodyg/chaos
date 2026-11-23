@@ -267,13 +267,17 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
           <p>
             <strong>Connect.</strong> Install GitHub CLI (2.103.3 or newer) and sign in once in a terminal with{" "}
             <code>gh auth login --hostname github.com</code>. Then open Settings → GitHub and press <em>Connect GitHub</em>. Chaos never
-            asks for or stores your password or token; GitHub CLI keeps your login, and disconnecting leaves it signed in.
+            asks for or stores your password or token; GitHub CLI keeps your login, and disconnecting leaves it signed in. In a shared
+            space, an owner connects it from the space's <em>Connections</em> tab; members need no setup, and only owners manage the
+            connection. One owner's device does the syncing; if that owner leaves or is demoted, another owner chooses{" "}
+            <em>Run GitHub sync on this device</em>.
           </p>
           <p>
             <strong>Add repositories.</strong> Under <em>Add a repository</em>, pick one and choose the list or project new tasks land in,
             whether they count as Personal or Work, and a filter: labels, milestone, assigned to you, and how many days of closed issues to
             include. Turn on <em>Use milestones as projects</em> to give each milestone its own project. Changes to the destination only
-            affect issues imported later.
+            affect issues imported later. In a shared space, adding a <em>private</em> repository asks you to confirm first: everyone in the
+            space will see its issues, including people without access to it on GitHub.
           </p>
           <p>
             <strong>What syncs.</strong> A linked task carries a GitHub mark and a link to its issue. These stay in step both ways, on a
@@ -288,11 +292,15 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             <li>Labels and tags. Local tags only become labels that already exist, unless you allow creating labels in the settings.</li>
             <li>
               Comments and diary updates. Comments arrive as diary updates; tick <em>Also post to GitHub</em> on a new update to send it
-              (the Settings default controls the tick).
+              (the Settings default controls the tick). In a shared space the comment goes out under the owner's GitHub login, signed with
+              your name (<em>— Your name (via Chaos)</em>).
             </li>
             <li>
-              Assignees are shown on the task; use <em>Assign to me</em> and <em>Unassign me</em> to change your own.
+              Assignees are shown on the task; use <em>Assign to me</em> and <em>Unassign me</em> to change your own. In a shared space, set
+              your GitHub login on the <em>Members</em> tab (it is used to match GitHub assignees to you, and is not verified); assigning a
+              member with a login puts that login on the issue, and the task's GitHub notice says when someone has no login set.
             </li>
+            <li>Pull requests that close the issue are listed on the task with their state and review decision.</li>
           </ul>
           <p>
             Planned date, estimate, priority, My Day, reminders and waiting stay in Chaos and never go to GitHub. Recurrence is not
@@ -306,11 +314,12 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             <strong>Leaving things.</strong> Deleting a task never changes the issue. An issue that stops matching the filter stays as a
             task that no longer syncs. <em>Keep as an ordinary task</em> detaches one task; removing a repository or disconnecting keeps all
             its tasks. Pause stops syncing for the connection or one repository. If GitHub CLI is missing, signed out or on another account,
-            syncing stops with a message and a recheck button.
+            syncing stops with a message and a recheck button. Only an owner can <em>Keep as an ordinary task</em> in a shared space.
           </p>
           <p>
             Backups and exports include issue text, including from private repositories. Custom views can filter by repository, issue state,
-            labels, milestone and assignee using the last synced state, so they work offline.
+            labels, milestone, assignee, author, issue type, and by linked pull requests and their review decision, using the last synced
+            state, so they work offline.
           </p>
           <Go to="settings" onNavigate={onNavigate}>
             Open Settings

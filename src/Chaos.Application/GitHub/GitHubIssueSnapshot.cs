@@ -4,14 +4,26 @@ using Chaos.Domain.GitHub;
 
 namespace Chaos.Application.GitHub;
 
-/// <summary>Versioned remote baseline. Arrays make the persisted representation independent of set implementations.</summary>
-public sealed record GitHubIssueSnapshot(string Title, string Body, bool Open, string? Reason, long[] LabelIds, long[] AssigneeIds, long? MilestoneNumber, DateOnly? MilestoneDue, int Comments = 0, string? RepositorySubscriptionId = null, string[]? AssigneeLogins = null)
+/// <summary>
+/// Versioned remote baseline. Arrays make the persisted representation independent of set implementations.
+/// <see cref="AuthorLogin"/> and <see cref="IssueType"/> arrived with client schema 12; older baselines read them as null.
+/// </summary>
+public sealed record GitHubIssueSnapshot(string Title, string Body, bool Open, string? Reason, long[] LabelIds, long[] AssigneeIds, long? MilestoneNumber, DateOnly? MilestoneDue, int Comments = 0, string? RepositorySubscriptionId = null, string[]? AssigneeLogins = null,
+    string? AuthorLogin = null, string? IssueType = null)
 {
-    public IssueProjection Projection() => new(Title, Body, new(Open, Reason), LabelIds.ToHashSet(), AssigneeIds.ToHashSet());
+    /// <summary>
+    /// The baseline as logins. A baseline written before logins were kept (ids only) yields placeholders, so the
+    /// local projection equals the base and the next pass simply takes GitHub's values.
+    /// </summary>
+    public IssueProjection Projection() => new(Title, Body, new(Open, Reason), LabelIds.ToHashSet(), Logins());
+
+    private HashSet<string> Logins() => AssigneeLogins is { } known ? IssueProjection.Logins([.. known])
+        : new HashSet<string>(AssigneeIds.Select(id => "id:" + id.ToString(System.Globalization.CultureInfo.InvariantCulture)), IssueProjection.LoginComparer);
+
     public static GitHubIssueSnapshot From(GitHubIssue issue) => new(issue.Title, issue.Body ?? "", issue.State == "open", issue.State == "closed" ? issue.StateReason ?? "completed" : issue.StateReason,
         issue.Labels.Select(l => l.Id).Order().ToArray(), issue.Assignees.Select(a => a.Id).Order().ToArray(), issue.Milestone?.Number,
         issue.Milestone?.DueOn is { } due ? DateOnly.FromDateTime(due.UtcDateTime) : null, issue.Comments,
-        AssigneeLogins: issue.Assignees.OrderBy(a => a.Id).Select(a => a.Login).ToArray());
+        AssigneeLogins: issue.Assignees.OrderBy(a => a.Id).Select(a => a.Login).ToArray(), AuthorLogin: issue.User.Login, IssueType: issue.Type?.Name);
 
     /// <summary>Assignee logins for display, or null when an older baseline stored only ids.</summary>
     public IReadOnlyList<string>? DisplayAssignees() => AssigneeLogins ?? (AssigneeIds.Length == 0 ? [] : null);

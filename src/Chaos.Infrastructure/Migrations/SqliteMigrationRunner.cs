@@ -13,7 +13,7 @@ namespace Chaos.Infrastructure.Migrations;
 public sealed class SqliteMigrationRunner
 {
     /// <summary>Highest schema version this build knows how to open.</summary>
-    public const int MaxKnownSchemaVersion = 47;
+    public const int MaxKnownSchemaVersion = 48;
 
     /// <param name="targetVersion">Stops after this version; null applies every pending migration. A JSON archive
     /// restore builds its staging database at the archive's version, loads the rows, then migrates the rest (PLAN §14).</param>
@@ -65,7 +65,7 @@ public sealed class SqliteMigrationRunner
     {
         // Rebuilding a referenced parent needs foreign keys disabled before BEGIN in SQLite.
         // Check the complete graph before committing and restore the connection's setting.
-        var rebuildParents = migration.Version is 38 or 42;
+        var rebuildParents = migration.Version is 38 or 42 or 48;
         var foreignKeysWereEnabled = false;
         if (rebuildParents)
         {

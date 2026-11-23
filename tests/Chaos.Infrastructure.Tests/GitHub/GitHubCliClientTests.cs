@@ -273,13 +273,18 @@ public sealed class GitHubCliClientTests
     }
 
     [Test]
-    public async Task SetSelfAssignmentAsync_Assign_OnlySendsConnectedLogin()
+    public async Task SetAssignmentAsync_Assign_SendsTheGivenLoginOnly()
     {
+        var methods = new List<HttpMethod>();
         string? posted = null;
-        var handler = new Handler((_, body) => { posted = body; return new(HttpStatusCode.Created) { Content = new StringContent("{}") }; });
+        var handler = new Handler((request, body) => { methods.Add(request.Method); posted = body; return new(HttpStatusCode.Created) { Content = new StringContent("{}") }; });
         using var client = new GitHubCliClient(new Runner(), handler, TimeProvider.System);
-        await client.SetSelfAssignmentAsync(new(1, "person"), "person", "repo", 1, true, CancellationToken.None);
+        await client.SetAssignmentAsync(new(1, "person"), "person", "repo", 1, "omar", true, CancellationToken.None);
         using var json = JsonDocument.Parse(posted!);
-        await Assert.That(json.RootElement.GetProperty("assignees").EnumerateArray().Single().GetString()).IsEqualTo("person");
+        await Assert.That(json.RootElement.GetProperty("assignees").EnumerateArray().Single().GetString()).IsEqualTo("omar");
+        await client.SetAssignmentAsync(new(1, "person"), "person", "repo", 1, "person", false, CancellationToken.None);
+        await Assert.That(methods).IsEquivalentTo([HttpMethod.Post, HttpMethod.Delete]);
+        await Assert.That(async () => await client.SetAssignmentAsync(new(1, "person"), "person", "repo", 1, "not a login", true, CancellationToken.None)).Throws<GitHubApiException>();
+        await Assert.That(methods.Count).IsEqualTo(2);
     }
 }

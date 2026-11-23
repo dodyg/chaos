@@ -598,6 +598,15 @@ public static class SyncCatalog
             ],
             ApplyOrder: 350),
 
+        // Q15 (PLAN3 10.6): the pull requests that close an issue, written by the runner and read by every member's views
+        new SyncTable("GitHubPullRequestLinks", "github_pull_request_link", SyncMode.Merge, ["IssueLinkId", "PullRequestId"],
+            Groups:
+            [
+                new("create", ["IssueLinkId", "RepositoryFullName", "Number"]),
+                new("state", ["Title", "State", "ReviewState", "Url", "RefreshedAtUtc"]),
+            ],
+            ApplyOrder: 355),
+
         new SyncTable("GitHubChecklistItems", "github_checklist_item", SyncMode.Merge, ["SubtaskId"],
             Groups: [new("base", ["IssueLinkId", "BaseOrdinal", "BaseText", "BaseChecked"])],
             ApplyOrder: 360), // keyed by the (deterministic) subtask id; refresh rewrites the row in place
@@ -606,7 +615,7 @@ public static class SyncCatalog
             Groups:
             [
                 new("create", ["IssueLinkId", "CommentId", "AuthorLogin", "HtmlUrl", "Origin"]),
-                new("state", ["State", "BaseBody", "BaseRemoteUpdatedUtc"]),
+                new("state", ["State", "BaseBody", "BaseRemoteUpdatedUtc", "Attribution"]), // Attribution (schema 12): the line a member's comment was posted with
             ],
             LocalColumns: ["LastErrorKind", "LastErrorMessage", "ErrorAttempts", "NextAttemptUtc"],
             UniqueRules: [new("UX_GitHubCommentLinks_Comment", SyncUniqueRuleKind.KeepLowestRetireOther,

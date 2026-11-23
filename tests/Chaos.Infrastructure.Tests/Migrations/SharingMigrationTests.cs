@@ -41,6 +41,60 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate048_AddsPullRequestLinks_AttributionAndAssigneeDirtyTriggers()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 47);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('team','person',2,'Team','now','now');
+            INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,GitHubLogin,Role,JoinedAtUtc)
+                VALUES ('member','team','person',1,'Person','person',1,'now');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('inbox','team',0,'Inbox','inbox',0,'now','now');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('task','team','inbox','Task',0,0,'now','now');
+            INSERT INTO TaskAssignees (TaskId,MemberId,AddedAtUtc) VALUES ('task','person','now');
+            INSERT INTO GitHubConnections (Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('connection','team','person','https://github.com','https://api.github.com',1,'person','now','now');
+            INSERT INTO GitHubRepositories (Id,ConnectionId,RepositoryId,Owner,Name,FullName,HtmlUrl,IsPrivate,TargetContainerId,FilterJson,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('repo','connection',10,'person','repo','person/repo','https://github.com/person/repo',0,'inbox','{"v":1}','now','now');
+            INSERT INTO GitHubIssueLinks (Id,RepositorySubscriptionId,ConnectionId,TaskId,IssueId,IssueNodeId,IssueNumber,HtmlUrl,BaseJson,BaseRemoteUpdatedUtc,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('link','repo','connection','task',1,'I_1',1,'https://github.com/person/repo/issues/1','{"v":1,"payload":{}}','now','now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_GitHubPullRequestLinks_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_table_info('GitHubCommentLinks') WHERE name='Attribution';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'GitHubDirtyAssignee%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM GitHubConnections;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE name='UX_GitHubConnections_ActivePerSpace';"))).IsEqualTo(1L);
+        // The connection's ProfileId names an owner who may have no Profiles row on this device (a member's).
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_list('GitHubConnections') WHERE \"from\"='ProfileId';"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_list('GitHubConnections') WHERE \"from\"='SpaceId';"))).IsEqualTo(1L);
+        Execute(connection, "INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) SELECT 'team2',Id,2,'Team 2','2026-11-10T09:00:00Z','2026-11-10T09:00:00Z' FROM Profiles LIMIT 1; INSERT INTO GitHubConnections (Id,SpaceId,ProfileId,WebBaseUrl,ApiBaseUrl,AccountId,AccountLogin,RunnerDeviceId,CreatedAtUtc,UpdatedAtUtc) VALUES ('other','team2','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','https://github.com','https://api.github.com',2,'other','device','now','now');");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+
+        // Assigning or unassigning a member marks the linked issue dirty on the runner, as a tag change does.
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks WHERE Id='link';"))).IsEqualTo(0L);
+        Execute(connection, "UPDATE TaskAssignees SET DeletedAtUtc='now' WHERE TaskId='task';");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT LocalDirty FROM GitHubIssueLinks WHERE Id='link';"))).IsEqualTo(1L);
+        Execute(connection, "UPDATE TaskAssignees SET DeletedAtUtc=NULL WHERE TaskId='task';");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='github_pull_request_link';"))).IsEqualTo(0L);
+
+        Execute(connection, """
+            INSERT INTO GitHubPullRequestLinks (IssueLinkId,PullRequestId,RepositoryFullName,Number,Title,State,ReviewState,Url,RefreshedAtUtc)
+                VALUES ('link','PR_1','person/repo',1,'Fix #1',2,1,'https://github.com/person/repo/pull/1','now');
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='github_pull_request_link' AND GroupName IN ('create','state');"))).IsEqualTo(2L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        var refused = false;
+        try { Execute(connection, "UPDATE GitHubPullRequestLinks SET State=4;"); }
+        catch (Microsoft.Data.Sqlite.SqliteException) { refused = true; }
+        await Assert.That(refused).IsTrue();
+    }
+
+    [Test]
     public async Task Migrate047_AddsStandupsAsASyncedTableOfSharedSpaces()
     {
         using var connection = Open();

@@ -114,6 +114,7 @@ public static class ActivityActions
         "spaces.restore",
         "spaces.revokeInvite",
         "spaces.setMyName",
+        "spaces.setMyGitHubLogin",
         "spaces.shareList",
         "spaces.list",
         "spaces.states",

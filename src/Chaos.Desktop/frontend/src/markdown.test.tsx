@@ -619,6 +619,11 @@ test("a connected journal offers explicit GitHub posting and deletion choices", 
         dueDateManaged: false,
         syncing: false,
         assignees: null,
+        canManage: true,
+        pullRequests: null,
+        unsentAssignees: null,
+        postedAs: "person",
+        commentsSigned: false,
       };
     },
   };

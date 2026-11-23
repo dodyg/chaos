@@ -29,6 +29,9 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public Task<IReadOnlyList<GitHubConnectionRecord>> ListConnectionsAsync(CancellationToken ct) =>
+        QueryAsync("SELECT * FROM GitHubConnections WHERE DeletedAtUtc IS NULL ORDER BY Id;", ReadConnection, ct);
+
     private static GitHubIssueWriteRecord ReadIssueWrite(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), StorageFormats.ParseInstant(r.GetString(2))!.Value);
 
     public async Task<GitHubIssueWriteRecord?> GetIssueWriteAsync(string linkId, CancellationToken ct) =>
@@ -388,12 +391,13 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         LastErrorMessage = reader.IsDBNull(reader.GetOrdinal("LastErrorMessage")) ? null : reader.GetString(reader.GetOrdinal("LastErrorMessage")),
         ErrorAttempts = reader.GetInt32(reader.GetOrdinal("ErrorAttempts")),
         NextAttemptUtc = reader.IsDBNull(reader.GetOrdinal("NextAttemptUtc")) ? null : StorageFormats.ParseInstant(reader.GetString(reader.GetOrdinal("NextAttemptUtc"))),
+        Attribution = reader.IsDBNull(reader.GetOrdinal("Attribution")) ? null : reader.GetString(reader.GetOrdinal("Attribution")),
     };
 
     public async Task UpsertCommentLinkAsync(GitHubCommentLinkRecord row, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO GitHubCommentLinks (DiaryEntryId, IssueLinkId, CommentId, AuthorLogin, HtmlUrl, Origin, State, BaseBody, BaseRemoteUpdatedUtc, LastErrorKind, LastErrorMessage, ErrorAttempts, NextAttemptUtc) VALUES ($DiaryEntryId, $IssueLinkId, $CommentId, $AuthorLogin, $HtmlUrl, $Origin, $State, $BaseBody, $BaseRemoteUpdatedUtc, $LastErrorKind, $LastErrorMessage, $ErrorAttempts, $NextAttemptUtc) ON CONFLICT (DiaryEntryId) DO UPDATE SET IssueLinkId=excluded.IssueLinkId, CommentId=excluded.CommentId, AuthorLogin=excluded.AuthorLogin, HtmlUrl=excluded.HtmlUrl, Origin=excluded.Origin, State=excluded.State, BaseBody=excluded.BaseBody, BaseRemoteUpdatedUtc=excluded.BaseRemoteUpdatedUtc, LastErrorKind=excluded.LastErrorKind, LastErrorMessage=excluded.LastErrorMessage, ErrorAttempts=excluded.ErrorAttempts, NextAttemptUtc=excluded.NextAttemptUtc;";
+        command.CommandText = "INSERT INTO GitHubCommentLinks (DiaryEntryId, IssueLinkId, CommentId, AuthorLogin, HtmlUrl, Origin, State, BaseBody, BaseRemoteUpdatedUtc, LastErrorKind, LastErrorMessage, ErrorAttempts, NextAttemptUtc, Attribution) VALUES ($DiaryEntryId, $IssueLinkId, $CommentId, $AuthorLogin, $HtmlUrl, $Origin, $State, $BaseBody, $BaseRemoteUpdatedUtc, $LastErrorKind, $LastErrorMessage, $ErrorAttempts, $NextAttemptUtc, $Attribution) ON CONFLICT (DiaryEntryId) DO UPDATE SET IssueLinkId=excluded.IssueLinkId, CommentId=excluded.CommentId, AuthorLogin=excluded.AuthorLogin, HtmlUrl=excluded.HtmlUrl, Origin=excluded.Origin, State=excluded.State, BaseBody=excluded.BaseBody, BaseRemoteUpdatedUtc=excluded.BaseRemoteUpdatedUtc, LastErrorKind=excluded.LastErrorKind, LastErrorMessage=excluded.LastErrorMessage, ErrorAttempts=excluded.ErrorAttempts, NextAttemptUtc=excluded.NextAttemptUtc, Attribution=excluded.Attribution;";
         command.Parameters.AddWithValue("$DiaryEntryId", row.DiaryEntryId);
         command.Parameters.AddWithValue("$IssueLinkId", row.IssueLinkId);
         command.Parameters.AddWithValue("$CommentId", (object?)row.CommentId ?? DBNull.Value);
@@ -407,8 +411,58 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         command.Parameters.AddWithValue("$LastErrorMessage", (object?)row.LastErrorMessage ?? DBNull.Value);
         command.Parameters.AddWithValue("$ErrorAttempts", row.ErrorAttempts);
         command.Parameters.AddWithValue("$NextAttemptUtc", row.NextAttemptUtc is { } NextAttemptUtc ? StorageFormats.Instant(NextAttemptUtc) : (object)DBNull.Value);
+        command.Parameters.AddWithValue("$Attribution", (object?)row.Attribution ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct);
     }
+
+    private static GitHubPullRequestLinkRecord ReadPullRequestLink(SqliteDataReader reader) => new()
+    {
+        IssueLinkId = reader.GetString(reader.GetOrdinal("IssueLinkId")),
+        PullRequestId = reader.GetString(reader.GetOrdinal("PullRequestId")),
+        RepositoryFullName = reader.GetString(reader.GetOrdinal("RepositoryFullName")),
+        Number = reader.GetInt64(reader.GetOrdinal("Number")),
+        Title = reader.GetString(reader.GetOrdinal("Title")),
+        State = reader.GetInt32(reader.GetOrdinal("State")),
+        ReviewState = reader.GetInt32(reader.GetOrdinal("ReviewState")),
+        Url = reader.GetString(reader.GetOrdinal("Url")),
+        RefreshedAtUtc = StorageFormats.ParseInstant(reader.GetString(reader.GetOrdinal("RefreshedAtUtc")))!.Value,
+    };
+
+    public Task<IReadOnlyList<GitHubPullRequestLinkRecord>> ListPullRequestLinksAsync(string issueLinkId, CancellationToken ct) =>
+        QueryAsync("SELECT * FROM GitHubPullRequestLinks WHERE IssueLinkId=$id ORDER BY Number;", ReadPullRequestLink, ct, ("$id", issueLinkId));
+
+    /// <summary>The rows are the complete set GitHub reported for the issue: a pull request that no longer references it is removed.</summary>
+    public async Task ReplacePullRequestLinksAsync(string issueLinkId, IReadOnlyList<GitHubPullRequestLinkRecord> rows, CancellationToken ct)
+    {
+        using (var clear = connection.CreateCommand())
+        {
+            clear.CommandText = "DELETE FROM GitHubPullRequestLinks WHERE IssueLinkId=$id;";
+            clear.Parameters.AddWithValue("$id", issueLinkId);
+            await clear.ExecuteNonQueryAsync(ct);
+        }
+        foreach (var row in rows)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO GitHubPullRequestLinks (IssueLinkId, PullRequestId, RepositoryFullName, Number, Title, State, ReviewState, Url, RefreshedAtUtc) VALUES ($IssueLinkId, $PullRequestId, $RepositoryFullName, $Number, $Title, $State, $ReviewState, $Url, $RefreshedAtUtc);";
+            command.Parameters.AddWithValue("$IssueLinkId", issueLinkId);
+            command.Parameters.AddWithValue("$PullRequestId", row.PullRequestId);
+            command.Parameters.AddWithValue("$RepositoryFullName", row.RepositoryFullName);
+            command.Parameters.AddWithValue("$Number", row.Number);
+            command.Parameters.AddWithValue("$Title", row.Title);
+            command.Parameters.AddWithValue("$State", row.State);
+            command.Parameters.AddWithValue("$ReviewState", row.ReviewState);
+            command.Parameters.AddWithValue("$Url", row.Url);
+            command.Parameters.AddWithValue("$RefreshedAtUtc", StorageFormats.Instant(row.RefreshedAtUtc));
+            await command.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    public Task<IReadOnlyList<GitHubIssueLinkRecord>> ListLinksStaleForPullRequestsAsync(string repositoryId, DateTimeOffset olderThan, int limit, CancellationToken ct) =>
+        QueryAsync("""
+            SELECT l.* FROM GitHubIssueLinks l WHERE l.RepositorySubscriptionId=$repo AND l.State IN (0,1) AND l.TaskId IS NOT NULL
+              AND EXISTS (SELECT 1 FROM GitHubPullRequestLinks p WHERE p.IssueLinkId=l.Id AND p.State IN (0,1) AND p.RefreshedAtUtc<$old)
+            ORDER BY l.Id LIMIT $limit;
+            """, ReadIssueLink, ct, ("$repo", repositoryId), ("$old", StorageFormats.Instant(olderThan)), ("$limit", limit));
 
     private static GitHubLabelTagRecord ReadLabelTag(SqliteDataReader reader) => new()
     {

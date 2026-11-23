@@ -176,11 +176,17 @@ public sealed class FakeGitHub : IGitHubApi
         if (labels.Any(item => item.Name.Equals(label, StringComparison.OrdinalIgnoreCase))) throw new GitHubApiException(GitHubErrorKind.Validation);
         var created = new GitHubLabel(++_nextId, label, "cfd3d7"); labels.Add(created); Tick(); return Task.FromResult(created);
     }
-    public async Task SetSelfAssignmentAsync(GitHubAccount account, string owner, string name, long number, bool assign, CancellationToken ct)
+    /// <summary>GitHub users other than the connected account that can be assigned by login; an unknown login is a 422.</summary>
+    public Dictionary<string, GitHubUser> KnownUsers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<string> AssignmentWrites { get; } = [];
+    public async Task SetAssignmentAsync(GitHubAccount account, string owner, string name, long number, string login, bool assign, CancellationToken ct)
     {
         Check(account); RemoteWrites++; var issue = Issue(owner, name, number);
-        var others = issue.Assignees.Where(user => user.Id != account.Id);
-        PutIssue(Key(owner, name), issue with { Assignees = (assign ? others.Append(new(account.Id, account.Login)) : others).ToArray(), UpdatedAt = Tick() });
+        var user = string.Equals(login, account.Login, StringComparison.OrdinalIgnoreCase) ? new GitHubUser(account.Id, account.Login)
+            : KnownUsers.GetValueOrDefault(login) ?? throw new GitHubApiException(GitHubErrorKind.Validation);
+        AssignmentWrites.Add((assign ? "+" : "-") + user.Login);
+        var others = issue.Assignees.Where(candidate => !string.Equals(candidate.Login, user.Login, StringComparison.OrdinalIgnoreCase));
+        PutIssue(Key(owner, name), issue with { Assignees = (assign ? others.Append(user) : others).ToArray(), UpdatedAt = Tick() });
         if (AfterSetWrite is { } hook) await hook();
     }
     public Task<IReadOnlyDictionary<string, IReadOnlyList<GitHubPullRequestRef>>> GetClosingPullRequestsAsync(GitHubAccount account, IReadOnlyList<string> issueNodeIds, CancellationToken ct)
