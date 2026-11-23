@@ -199,8 +199,14 @@ public static class ReminderSync
             return (null, ReminderSuspension.TaskFinished, lastActivity);
         }
 
+        var waitingStart = waiting?.StartedAtUtc;
+        if (followUp.DelegationId is { } delegationId)
+        {
+            var delegation = await session.Delegations.GetAsync(delegationId, ct);
+            waitingStart = delegation?.CreatedAtUtc;
+        }
         var computed = ReminderTiming.FollowUpDue(followUp.Kind, followUp.FixedAtUtc, followUp.Amount, followUp.Unit,
-            waiting?.StartedAtUtc, DueAnchor(task, profile, zone), lastActivity, zone);
+            waitingStart, DueAnchor(task, profile, zone), lastActivity, zone);
         if (computed is not { } due)
         {
             return (null, followUp.Kind == FollowUpKind.BeforeDue ? ReminderSuspension.NoDueDate : ReminderSuspension.NoWaitingStart, lastActivity);

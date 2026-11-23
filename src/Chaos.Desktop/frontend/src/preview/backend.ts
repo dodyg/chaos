@@ -264,7 +264,7 @@ const row = (t: TaskResponse, groupDate: string | null = null): QueryRowResponse
   groupDate,
   waitingPerson: null,
   nextFollowUpAtUtc: null,
-  lastActivityAtUtc: null,
+  lastActivityAtUtc: null, delegatedTo: null,
 });
 const find = (id: string) => tasks.find((t) => t.id === id);
 const bump = (version: string) => String(Number(version) + 1);
@@ -301,6 +301,8 @@ function matches(t: TaskResponse, request: TaskQueryRequest) {
       return t.status === "Done";
     case "MyDay":
       return (dayPlans.get(request.day ?? today) ?? []).includes(t.id);
+    case "DelegatedByMe":
+      return false; // the preview holds no delegations (Q13)
     default:
       return true;
   }
@@ -1168,7 +1170,7 @@ function calendarHandlers(): Record<string, Handler> {
           groupDate: null,
           waitingPerson: null,
           nextFollowUpAtUtc: null,
-          lastActivityAtUtc: null,
+          lastActivityAtUtc: null, delegatedTo: null,
         }));
       return ok({ rows, totalCount: rows.length, nextCursor: null });
     },
@@ -1390,6 +1392,7 @@ function previewDraft(text: string, containerId: string | null): CaptureDraftDto
     tagIds: [],
     tagPaths,
     assigneeIds: [],
+    delegateToId: null,
     waitingOn: null,
     followUpDate: null,
     followUpTime: null,
@@ -1896,7 +1899,7 @@ const handlers: Record<string, Handler> = {
   },
   "queries.counts": (r: { category: string | null }) =>
     ok({
-      views: ["MyDay", "Today", "Upcoming", "Overdue", "Waiting", "RecentlyCompleted", "AssignedToMe"].map((view) => ({
+      views: ["MyDay", "Today", "Upcoming", "Overdue", "Waiting", "RecentlyCompleted", "AssignedToMe", "DelegatedByMe"].map((view) => ({
         view,
         count: runQuery({
           view,
@@ -2319,6 +2322,10 @@ const handlers: Record<string, Handler> = {
     return ok({});
   },
   "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [], rotation: null, nextHosts: null }),
+  // Delegations (PLAN3 Q13): the preview holds none, so the card and the views render their empty states.
+  "delegation.get": () => ok({ task: null, live: [], history: [] }),
+  "delegation.list": () => ok({ items: [] }),
+  "delegation.nudgeTemplate": () => ok({ text: "" }),
   // The activity feed (PLAN2 §6.4): the preview records its own writes in memory with the real shape, so the window's stream code runs here too.
   "activity.head": () => ok({ head: String(activitySeq) }),
   "activity.since": (r: { after: string; limit: number }) =>
@@ -2338,7 +2345,7 @@ const handlers: Record<string, Handler> = {
     followUpDueAtUtc: null,
     followUpSnoozedUntilUtc: null,
     followUpSuspension: "None",
-    lastActivityAtUtc: null,
+    lastActivityAtUtc: null, delegatedTo: null,
     replayed: false,
   }),
 };

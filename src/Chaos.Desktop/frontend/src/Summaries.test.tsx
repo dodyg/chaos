@@ -59,6 +59,7 @@ function header(patch: Partial<SummaryHeaderDto> = {}): SummaryHeaderDto {
 function facts(): SummaryFactsDto {
   return {
     meetings: [],
+    delegations: [],
     completions: [
       { task: task("a", "Plant bulbs", "Garden"), completedAtUtc: "2026-11-10T10:00:00Z", reopenedAfter: false, stillDone: true },
       { task: task("b", "Draft report", "Work"), completedAtUtc: "2026-11-10T11:00:00Z", reopenedAfter: true, stillDone: false },

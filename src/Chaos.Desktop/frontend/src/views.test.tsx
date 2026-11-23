@@ -67,7 +67,7 @@ function resultRow(item: TaskResponse): QueryRowResponse {
     groupDate: null,
     waitingPerson: null,
     nextFollowUpAtUtc: null,
-    lastActivityAtUtc: null,
+    lastActivityAtUtc: null, delegatedTo: null,
   };
 }
 const tags: TagResponse[] = [{ id: "bug", name: "bug", path: "bug", parentId: null, color: null, version: "1", depth: 0 }];

@@ -240,7 +240,7 @@ test("an unscheduled task is planned with the keyboard: Plan… sets a date and 
     groupDate: null,
     waitingPerson: null,
     nextFollowUpAtUtc: null,
-    lastActivityAtUtc: null,
+    lastActivityAtUtc: null, delegatedTo: null,
   };
   const { api, taskApi, calls } = fakes([], [row], [loose]);
   mount(api, taskApi);

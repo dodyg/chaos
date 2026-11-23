@@ -155,6 +155,7 @@ public sealed class CollaborationNoticeTests
                 INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$omar,2,'Team','now','now');
                 INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row,$space,$profile,1,'Me',2,$now);
                 INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row2,$space,$omar,1,'Omar',1,$now);
+                UPDATE Profiles SET ZoneId='UTC', QuietHoursEnabled=1, QuietStart='08:00:00', QuietEnd='10:00:00' WHERE Id=$profile;
                 UPDATE Tasks SET SpaceId=$space WHERE Id=$task;
                 INSERT INTO TaskDelegations (Id,TaskId,FromMemberId,ToMemberId,Message,ReviewRequired,State,StateChangedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc)
                     VALUES ($delegation,$task,$omar,$profile,'Please',1,1,$now,1,$now,$now);
@@ -206,6 +207,9 @@ public sealed class CollaborationNoticeTests
         var notices = await inbox.ListAsync();
         await Assert.That(notices.Select(notice => notice.TaskId!)).IsEquivalentTo([task.Id, task.Id, task.Id]);
         await Assert.That(notices.Single(notice => notice.Kind == "nudge").ActorName).IsEqualTo("Omar");
+        await Assert.That((await inbox.DueAsync()).Any(notice => notice.Kind == "nudge")).IsFalse();
+        host.Clock.Now = host.Clock.Now.AddHours(1);
+        await Assert.That((await inbox.DueAsync()).Any(notice => notice.Kind == "nudge")).IsTrue();
 
         await host.Store.ExecuteAsync((s, _) =>
         {

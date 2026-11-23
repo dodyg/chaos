@@ -84,6 +84,7 @@ import { useAutosave } from "./autosave";
 import type { PadFocus } from "./ScratchPad";
 import { useSpaceRole } from "./Sharing";
 import { avatarClass } from "./assignees";
+import { DelegationSection } from "./DelegationPanel";
 
 const operationId = () => crypto.randomUUID();
 export type TaskEditorApi = {
@@ -864,7 +865,20 @@ export function TaskEditor({
               </TabsContent>
               <TabsContent value="details" className="grid grid-cols-[minmax(0,1fr)] gap-4">
                 {spaceAccess.shared && (
-                  <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={canEdit} run={run} onSaved={setEditing} setError={setError} />
+                  <>
+                    <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={canEdit} run={run} onSaved={setEditing} setError={setError} />
+                    <DelegationSection
+                      task={editing}
+                      canEdit={canEdit}
+                      onTaskChanged={(updated) =>
+                        setEditing((current) =>
+                          current && updated && current.id === updated.id
+                            ? { ...current, status: updated.status, version: updated.version, updatedAtUtc: updated.updatedAtUtc }
+                            : current,
+                        )
+                      }
+                    />
+                  </>
                 )}
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Status">

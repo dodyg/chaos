@@ -38,7 +38,8 @@ public sealed record CaptureDraftDto(
     string? FollowUpTime,
     IReadOnlyList<CaptureSubtaskDto> Subtasks,
     string? Category = null,
-    IReadOnlyList<string>? AssigneeIds = null);
+    IReadOnlyList<string>? AssigneeIds = null,
+    string? DelegateToId = null);
 
 /// <summary>One task line of the preview. Token offsets are relative to <see cref="Text"/>, which starts at <see cref="SourceStart"/> in the typed input.</summary>
 public sealed record CaptureItemDto(
@@ -106,7 +107,8 @@ public sealed class CaptureRpcService(CaptureCommands capture)
         draft.FollowUpTime?.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
         [.. subtasks.Select(subtask => new CaptureSubtaskDto(subtask.Title, subtask.Done))],
         draft.Category?.ToString(),
-        draft.AssigneeIds);
+        draft.AssigneeIds,
+        draft.DelegateToId);
 
     internal static CaptureTaskDraft ToDraft(CaptureDraftDto dto, string path) => new()
     {
@@ -114,6 +116,7 @@ public sealed class CaptureRpcService(CaptureCommands capture)
         Notes = dto.Notes,
         ContainerId = string.IsNullOrWhiteSpace(dto.ContainerId) ? null : dto.ContainerId,
         AssigneeIds = dto.AssigneeIds ?? [],
+        DelegateToId = string.IsNullOrWhiteSpace(dto.DelegateToId) ? null : dto.DelegateToId,
         Priority = Enum.TryParse<TaskPriority>(dto.Priority, out var priority) && Enum.IsDefined(priority) ? priority : throw AppException.Validation($"{path}.priority", "Choose a valid priority."),
         EstimateMinutes = dto.EstimateMinutes,
         PlannedDate = Date(dto.PlannedDate, $"{path}.plannedDate"),

@@ -77,7 +77,7 @@ function resultRow(item: TaskResponse, tagIds: string[] = [], matches: string[] 
     groupDate: null,
     waitingPerson: null,
     nextFollowUpAtUtc: null,
-    lastActivityAtUtc: null,
+    lastActivityAtUtc: null, delegatedTo: null,
   };
 }
 

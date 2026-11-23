@@ -19,11 +19,13 @@ public sealed record SuggestionDto(SummaryTaskDto Task, string Reason);
 public sealed record GoalFactDto(string GoalId, string Title, string Outcome, int DoneCount, int CountedCount);
 public sealed record WeekProgressDto(string WeekStart, string Revision, int AssignedCount, int DoneCount, int CancelledCount, IReadOnlyList<GoalFactDto> Goals);
 public sealed record FollowUpFactDto(SummaryTaskDto Task, string? Person, string DueAtUtc);
+/// <summary>A live delegation in a summary (Q13): the other party, which side the person is on (From/To), the state name, and the delegator's follow-up when it is theirs.</summary>
+public sealed record DelegationFactDto(SummaryTaskDto Task, string Person, string Side, string State, string? DueDate, string? FollowUpDueAtUtc);
 public sealed record SummaryFactsDto(
     IReadOnlyList<CompletionDto> Completions, IReadOnlyList<ProjectProgressDto> Projects, IReadOnlyList<UnfinishedDto> Unfinished,
     IReadOnlyList<WaitingFactDto> Waiting, IReadOnlyList<SummaryTaskDto> Deadlines, IReadOnlyList<DiaryFactDto> DiaryUpdates, int DiaryUpdateCount,
     IReadOnlyList<SuggestionDto> Suggested, WeekProgressDto? Week, IReadOnlyList<SummaryTaskDto> Selected, int OverdueCount, IReadOnlyList<FollowUpFactDto> FollowUps,
-    IReadOnlyList<MeetingFactDto>? Meetings = null);
+    IReadOnlyList<MeetingFactDto>? Meetings = null, IReadOnlyList<DelegationFactDto>? Delegations = null);
 /// <summary>A meeting in a summary: Date is yyyy-MM-dd, Start and End are HH:mm (null for all-day).</summary>
 public sealed record MeetingFactDto(string Title, string Date, string? Start, string? End, bool AllDay);
 public sealed record SummaryCountsDto(int CompletionEvents, int StillDone, int Unfinished, int DiaryUpdates, int Deadlines, int Waiting, int Selected, bool Quiet);
@@ -178,7 +180,9 @@ public sealed class SummaryRpcService(SummaryCommands summaries)
         [.. facts.Selected.Select(Map)],
         facts.OverdueCount,
         [.. facts.FollowUps.Select(item => new FollowUpFactDto(Map(item.Task), item.Person, StorageFormats.Instant(item.DueAtUtc)))],
-        [.. facts.Meetings.Select(item => new MeetingFactDto(item.Title, StorageFormats.Date(item.Date), item.Start?.ToString("HH:mm", CultureInfo.InvariantCulture), item.End?.ToString("HH:mm", CultureInfo.InvariantCulture), item.AllDay))]);
+        [.. facts.Meetings.Select(item => new MeetingFactDto(item.Title, StorageFormats.Date(item.Date), item.Start?.ToString("HH:mm", CultureInfo.InvariantCulture), item.End?.ToString("HH:mm", CultureInfo.InvariantCulture), item.AllDay))],
+        [.. facts.Delegations.Select(item => new DelegationFactDto(Map(item.Task), item.Person, item.Side.ToString(), item.State.ToString(),
+            item.DueDate is { } due ? StorageFormats.Date(due) : null, Optional(item.FollowUpDueAtUtc)))]);
 
     internal static SummaryTaskDto Map(SummaryTaskFact task) => new(
         task.TaskId, task.Title, task.ContainerId, task.ContainerName, task.ContainerKind.ToString(), task.Status.ToString(), task.Priority.ToString(),

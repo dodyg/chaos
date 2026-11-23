@@ -239,6 +239,34 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
         await Assert.That((await new WaitingCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock).DueAsync(null)).Select(item => item.Delegation?.Id)).DoesNotContain(delegated.Delegation.Id);
     }
 
+    [Test]
+    public async Task Delegation_OfflineAcceptAndWithdraw_ConvergeWithBothMovesInHistory()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var sara = await world.AddPersonAsync("conflict-sara@example.com", "Sara");
+        var omar = await world.AddPersonAsync("conflict-omar@example.com", "Omar");
+        var (_, _, taskId) = await ShareAsync(world, sara, omar);
+        var from = new DelegationCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock);
+        var to = new DelegationCommands(omar.Desktop.Store, omar.Desktop.Ids, omar.Desktop.Clock);
+        var task = (await sara.Desktop.Tasks.GetAsync(taskId))!;
+        var delegation = (await from.DelegateAsync(new(Op(), taskId, task.Version, omar.ProfileId.ToString("D"), null, null, null, false, null))).Delegation;
+        await world.SettleAsync();
+
+        var recipient = (await to.GetForTaskAsync(taskId)).Live.Single().Delegation;
+        await to.RespondAsync(new(Op(), recipient.Id, recipient.Version, DelegationResponse.Accept, null));
+        await from.WithdrawAsync(new(Op(), delegation.Id, delegation.Version));
+        await world.SettleAsync();
+
+        foreach (var device in new[] { sara.Desktop, omar.Desktop })
+        {
+            var view = await new DelegationCommands(device.Store, device.Ids, device.Clock).GetForTaskAsync(taskId);
+            await Assert.That(view.History.Single().Delegation.State).IsEqualTo(DelegationState.Withdrawn);
+            var diary = await device.Store.QueryAsync((session, token) => session.Diary.ListByTaskAsync(taskId, false, token));
+            await Assert.That(diary.Select(entry => entry.RawMarkdown)).Contains(entry => entry.StartsWith("Accepted the delegation"));
+            await Assert.That(diary.Select(entry => entry.RawMarkdown)).Contains(entry => entry.StartsWith("Took the task back"));
+        }
+    }
+
     private static async Task<string> CreateListAsync(SyncDevice device, string spaceId, string name) =>
         (await new ContainerCommands(device.Store, device.Ids, device.Clock).CreateAsync(new(Op(), name, ContainerKind.List, spaceId))).Container.Id;
 

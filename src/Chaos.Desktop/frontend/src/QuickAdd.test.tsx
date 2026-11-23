@@ -46,6 +46,7 @@ const blank: CaptureDraftDto = {
   tagIds: [],
   tagPaths: [],
   assigneeIds: [],
+  delegateToId: null,
   waitingOn: null,
   followUpDate: null,
   followUpTime: null,

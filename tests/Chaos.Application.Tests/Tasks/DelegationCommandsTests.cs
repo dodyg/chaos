@@ -98,6 +98,17 @@ public sealed class DelegationCommandsTests
     }
 
     [Test]
+    public async Task Delegate_AfterWaitingFollowUp_UsesDelegationStart()
+    {
+        var store = new InMemoryStore();
+        var delegation = await DelegatedAsync(store, followUp: new FollowUpSpec(FollowUpKind.AfterWaiting, null, 2, DurationUnit.Days));
+
+        var view = await New(store).GetForTaskAsync(delegation.TaskId);
+
+        await Assert.That(view.Live.Single().FollowUpDueAtUtc).IsEqualTo(Now.AddDays(2));
+    }
+
+    [Test]
     public async Task Delegate_PersonalTask_ViewerRecipientOrSelf_IsRefused()
     {
         var store = new InMemoryStore();

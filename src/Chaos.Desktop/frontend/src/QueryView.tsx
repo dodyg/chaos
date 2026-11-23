@@ -16,7 +16,7 @@ import {
   type TaskQueryRequest,
   type TaskResponse,
 } from "#neoastra";
-import { CalendarDays, FolderKanban, SearchX, UserRound } from "lucide-react";
+import { CalendarDays, FolderKanban, Handshake, SearchX, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ export const builtInViews = [
   { view: "Waiting", title: "Waiting", hint: "Tasks waiting on someone outside the app." },
   { view: "RecentlyCompleted", title: "Recently completed", hint: "Done in the last 30 days, newest first." },
   { view: "AssignedToMe", title: "Assigned to me", hint: "Open tasks in Personal and shared tasks assigned to you." },
+  { view: "DelegatedByMe", title: "Delegated by me", hint: "Tasks you delegated to members and that still await an answer or your review, by person then due date." },
 ] as const;
 
 type Filters = { status: string; priority: string; includeCompleted: boolean; includeArchived: boolean; dueFrom: string; dueTo: string };
@@ -387,7 +388,9 @@ export function QueryView({
         <ol className="grid gap-1" aria-label="Results">
           {shown.map((row, index) => {
             const heading = grouped && row.groupDate && row.groupDate !== shown[index - 1]?.groupDate;
-            const personHeading = query.view === "Waiting" && (index === 0 || row.waitingPerson !== shown[index - 1]?.waitingPerson);
+            const personOf = (item: QueryRowResponse) => (query.view === "Waiting" ? item.waitingPerson : item.delegatedTo);
+            const byPerson = query.view === "Waiting" || query.view === "DelegatedByMe";
+            const personHeading = byPerson && (index === 0 || personOf(row) !== personOf(shown[index - 1]));
             const group = listGroup(row, layout.group, today);
             const customHeading =
               isCustom && layout.group !== "none" && (index === 0 || group.key !== listGroup(shown[index - 1], layout.group, today).key);
@@ -418,7 +421,7 @@ export function QueryView({
                     className="flex items-center gap-1.5 border-b px-1 pt-3 pb-1.5 text-xs font-semibold tracking-wider text-muted-foreground uppercase"
                   >
                     <UserRound className="size-3.5" />
-                    <bdi>{row.waitingPerson ?? "No person named"}</bdi>
+                    <bdi>{personOf(row) ?? (query.view === "Waiting" ? "No person named" : "Unknown person")}</bdi>
                   </li>
                 )}
                 <li data-task-row={task.id}>
@@ -465,6 +468,12 @@ export function QueryView({
                               <span className="inline-flex items-center gap-1">
                                 <UserRound className="size-3.5" />
                                 Waiting on <bdi>{row.waitingPerson}</bdi>
+                              </span>
+                            )}
+                            {row.delegatedTo && query.view !== "DelegatedByMe" && (
+                              <span className="inline-flex items-center gap-1">
+                                <Handshake className="size-3.5" />
+                                Delegated to <bdi>{row.delegatedTo}</bdi>
                               </span>
                             )}
                             {row.nextFollowUpAtUtc && (

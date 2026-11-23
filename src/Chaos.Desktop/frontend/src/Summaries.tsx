@@ -1,4 +1,5 @@
 import { TaskViewAction } from "./TaskViewAction";
+import { describeDelegation } from "./delegation";
 import React from "react";
 import { useRpcQuery } from "./useRpcQuery";
 import {
@@ -534,6 +535,22 @@ function SummaryDetail({
                         follow up {new Date(item.followUpDueAtUtc).toLocaleDateString()}
                       </span>
                     )}
+                  </TaskItem>
+                ))}
+              </ul>
+            </Section>
+          )}
+          {(facts.delegations?.length ?? 0) > 0 && (
+            <Section title="Delegations" count={facts.delegations!.length}>
+              <ul className="grid gap-1">
+                {facts.delegations!.map((item) => (
+                  <TaskItem key={`${item.side}-${item.task.taskId}`} task={item.task} onOpen={onOpenTask}>
+                    <span className="text-xs text-muted-foreground">
+                      <bdi>{item.person}</bdi>
+                      {" · "}
+                      {describeDelegation(item.state, item.side as "From" | "To")}
+                      {item.followUpDueAtUtc ? ` · follow up ${new Date(item.followUpDueAtUtc).toLocaleDateString()}` : ""}
+                    </span>
                   </TaskItem>
                 ))}
               </ul>

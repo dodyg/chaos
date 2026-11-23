@@ -89,6 +89,7 @@ import {
   CircleCheckBig,
   FolderKanban,
   Hourglass,
+  Handshake,
   Inbox,
   LayoutTemplate,
   ListTodo,
@@ -127,6 +128,7 @@ const viewIcons: Record<string, React.ReactNode> = {
   Waiting: <Hourglass />,
   RecentlyCompleted: <CircleCheckBig />,
   AssignedToMe: <UserRound />,
+  DelegatedByMe: <Handshake />,
 };
 
 type Api = {

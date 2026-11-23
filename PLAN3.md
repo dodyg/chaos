@@ -1840,7 +1840,7 @@ nothing is lost.
 
 **Exit:** a monthly book-club host rotates correctly across members and devices.
 
-### [ ] Q13: Delegation, follow-ups and nudges
+### [x] Q13: Delegation, follow-ups and nudges
 
 **Depends on:** Q8. **Migration:** `046_delegation.sql` (`TaskDelegations`, `Nudges`, `FollowUps.DelegationId`).
 **Read:** 9.11.
@@ -1867,6 +1867,10 @@ nothing is lost.
 
 **Exit:** Sara delegates to Omar, gets reminded to follow up, nudges him, and reviews his result, with everything in
 the diary.
+
+**Progress note 2026-11-23 (implementation and verification).** Completed the desktop delegation RPC and UI, including follow-up actions, hand-off, summaries and quick-add wiring. Added the AfterWaiting delegation follow-up, based on the delegation's start, and retained a rejected response in the editor. PostgreSQL tests demonstrated offline accept versus withdrawal with both diary entries, and the review and nudge flow; recipient quiet hours were verified. The full gate built successfully and passed Domain 328, Application 136, Infrastructure 787, Sync 82 and Server 221, but stopped in Desktop with 100 passed and one GitHub scheduler timeout. A serial Desktop rerun passed 101; the updated Application suite passed 137; focused delegation, quiet-hours and conflict tests passed; Slopwatch reported 0 issues. Desktop frontend passed 329, web passed 17, and web lint passed with its existing hook-dependency warning. The gate was not a clean pass, so Q13 remains unticked. Smallest next action: run `pwsh -File eng/verify.ps1` against PostgreSQL and tick Q13 only after a clean gate.
+
+**Progress note 2026-11-23 (completion).** Reran the full gate with test concurrency limited to one and disposable PostgreSQL 18.7 via `wslc`. It passed: Domain 328, Application 137, Infrastructure 787, Sync 82, Server 221 and Desktop 101 (1,656 total), no skips; Slopwatch found 0 issues. Desktop frontend passed 329; web passed 17; web lint passed with its existing hook-dependency warning. The test container was removed. Nothing remains open for Q13; smallest next action is Q14.
 
 ### [ ] Q14: Space and project summaries, and standups
 

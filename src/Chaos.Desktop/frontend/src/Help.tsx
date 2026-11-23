@@ -362,7 +362,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             it without moving it.
           </p>
           <p>
-            <strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed and Assigned to me.
+            <strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed, Assigned to me and Delegated by me.
           </p>
           <p>
             Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. The history names
@@ -470,12 +470,12 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       id: "reminders",
       title: "Reminders and waiting",
       icon: <Bell />,
-      keywords: "reminder notification alert waiting follow up delegate",
+      keywords: "reminder notification alert waiting follow up delegate delegation nudge",
       body: (
         <>
           <p>
             Add reminders in quick add (“remind me 1h before”) or from the task. Mark a task as waiting on someone and set a follow-up date
-            so it comes back to you. Everything that fired is listed under Alerts. Alerts, summaries and changes made by background work
+            so it comes back to you. Follow-ups for tasks you delegated to a member offer a nudge and a way to take the task back. Everything that fired is listed under Alerts. Alerts, summaries and changes made by background work
             (reminders, calendar and GitHub sync) appear on their own, without switching windows.
           </p>
           <p>
@@ -512,7 +512,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       id: "sharing",
       title: "Sharing",
       icon: <Users />,
-      keywords: "share shared space invite member role owner editor viewer leave remove move list team collaborate link email offline",
+      keywords: "share shared space invite member role owner editor viewer leave remove move list team collaborate link email offline delegate delegation nudge review follow up assigned",
       body: (
         <>
           <p>
@@ -564,6 +564,24 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             The link is shown once when you create it, so copy it then; open invitations can be turned off at any time. The person opens the
             link in a browser, signs in, and joins. On a computer that already has Chaos, choose <strong>Join with a link…</strong> and
             paste it.
+          </p>
+          <h3 className="font-semibold">Delegating</h3>
+          <p>
+            Owners and Editors can hand a task to a member: open the task and choose <strong>Delegate…</strong> in the Delegation section.
+            Name the person, say what done looks like, and optionally a due date and whether you want to review the result. The task is
+            assigned to them. In quick add, <code>+Omar follow up Friday</code> in a shared space does the same and sets your follow-up.
+          </p>
+          <p>
+            The other person can <strong>Accept</strong>, <strong>Ask</strong> (the question goes on the task) or <strong>Decline</strong> with a
+            reason; a declined task comes back to you. When they mark it done, you either review it (the task waits as <em>Needs review</em>
+            until you <strong>Accept result</strong> or <strong>Send back</strong>) or it is simply completed. You can <strong>Take back</strong> a
+            task while it is still open, or hand it to someone else. Everything that happened is written in the task’s updates.
+          </p>
+          <p>
+            Your follow-up lands in My Day with <strong>Nudge</strong>, <strong>Open</strong> and <strong>Take back</strong>. A nudge is a short
+            note the other person sees in their inbox (quiet hours apply); the text is prewritten in your language and you can change it.
+            Three nudges per task per 24 hours. The <strong>Delegated by me</strong> view lists what you handed out, by person; the evening
+            and weekly summaries list delegations waiting for an answer or your review.
           </p>
           <h3 className="font-semibold">Leaving and removal</h3>
           <p>

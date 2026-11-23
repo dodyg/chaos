@@ -1,11 +1,16 @@
 import { TaskViewAction } from "./TaskViewAction";
+import { DelegateDialog, NudgeDialog, type DelegationApi } from "./DelegationPanel";
 import React from "react";
 import { useActivity } from "./activity";
 import {
+  delegationRpc,
+  peopleRpc,
   reminderRpc,
   waitingRpc,
   type FollowUpDto,
   type FollowUpItemResponse,
+  type DelegationItemDto,
+  type PersonResponse,
   type NotificationItemResponse,
   type ReminderRuleDto,
   type ReminderRuleResponse,
@@ -13,7 +18,7 @@ import {
   type TaskResponse,
   type WaitingResponse,
 } from "#neoastra";
-import { Bell, BellOff, Check, Clock, ExternalLink, MessageSquareText, Plus, Trash2, UserRound, X } from "lucide-react";
+import { Bell, BellOff, BellRing, Check, Clock, ExternalLink, Handshake, MessageSquareText, Plus, Trash2, UserRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -507,6 +512,8 @@ export function FollowUps({
   revision,
   busy,
   api = waitingRpc,
+  delegationApi = delegationRpc,
+  directoryApi = peopleRpc,
   onOpen,
   onChanged,
 }: {
@@ -514,6 +521,9 @@ export function FollowUps({
   revision: number;
   busy: boolean;
   api?: typeof waitingRpc;
+  /** Delegation follow-ups (Q13) offer nudge and take back; absent, they behave like any follow-up. */
+  delegationApi?: DelegationApi;
+  directoryApi?: Pick<typeof peopleRpc, "list">;
   onOpen: (task: TaskResponse) => void;
   onChanged: () => void;
 }) {
@@ -523,6 +533,8 @@ export function FollowUps({
   const [logging, setLogging] = React.useState<string | null>(null);
   const [note, setNote] = React.useState("");
   const [local, setLocal] = React.useState(0);
+  const [nudging, setNudging] = React.useState<DelegationItemDto | null>(null);
+  const [handingOver, setHandingOver] = React.useState<{ task: TaskResponse; people: readonly PersonResponse[] } | null>(null);
 
   React.useEffect(() => {
     let current = true;
@@ -561,8 +573,42 @@ export function FollowUps({
     }
   }
 
+/** A delegation move from My Day: the live delegation's version is read first, then the move is made. */
+async function takeBack(item: FollowUpItemResponse) {
+  if (working || busy || !item.delegationId) return;
+  setWorking(true);
+  setError(null);
+  try {
+    const view = await delegationApi.get({ taskId: item.task.id });
+    const live = view.ok ? view.live.find((entry) => entry.delegation.id === item.delegationId) : null;
+    if (!live) throw new Error("This delegation is no longer active.");
+    const result = await delegationApi.withdraw({ operationId: operationId(), delegationId: live.delegation.id, expectedVersion: live.delegation.version });
+    if (!result.ok) throw new Error(result.error?.message ?? "Could not take the task back.");
+    setLocal((value) => value + 1);
+    onChanged();
+  } catch (e) {
+    setError(e instanceof Error ? e.message : "Could not take the task back.");
+  } finally {
+    setWorking(false);
+  }
+}
+
   if (items.length === 0 && !error) return null;
   const disabled = busy || working;
+  async function handOver(item: FollowUpItemResponse) {
+    setWorking(true);
+    setError(null);
+    try {
+      const [view, directory] = await Promise.all([delegationApi.get({ taskId: item.task.id }), directoryApi.list({ spaceId: item.task.spaceId })]);
+      if (!view.ok || !view.task || !view.live.some((entry) => entry.delegation.id === item.delegationId)) throw new Error(view.error?.message ?? "This delegation is no longer active.");
+      if (!directory.ok) throw new Error(directory.error?.message ?? "Could not load members.");
+      setHandingOver({ task: view.task, people: directory.people });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not hand over the task.");
+    } finally {
+      setWorking(false);
+    }
+  }
   return (
     <section aria-labelledby="follow-ups-heading" className="grid gap-1.5">
       <h3
@@ -587,7 +633,16 @@ export function FollowUps({
               </button>
               <span className="text-xs text-muted-foreground">
                 Follow up
-                {item.person ? (
+                {item.delegationId ? (
+                  item.delegatedTo ? (
+                    <>
+                      {" "}
+                      with <bdi>{item.delegatedTo}</bdi>
+                    </>
+                  ) : (
+                    ""
+                  )
+                ) : item.person ? (
                   <>
                     {" "}
                     with <bdi>{item.person}</bdi>
@@ -605,6 +660,21 @@ export function FollowUps({
                 <ExternalLink />
                 Open
               </Button>
+              {item.delegationId && (
+                <>
+                  <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={() => void delegationApi.get({ taskId: item.task.id }).then((view) => setNudging(view.ok ? (view.live.find((entry) => entry.delegation.id === item.delegationId) ?? null) : null))}>
+                    <BellRing />
+                    Nudge
+                  </Button>
+                  <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={() => void takeBack(item)}>
+                    <Handshake />
+                    Take back
+                  </Button>
+                  <Button type="button" size="xs" variant="outline" disabled={disabled} onClick={() => void handOver(item)}>
+                    Hand to someone else
+                  </Button>
+                </>
+              )}
               <Button
                 type="button"
                 size="xs"
@@ -687,6 +757,26 @@ export function FollowUps({
           </li>
         ))}
       </ol>
+      {nudging && (
+        <NudgeDialog
+          delegationId={nudging.delegation.id}
+          version={nudging.delegation.version}
+          toName={nudging.toName}
+          nudges={nudging.nudges}
+          api={delegationApi}
+          onClose={() => setNudging(null)}
+          onSent={() => {
+            setNudging(null);
+            setLocal((value) => value + 1);
+            onChanged();
+          }}
+        />
+      )}
+      {handingOver && <DelegateDialog task={handingOver.task} people={handingOver.people} api={delegationApi} onClose={() => setHandingOver(null)} onDelegated={() => {
+        setHandingOver(null);
+        setLocal((value) => value + 1);
+        onChanged();
+      }} />}
     </section>
   );
 }
