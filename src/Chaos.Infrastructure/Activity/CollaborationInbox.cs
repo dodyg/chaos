@@ -18,7 +18,8 @@ public sealed class CollaborationInbox(SqliteApplicationStore store, TimeProvide
             SELECT n.Id,n.Kind,n.SpaceId,n.EntityKind,n.EntityId,n.ActorId,
               COALESCE((SELECT m.DisplayName FROM SpaceMembers m WHERE m.SpaceId=n.SpaceId AND m.MemberId=n.ActorId COLLATE NOCASE LIMIT 1),'Unknown person'),
               n.CreatedAtUtc,n.NotifyAtUtc,n.DeliveredAtUtc,n.ReadAtUtc,
-              CASE n.EntityKind WHEN 'task' THEN n.EntityId WHEN 'diary_entry' THEN (SELECT TaskId FROM DiaryEntries WHERE Id=n.EntityId) END
+              CASE n.EntityKind WHEN 'task' THEN n.EntityId WHEN 'diary_entry' THEN (SELECT TaskId FROM DiaryEntries WHERE Id=n.EntityId)
+                WHEN 'task_delegation' THEN (SELECT TaskId FROM TaskDelegations WHERE Id=n.EntityId) WHEN 'nudge' THEN (SELECT TaskId FROM Nudges WHERE Id=n.EntityId) END
             FROM CollaborationNotices n ORDER BY n.CreatedAtUtc DESC,n.Id LIMIT 500;
             """;
         using var reader = command.ExecuteReader();
@@ -43,7 +44,8 @@ public sealed class CollaborationInbox(SqliteApplicationStore store, TimeProvide
         {
             var preference = await settings.GetAsync(notice.SpaceId, ct);
             if (!preference.Nothing && (notice.Kind != "mentioned" || preference.Mentioned)
-                && (notice.Kind != "assigned" || preference.Assigned) && (notice.Kind != "due-soon" || preference.DueSoon)) eligible.Add(notice);
+                && (notice.Kind != "assigned" || preference.Assigned) && (notice.Kind != "due-soon" || preference.DueSoon)
+                && (notice.Kind is not ("delegated" or "delegation-response" or "review-requested" or "nudge") || preference.Delegations)) eligible.Add(notice);
         }
         return eligible;
     }

@@ -43,11 +43,22 @@ public sealed class CollaborationNoticeDeriver(SqliteApplicationStore store, Tim
                 foreach (var change in changes)
                 {
                     if (string.Equals(change.ActorId, profile.Id, StringComparison.OrdinalIgnoreCase)) continue;
-                    var assignment = change.Kind == "task_assignee" && string.Equals(change.After, profile.Id, StringComparison.OrdinalIgnoreCase);
-                    if (!assignment && (!ContainsMention(change.After, profile.Id) || ContainsMention(change.Before, profile.Id))) continue;
-                    var kind = assignment ? "assigned" : "mentioned";
-                    var entityKind = assignment ? "task" : change.Kind;
-                    var entityId = assignment ? change.EntityId.Split('|')[0] : change.EntityId;
+                    string kind, entityKind, entityId;
+                    if (change.Kind is "task_delegation" or "nudge")
+                    {
+                        if (await DelegationNoticeKindAsync(session, change, profile.Id, token) is not { } delegationKind) continue;
+                        kind = delegationKind;
+                        entityKind = change.Kind;
+                        entityId = change.EntityId;
+                    }
+                    else
+                    {
+                        var assignment = change.Kind == "task_assignee" && string.Equals(change.After, profile.Id, StringComparison.OrdinalIgnoreCase);
+                        if (!assignment && (!ContainsMention(change.After, profile.Id) || ContainsMention(change.Before, profile.Id))) continue;
+                        kind = assignment ? "assigned" : "mentioned";
+                        entityKind = assignment ? "task" : change.Kind;
+                        entityId = assignment ? change.EntityId.Split('|')[0] : change.EntityId;
+                    }
                     using var command = connection.CreateCommand();
                     command.CommandText = """
                         INSERT OR IGNORE INTO CollaborationNotices
@@ -56,7 +67,8 @@ public sealed class CollaborationNoticeDeriver(SqliteApplicationStore store, Tim
                         WHERE EXISTS (SELECT 1 FROM Spaces s JOIN SpaceMembers m ON m.SpaceId=s.Id
                             WHERE s.Id=$space AND s.Kind=2 AND s.DeletedAtUtc IS NULL AND m.MemberId=$profile COLLATE NOCASE AND m.RemovedAtUtc IS NULL)
                           AND NOT EXISTS (SELECT 1 FROM SpaceNotificationSettings n WHERE n.ProfileId=$profile COLLATE NOCASE
-                            AND n.SpaceId=$space AND (n."Nothing"=1 OR ($noticeKind='mentioned' AND n.Mentioned=0) OR ($noticeKind='assigned' AND n.Assigned=0)));
+                            AND n.SpaceId=$space AND (n."Nothing"=1 OR ($noticeKind='mentioned' AND n.Mentioned=0) OR ($noticeKind='assigned' AND n.Assigned=0)
+                              OR ($noticeKind IN ('delegated','delegation-response','review-requested','nudge') AND n.Delegations=0)));
                         """;
                     var noticeId = Guid.NewGuid().ToString("D");
                     command.Parameters.AddWithValue("$id", noticeId);
@@ -90,6 +102,26 @@ public sealed class CollaborationNoticeDeriver(SqliteApplicationStore store, Tim
         count += await DeriveDueSoonAsync(session, profile, now, token);
         return count;
     }, ct);
+
+    /// <summary>
+    /// Which delegation notice a remote change means for this person (Q13): a new delegation or a nudge for the
+    /// recipient; the recipient's answer, a result to review, or the delegator's closing or taking back for the
+    /// other party. Null when the change is not theirs to hear about.
+    /// </summary>
+    private static async Task<string?> DelegationNoticeKindAsync(IDataSession session, RemoteTextChange change, string profileId, CancellationToken ct)
+    {
+        var forMe = string.Equals(change.ToMemberId, profileId, StringComparison.OrdinalIgnoreCase);
+        var fromMe = string.Equals(change.FromMemberId, profileId, StringComparison.OrdinalIgnoreCase);
+        if (change.Kind == "nudge") return forMe ? "nudge" : null;
+        if (change.Before is null) return forMe && change.After == "Pending" ? "delegated" : null;
+        if (fromMe)
+        {
+            if (change.After == "Done")
+                return await session.Delegations.GetAsync(change.EntityId, ct) is { ReviewRequired: true } ? "review-requested" : "delegation-response";
+            return change.After is "Accepted" or "Question" or "Declined" ? "delegation-response" : null;
+        }
+        return forMe && (change.After is "Withdrawn" or "Closed" || (change.After == "Accepted" && change.Before == "Done")) ? "delegation-response" : null;
+    }
 
     private static async Task<int> DeriveDueSoonAsync(Chaos.Application.Abstractions.IDataSession session, ProfileRecord profile, DateTimeOffset now, CancellationToken ct)
     {

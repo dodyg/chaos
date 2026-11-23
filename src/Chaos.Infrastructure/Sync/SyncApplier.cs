@@ -230,12 +230,41 @@ public sealed partial class SyncApplier(SqliteApplicationStore store, TimeProvid
     private async Task<StepResult> ApplyStepWithTextAsync(SqliteDataSession session, SqliteConnection connection, SyncSchema schema,
         SyncChange change, string payload, CancellationToken ct)
     {
-        var before = change.ActorId is not null && change.Op == SyncOp.Upsert ? ReadText(connection, change) : null;
+        var tracked = change.ActorId is not null && change.Op == SyncOp.Upsert;
+        var before = tracked ? ReadText(connection, change) : null;
+        var delegationBefore = tracked && change.Kind is "task_delegation" or "nudge" ? ReadDelegation(connection, change) : null;
         var result = await ApplyStepAsync(connection, schema, change, payload, ct);
         if (result == StepResult.Applied && change.ActorId is { } actor && ReadText(connection, change) is { } after
             && !string.Equals(before?.Text, after.Text, StringComparison.Ordinal))
             session.Notes.NoteRemoteText(new RemoteTextChange(change.ChangeId, change.Kind, change.EntityKey, after.SpaceId, actor, before?.Text, after.Text));
+        else if (result == StepResult.Applied && tracked && change.Kind is "task_delegation" or "nudge")
+        {
+            // A delegation that arrived or moved, or a nudge that arrived (Q13): the other party's device derives its notice from it.
+            if (ReadDelegation(connection, change) is { } delegation && (delegationBefore is null || delegationBefore.Value.State != delegation.State))
+                session.Notes.NoteRemoteText(new RemoteTextChange(change.ChangeId, change.Kind, change.EntityKey, delegation.SpaceId, change.ActorId!,
+                    delegationBefore is null ? null : ((DelegationState)delegationBefore.Value.State).ToString(), ((DelegationState)delegation.State).ToString())
+                { FromMemberId = delegation.From, ToMemberId = delegation.To, TaskId = delegation.TaskId });
+        }
         return result;
+    }
+
+    private readonly record struct DelegationRow(string SpaceId, long State, string From, string To, string TaskId);
+
+    /// <summary>The delegation or nudge a change names, as it stands now: its state (a nudge counts as one state, 0).</summary>
+    private static DelegationRow? ReadDelegation(SqliteConnection connection, SyncChange change)
+    {
+        var query = change.Kind switch
+        {
+            "task_delegation" => "SELECT t.SpaceId, d.State, d.FromMemberId, d.ToMemberId, d.TaskId FROM TaskDelegations d JOIN Tasks t ON t.Id=d.TaskId WHERE d.Id=$id AND d.DeletedAtUtc IS NULL",
+            "nudge" => "SELECT t.SpaceId, 0, n.FromMemberId, n.ToMemberId, n.TaskId FROM Nudges n JOIN Tasks t ON t.Id=n.TaskId WHERE n.Id=$id",
+            _ => null,
+        };
+        if (query is null) return null;
+        using var command = connection.CreateCommand();
+        command.CommandText = query;
+        command.Parameters.AddWithValue("$id", change.EntityKey);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? new DelegationRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3), reader.GetString(4)) : null;
     }
 
     private static (string SpaceId, string Text)? ReadText(SqliteConnection connection, SyncChange change)

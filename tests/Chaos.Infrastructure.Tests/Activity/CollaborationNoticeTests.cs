@@ -139,6 +139,93 @@ public sealed class CollaborationNoticeTests
     }
 
     [Test]
+    public async Task DeriveAsync_DelegationNoticesFollowThePartiesAndTheDelegationsPreference()
+    {
+        using var host = await DataHost.StartAsync();
+        var profile = (await host.Store.QueryAsync((s, ct) => s.Profiles.GetPrimaryAsync(ct)))!;
+        var task = await CaptureTaskAsync(host);
+        var space = Guid.NewGuid().ToString("D");
+        var omar = Guid.NewGuid().ToString("D");
+        var delegation = Guid.NewGuid().ToString("D");
+        var nudge = Guid.NewGuid().ToString("D");
+        await host.Store.ExecuteAsync((s, _) =>
+        {
+            using var command = s.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$omar,2,'Team','now','now');
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row,$space,$profile,1,'Me',2,$now);
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES ($row2,$space,$omar,1,'Omar',1,$now);
+                UPDATE Tasks SET SpaceId=$space WHERE Id=$task;
+                INSERT INTO TaskDelegations (Id,TaskId,FromMemberId,ToMemberId,Message,ReviewRequired,State,StateChangedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ($delegation,$task,$omar,$profile,'Please',1,1,$now,1,$now,$now);
+                INSERT INTO Nudges (Id,TaskId,DelegationId,FromMemberId,ToMemberId,Text,SentAtUtc,CreatedAtUtc,UpdatedAtUtc)
+                    VALUES ($nudge,$task,$delegation,$omar,$profile,'Any news?',$now,$now,$now);
+                INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome,DetailJson) VALUES ('op','now','sync','sync.apply','ok',$detail);
+                INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome,DetailJson) VALUES ('op2','now','sync','sync.apply','ok',$detail2);
+                """;
+            command.Parameters.AddWithValue("$space", space);
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$omar", omar);
+            command.Parameters.AddWithValue("$row", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$row2", Guid.NewGuid().ToString("D"));
+            command.Parameters.AddWithValue("$task", task.Id);
+            command.Parameters.AddWithValue("$delegation", delegation);
+            command.Parameters.AddWithValue("$nudge", nudge);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
+            // Omar delegated to me, then (as I would see it) accepted on my behalf: only the first is mine to hear.
+            command.Parameters.AddWithValue("$detail", JsonSerializer.Serialize(new[]
+            {
+                new RemoteTextChange("1", "task_delegation", delegation, space, omar, null, "Pending") { FromMemberId = omar, ToMemberId = profile.Id, TaskId = task.Id },
+                new RemoteTextChange("2", "task_delegation", delegation, space, omar, "Pending", "Accepted") { FromMemberId = omar, ToMemberId = profile.Id, TaskId = task.Id },
+            }));
+            // I delegated to Omar (the row is rewritten as mine for the second half) and he reported done with review; then nudged... no: he cannot nudge me.
+            command.Parameters.AddWithValue("$detail2", JsonSerializer.Serialize(new[]
+            {
+                new RemoteTextChange("3", "task_delegation", delegation, space, omar, "Accepted", "Done") { FromMemberId = profile.Id, ToMemberId = omar, TaskId = task.Id },
+                new RemoteTextChange("4", "nudge", nudge, space, omar, null, "Sent") { FromMemberId = omar, ToMemberId = profile.Id, TaskId = task.Id },
+                new RemoteTextChange("5", "nudge", Guid.NewGuid().ToString("D"), space, omar, null, "Sent") { FromMemberId = profile.Id, ToMemberId = omar, TaskId = task.Id },
+            }));
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        await host.Store.ExecuteAsync((s, _) =>
+        {
+            using var command = s.Connection().CreateCommand();
+            command.CommandText = "UPDATE TaskDelegations SET FromMemberId=$profile, ToMemberId=$omar WHERE Id=$delegation;";
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$omar", omar);
+            command.Parameters.AddWithValue("$delegation", delegation);
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        var deriver = new CollaborationNoticeDeriver(host.Store, host.Clock);
+        await Assert.That(await deriver.DeriveAsync()).IsEqualTo(3);
+        await Assert.That(await deriver.DeriveAsync()).IsEqualTo(0);
+        await Assert.That(await TextAsync(host, "SELECT group_concat(Kind) FROM (SELECT Kind FROM CollaborationNotices ORDER BY Kind);")).IsEqualTo("delegated,nudge,review-requested");
+        var inbox = new CollaborationInbox(host.Store, host.Clock);
+        var notices = await inbox.ListAsync();
+        await Assert.That(notices.Select(notice => notice.TaskId!)).IsEquivalentTo([task.Id, task.Id, task.Id]);
+        await Assert.That(notices.Single(notice => notice.Kind == "nudge").ActorName).IsEqualTo("Omar");
+
+        await host.Store.ExecuteAsync((s, _) =>
+        {
+            using var command = s.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO SpaceNotificationSettings (Id,ProfileId,SpaceId,Delegations,CreatedAtUtc,UpdatedAtUtc) VALUES ($id,$profile,$space,0,'now','now');
+                INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome,DetailJson) VALUES ('op3','now','sync','sync.apply','ok',$detail);
+                """;
+            command.Parameters.AddWithValue("$id", $"spacenotify:{profile.Id}:{space}");
+            command.Parameters.AddWithValue("$profile", profile.Id);
+            command.Parameters.AddWithValue("$space", space);
+            command.Parameters.AddWithValue("$detail", JsonSerializer.Serialize(new[] { new RemoteTextChange("6", "task_delegation", Guid.NewGuid().ToString("D"), space, omar, null, "Pending") { FromMemberId = omar, ToMemberId = profile.Id, TaskId = task.Id } }));
+            command.ExecuteNonQuery();
+            return Task.FromResult(0);
+        });
+        await Assert.That(await deriver.DeriveAsync()).IsEqualTo(0);
+        await Assert.That(await CountAsync(host, "SELECT count(*) FROM CollaborationNotices;")).IsEqualTo(3L);
+    }
+
+    [Test]
     public async Task DeriveAsync_MentionsAreIdempotentAndIgnoreOwnOrUnchangedText()
     {
         using var host = await DataHost.StartAsync();
