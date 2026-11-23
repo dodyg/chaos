@@ -24,5 +24,7 @@ wslc run -d --name chaos-test-pg -e POSTGRES_PASSWORD=<test password> -p 55432:5
 $env:CHAOS_TEST_PG = "Host=127.0.0.1;Port=55432;Username=postgres;Password=<test password>"
 ```
 
-With this the 216 server tests take about 15 minutes instead of well over an hour. Remove the container
+With this the 216 server tests take about 12 minutes instead of well over an hour. The harness migrates one
+template database per session and copies it for each test (`PostgresServer.CreateMigratedDatabaseAsync`); the rest of
+the per-test time is mostly starting a test server. Remove the container
 (`wslc rm -f chaos-test-pg`) when finished.
