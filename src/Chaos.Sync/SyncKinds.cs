@@ -47,6 +47,8 @@ public static class SyncKinds
         new("view_alert_setting", 1, 59, false, new SyncGroupInfo[] { new("create", 8), new("settings", 8) }),
         new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1) }),
         new("task_assignee", 2, 61, false, new SyncGroupInfo[] { new("create", 5), new("done", 5), new("deleted", 5) }),
+        new("task_delegation", 1, 62, false, new SyncGroupInfo[] { new("create", 10), new("brief", 10), new("state", 10), new("deleted", 10) }),
+        new("nudge", 1, 63, false, new SyncGroupInfo[] { new("record", 10) }),
         new("calendar_event_link", 1, 65, false, ["create", "deleted"]),
         new("subtask", 1, 70, false, ["create", "title", "notes", "status", "position", "deleted"]),
         new("task_tag", 2, 80, false, ["deleted"]),
@@ -63,7 +65,7 @@ public static class SyncKinds
         new("reminder_rule", 1, 190, false, ["create", "rule", "deleted"]),
         new("reminder_acknowledgement", 1, 195, false, ["decision"]),
         new("waiting_detail", 1, 200, false, ["create", "person", "deleted"]),
-        new("follow_up", 1, 210, false, ["create", "kind", "schedule", "resolved", "deleted"]),
+        new("follow_up", 1, 210, false, new SyncGroupInfo[] { new("create", 1), new("kind", 1), new("schedule", 1), new("resolved", 1), new("deleted", 1), new("delegation", 10) }),
         new("day_plan", 1, 220, false, ["create", "seed", "initialized"]),
         new("day_plan_item", 1, 230, false, ["create", "position", "removed"]),
         new("week_plan", 1, 240, false, ["create", "state"]),
@@ -102,6 +104,8 @@ public static class SyncKinds
             "section" => Parent("container", "ContainerId"),
             "subtask" or "diary_entry" => Parent("task", "TaskId"),
             "task_assignee" => KeyParent("task", 0),
+            "task_delegation" => Parent("task", "TaskId"),
+            "nudge" => Parent("task", "TaskId", "record"),
             "task_history" => Parent("task", "TaskId", "record"),
             "github_issue_link" => Parent("task", "TaskId", "state"),
             "pad_drawing" or "scratch_task_link" => KeyParent("pad", 0),
@@ -138,6 +142,9 @@ public static class SyncKinds
         "space_member" => SyncWrite.Server,
         "diary_entry" when group == "create" => SyncWrite.Commenter,
         "diary_entry" => SyncWrite.Author,
+        "task_delegation" when group == "brief" => SyncWrite.Author,
+        "task_delegation" when group == "state" => SyncWrite.Author, // who, depends on the transition: SyncService checks the table
+        "nudge" => SyncWrite.Author, // only the delegator nudges; SyncService also applies the rate limit
         _ when kind.StartsWith("github_", StringComparison.Ordinal) => SyncWrite.Owner,
         _ => SyncWrite.Editor,
     };

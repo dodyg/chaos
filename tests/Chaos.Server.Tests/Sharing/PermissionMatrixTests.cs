@@ -25,6 +25,8 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         view_alert_setting=create,settings
         task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted
         task_assignee=create,done,deleted
+        task_delegation=create,brief,state,deleted
+        nudge=record
         calendar_event_link=create,deleted
         subtask=create,title,notes,status,position,deleted
         task_tag=deleted
@@ -41,7 +43,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         reminder_rule=create,rule,deleted
         reminder_acknowledgement=decision
         waiting_detail=create,person,deleted
-        follow_up=create,kind,schedule,resolved,deleted
+        follow_up=create,kind,schedule,resolved,deleted,delegation
         day_plan=create,seed,initialized
         day_plan_item=create,position,removed
         week_plan=create,state

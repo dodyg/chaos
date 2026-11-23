@@ -365,6 +365,7 @@ public sealed class TransferTests
             public IRecurrenceStore Recurrence => inner.Recurrence;
             public IReminderRuleStore ReminderRules => inner.ReminderRules;
             public IWaitingStore Waiting => inner.Waiting;
+            public IDelegationStore Delegations => inner.Delegations;
             public INotificationJobStore Notifications => inner.Notifications;
             public IDayPlanStore DayPlans => inner.DayPlans;
             public IWeekPlanStore Weeks => inner.Weeks;

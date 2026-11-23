@@ -25,6 +25,7 @@ public enum ChangeKind
     Page = 14,
     Attachment = 15,
     SpaceState = 16,
+    Delegation = 17,
 }
 
 internal sealed class RecordingSpaceStore(RecordingDataSession recorder, ISpaceStore inner) : ISpaceStore
@@ -148,6 +149,40 @@ internal sealed class RecordingWaitingStore(RecordingDataSession recorder, IWait
     }
 }
 
+internal sealed class RecordingDelegationStore(RecordingDataSession recorder, IDelegationStore inner) : IDelegationStore
+{
+    public Task<TaskDelegationRecord?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListByTaskAsync(string taskId, CancellationToken ct) => inner.ListByTaskAsync(taskId, ct);
+    public Task<TaskDelegationRecord?> FindLiveForTaskAsync(string taskId, CancellationToken ct) => inner.FindLiveForTaskAsync(taskId, ct);
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveFromAsync(string memberId, CancellationToken ct) => inner.ListLiveFromAsync(memberId, ct);
+    public Task<IReadOnlyList<TaskDelegationRecord>> ListLiveToAsync(string memberId, CancellationToken ct) => inner.ListLiveToAsync(memberId, ct);
+
+    public async Task AddAsync(TaskDelegationRecord row, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        await inner.AddAsync(row, ct);
+        recorder.RecordEntity<TaskDelegationRecord>(ChangeKind.Delegation, row.Id, null, row.Version);
+    }
+
+    public async Task<TaskDelegationRecord?> UpdateAsync(TaskDelegationRecord row, long expectedVersion, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        var before = recorder.IsRecorded(ChangeKind.Delegation, row.Id) ? null : await inner.GetAsync(row.Id, ct);
+        var applied = await inner.UpdateAsync(row, expectedVersion, ct);
+        if (applied is not null) recorder.RecordEntity(ChangeKind.Delegation, row.Id, before, row.Version);
+        return applied;
+    }
+
+    public Task<IReadOnlyList<NudgeRecord>> ListNudgesAsync(string delegationId, CancellationToken ct) => inner.ListNudgesAsync(delegationId, ct);
+
+    // A nudge was sent; it is a record like a diary entry, not something undo rewrites.
+    public async Task AddNudgeAsync(NudgeRecord row, CancellationToken ct)
+    {
+        await recorder.TouchTaskAsync(row.TaskId, ct);
+        await inner.AddNudgeAsync(row, ct);
+    }
+}
+
 public enum LinkKind
 {
     TaskTag = 1,
@@ -210,6 +245,7 @@ public sealed class RecordingDataSession : IDataSession
         Pad = new RecordingPadStore(this, inner.Pad);
         Pages = new RecordingPageStore(this, inner.Pages);
         Waiting = new RecordingWaitingStore(this, inner.Waiting);
+        Delegations = new RecordingDelegationStore(this, inner.Delegations);
     }
 
     private IRecurrenceStore? _recurrence;
@@ -234,6 +270,7 @@ public sealed class RecordingDataSession : IDataSession
     public IRecurrenceStore Recurrence => _recurrence ??= new RecordingRecurrenceStore(this, _inner.Recurrence);
     public IReminderRuleStore ReminderRules => _reminderRules ??= new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IWaitingStore Waiting { get; }
+    public IDelegationStore Delegations { get; }
     public INotificationJobStore Notifications => _inner.Notifications;
     public IDayPlanStore DayPlans => _inner.DayPlans;
     public IWeekPlanStore Weeks => _inner.Weeks;
@@ -686,6 +723,12 @@ internal static class UndoLabels
         ["waiting.clear"] = "Stop waiting on",
         ["waiting.log"] = "Log follow-up on",
         ["followup.snooze"] = "Snooze follow-up of",
+        ["delegation.delegate"] = "Delegate",
+        ["delegation.respond"] = "Respond to delegation of",
+        ["delegation.done"] = "Mark delegation done of",
+        ["delegation.close"] = "Close delegation of",
+        ["delegation.reopen"] = "Reopen delegation of",
+        ["delegation.withdraw"] = "Take back",
     };
 
     public static string For(string commandKind, string? subject)

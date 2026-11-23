@@ -10,7 +10,7 @@ namespace Chaos.Infrastructure.Service;
 public sealed class SqliteDeviceIdentity(IApplicationStore store, string appVersion) : IDeviceIdentity
 {
     /// <summary>The sync protocol schema this build speaks; P13 raises it when the protocol changes.</summary>
-    public const int ClientSchema = 9;
+    public const int ClientSchema = 10;
 
     public async Task<DeviceIdentity> GetAsync(CancellationToken ct)
     {

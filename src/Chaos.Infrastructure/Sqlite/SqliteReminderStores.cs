@@ -54,8 +54,8 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO FollowUps (Id,TaskId,ProfileId,Kind,FixedAtUtc,Amount,Unit,SnoozedUntilUtc,DueAtUtc,ResolvedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
-            VALUES ($id,$task,$profile,$kind,$fixed,$amount,$unit,$snoozed,NULL,$resolved,$version,$created,$updated,$deleted)
+            INSERT INTO FollowUps (Id,TaskId,ProfileId,Kind,FixedAtUtc,Amount,Unit,SnoozedUntilUtc,DueAtUtc,ResolvedAtUtc,DelegationId,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
+            VALUES ($id,$task,$profile,$kind,$fixed,$amount,$unit,$snoozed,NULL,$resolved,$delegation,$version,$created,$updated,$deleted)
             """;
         BindFollowUp(command, row);
         await command.ExecuteNonQueryAsync(ct);
@@ -66,7 +66,7 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
         using var command = connection.CreateCommand();
         // DueAtUtc is derived and left to SetFollowUpDueAsync.
         command.CommandText = """
-            UPDATE FollowUps SET Kind=$kind,FixedAtUtc=$fixed,Amount=$amount,Unit=$unit,SnoozedUntilUtc=$snoozed,ResolvedAtUtc=$resolved,
+            UPDATE FollowUps SET Kind=$kind,FixedAtUtc=$fixed,Amount=$amount,Unit=$unit,SnoozedUntilUtc=$snoozed,ResolvedAtUtc=$resolved,DelegationId=$delegation,
             Version=$version,UpdatedAtUtc=$updated,DeletedAtUtc=$deleted WHERE Id=$id AND Version=$expected
             """;
         BindFollowUp(command, row);
@@ -113,6 +113,7 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
             Unit = reader.Ln("Unit") is { } unit ? (DurationUnit)unit : null, SnoozedUntilUtc = reader.In("SnoozedUntilUtc"),
             DueAtUtc = reader.In("DueAtUtc"), ResolvedAtUtc = reader.In("ResolvedAtUtc"), Version = reader.L("Version"),
             CreatedAtUtc = reader.I("CreatedAtUtc"), UpdatedAtUtc = reader.I("UpdatedAtUtc"), DeletedAtUtc = reader.In("DeletedAtUtc"),
+            DelegationId = reader.Sn("DelegationId"),
         });
         return rows;
     }
@@ -146,6 +147,7 @@ public sealed class SqliteWaitingStore(SqliteConnection connection) : IWaitingSt
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(row.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(row.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", Instant(row.DeletedAtUtc));
+        command.Parameters.AddWithValue("$delegation", SqliteProfileStore.OptionalValue(row.DelegationId));
     }
 
     internal static object Instant(DateTimeOffset? value) => value is { } instant ? StorageFormats.Instant(instant) : DBNull.Value;

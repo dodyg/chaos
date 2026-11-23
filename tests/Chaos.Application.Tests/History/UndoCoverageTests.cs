@@ -15,7 +15,7 @@ public sealed class UndoCoverageTests
     private static readonly string[] Recorded =
     [
         "Containers", "Sections", "Tasks", "Subtasks", "Templates", "Tags", "Diary", "Pad", "Pages", "Recurrence",
-        "ReminderRules", "Waiting", "Attachments", "Spaces",
+        "ReminderRules", "Waiting", "Attachments", "Spaces", "Delegations",
     ];
 
     /// <summary>
