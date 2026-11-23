@@ -25,7 +25,7 @@ public sealed class UndoCoverageTests
     private static readonly string[] PassThroughOnPurpose =
     [
         "Profiles", "People", "Queries", "History", "Undo", "ChecklistConversions", "Notifications", "DayPlans", "Weeks",
-        "Summaries", "Receipts", "Backups", "Imports", "GitHub", "Boards", "SavedViews", "Calendars", "Activity",
+        "Summaries", "SpaceUpdates", "Receipts", "Backups", "Imports", "GitHub", "Boards", "SavedViews", "Calendars", "Activity",
     ];
 
     [Test]

@@ -974,7 +974,7 @@ public sealed class SpaceService(
 
     private static bool ReferencesIncluded(Dictionary<string, SyncGroupState> groups, HashSet<(string Kind, string Key)> included) =>
         groups.Values.SelectMany(g => g.Values.Values)
-            .Any(pair => pair.Key != "AuthorProfileId" && pair.Key != "OwnerProfileId"
+            .Any(pair => pair.Key != "AuthorProfileId" && pair.Key != "AuthorMemberId" && pair.Key != "OwnerProfileId"
                 && pair.Value is string id && included.Any(item => item.Key == id));
 
     private static short HigherRole(short current, short invited) => current < invited ? current : invited;

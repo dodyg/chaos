@@ -305,6 +305,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddReminderRpcService(new ReminderRpcService(_reminders, _reminderEngine));
         rpc.AddWaitingRpcService(new WaitingRpcService(new WaitingCommands(store, ids, clock)));
         rpc.AddSummaryRpcService(new SummaryRpcService(_summaries));
+        rpc.AddSpaceUpdateRpcService(new SpaceUpdateRpcService(new Chaos.Application.Spaces.SpaceUpdateCommands(store, ids, clock)));
         rpc.AddDataRpcService(_dataRpc);
         rpc.AddGitHubRpcService(new GitHubRpcService(_github, store, _githubEngine, _githubApi, _githubScheduler));
     }

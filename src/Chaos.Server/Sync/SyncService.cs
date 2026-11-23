@@ -474,7 +474,7 @@ public sealed class SyncService(
         }
         if (streamId == account.Id)
         {
-            return kind.Kind is "task_assignee" or "task_delegation" or "nudge" ? SyncRejection.Forbidden : null;
+            return kind.Kind is "task_assignee" or "task_delegation" or "nudge" or "space_update" ? SyncRejection.Forbidden : null;
         }
         if (!roles.TryGetValue(streamId, out var role))
         {
@@ -530,9 +530,10 @@ public sealed class SyncService(
             }
         }
 
-        if (kind.Kind == "diary_entry" && change.Groups.TryGetValue("create", out var create))
+        if (kind.Kind is "diary_entry" or "space_update" && change.Groups.TryGetValue("create", out var create))
         {
-            var author = create.Values.Values.GetValueOrDefault("AuthorProfileId")?.ToString();
+            // A post names its author, and the author must be the caller (PLAN3 9.4, 9.12).
+            var author = create.Values.Values.GetValueOrDefault(AuthorColumn(kind.Kind))?.ToString();
             if (!Guid.TryParse(author, out var id) || id != account.ProfileId)
             {
                 return SyncRejection.Forbidden;
@@ -681,9 +682,12 @@ public sealed class SyncService(
     {
         return await StoredAuthorAsync(streamId, change, ct) == account.ProfileId
             || (await StoredAuthorAsync(streamId, change, ct) is null
-                && Value(change, "create", "AuthorProfileId")?.ToString() is { } incoming
+                && Value(change, "create", AuthorColumn(change.Kind))?.ToString() is { } incoming
                 && Guid.TryParse(incoming, out var actor) && actor == account.ProfileId);
     }
+
+    /// <summary>The create-group column naming who wrote a member's post: a diary entry or a standup.</summary>
+    private static string AuthorColumn(string kind) => kind == "space_update" ? "AuthorMemberId" : "AuthorProfileId";
 
     private async Task<Guid?> StoredAuthorAsync(Guid streamId, SyncChange change, CancellationToken ct)
     {
@@ -695,7 +699,7 @@ public sealed class SyncService(
         var stored = author is null
             ? null
             : SyncJson.ReadGroups(author).GetValueOrDefault("create")?.Values.Values
-                .GetValueOrDefault("AuthorProfileId")?.ToString();
+                .GetValueOrDefault(AuthorColumn(change.Kind))?.ToString();
         return Guid.TryParse(stored, out var actor) ? actor : null;
     }
 

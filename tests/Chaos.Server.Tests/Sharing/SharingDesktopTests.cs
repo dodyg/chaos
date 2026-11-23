@@ -8,10 +8,12 @@ using Chaos.Application.Containers;
 using Chaos.Application.Planning;
 using Chaos.Application.Queries;
 using Chaos.Application.Spaces;
+using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
 using Chaos.Application.Views;
 using Chaos.Application.Boards;
 using Chaos.Domain.Reminders;
+using Chaos.Domain.Summaries;
 using Chaos.Domain.Tasks;
 using Chaos.Application.Reminders;
 using Chaos.Application.Tasks;
@@ -19,6 +21,7 @@ using Chaos.Infrastructure.Sync;
 using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Activity;
 using Chaos.Infrastructure.Attachments;
+using Chaos.Server.Data;
 using Chaos.Server.Tests.Sync;
 using Chaos.Sync;
 using Microsoft.EntityFrameworkCore;
@@ -267,6 +270,58 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
         }
     }
 
+    [Test]
+    public async Task Standup_TeamsCompletionReachesTheEveningSummary_AndAViewersStandupReachesEveryOverview()
+    {
+        await using var world = await SharingWorld.StartAsync(postgres);
+        var sara = await world.AddPersonAsync("standup-sara@example.com", "Sara");
+        var omar = await world.AddPersonAsync("standup-omar@example.com", "Omar");
+        var lina = await world.AddPersonAsync("standup-lina@example.com", "Lina");
+        var (space, _, taskId) = await ShareAsync(world, sara, omar);
+        var joined = await lina.Spaces().JoinWithLinkAsync(await InviteAsync(sara, space, SpaceMember.ViewerRole));
+        await Assert.That(joined.Role).IsEqualTo(SpaceMember.ViewerRole);
+        await world.SettleAsync();
+
+        // Omar finishes the task; Lina's evening summary names it as team news, by him, under the space.
+        omar.Desktop.Clock.Now = omar.Desktop.Clock.Now.AddMinutes(1);
+        await omar.Desktop.Tasks.SetStatusAsync(new(Op(), taskId, (await omar.Desktop.Tasks.GetAsync(taskId))!.Version, TaskItemStatus.Done, null));
+        await world.SettleAsync();
+        lina.Desktop.Clock.Now = lina.Desktop.Clock.Now.AddMinutes(5);
+        var linaZone = TimeZoneInfo.FindSystemTimeZoneById((await lina.Desktop.TextAsync("SELECT ZoneId FROM Profiles WHERE DeletedAtUtc IS NULL LIMIT 1;"))!);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(lina.Desktop.Clock.Now, linaZone).DateTime);
+        var linaSummaries = new SummaryCommands(lina.Desktop.Store, lina.Desktop.Ids, lina.Desktop.Clock);
+        var summary = await linaSummaries.GenerateAsync(new(Op(), SummaryKind.Daily, today));
+        var team = summary.Facts.Spaces.Single();
+        await Assert.That(team.Name).IsEqualTo("Team");
+        await Assert.That((team.CompletedByOthers.Single().Task.Title, team.CompletedByOthers.Single().Actor)).IsEqualTo(("Write the plan", "Omar"));
+        await Assert.That(summary.Facts.Spaces.SelectMany(item => item.CompletedByOthers).Any(item => item.Task.TaskId != taskId)).IsFalse();
+        await Assert.That(await lina.Desktop.CountAsync("SELECT count(*) FROM SpaceUpdates;")).IsEqualTo(0L);
+
+        // Lina reviews the suggested text, changes it and posts it as a viewer; nothing left her device before that.
+        var draft = await linaSummaries.StandupDraftAsync(summary.Summary.Id, space);
+        await Assert.That(draft.ForDate).IsEqualTo(today);
+        await Assert.That(draft.Markdown).Contains("## Done").And.Contains("## Planned").And.Contains("## Blocked");
+        var linaUpdates = new SpaceUpdateCommands(lina.Desktop.Store, lina.Desktop.Ids, lina.Desktop.Clock);
+        var posted = await linaUpdates.PostAsync(new(Op(), space, draft.ForDate, draft.Markdown + "\n## Notes\n- Venue quotes are in."));
+        await Assert.That(posted.Item.AuthorName).IsEqualTo("Lina");
+        await world.SettleAsync();
+        foreach (var member in new[] { sara, omar, lina })
+        {
+            var items = await new SpaceUpdateCommands(member.Desktop.Store, member.Desktop.Ids, member.Desktop.Clock).ListAsync(space);
+            await Assert.That(items.Select(item => (item.AuthorName, item.Update.RawMarkdown, item.IsMine))).IsEquivalentTo(new[] { ("Lina", posted.Item.Update.RawMarkdown, member == lina) });
+        }
+
+        // Omar, an editor, cannot change Lina's standup; Sara, the owner, removes it for everyone.
+        var omarView = (await new SpaceUpdateCommands(omar.Desktop.Store, omar.Desktop.Ids, omar.Desktop.Clock).ListAsync(space)).Single();
+        await Assert.That(async () => await new SpaceUpdateCommands(omar.Desktop.Store, omar.Desktop.Ids, omar.Desktop.Clock)
+            .EditAsync(new(Op(), omarView.Update.Id, omarView.Update.Version, "forged"))).Throws<AppException>();
+        var saraView = (await new SpaceUpdateCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock).ListAsync(space)).Single();
+        await new SpaceUpdateCommands(sara.Desktop.Store, sara.Desktop.Ids, sara.Desktop.Clock).DeleteAsync(new(Op(), saraView.Update.Id, saraView.Update.Version));
+        await world.SettleAsync();
+        await Assert.That(await new SpaceUpdateCommands(lina.Desktop.Store, lina.Desktop.Ids, lina.Desktop.Clock).ListAsync(space)).IsEmpty();
+        await Assert.That(await new SpaceUpdateCommands(omar.Desktop.Store, omar.Desktop.Ids, omar.Desktop.Clock).ListAsync(space)).IsEmpty();
+    }
+
     private static async Task<string> CreateListAsync(SyncDevice device, string spaceId, string name) =>
         (await new ContainerCommands(device.Store, device.Ids, device.Clock).CreateAsync(new(Op(), name, ContainerKind.List, spaceId))).Container.Id;
 
@@ -280,10 +335,10 @@ public sealed class SharingDesktopTests(PostgresServer postgres)
             null, null, null, null, null, null, TaskPriority.Normal, null, CapacityCategory.Personal));
     }
 
-    private static async Task<string> InviteAsync(SharingPerson owner, string spaceId)
+    private static async Task<string> InviteAsync(SharingPerson owner, string spaceId, short role = 2)
     {
         var response = await owner.Desktop.Client.CallAsync(HttpMethod.Post, $"v2/spaces/{spaceId}/invites",
-            JsonSerializer.Serialize(new { role = 2, maxUses = 10 }), CancellationToken.None);
+            JsonSerializer.Serialize(new { role, maxUses = 10 }), CancellationToken.None);
         if (!response.Ok)
         {
             throw new InvalidOperationException($"Invite failed {response.Status}: {response.Body}");

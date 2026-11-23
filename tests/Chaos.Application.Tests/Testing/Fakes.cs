@@ -54,6 +54,7 @@ public sealed class InMemoryStore : IApplicationStore
     public readonly List<BoardSettingsRecord> BoardSettings = [];
     public readonly List<TaskDelegationRecord> Delegations = [];
     public readonly List<NudgeRecord> Nudges = [];
+    public readonly List<SpaceUpdateRecord> SpaceUpdates = [];
     public readonly List<(string SpaceId, Chaos.Application.People.SpacePerson Person)> People = [];
 
     public Task<TResult> ExecuteAsync<TResult>(Func<IDataSession, CancellationToken, Task<TResult>> operation, CancellationToken ct = default) =>
@@ -88,6 +89,7 @@ public sealed class InMemoryStore : IApplicationStore
         public IReminderRuleStore ReminderRules { get; } = new FakeReminderRuleStore(owner.ReminderRules);
         public IWaitingStore Waiting { get; } = new FakeWaitingStore(owner.Waiting, owner.FollowUps);
         public IDelegationStore Delegations { get; } = new FakeDelegationStore(owner.Delegations, owner.Nudges);
+        public ISpaceUpdateStore SpaceUpdates { get; } = new FakeSpaceUpdateStore(owner.SpaceUpdates);
         public INotificationJobStore Notifications { get; } = new FakeNotificationJobStore(owner.Jobs);
         public IDayPlanStore DayPlans => throw new NotSupportedException("This test store does not implement day plans; My Day is tested against SQLite.");
         public IWeekPlanStore Weeks => throw new NotSupportedException("This test store does not implement week plans; My Week is tested against SQLite.");
@@ -104,6 +106,26 @@ public sealed class FakePeopleStore(List<(string SpaceId, Chaos.Application.Peop
 {
     public Task<IReadOnlyList<Chaos.Application.People.SpacePerson>> ListAsync(string spaceId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<Chaos.Application.People.SpacePerson>>(people.Where(entry => entry.SpaceId == spaceId).Select(entry => entry.Person).ToList());
+}
+
+public sealed class FakeSpaceUpdateStore(List<SpaceUpdateRecord> rows) : ISpaceUpdateStore
+{
+    public Task<SpaceUpdateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(row => row.Id == id));
+    public Task<IReadOnlyList<SpaceUpdateRecord>> ListAsync(string spaceId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SpaceUpdateRecord>>(rows.Where(row => row.SpaceId == spaceId && row.DeletedAtUtc is null).OrderByDescending(row => row.CreatedAtUtc).ToList());
+    public Task AddAsync(SpaceUpdateRecord row, CancellationToken ct)
+    {
+        rows.RemoveAll(existing => existing.Id == row.Id);
+        rows.Add(row);
+        return Task.CompletedTask;
+    }
+    public Task<SpaceUpdateRecord?> UpdateAsync(SpaceUpdateRecord row, long expectedVersion, CancellationToken ct)
+    {
+        var index = rows.FindIndex(existing => existing.Id == row.Id);
+        if (index < 0 || rows[index].Version != expectedVersion) return Task.FromResult<SpaceUpdateRecord?>(null);
+        rows[index] = row;
+        return Task.FromResult<SpaceUpdateRecord?>(row);
+    }
 }
 
 public sealed class FakeDelegationStore(List<TaskDelegationRecord> delegations, List<NudgeRecord> nudges) : IDelegationStore

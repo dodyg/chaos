@@ -333,6 +333,18 @@ public static class SyncCatalog
             LocalColumns: ["Version", "Revision"], // Revision numbers this device's version rows (DiaryRevisions stay local)
             ApplyOrder: 100),
 
+        // Q14 standups. The author is named in the create group; the server lets only that member write the
+        // entry group, and the author or an owner the deleted group (Chaos.Sync SyncKinds).
+        new SyncTable("SpaceUpdates", "space_update", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "AuthorMemberId", "ForDate", "CreatedAtUtc"]),
+                new("entry", ["RawMarkdown", "EditedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 101),
+
         new SyncTable("ScratchPadItems", "pad", SyncMode.Merge, ["Id"],
             Groups:
             [

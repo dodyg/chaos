@@ -2329,6 +2329,7 @@ export function App({
                     api={spaceApi}
                     space={currentSpace}
                     lists={spaceLists.get(currentSpace.spaceId) ?? []}
+                    revision={revision}
                     onOpenList={openContainer}
                     onChanged={() => void refreshContainers().catch((e: unknown) => setError(String(e)))}
                     onLeft={() => {

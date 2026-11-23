@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { containerRpc, spaceRpc, taskRpc, type ContainerResponse, type SpaceResponse, type TaskResponse } from "#neoastra";
+import { containerRpc, spaceRpc, spaceUpdateRpc, taskRpc, type ContainerResponse, type SpaceResponse, type TaskResponse } from "#neoastra";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
 Object.defineProperties(globalThis, {
@@ -424,6 +424,100 @@ test("the owner manages roles and removal; a viewer only reads the member list a
     assert.equal(screen.queryByRole("combobox", { name: /Role of/ }), null);
     assert.equal(screen.queryByRole("button", { name: /Remove/ }), null);
     assert.ok(screen.getByRole("button", { name: "Leave this space" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the Overview lists standups newest first; the author edits, the author or an owner deletes, and a viewer cannot touch others'", async () => {
+  const calls: string[] = [];
+  const standup = (id: string, author: string, isMine: boolean, created: string) => ({
+    id,
+    spaceId: shared,
+    authorMemberId: isMine ? "a" : "b",
+    forDate: "2026-11-20",
+    rawMarkdown: "## Done\n- " + id,
+    editedAtUtc: null,
+    createdAtUtc: created,
+    version: "1",
+    authorName: author,
+    isMine,
+  });
+  const updates = [standup("s2", "Bo", true, "2026-11-20T18:00:00Z"), standup("s1", "Ana Lopez", false, "2026-11-20T17:00:00Z")];
+  const updatesApi = {
+    ...spaceUpdateRpc,
+    list: async () => ({ ok: true, updates, error: null }),
+    edit: async (request: { updateId: string; expectedVersion: string; markdown: string }) => {
+      calls.push(`edit ${request.updateId} ${request.expectedVersion} ${request.markdown}`);
+      return { ok: true, update: null, replayed: false, error: null };
+    },
+    delete: async (request: { updateId: string; expectedVersion: string }) => {
+      calls.push(`delete ${request.updateId} ${request.expectedVersion}`);
+      return { ok: true, update: null, replayed: false, error: null };
+    },
+  } as unknown as typeof spaceUpdateRpc;
+  const noop = () => {};
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <SpaceHome
+      space={space(1)}
+      lists={[]}
+      onOpenList={noop}
+      onLeft={noop}
+      onChanged={noop}
+      api={homeApi(1)}
+      updatesApi={updatesApi}
+      revision={0}
+    />,
+    { container: dom.window.document.body },
+  );
+  try {
+    const region = await screen.findByRole("region", { name: "Standups" });
+    const items = within(region).getAllByRole("listitem", { name: /Standup by/ });
+    assert.equal(items.length, 2);
+    assert.ok(within(items[0]).getByText("Bo"), "newest first");
+    assert.ok(within(items[1]).getByText("Ana Lopez"));
+    assert.ok(within(items[0]).getByRole("heading", { name: "Done" }), "the standup renders as Markdown");
+    assert.equal(within(items[1]).queryByRole("button", { name: "Edit" }), null, "only the author edits");
+    assert.ok(within(items[0]).getByRole("button", { name: "Edit" }), "the author edits");
+    assert.ok(within(items[1]).getByRole("button", { name: "Delete standup by Ana Lopez" }), "an owner may delete another's standup");
+
+    await user.click(within(items[1]).getByRole("button", { name: "Delete standup by Ana Lopez" }));
+    assert.deepEqual(calls, [], "the first click only asks");
+    await user.click(within(items[1]).getByRole("button", { name: "Delete" }));
+    await waitFor(() => assert.deepEqual(calls, ["delete s1 1"]));
+    await screen.findByText("Standup deleted.");
+
+    await user.click(within(items[0]).getByRole("button", { name: "Edit" }));
+    const editor = within(items[0]).getByRole("textbox", { name: "Standup" }) as HTMLTextAreaElement;
+    await user.clear(editor);
+    await user.type(editor, "## Done\n- s2\n- edited");
+    await user.click(within(items[0]).getByRole("button", { name: "Save standup" }));
+    await waitFor(() => assert.equal(calls[1], "edit s2 1 ## Done\n- s2\n- edited"));
+  } finally {
+    cleanup();
+  }
+
+  // A viewer edits and deletes only their own standup.
+  render(
+    <SpaceHome
+      space={space(3)}
+      lists={[]}
+      onOpenList={noop}
+      onLeft={noop}
+      onChanged={noop}
+      api={homeApi(3)}
+      updatesApi={updatesApi}
+      revision={0}
+    />,
+    { container: dom.window.document.body },
+  );
+  try {
+    const region = await screen.findByRole("region", { name: "Standups" });
+    const items = within(region).getAllByRole("listitem", { name: /Standup by/ });
+    assert.ok(within(items[0]).getByRole("button", { name: "Edit" }));
+    assert.equal(within(items[1]).queryByRole("button", { name: /Delete/ }), null);
+    assert.equal(within(items[1]).queryByRole("button", { name: "Edit" }), null);
   } finally {
     cleanup();
   }

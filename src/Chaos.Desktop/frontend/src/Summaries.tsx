@@ -1,20 +1,24 @@
 import { TaskViewAction } from "./TaskViewAction";
 import { describeDelegation } from "./delegation";
+import { Modal } from "./Sharing";
 import React from "react";
 import { useRpcQuery } from "./useRpcQuery";
 import {
+  spaceUpdateRpc,
   summaryRpc,
   type CarryOverCandidateDto,
+  type SpaceSummaryDto,
   type SummaryDetailDto,
   type SummaryHeaderDto,
   type SummarySettingsResponse,
   type SummaryTaskDto,
 } from "#neoastra";
-import { BookOpen, CalendarArrowUp, Check, NotebookPen, RefreshCw, X } from "lucide-react";
+import { BookOpen, CalendarArrowUp, Check, Megaphone, NotebookPen, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Count, EmptyState, Field, FieldGroup, InlineError, PageHeader } from "@/components/common";
+import { MarkdownEditor } from "./MarkdownEditor";
 
 const operationId = () => crypto.randomUUID();
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -49,7 +53,7 @@ export function periodText(header: SummaryHeaderDto) {
   return header.kind === "Weekly" ? `${dayText(header.periodStart)} – ${dayText(header.periodEnd)}` : dayText(header.periodStart);
 }
 
-/** Plain counts in one line: "3 completed · 2 unfinished · 1 diary update". */
+/** Plain counts in one line: "3 completed · 2 unfinished · 1 diary update · 4 team updates". */
 export function countsText(header: SummaryHeaderDto) {
   const c = header.counts;
   if (c.quiet) return "A quiet period: nothing recorded.";
@@ -60,6 +64,7 @@ export function countsText(header: SummaryHeaderDto) {
           `${c.stillDone} completed`,
           `${c.unfinished} unfinished`,
           `${c.diaryUpdates} diary ${c.diaryUpdates === 1 ? "update" : "updates"}`,
+          ...(c.spaceActivity > 0 ? [`${c.spaceActivity} team ${c.spaceActivity === 1 ? "update" : "updates"}`] : []),
         ];
   return parts.join(" · ");
 }
@@ -123,6 +128,7 @@ export function SummaryPrompts({ api = summaryRpc, onOpen }: { api?: typeof summ
 /** Summaries (PLAN §12): past summaries newest first, one summary in detail, generation and the schedule. */
 export function Summaries({
   api = summaryRpc,
+  updatesApi = spaceUpdateRpc,
   revision,
   today,
   openId,
@@ -131,6 +137,8 @@ export function Summaries({
   onOpenDailyPage,
 }: {
   api?: typeof summaryRpc;
+  /** The standup client (Q14); the real one unless a test answers. */
+  updatesApi?: typeof spaceUpdateRpc;
   revision: number;
   today: string;
   openId: string | null;
@@ -287,6 +295,7 @@ export function Summaries({
           <SummaryDetail
             detail={detail}
             api={api}
+            updatesApi={updatesApi}
             working={working}
             onRevision={setSelectedId}
             onRegenerate={() => void generate(detail.header.kind, detail.header.periodStart)}
@@ -295,6 +304,7 @@ export function Summaries({
               onChanged();
               setLocal((value) => value + 1);
             }}
+            onStandupPosted={() => onChanged()}
             onOpenDailyPage={onOpenDailyPage}
           />
         ) : (
@@ -344,6 +354,8 @@ function SummaryDetail({
   onOpenTask,
   onCarried,
   onOpenDailyPage,
+  updatesApi = spaceUpdateRpc,
+  onStandupPosted,
 }: {
   detail: SummaryDetailDto;
   api: typeof summaryRpc;
@@ -353,8 +365,12 @@ function SummaryDetail({
   onOpenTask: (taskId: string) => void;
   onCarried: () => void;
   onOpenDailyPage?: (date: string) => void;
+  /** The standup client (Q14); the real one unless a test answers. */
+  updatesApi?: typeof spaceUpdateRpc;
+  onStandupPosted: () => void;
 }) {
   const { header, facts } = detail;
+  const [standupFor, setStandupFor] = React.useState<SpaceSummaryDto | null>(null);
   const byContainer = new Map<string, (typeof facts.completions)[number][]>();
   for (const item of facts.completions) {
     const key = item.task.containerName || "Inbox";
@@ -556,6 +572,65 @@ function SummaryDetail({
               </ul>
             </Section>
           )}
+          {(facts.spaces ?? []).length > 0 && (
+            <Section title="Your spaces" count={(facts.spaces ?? []).length}>
+              {(facts.spaces ?? []).map((space) => (
+                <div key={space.spaceId} className="grid gap-1" role="group" aria-label={`${space.name} updates`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h5 className="text-sm font-semibold" dir="auto">
+                      {space.name}
+                    </h5>
+                    <Button type="button" size="xs" variant="outline" className="ml-auto" onClick={() => setStandupFor(space)}>
+                      <Megaphone />
+                      Post as standup to {space.name}…
+                    </Button>
+                  </div>
+                  <SpaceEvents
+                    title="Finished by others"
+                    items={space.completedByOthers}
+                    onOpenTask={onOpenTask}
+                    note={(item) => `by ${item.actor}`}
+                  />
+                  <SpaceEvents title="New tasks" items={space.newByOthers} onOpenTask={onOpenTask} note={(item) => `by ${item.actor}`} />
+                  <SpaceEvents
+                    title="Newly blocked"
+                    items={space.newlyBlocked}
+                    onOpenTask={onOpenTask}
+                    note={(item) => `${item.blockedBy === "Declined" ? "delegation declined" : "waiting"} · ${item.actor}`}
+                  />
+                  {space.deadlines.length > 0 && (
+                    <div className="grid gap-1">
+                      <h6 className="text-xs font-medium text-muted-foreground">Due in the next 7 days</h6>
+                      <ul className="grid gap-1">
+                        {space.deadlines.map((item) => (
+                          <TaskItem key={item.task.taskId} task={item.task} onOpen={onOpenTask}>
+                            {item.assignees.length > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                <bdi>{item.assignees.join(", ")}</bdi>
+                              </span>
+                            )}
+                          </TaskItem>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {space.projects.length > 0 && (
+                    <ul className="grid gap-1 text-sm">
+                      {space.projects.map((project) => (
+                        <li key={project.projectId} dir="auto">
+                          {project.name}: {project.doneBefore} of {project.countedBefore} → {project.doneAfter} of {project.countedAfter}{" "}
+                          done
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Only what other members did in the spaces you belong to; your own work stays above, and meetings never appear here.
+              </p>
+            </Section>
+          )}
           {facts.deadlines.length > 0 && (
             <Section title={`Due ${next}`} count={facts.deadlines.length}>
               <ul className="grid gap-1">
@@ -610,7 +685,158 @@ function SummaryDetail({
           )}
         </>
       )}
+      {standupFor && (
+        <StandupDialog
+          summaryId={header.id}
+          space={standupFor}
+          api={api}
+          updatesApi={updatesApi}
+          onClose={() => setStandupFor(null)}
+          onPosted={onStandupPosted}
+        />
+      )}
     </article>
+  );
+}
+
+/** What other members did in a space: each task with who did it and, for blocked work, why. */
+function SpaceEvents({
+  title,
+  items,
+  onOpenTask,
+  note,
+}: {
+  title: string;
+  items: ReadonlyArray<{ task: SummaryTaskDto; actor: string; blockedBy: string | null }>;
+  onOpenTask: (taskId: string) => void;
+  note: (item: { task: SummaryTaskDto; actor: string; blockedBy: string | null }) => string;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="grid gap-1">
+      <h6 className="text-xs font-medium text-muted-foreground">
+        {title} <Count>{items.length}</Count>
+      </h6>
+      <ul className="grid gap-1">
+        {items.map((item) => (
+          <TaskItem key={`${item.task.taskId}-${item.blockedBy ?? ""}`} task={item.task} onOpen={onOpenTask}>
+            <span className="text-xs text-muted-foreground">
+              <bdi>{note(item)}</bdi>
+            </span>
+          </TaskItem>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The standup editor (PLAN3 9.12): prefilled with the person's own completed, planned and blocked work in one
+ * space. Nothing leaves this computer until <em>Post standup</em>; closing it posts nothing.
+ */
+function StandupDialog({
+  summaryId,
+  space,
+  api,
+  updatesApi,
+  onClose,
+  onPosted,
+}: {
+  summaryId: string;
+  space: SpaceSummaryDto;
+  api: typeof summaryRpc;
+  updatesApi: typeof spaceUpdateRpc;
+  onClose: () => void;
+  onPosted: () => void;
+}) {
+  const [forDate, setForDate] = React.useState("");
+  const [text, setText] = React.useState("");
+  const [ready, setReady] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [working, setWorking] = React.useState(false);
+  const [posted, setPosted] = React.useState(false);
+
+  React.useEffect(() => {
+    let current = true;
+    void api
+      .standupDraft({ summaryId, spaceId: space.spaceId })
+      .then((result) => {
+        if (!current) return;
+        if (result.ok && result.markdown && result.forDate) {
+          setText(result.markdown);
+          setForDate(result.forDate);
+          setReady(true);
+        } else setError(result.error?.message ?? "Could not prepare the standup.");
+      })
+      .catch((e: unknown) => {
+        if (current) setError(String(e));
+      });
+    return () => {
+      current = false;
+    };
+  }, [api, summaryId, space.spaceId]);
+
+  async function post() {
+    if (working || !ready) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const result = await updatesApi.post({ operationId: operationId(), spaceId: space.spaceId, forDate, markdown: text });
+      if (!result.ok) throw new Error(result.error?.message ?? "Could not post the standup.");
+      setPosted(true);
+      onPosted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not post the standup.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal title={`Post as standup to ${space.name}`} onClose={onClose}>
+      {posted ? (
+        <div className="grid gap-3">
+          <p role="status" className="text-sm">
+            Posted. Members of {space.name} see it on the space’s Overview.
+          </p>
+          <Button type="button" className="w-fit" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      ) : (
+        <form
+          className="grid gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void post();
+          }}
+        >
+          {error && <InlineError>{error}</InlineError>}
+          <MarkdownEditor
+            id={`standup-${space.spaceId}`}
+            label="Your standup"
+            rows={8}
+            value={text}
+            onChange={setText}
+            disabled={!ready}
+            spaceId={space.spaceId}
+            grow
+          />
+          <p className="text-xs text-muted-foreground">
+            Suggested from your own work in {space.name} this day. Change it as you like; nothing is posted until you choose Post standup.
+          </p>
+          <div className="flex gap-2">
+            <Button disabled={working || !ready || !text.trim()}>
+              <Megaphone />
+              Post standup
+            </Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 

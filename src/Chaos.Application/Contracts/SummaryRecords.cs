@@ -106,6 +106,24 @@ public sealed record FollowUpFact(SummaryTaskFact Task, string? Person, DateTime
 
 public sealed record DelegationFact(SummaryTaskFact Task, string Person, DelegationSide Side, DelegationState State, DateOnly? DueDate, DateTimeOffset? FollowUpDueAtUtc);
 
+/// <summary>Why a task in a shared space counts as newly blocked: its status moved to Waiting, or a delegation of it was declined.</summary>
+public enum SpaceBlockReason { Waiting = 0, Declined = 1 }
+
+/// <summary>Something another member did in one of the person's shared spaces during the period, from history.</summary>
+public sealed record SpaceActivityFact(SummaryTaskFact Task, string Actor, DateTimeOffset AtUtc, SpaceBlockReason? BlockedBy = null);
+
+/// <summary>An open task of a shared space due within seven days after the period, with the names of its live assignees.</summary>
+public sealed record SpaceDeadlineFact(SummaryTaskFact Task, IReadOnlyList<string> Assignees);
+
+/// <summary>
+/// What happened in one shared space the person belongs to (PLAN3 9.12): completions, new tasks and newly
+/// blocked work by other members, the deadlines coming up, and how each project moved. Only what this device
+/// holds; meetings and the person's own plans never appear here.
+/// </summary>
+public sealed record SpaceSummaryFact(
+    string SpaceId, string Name, IReadOnlyList<SpaceActivityFact> CompletedByOthers, IReadOnlyList<SpaceActivityFact> NewByOthers,
+    IReadOnlyList<SpaceActivityFact> NewlyBlocked, IReadOnlyList<SpaceDeadlineFact> Deadlines, IReadOnlyList<ProjectProgressFact> Projects);
+
 /// <summary>
 /// The structured facts of one summary (PLAN §12). Rendering is lists and counts in the UI
 /// resource language; there is no generated narrative. Lists not used by a kind are empty.
@@ -133,10 +151,17 @@ public sealed record SummaryFacts
     public IReadOnlyList<DelegationFact> Delegations { get; init; } = [];
     /// <summary>Morning: today's meetings; daily: tomorrow's. Empty unless "Include meetings in summaries" is on.</summary>
     public IReadOnlyList<MeetingFact> Meetings { get; init; } = [];
+    /// <summary>What other members did in the person's shared spaces (Q14): daily and weekly summaries, one entry per space with something to say.</summary>
+    public IReadOnlyList<SpaceSummaryFact> Spaces { get; init; } = [];
     /// <summary>True when every list above is empty: shown as a quiet period, not an error.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsQuiet =>
         Completions.Count == 0 && Projects.Count == 0 && Unfinished.Count == 0 && Waiting.Count == 0 && Deadlines.Count == 0
         && DiaryUpdates.Count == 0 && Suggested.Count == 0 && Selected.Count == 0 && OverdueCount == 0 && FollowUps.Count == 0 && Meetings.Count == 0 && Delegations.Count == 0
+        && Spaces.Count == 0
         && (Week is null || Week.AssignedCount == 0 && Week.Goals.Count == 0);
+
+    /// <summary>Events by other members across the spaces section: completions, new tasks and newly blocked work.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int SpaceActivityCount => Spaces.Sum(space => space.CompletedByOthers.Count + space.NewByOthers.Count + space.NewlyBlocked.Count);
 }

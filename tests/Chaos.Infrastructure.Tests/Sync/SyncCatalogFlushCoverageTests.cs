@@ -67,6 +67,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["task_assignee"] = "assignment",
         ["task_delegation"] = "delegation",
         ["nudge"] = "delegation",
+        ["space_update"] = "delegation",
         ["space_notification_setting"] = "assignment",
         ["subtask"] = Work,
         ["task_tag"] = Work,
@@ -193,13 +194,19 @@ public sealed class SyncCatalogFlushCoverageTests
             {
                 var me = await host.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token));
                 var omar = Guid.NewGuid().ToString("D");
-                var (_, list) = await SharedTeamAsync(host, me!.Id, omar);
+                var (team, list) = await SharedTeamAsync(host, me!.Id, omar);
                 var delegated = (await host.Tasks.CaptureAsync(new(Op(), list, "Send the quote", null))).Task;
                 var delegations = new DelegationCommands(host.Store, host.Ids, host.Clock);
                 var result = await delegations.DelegateAsync(new(Op(), delegated.Id, delegated.Version, omar, "Please", null, null, false,
                     new FollowUpSpec(Chaos.Domain.Reminders.FollowUpKind.Fixed, host.Clock.Now.AddDays(1), null, null)));
                 await delegations.NudgeAsync(new(Op(), result.Delegation.Id, result.Delegation.Version, null));
                 expected["task_delegation"] = result.Delegation.Id;
+
+                // A standup posted and edited (Q14): the create group, then the entry group.
+                var standups = new SpaceUpdateCommands(host.Store, host.Ids, host.Clock);
+                var posted = await standups.PostAsync(new(Op(), team, DateOnly.FromDateTime(host.Clock.Now.DateTime), "## Done"));
+                await standups.EditAsync(new(Op(), posted.Item.Update.Id, 1, "## Done\n- Sent the quote"));
+                expected["space_update"] = posted.Item.Update.Id;
                 break;
             }
             case "reminder_ack":

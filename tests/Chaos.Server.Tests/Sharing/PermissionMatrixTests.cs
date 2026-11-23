@@ -32,6 +32,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         task_tag=deleted
         subtask_tag=deleted
         diary_entry=create,entry,deleted
+        space_update=create,entry,deleted
         task_history=record
         pad=create,text,position,archived,deleted
         pad_drawing=strokes,preview

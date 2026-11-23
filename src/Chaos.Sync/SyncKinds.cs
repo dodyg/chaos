@@ -54,6 +54,7 @@ public static class SyncKinds
         new("task_tag", 2, 80, false, ["deleted"]),
         new("subtask_tag", 2, 90, false, ["deleted"]),
         new("diary_entry", 1, 100, false, ["create", "entry", "deleted"]),
+        new("space_update", 1, 101, true, new SyncGroupInfo[] { new("create", 11), new("entry", 11), new("deleted", 11) }),
         new("task_history", 1, 110, false, ["record"]),
         new("pad", 1, 120, true, ["create", "text", "position", "archived", "deleted"]),
         new("pad_drawing", 1, 125, false, ["strokes", "preview"]),
@@ -100,7 +101,7 @@ public static class SyncKinds
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
             "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
             "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
-            "space_state" or "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
+            "space_state" or "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" or "space_update" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
             "section" => Parent("container", "ContainerId"),
             "subtask" or "diary_entry" => Parent("task", "TaskId"),
             "task_assignee" => KeyParent("task", 0),
@@ -140,8 +141,8 @@ public static class SyncKinds
     {
         "space" or "space_state" => SyncWrite.Owner,
         "space_member" => SyncWrite.Server,
-        "diary_entry" when group == "create" => SyncWrite.Commenter,
-        "diary_entry" => SyncWrite.Author,
+        "diary_entry" or "space_update" when group == "create" => SyncWrite.Commenter,
+        "diary_entry" or "space_update" => SyncWrite.Author, // the author named in the create group; SyncService checks, owners may delete
         "task_delegation" when group == "brief" => SyncWrite.Author,
         "task_delegation" when group == "state" => SyncWrite.Author, // who, depends on the transition: SyncService checks the table
         "nudge" => SyncWrite.Author, // only the delegator nudges; SyncService also applies the rate limit

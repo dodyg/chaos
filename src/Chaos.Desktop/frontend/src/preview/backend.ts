@@ -184,6 +184,33 @@ tasks.push(
   task("shared-3", "Put the green bin out on Thursday", { containerId: "bins", spaceId: viewerSpace }),
 );
 const spaceInvites = new Map<string, PreviewInvite[]>([[designSpace, []]]);
+// Standups (PLAN3 Q14) per space; the Overview lists them newest first.
+type PreviewStandup = {
+  id: string;
+  spaceId: string;
+  authorMemberId: string;
+  forDate: string;
+  rawMarkdown: string;
+  editedAtUtc: string | null;
+  createdAtUtc: string;
+  version: string;
+  authorName: string;
+  isMine: boolean;
+};
+const standups: PreviewStandup[] = [
+  {
+    id: "standup-1",
+    spaceId: designSpace,
+    authorMemberId: "m-ana",
+    forDate: addDays(today, -1),
+    rawMarkdown: "## Done\n- Icon guidelines drafted\n\n## Planned\n- Review the navigation with Bo",
+    editedAtUtc: null,
+    createdAtUtc: `${addDays(today, -1)}T17:30:00Z`,
+    version: "1",
+    authorName: "Ana Lopez",
+    isMine: false,
+  },
+];
 
 // Board settings per container (PLAN2 P2): version 0 means "defaults, no row yet".
 type PreviewBoardSettings = {
@@ -264,7 +291,8 @@ const row = (t: TaskResponse, groupDate: string | null = null): QueryRowResponse
   groupDate,
   waitingPerson: null,
   nextFollowUpAtUtc: null,
-  lastActivityAtUtc: null, delegatedTo: null,
+  lastActivityAtUtc: null,
+  delegatedTo: null,
 });
 const find = (id: string) => tasks.find((t) => t.id === id);
 const bump = (version: string) => String(Number(version) + 1);
@@ -1170,7 +1198,8 @@ function calendarHandlers(): Record<string, Handler> {
           groupDate: null,
           waitingPerson: null,
           nextFollowUpAtUtc: null,
-          lastActivityAtUtc: null, delegatedTo: null,
+          lastActivityAtUtc: null,
+          delegatedTo: null,
         }));
       return ok({ rows, totalCount: rows.length, nextCursor: null });
     },
@@ -2326,6 +2355,43 @@ const handlers: Record<string, Handler> = {
   "delegation.get": () => ok({ task: null, live: [], history: [] }),
   "delegation.list": () => ok({ items: [] }),
   "delegation.nudgeTemplate": () => ok({ text: "" }),
+  // Standups (Q14): listed on the space Overview; posting, editing and deleting follow the same rules as the host.
+  "spaceUpdates.list": (r: { spaceId: string }) =>
+    ok({ updates: standups.filter((s) => s.spaceId === r.spaceId).sort((a, b) => b.createdAtUtc.localeCompare(a.createdAtUtc)) }),
+  "spaceUpdates.post": (r: { spaceId: string; forDate: string; markdown: string }) => {
+    const mine = spaceMembers.get(r.spaceId)?.find((m) => m.isMe);
+    if (!mine) return fail("You are no longer a member of this space.");
+    const item: PreviewStandup = {
+      id: newId("standup"),
+      spaceId: r.spaceId,
+      authorMemberId: mine.memberId,
+      forDate: r.forDate,
+      rawMarkdown: r.markdown,
+      editedAtUtc: null,
+      createdAtUtc: now(),
+      version: "1",
+      authorName: mine.name,
+      isMine: true,
+    };
+    standups.unshift(item);
+    return ok({ update: item, replayed: false });
+  },
+  "spaceUpdates.edit": (r: { updateId: string; expectedVersion: string; markdown: string }) => {
+    const item = standups.find((s) => s.id === r.updateId);
+    if (!item) return fail("That standup no longer exists. Refresh and try again.");
+    if (!item.isMine) return fail("Only the author can edit this standup.");
+    if (item.version !== r.expectedVersion) return fail("This standup changed elsewhere while you were working. Refresh and try again.");
+    Object.assign(item, { rawMarkdown: r.markdown, editedAtUtc: now(), version: String(Number(item.version) + 1) });
+    return ok({ update: item, replayed: false });
+  },
+  "spaceUpdates.delete": (r: { updateId: string; expectedVersion: string }) => {
+    const index = standups.findIndex((s) => s.id === r.updateId);
+    if (index < 0) return fail("That standup no longer exists. Refresh and try again.");
+    const allowed = standups[index].isMine || spaceMembers.get(standups[index].spaceId)?.some((m) => m.isMe && m.role === 1);
+    if (!allowed) return fail("Only the author or a space owner can delete this standup.");
+    standups.splice(index, 1);
+    return ok({ update: null, replayed: false });
+  },
   // The activity feed (PLAN2 §6.4): the preview records its own writes in memory with the real shape, so the window's stream code runs here too.
   "activity.head": () => ok({ head: String(activitySeq) }),
   "activity.since": (r: { after: string; limit: number }) =>
@@ -2345,7 +2411,8 @@ const handlers: Record<string, Handler> = {
     followUpDueAtUtc: null,
     followUpSnoozedUntilUtc: null,
     followUpSuspension: "None",
-    lastActivityAtUtc: null, delegatedTo: null,
+    lastActivityAtUtc: null,
+    delegatedTo: null,
     replayed: false,
   }),
 };

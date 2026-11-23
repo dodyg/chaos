@@ -2,6 +2,7 @@ import React from "react";
 import {
   collaborationRpc,
   spaceRpc,
+  spaceUpdateRpc,
   tagRpc,
   type ContainerResponse,
   type SpaceInviteResponseItem,
@@ -9,6 +10,7 @@ import {
   type SpaceResponse,
   type SpaceNotificationPreference,
   type SpaceStateDto,
+  type SpaceUpdateDto,
   type TagResponse,
 } from "#neoastra";
 import { ChevronRight, FolderKanban, Home, ListTodo, Users } from "lucide-react";
@@ -17,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { EmptyState, Field, InlineError, PageHeader } from "@/components/common";
+import { MarkdownEditor } from "./MarkdownEditor";
+import { MarkdownPreview } from "./markdown";
 
 /** Roles as the service numbers them (PLAN3 §8.3). */
 export const OWNER = 1;
@@ -976,7 +980,7 @@ function SpaceTagSettings({ spaceId }: { spaceId: string }) {
   );
 }
 
-/** A shared space's home (§9.1): Overview, Members and, for an owner, Settings. */
+/** A shared space's home (§9.1): Overview (with the standups), Members and, for an owner, Settings. */
 export function SpaceHome({
   space,
   lists,
@@ -984,6 +988,8 @@ export function SpaceHome({
   onLeft,
   onChanged,
   api = spaceRpc,
+  updatesApi = spaceUpdateRpc,
+  revision = 0,
 }: {
   space: SpaceResponse;
   lists: readonly ContainerResponse[];
@@ -991,6 +997,10 @@ export function SpaceHome({
   onLeft: () => void;
   onChanged: () => void;
   api?: SpaceApi;
+  /** Standups of the space (Q14); the real client unless a test answers. */
+  updatesApi?: typeof spaceUpdateRpc;
+  /** Bumps when anything on this computer changed, so standups posted by other members appear. */
+  revision?: number;
 }) {
   const access = accessIn([space], space.spaceId);
   const [tab, setTab] = React.useState<HomeTab>("overview");
@@ -1068,6 +1078,7 @@ export function SpaceHome({
 
       {tab === "overview" && (
         <div role="tabpanel" aria-label="Overview" className="grid gap-3">
+          <SpaceStandups spaceId={space.spaceId} access={access} api={updatesApi} revision={revision} onChanged={onChanged} />
           {lists.length === 0 ? (
             <EmptyState title="No lists in this space yet.">
               Open a Personal list and choose Move to space… to bring it here
@@ -1210,6 +1221,173 @@ export function SpaceHome({
       )}
     </section>
   );
+}
+
+/**
+ * The standups of a space (PLAN3 9.12), newest first. A member posts one from an evening summary after reviewing the
+ * suggested text; the author edits it, the author or an owner deletes it. Other people's text is rendered as Markdown.
+ */
+export function SpaceStandups({
+  spaceId,
+  access,
+  api,
+  revision,
+  onChanged,
+}: {
+  spaceId: string;
+  access: SpaceAccess;
+  api: typeof spaceUpdateRpc;
+  revision: number;
+  onChanged: () => void;
+}) {
+  const [items, setItems] = React.useState<SpaceUpdateDto[]>([]);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [editing, setEditing] = React.useState<{ id: string; version: string; markdown: string } | null>(null);
+  const [confirming, setConfirming] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const { busy, error, run } = useAction();
+
+  const load = React.useCallback(async () => {
+    const result = await api.list({ spaceId });
+    if (result.ok) {
+      setItems([...result.updates]);
+      setLoadError(null);
+    } else setLoadError(result.error?.message ?? "Could not load the standups.");
+  }, [api, spaceId]);
+  React.useEffect(() => {
+    void load().catch((e: unknown) => setLoadError(String(e)));
+  }, [load, revision]);
+  React.useEffect(() => {
+    setEditing(null);
+    setConfirming(null);
+    setNotice(null);
+    setItems([]);
+  }, [spaceId]);
+
+  async function save() {
+    if (!editing) return;
+    const result = await run(() =>
+      api.edit({ operationId: crypto.randomUUID(), updateId: editing.id, expectedVersion: editing.version, markdown: editing.markdown }),
+    );
+    if (!result) return;
+    setEditing(null);
+    setNotice("Standup updated.");
+    await load();
+    onChanged();
+  }
+
+  async function remove(id: string, version: string) {
+    const result = await run(() => api.delete({ operationId: crypto.randomUUID(), updateId: id, expectedVersion: version }));
+    if (!result) return;
+    setConfirming(null);
+    setNotice("Standup deleted.");
+    await load();
+    onChanged();
+  }
+
+  return (
+    <section aria-label="Standups" className="grid gap-1.5">
+      <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">Standups</h3>
+      {items.length === 0 && !loadError && (
+        <p className="text-sm text-muted-foreground">No standups yet. Post one from an evening summary.</p>
+      )}
+      {(loadError ?? error) && <InlineError>{loadError ?? error}</InlineError>}
+      {notice && (
+        <p role="status" className="text-sm">
+          {notice}
+        </p>
+      )}
+      <ol className="grid gap-2">
+        {items.map((item) => (
+          <li key={item.id} className="grid gap-1 rounded-lg border bg-card px-3 py-2 text-sm" aria-label={`Standup by ${item.authorName}`}>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <bdi className="font-medium text-foreground">{item.authorName}</bdi>
+              <span>{dayLabel(item.forDate)}</span>
+              {item.editedAtUtc && <span>edited</span>}
+              <span className="ml-auto flex gap-1">
+                {item.isMine && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => setEditing({ id: item.id, version: item.version, markdown: item.rawMarkdown })}
+                  >
+                    Edit
+                  </Button>
+                )}
+                {(item.isMine || access.isOwner) &&
+                  (confirming === item.id ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="destructive"
+                        disabled={busy}
+                        onClick={() => void remove(item.id, item.version)}
+                      >
+                        Delete
+                      </Button>
+                      <Button type="button" size="xs" variant="ghost" onClick={() => setConfirming(null)}>
+                        Keep
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      aria-label={`Delete standup by ${item.authorName}`}
+                      onClick={() => setConfirming(item.id)}
+                    >
+                      Delete
+                    </Button>
+                  ))}
+              </span>
+            </div>
+            {editing?.id === item.id ? (
+              <form
+                className="grid gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void save();
+                }}
+              >
+                <MarkdownEditor
+                  id={`standup-${item.id}`}
+                  label="Standup"
+                  rows={6}
+                  value={editing.markdown}
+                  onChange={(markdown) => setEditing({ ...editing, markdown })}
+                  spaceId={spaceId}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={busy || !editing.markdown.trim()}>
+                    Save standup
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setEditing(null)}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <MarkdownPreview source={item.rawMarkdown} compact className="text-sm" />
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** A yyyy-MM-dd date as a short day (no time zone involved). */
+function dayLabel(date: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString(undefined, {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function ListLinks({ title, lists, onOpen }: { title: string; lists: readonly ContainerResponse[]; onOpen: (id: string) => void }) {

@@ -1872,7 +1872,7 @@ the diary.
 
 **Progress note 2026-11-23 (completion).** Reran the full gate with test concurrency limited to one and disposable PostgreSQL 18.7 via `wslc`. It passed: Domain 328, Application 137, Infrastructure 787, Sync 82, Server 221 and Desktop 101 (1,656 total), no skips; Slopwatch found 0 issues. Desktop frontend passed 329; web passed 17; web lint passed with its existing hook-dependency warning. The test container was removed. Nothing remains open for Q13; smallest next action is Q14.
 
-### [ ] Q14: Space and project summaries, and standups
+### [x] Q14: Space and project summaries, and standups
 
 **Depends on:** Q13. **Migration:** `047_space_updates.sql` (`SpaceUpdates`). **Read:** 9.12.
 
@@ -1886,6 +1886,25 @@ the diary.
 
 **Exit:** the evening summary tells Lina what her team finished and what became blocked, and she can post her
 standup after editing it.
+
+**Progress note 2026-11-23 (implementation and verification).** Added the spaces section to the evening and weekly
+summaries (`SummaryFactsBuilder`): for each shared space the person belongs to, completions, new tasks and newly blocked
+work by other members (status moved to Waiting, or a delegation declined) from the space's own history, the open tasks due
+in the seven days after the period with their assignees, and how each project moved; the person's own work and meetings
+stay out, and summary rows stay personal. `summaries.standupDraft` prefills a standup from the person's own completed,
+planned and blocked work in one space (headings in the six languages); `spaceUpdates.post`, `edit` and `delete` are
+separate explicit commands over the new synced kind `space_update` (`SpaceUpdates`, migration 047, client schema 11):
+`create` Commenter with the author as the caller, `entry` Author, `deleted` Author or Owner, refused in the account
+stream. The space Overview lists standups newest first, with edit for the author and delete for the author or an owner.
+Help and `docs/decisions.md` record the choices. PostgreSQL tests cover a viewer posting, forged authors, and the
+two-account flow (Omar completes a task; Lina's evening summary names it; her edited standup reaches every Overview;
+the owner removes it). The full gate (`eng/verify.ps1 -MaxParallelTests 1`) against disposable PostgreSQL 18.7 via
+`wslc` passed: Domain 328, Application 141, Infrastructure 792, Sync 82, Server 224 and Desktop 102 (1,669 total), no
+skips; Slopwatch found 0 issues. Desktop frontend passed 331; web passed 17; web lint passed with its existing
+hook-dependency warning. A first gate run stopped in the Release build on a transient failure (62 cascading type errors
+in `Chaos.Server.Tests`); the same build and the rerun passed without any change, and its cause was not found. The PWA
+shows neither summaries nor spaces yet (Q21), so it is untouched. The test container was removed. Nothing remains open
+for Q14; smallest next action is Q15.
 
 ### [ ] Q15: GitHub in shared spaces and the missing GitHub fields
 

@@ -41,6 +41,31 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate047_AddsStandupsAsASyncedTableOfSharedSpaces()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 46);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('space','person',1,'Personal','now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('team','other',2,'Team','now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_SpaceUpdates_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending;"))).IsEqualTo(0L);
+        Execute(connection, """
+            INSERT INTO SpaceUpdates (Id,SpaceId,AuthorMemberId,ForDate,RawMarkdown,Version,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('standup','team','person','2026-11-23','## Done',1,'now','now');
+            UPDATE SpaceUpdates SET RawMarkdown='## Done\n- Ship', EditedAtUtc='now', Version=2 WHERE Id='standup';
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='space_update' AND GroupName IN ('create','entry');"))).IsEqualTo(2L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Migrate046_AddsDelegationTablesAndLinksExistingFollowUps()
     {
         using var connection = Open();

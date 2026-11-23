@@ -28,6 +28,7 @@ public interface IDataSession
     IReminderRuleStore ReminderRules { get; }
     IWaitingStore Waiting { get; }
     IDelegationStore Delegations { get; }
+    ISpaceUpdateStore SpaceUpdates { get; }
     INotificationJobStore Notifications { get; }
     IDayPlanStore DayPlans { get; }
     IWeekPlanStore Weeks { get; }
@@ -217,6 +218,21 @@ public interface IDelegationStore
     /// <summary>Nudges of one delegation, oldest first.</summary>
     Task<IReadOnlyList<NudgeRecord>> ListNudgesAsync(string delegationId, CancellationToken ct);
     Task AddNudgeAsync(NudgeRecord row, CancellationToken ct);
+}
+
+/// <summary>
+/// Standups (PLAN3 9.12) within the caller's transaction: versioned rows of a shared space. A deleted
+/// row is a tombstone that stays until the space is purged.
+/// </summary>
+public interface ISpaceUpdateStore
+{
+    /// <summary>The row even when tombstoned.</summary>
+    Task<SpaceUpdateRecord?> GetIncludingDeletedAsync(string id, CancellationToken ct);
+    /// <summary>Live standups of the space, newest first (creation time, then id).</summary>
+    Task<IReadOnlyList<SpaceUpdateRecord>> ListAsync(string spaceId, CancellationToken ct);
+    Task AddAsync(SpaceUpdateRecord row, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<SpaceUpdateRecord?> UpdateAsync(SpaceUpdateRecord row, long expectedVersion, CancellationToken ct);
 }
 
 /// <summary>Versioned series and occurrence rows within the caller's transaction.</summary>

@@ -271,6 +271,7 @@ public sealed class RecordingDataSession : IDataSession
     public IReminderRuleStore ReminderRules => _reminderRules ??= new RecordingReminderRuleStore(this, _inner.ReminderRules);
     public IWaitingStore Waiting { get; }
     public IDelegationStore Delegations { get; }
+    public ISpaceUpdateStore SpaceUpdates => _inner.SpaceUpdates;
     public INotificationJobStore Notifications => _inner.Notifications;
     public IDayPlanStore DayPlans => _inner.DayPlans;
     public IWeekPlanStore Weeks => _inner.Weeks;
