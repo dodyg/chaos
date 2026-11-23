@@ -1222,3 +1222,10 @@ plan provides one, and each blocking package stays unticked until the owner conf
 - **Presence.** `POST /v2/presence` and `DELETE /v2/presence`, in memory only. Reports expire after 45 seconds, a sweep every 5 seconds tells the room, and a change goes as `{"presence":{spaceId,entityKind,entityId,members,editing}}` on the event stream of the space's connected members. Personal entities are never recorded, sent or shown, on the service or the client. Presence is per service process: it is not shared between instances.
 - **Not done in Q11.** The task notes editor does not merge unsaved typing in the renderer, and shows no presence line; task notes are still merged by the applier. The same-line labels in a renderer merge are generic.
 
+
+## 2026-11-23 (Q12 rotating repeating tasks)
+
+- **Model.** `RecurrenceSeries.RotationJson` is `{"members":[ids],"start":n}` (sync group `rotation`, client schema 9). `RecurrenceOccurrences.RotationIndex` is in the `create` group. The first occurrence takes `start`; a successor takes the predecessor index plus 1, falling back to `start` when the predecessor has none. The host is `members[index % count]`, moving on to the next current owner or editor when that member has left. The index itself always advances by one, so a skipped member does not shift the order for others. Skipping an occurrence advances the rotation too.
+- **Editing.** Any change to the rotation (members or start) clears the active occurrence's index, because indexes refer to the old member list. The active occurrence keeps its host; the next one uses the new `start`, which is also what the editor shows as "Next: Omar, then Sara".
+- **Eligibility.** Rotation members must be current human owners or editors of a shared space (the Q7 assignment rule). Rotation is refused in a Personal space. The successor's only live assignee is the host; stale assignee rows on a revived tombstone are removed.
+- **Quick add.** Quick add gets no rotation syntax. Rotation is set in the task editor's Repeat tab.

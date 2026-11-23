@@ -13,8 +13,12 @@ public sealed record RecurrenceRuleDto(string Mode, string Frequency, int Interv
     string EndKind, int? Count, string? UntilDate);
 public sealed record RecurrenceGetRequest(string TaskId);
 public sealed record RecurrenceOccurrenceDto(string TaskId, string NominalKey, string EffectiveLocal, string State, string? CompletedAtUtc, string Revision);
-public sealed record RecurrenceGetResponse(bool Ok, RecurrenceRuleDto? Rule, bool Ended, IReadOnlyList<RecurrenceOccurrenceDto> Occurrences, TaskErrorResponse? Error);
-public sealed record RecurrenceRuleRequest(string OperationId, string TaskId, string ExpectedVersion, RecurrenceRuleDto Rule);
+public sealed record RotationDto(IReadOnlyList<string> Members, int Start);
+public sealed record RotationHostDto(string MemberId, string DisplayName);
+public sealed record RecurrenceGetResponse(bool Ok, RecurrenceRuleDto? Rule, bool Ended, IReadOnlyList<RecurrenceOccurrenceDto> Occurrences, TaskErrorResponse? Error,
+    RotationDto? Rotation = null, IReadOnlyList<RotationHostDto>? NextHosts = null);
+public sealed record RotationRequest(string OperationId, string TaskId, string ExpectedVersion, RotationDto? Rotation);
+public sealed record RecurrenceRuleRequest(string OperationId, string TaskId, string ExpectedVersion, RecurrenceRuleDto Rule, RotationDto? Rotation = null);
 public sealed record RecurrenceActionRequest(string OperationId, string TaskId, string ExpectedVersion);
 public sealed record RecurrenceMoveRequest(string OperationId, string TaskId, string ExpectedVersion, string Date, string? Time);
 public sealed record RecurrencePreviewRequest(RecurrenceRuleDto Rule, string Through, int Limit);
@@ -37,7 +41,9 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
             return detail is null ? new(true, null, false, [], null) : new(true, Map(detail.Rule), detail.Series.EndedAtUtc is not null,
                 [.. detail.Occurrences.Select(item => new RecurrenceOccurrenceDto(item.TaskId ?? "", item.NominalKey, item.EffectiveLocal,
                     item.State.ToString(), item.CompletedAtUtc is { } instant ? StorageFormats.Instant(instant) : null,
-                    item.SeriesRevision.ToString(CultureInfo.InvariantCulture)))], null);
+                    item.SeriesRevision.ToString(CultureInfo.InvariantCulture)))], null,
+                detail.Rotation is null ? null : new RotationDto([.. detail.Rotation.Members], detail.Rotation.Start),
+                [.. (detail.NextHosts ?? []).Select(host => new RotationHostDto(host.MemberId, host.DisplayName))]);
         },
             error => new(false, null, false, [], error));
 
@@ -77,7 +83,14 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
     public async ValueTask<TaskOperationResponse> StartAsync(RecurrenceRuleRequest request, CancellationToken ct)
     {
         using var rpcScope = ActivityScope.Rpc("recurrence.start");
-        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.StartAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule)), ct); }, ct);
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.StartAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), Parse(request.Rule), ParseRotation(request.Rotation)), ct); }, ct);
+    }
+
+    [NeoRpcMethod("setRotation")]
+    public async ValueTask<TaskOperationResponse> SetRotationAsync(RotationRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("recurrence.setRotation");
+        return await MutateAsync(request.OperationId, request.TaskId, async () => { await commands.SetRotationAsync(new(request.OperationId, request.TaskId, Version(request.ExpectedVersion), ParseRotation(request.Rotation)), ct); }, ct);
     }
 
     [NeoRpcMethod("revise")]
@@ -130,6 +143,8 @@ public sealed class RecurrenceRpcService(RecurrenceCommands commands, TaskComman
         catch (ArgumentOutOfRangeException) { return new(false, operationId, null, TaskRpcService.ToErrorResponse(AppException.Validation("rule", "The resulting date is outside the supported calendar."))); }
         catch (AppException error) { return new(false, operationId, null, TaskRpcService.ToErrorResponse(error)); }
     }
+
+    private static Rotation? ParseRotation(RotationDto? dto) => dto is null ? null : new Rotation([.. dto.Members], dto.Start);
 
     internal static RecurrenceRule Parse(RecurrenceRuleDto dto)
     {

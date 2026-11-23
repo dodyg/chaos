@@ -349,6 +349,7 @@ public static class SyncCatalog
             [
                 new("create", ["SpaceId", "ContainerId", "CreatedAtUtc"]),
                 new("rule", ["RuleJson", "TemplateJson", "Revision"]), // the revision triggers bump them together
+                new("rotation", ["RotationJson"]),
                 new("ended", ["EndedAtUtc"]),
                 new("deleted", ["DeletedAtUtc"]),
             ],
@@ -358,7 +359,7 @@ public static class SyncCatalog
         new SyncTable("RecurrenceOccurrences", "recurrence_occurrence", SyncMode.Merge, ["Id"],
             Groups:
             [
-                new("create", ["SeriesId", "NominalKey", "ScheduleKey", "EffectiveLocal", "CreatedAtUtc"]),
+                new("create", ["SeriesId", "NominalKey", "ScheduleKey", "EffectiveLocal", "RotationIndex", "CreatedAtUtc"]),
                 new("task", ["TaskId"]),
                 new("state", ["State", "CompletedAtUtc"]),
                 new("edit", ["EditSnapshotJson"]),

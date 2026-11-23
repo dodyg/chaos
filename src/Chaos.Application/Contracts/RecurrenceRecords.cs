@@ -9,6 +9,8 @@ public sealed record RecurrenceSeriesRecord : AggregateRecord
     public required long Revision { get; init; }
     public required long ActionableCount { get; init; }
     public DateTimeOffset? EndedAtUtc { get; init; }
+    /// <summary>PLAN3 9.10: <c>{"members":[ids],"start":n}</c>, shared spaces only; null when the series does not rotate.</summary>
+    public string? RotationJson { get; init; }
 }
 
 public enum OccurrenceState { Active, Completed, Skipped }
@@ -24,4 +26,6 @@ public sealed record RecurrenceOccurrenceRecord : AggregateRecord
     public required OccurrenceState State { get; init; }
     public DateTimeOffset? CompletedAtUtc { get; init; }
     public required long SeriesRevision { get; init; }
+    /// <summary>Position in the series' rotation, fixed when the occurrence is created; null when it does not rotate.</summary>
+    public int? RotationIndex { get; init; }
 }

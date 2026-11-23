@@ -54,8 +54,8 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO RecurrenceSeries (Id,SpaceId,ContainerId,RuleJson,TemplateJson,Revision,ActionableCount,EndedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
-            VALUES ($id,$space,$container,$rule,$template,$revision,$count,$ended,$version,$created,$updated,$deleted)
+            INSERT INTO RecurrenceSeries (Id,SpaceId,ContainerId,RuleJson,TemplateJson,Revision,ActionableCount,EndedAtUtc,RotationJson,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
+            VALUES ($id,$space,$container,$rule,$template,$revision,$count,$ended,$rotation,$version,$created,$updated,$deleted)
             """;
         BindSeries(command, row);
         await command.ExecuteNonQueryAsync(ct);
@@ -66,7 +66,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE RecurrenceSeries SET SpaceId=$space,ContainerId=$container,RuleJson=$rule,TemplateJson=$template,Revision=$revision,
-            ActionableCount=$count,EndedAtUtc=$ended,Version=$version,UpdatedAtUtc=$updated,DeletedAtUtc=$deleted WHERE Id=$id AND Version=$expected
+            ActionableCount=$count,EndedAtUtc=$ended,RotationJson=$rotation,Version=$version,UpdatedAtUtc=$updated,DeletedAtUtc=$deleted WHERE Id=$id AND Version=$expected
             """;
         BindSeries(command, row);
         command.Parameters.AddWithValue("$expected", expectedVersion);
@@ -77,8 +77,8 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO RecurrenceOccurrences (Id,SeriesId,NominalKey,ScheduleKey,TaskId,EffectiveLocal,EditSnapshotJson,State,CompletedAtUtc,SeriesRevision,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
-            VALUES ($id,$series,$key,$schedule,$task,$effective,$edit,$state,$completed,$revision,$version,$created,$updated,$deleted)
+            INSERT INTO RecurrenceOccurrences (Id,SeriesId,NominalKey,ScheduleKey,TaskId,EffectiveLocal,EditSnapshotJson,State,CompletedAtUtc,SeriesRevision,RotationIndex,Version,CreatedAtUtc,UpdatedAtUtc,DeletedAtUtc)
+            VALUES ($id,$series,$key,$schedule,$task,$effective,$edit,$state,$completed,$revision,$rotationIndex,$version,$created,$updated,$deleted)
             """;
         BindOccurrence(command, row);
         await command.ExecuteNonQueryAsync(ct);
@@ -89,7 +89,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE RecurrenceOccurrences SET ScheduleKey=$schedule,TaskId=$task,EffectiveLocal=$effective,EditSnapshotJson=$edit,State=$state,CompletedAtUtc=$completed,
-            SeriesRevision=$revision,Version=$version,UpdatedAtUtc=$updated,DeletedAtUtc=$deleted WHERE Id=$id AND Version=$expected
+            SeriesRevision=$revision,RotationIndex=$rotationIndex,Version=$version,UpdatedAtUtc=$updated,DeletedAtUtc=$deleted WHERE Id=$id AND Version=$expected
             """;
         BindOccurrence(command, row);
         command.Parameters.AddWithValue("$expected", expectedVersion);
@@ -106,7 +106,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
         while (await reader.ReadAsync(ct))
             result.Add(new RecurrenceOccurrenceRecord { Id = reader.S("Id"), SeriesId = reader.S("SeriesId"), NominalKey = reader.S("NominalKey"), ScheduleKey = reader.S("ScheduleKey"),
                 TaskId = reader.Sn("TaskId"), EffectiveLocal = reader.S("EffectiveLocal"), EditSnapshotJson = reader.Sn("EditSnapshotJson"), State = (OccurrenceState)reader.L("State"),
-                CompletedAtUtc = reader.In("CompletedAtUtc"), SeriesRevision = reader.L("SeriesRevision"), Version = reader.L("Version"),
+                CompletedAtUtc = reader.In("CompletedAtUtc"), SeriesRevision = reader.L("SeriesRevision"), RotationIndex = reader.IsDBNull(reader.GetOrdinal("RotationIndex")) ? null : (int)reader.L("RotationIndex"), Version = reader.L("Version"),
                 CreatedAtUtc = reader.I("CreatedAtUtc"), UpdatedAtUtc = reader.I("UpdatedAtUtc"), DeletedAtUtc = reader.In("DeletedAtUtc") });
         return result;
     }
@@ -115,7 +115,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
     {
         Id = reader.S("Id"), SpaceId = reader.S("SpaceId"), ContainerId = reader.S("ContainerId"), RuleJson = reader.S("RuleJson"),
         TemplateJson = reader.S("TemplateJson"), Revision = reader.L("Revision"), ActionableCount = reader.L("ActionableCount"),
-        EndedAtUtc = reader.In("EndedAtUtc"), Version = reader.L("Version"), CreatedAtUtc = reader.I("CreatedAtUtc"),
+        EndedAtUtc = reader.In("EndedAtUtc"), RotationJson = reader.Sn("RotationJson"), Version = reader.L("Version"), CreatedAtUtc = reader.I("CreatedAtUtc"),
         UpdatedAtUtc = reader.I("UpdatedAtUtc"), DeletedAtUtc = reader.In("DeletedAtUtc")
     };
 
@@ -129,6 +129,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
         command.Parameters.AddWithValue("$revision", row.Revision);
         command.Parameters.AddWithValue("$count", row.ActionableCount);
         command.Parameters.AddWithValue("$ended", Optional(row.EndedAtUtc));
+        command.Parameters.AddWithValue("$rotation", (object?)row.RotationJson ?? DBNull.Value);
     }
 
     private static void BindOccurrence(SqliteCommand command, RecurrenceOccurrenceRecord row)
@@ -143,6 +144,7 @@ public sealed class SqliteRecurrenceStore(SqliteConnection connection) : IRecurr
         command.Parameters.AddWithValue("$state", (int)row.State);
         command.Parameters.AddWithValue("$completed", Optional(row.CompletedAtUtc));
         command.Parameters.AddWithValue("$revision", row.SeriesRevision);
+        command.Parameters.AddWithValue("$rotationIndex", (object?)row.RotationIndex ?? DBNull.Value);
     }
 
     private static void BindCommon(SqliteCommand command, AggregateRecord row)

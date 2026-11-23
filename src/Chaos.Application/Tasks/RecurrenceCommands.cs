@@ -9,13 +9,15 @@ using Chaos.Sync;
 
 namespace Chaos.Application.Tasks;
 
-public sealed record StartRecurrenceCommand(string OperationId, string TaskId, long ExpectedVersion, RecurrenceRule Rule);
+public sealed record StartRecurrenceCommand(string OperationId, string TaskId, long ExpectedVersion, RecurrenceRule Rule, Rotation? Rotation = null);
+public sealed record SetRotationCommand(string OperationId, string TaskId, long ExpectedVersion, Rotation? Rotation);
 public sealed record StartRecurrenceResult(RecurrenceSeriesRecord Series, RecurrenceOccurrenceRecord Occurrence, bool Replayed);
 public sealed record RecurrenceActionCommand(string OperationId, string TaskId, long ExpectedVersion);
 public sealed record RecurrenceActionResult(TaskRecord Task, bool Replayed);
 public sealed record MoveOccurrenceCommand(string OperationId, string TaskId, long ExpectedVersion, DateOnly Date, TimeOnly? Time);
 public sealed record ReviseRecurrenceCommand(string OperationId, string TaskId, long ExpectedVersion, RecurrenceRule Rule);
-public sealed record RecurrenceDetail(RecurrenceSeriesRecord Series, RecurrenceRule Rule, IReadOnlyList<RecurrenceOccurrenceRecord> Occurrences);
+public sealed record RecurrenceDetail(RecurrenceSeriesRecord Series, RecurrenceRule Rule, IReadOnlyList<RecurrenceOccurrenceRecord> Occurrences,
+    Rotation? Rotation = null, IReadOnlyList<RotationHost>? NextHosts = null);
 public sealed record RecurrenceProjection(DateTime NominalLocal, bool Projected);
 public sealed record UpcomingRecurrenceProjection(string SourceTaskId, string Title, DateTime NominalLocal);
 
@@ -31,7 +33,16 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
                 ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence series could not be found.");
             var rule = StoredJsonFormats.ReadSnapshot<RecurrenceRule>(series.RuleJson)
                 ?? throw new AppException(AppErrorKind.StorageUnavailable, "The recurrence rule could not be read.");
-            return new RecurrenceDetail(series, rule, await session.Recurrence.ListOccurrencesAsync(series.Id, token));
+            var occurrences = await session.Recurrence.ListOccurrencesAsync(series.Id, token);
+            var rotation = RotationSupport.Read(series.RotationJson);
+            if (rotation is null) return new RecurrenceDetail(series, rule, occurrences);
+            var people = await session.People.ListAsync(series.SpaceId, token);
+            var names = people.ToDictionary(p => p.ActorId, p => p.DisplayName, StringComparer.Ordinal);
+            var active = occurrences.SingleOrDefault(item => item.State == OccurrenceState.Active);
+            IReadOnlyList<RotationHost> next = series.EndedAtUtc is not null ? []
+                : [.. rotation.Upcoming(active?.RotationIndex, 2, RotationSupport.Live(people))
+                    .Select(id => new RotationHost(id, names.GetValueOrDefault("person:" + id, id)))];
+            return new RecurrenceDetail(series, rule, occurrences, rotation, next);
         }, ct);
 
     /// <summary>Read-only fixed-schedule candidates; actual successors depend on when the active task is finished.</summary>
@@ -93,15 +104,16 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
                 {
                     var task = await session.Tasks.GetAsync(command.TaskId, inner) ?? throw AppException.NotFound("That task no longer exists.");
                     if (task.Version != command.ExpectedVersion) throw AppException.VersionConflict("This task changed elsewhere. Refresh and try again.");
-                    return await StartInSessionAsync(session, ids, task, command.Rule, command.OperationId, now, inner);
+                    return await StartInSessionAsync(session, ids, task, command.Rule, command.OperationId, now, inner, command.Rotation);
                 }, token);
             return replayed ? result with { Replayed = true } : result;
         }, ct);
     }
 
     internal static async Task<StartRecurrenceResult> StartInSessionAsync(IDataSession session, IIdGenerator ids, TaskRecord task,
-        RecurrenceRule rule, string operationId, DateTimeOffset now, CancellationToken ct)
+        RecurrenceRule rule, string operationId, DateTimeOffset now, CancellationToken ct, Rotation? rotation = null)
     {
+        if (rotation is not null) await RotationSupport.ValidateAsync(session, task.SpaceId, rotation, ct);
         try { rule.Validate(); }
         catch (DomainValidationException error) { throw AppException.Validation("rule", error.Message); }
         if (await session.GitHub.FindLinkByTaskAsync(task.Id, ct) is { State: not 4 })
@@ -152,7 +164,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
         {
             Id = ids.NewId().ToString(), SpaceId = task.SpaceId, ContainerId = task.ContainerId,
             RuleJson = StoredJsonFormats.Snapshot(rule), TemplateJson = StoredJsonFormats.Snapshot(snapshot),
-            Revision = 1, ActionableCount = 1, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
+            Revision = 1, ActionableCount = 1, RotationJson = RotationSupport.Write(rotation), Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
         };
         await session.Recurrence.AddSeriesAsync(series, ct);
         var occurrence = new RecurrenceOccurrenceRecord
@@ -161,7 +173,7 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
             // its random id; only materialized successors take occurrencetask ids.
             Id = StorageFormats.NameBasedId(NameBasedId.Names.Occurrence(series.Id, Key(first))),
             SeriesId = series.Id, TaskId = task.Id, NominalKey = Key(first), ScheduleKey = Key(first),
-            EffectiveLocal = Key(first), State = OccurrenceState.Active, SeriesRevision = 1,
+            EffectiveLocal = Key(first), State = OccurrenceState.Active, SeriesRevision = 1, RotationIndex = rotation?.Start,
             Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
         };
         await session.Recurrence.AddOccurrenceAsync(occurrence, ct);
@@ -172,6 +184,9 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
             PlannedZoneId = task.PlannedDate is null && task.DueDate is null && rule.AnchorTime is not null ? rule.ZoneId : task.PlannedZoneId,
             DueDate = task.DueDate?.AddDays(offset), Version = task.Version + 1, UpdatedAtUtc = now };
         if (await session.Tasks.UpdateAsync(updated, task.Version, ct) is null) throw AppException.VersionConflict("This task changed elsewhere.");
+        if (rotation is not null)
+            await RotationSupport.AssignOnlyAsync(session, task.Id,
+                rotation.HostFor(rotation.Start, RotationSupport.Live(await session.People.ListAsync(task.SpaceId, ct))), now, ct);
         await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, operationId, snapshot,
             snapshot with { Task = updated }, "recurrence.started", ["Recurrence"], now, ct);
         return new StartRecurrenceResult(series, occurrence, false);
@@ -259,6 +274,44 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
                     var moved = occurrence with { EffectiveLocal = Key(effective), Version = occurrence.Version + 1, UpdatedAtUtc = now };
                     if (await session.Recurrence.UpdateOccurrenceAsync(moved, occurrence.Version, inner) is null) throw AppException.VersionConflict("This occurrence changed elsewhere.");
                     return new RecurrenceActionResult(updated, false);
+                }, token);
+            return replayed ? result with { Replayed = true } : result;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Sets, changes or clears the rotation. It applies from the next occurrence on: the active occurrence keeps its host.
+    /// Any change clears the active occurrence's index, because indexes refer to the old member list: the new start decides who is next.
+    /// </summary>
+    public async Task<RecurrenceActionResult> SetRotationAsync(SetRotationCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return await TaskMutationSupport.InWriteTransactionAsync(store, clock, ids, async (session, profile, now, token) =>
+        {
+            var (result, replayed) = await TaskMutationSupport.ReplayOrRunAsync(session, profile.Id, command.OperationId,
+                "recurrence.rotation", command, now, async inner =>
+                {
+                    var task = await session.Tasks.GetAsync(command.TaskId, inner) ?? throw AppException.NotFound("That task no longer exists.");
+                    if (task.Version != command.ExpectedVersion) throw AppException.VersionConflict("This task changed elsewhere. Refresh and try again.");
+                    var occurrence = await session.Recurrence.FindByTaskAsync(task.Id, inner)
+                        ?? throw AppException.Validation("taskId", "This task is not a recurring occurrence.");
+                    var series = await session.Recurrence.GetSeriesAsync(occurrence.SeriesId, inner)
+                        ?? throw AppException.NotFound("This series no longer exists.");
+                    if (series.EndedAtUtc is not null) throw AppException.Validation("rotation", "This series has ended.");
+                    if (command.Rotation is not null) await RotationSupport.ValidateAsync(session, series.SpaceId, command.Rotation, inner);
+                    var json = RotationSupport.Write(command.Rotation);
+                    if (json == series.RotationJson) return new RecurrenceActionResult(task, false);
+                    var changed = series with { RotationJson = json, Version = series.Version + 1, UpdatedAtUtc = now };
+                    if (await session.Recurrence.UpdateSeriesAsync(changed, series.Version, inner) is null)
+                        throw AppException.VersionConflict("This series changed elsewhere.");
+                    var active = (await session.Recurrence.ListOccurrencesAsync(series.Id, inner)).SingleOrDefault(item => item.State == OccurrenceState.Active);
+                    if (active?.RotationIndex is not null)
+                    {
+                        var cleared = active with { RotationIndex = null, Version = active.Version + 1, UpdatedAtUtc = now };
+                        if (await session.Recurrence.UpdateOccurrenceAsync(cleared, active.Version, inner) is null)
+                            throw AppException.VersionConflict("This occurrence changed elsewhere.");
+                    }
+                    return new RecurrenceActionResult(task, false);
                 }, token);
             return replayed ? result with { Replayed = true } : result;
         }, ct);
@@ -449,10 +502,18 @@ public sealed class RecurrenceCommands(IApplicationStore store, IIdGenerator ids
             if (template.SubtaskTagIds?.TryGetValue(child.Id, out var tagIds) == true)
                 foreach (var tagId in tagIds) await session.Tags.AddSubtaskLinkAsync(newChild.Id, tagId, ct);
         }
+        // PLAN3 9.10: the index follows the predecessor's, so two devices make the same successor with the same host.
+        var rotation = RotationSupport.Read(series.RotationJson);
+        var rotationIndex = rotation?.NextIndex(occurrence.RotationIndex);
+        if (rotation is not null && rotationIndex is { } hostIndex)
+        {
+            var live = RotationSupport.Live(await session.People.ListAsync(series.SpaceId, ct));
+            await RotationSupport.AssignOnlyAsync(session, taskId, rotation.HostFor(hostIndex, live), now, ct);
+        }
         var newOccurrence = new RecurrenceOccurrenceRecord
         {
             Id = occurrenceId, SeriesId = series.Id, TaskId = taskId, NominalKey = nominalKey, ScheduleKey = nominalKey, EffectiveLocal = nominalKey,
-            State = OccurrenceState.Active, SeriesRevision = series.Revision, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
+            State = OccurrenceState.Active, SeriesRevision = series.Revision, RotationIndex = rotationIndex, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now,
         };
         if (priorOccurrence is null)
             await session.Recurrence.AddOccurrenceAsync(newOccurrence, ct);

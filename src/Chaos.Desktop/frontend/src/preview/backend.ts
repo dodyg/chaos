@@ -2318,7 +2318,7 @@ const handlers: Record<string, Handler> = {
       : previewIssueAssignees.filter((a) => a !== "preview-user");
     return ok({});
   },
-  "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [] }),
+  "recurrence.get": () => ok({ rule: null, ended: false, occurrences: [], rotation: null, nextHosts: null }),
   // The activity feed (PLAN2 §6.4): the preview records its own writes in memory with the real shape, so the window's stream code runs here too.
   "activity.head": () => ok({ head: String(activitySeq) }),
   "activity.since": (r: { after: string; limit: number }) =>

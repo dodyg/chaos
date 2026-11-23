@@ -57,7 +57,7 @@ public static class SyncKinds
         new("pad_drawing", 1, 125, false, ["strokes", "preview"]),
         new("scratch_task_link", 2, 130, false, ["anchor"]),
         new("pad_tag", 2, 140, false, ["deleted"]),
-        new("recurrence_series", 1, 160, true, ["create", "rule", "ended", "deleted"]),
+        new("recurrence_series", 1, 160, true, new SyncGroupInfo[] { new("create", 1), new("rule", 1), new("rotation", 9), new("ended", 1), new("deleted", 1) }),
         new("recurrence_occurrence", 1, 170, false, ["create", "task", "state", "edit", "series", "deleted"]),
         new("recurrence_exception", 2, 180, false, ["exception"]),
         new("reminder_rule", 1, 190, false, ["create", "rule", "deleted"]),

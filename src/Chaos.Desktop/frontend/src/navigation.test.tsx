@@ -167,6 +167,8 @@ test("deleting an active repeating task offers skip or end and delete", async ()
           },
         ],
         error: null,
+        rotation: null,
+        nextHosts: null,
       }),
       endAndDelete: async (request: { operationId: string }) => {
         ended = true;

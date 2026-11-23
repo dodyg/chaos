@@ -43,7 +43,7 @@ test("previews a weekly rule before saving it", async () => {
   const calls: string[] = [];
   const api: typeof recurrenceRpc = {
     ...recurrenceRpc,
-    get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null }),
+    get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null, rotation: null, nextHosts: null }),
     preview: async (request) => {
       calls.push(request.rule.frequency);
       return { ok: true, slots: ["2026-11-10T00:00:00"], error: null };
@@ -89,7 +89,7 @@ test("does not change recurrence while task edits are unsaved", async () => {
   let error = "";
   const api: typeof recurrenceRpc = {
     ...recurrenceRpc,
-    get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null }),
+    get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null, rotation: null, nextHosts: null }),
     start: async (request) => {
       started = true;
       return { ok: true, operationId: request.operationId, task, error: null, warning: null };
@@ -147,5 +147,65 @@ test("upcoming projections are labeled and cannot be opened or dragged", async (
   await waitFor(() => assert.ok(screen.getByText("Projected")));
   assert.equal(screen.queryByRole("button", { name: "Repeat" }), null);
   assert.equal(screen.getByText(/Repeat · 2026-11-12/).getAttribute("draggable"), null);
+  cleanup();
+});
+
+test("starts a repeating task with a rotation and shows who is next", async () => {
+  let sent: { members: readonly string[]; start: number } | null = null;
+  const person = (id: string, name: string) => ({
+    actorId: `person:${id}`,
+    displayName: name,
+    initials: name.slice(0, 1),
+    colorIndex: 0,
+    kind: "person",
+    isMe: false,
+    role: 2,
+    former: false,
+  });
+  const people = {
+    list: async () => ({ ok: true as const, people: [person("omar", "Omar"), person("sara", "Sara")], error: null }),
+  };
+  const api: typeof recurrenceRpc = {
+    ...recurrenceRpc,
+    get: async () => ({
+      ok: true,
+      rule: null,
+      ended: false,
+      occurrences: [],
+      error: null,
+      rotation: null,
+      nextHosts: [
+        { memberId: "omar", displayName: "Omar" },
+        { memberId: "sara", displayName: "Sara" },
+      ],
+    }),
+    start: async (request) => {
+      sent = request.rotation;
+      return { ok: true, operationId: request.operationId, task: { ...task, version: "2" }, error: null, warning: null };
+    },
+  };
+  const tasks: typeof taskRpc = { ...taskRpc, get: async () => ({ ok: true, task, error: null }) };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <RecurrenceEditor
+      task={task}
+      revision={0}
+      busy={false}
+      api={api}
+      taskApi={tasks}
+      directoryApi={people}
+      onChanged={() => {}}
+      onError={(message) => {
+        throw new Error(message);
+      }}
+    />,
+    { container: dom.window.document.body },
+  );
+  await waitFor(() => assert.ok(screen.getByLabelText("Omar")));
+  assert.ok(screen.getByText("Next: Omar, then Sara"));
+  await user.click(screen.getByLabelText("Omar"));
+  await user.click(screen.getByLabelText("Sara"));
+  await user.click(screen.getByRole("button", { name: "Start repeating" }));
+  await waitFor(() => assert.deepEqual(sent, { members: ["omar", "sara"], start: 0 }));
   cleanup();
 });

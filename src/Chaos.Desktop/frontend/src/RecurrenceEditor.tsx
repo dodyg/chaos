@@ -1,7 +1,9 @@
 import React from "react";
 import {
+  peopleRpc,
   recurrenceRpc,
   taskRpc,
+  type PersonResponse,
   type RecurrenceGetResponse,
   type RecurrenceRuleDto,
   type TaskOperationResponse,
@@ -22,6 +24,7 @@ type Props = {
   onError: (message: string) => void;
   api?: typeof recurrenceRpc;
   taskApi?: typeof taskRpc;
+  directoryApi?: Pick<typeof peopleRpc, "list">;
 };
 const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const localDate = () => {
@@ -54,6 +57,7 @@ export function RecurrenceEditor({
   onError,
   api = recurrenceRpc,
   taskApi = taskRpc,
+  directoryApi = peopleRpc,
 }: Props) {
   const timeZones = zoneList ?? deviceTimeZones();
   const [detail, setDetail] = React.useState<RecurrenceGetResponse | null>(null);
@@ -69,6 +73,25 @@ export function RecurrenceEditor({
   const [moveDate, setMoveDate] = React.useState("");
   const [moveTime, setMoveTime] = React.useState("");
   const generation = React.useRef(0);
+  // Rotation (PLAN3 9.10): the people who can host, the ordered selection and who starts.
+  const [people, setPeople] = React.useState<readonly PersonResponse[]>([]);
+  const [rotationMembers, setRotationMembers] = React.useState<readonly string[]>([]);
+  const [rotationStart, setRotationStart] = React.useState(0);
+  React.useEffect(() => {
+    let live = true;
+    directoryApi
+      .list({ spaceId: task.spaceId })
+      .then((directory) => {
+        if (live && directory.ok)
+          setPeople(directory.people.filter((p) => p.kind === "person" && !p.former && (p.role === 1 || p.role === 2)));
+      })
+      .catch(() => {
+        if (live) setPeople([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [task.spaceId, directoryApi]);
   React.useEffect(() => {
     const current = ++generation.current;
     setDetail(null);
@@ -85,6 +108,8 @@ export function RecurrenceEditor({
         }
         setDetail(result);
         if (result.rule) setRule(result.rule);
+        setRotationMembers(result.rotation?.members ?? []);
+        setRotationStart(result.rotation?.start ?? 0);
       })
       .catch((error: unknown) => {
         if (generation.current === current) onError(String(error));
@@ -142,6 +167,12 @@ export function RecurrenceEditor({
     }
   }
   const disabled = busy || pending || !detail;
+  const rotationDto = () =>
+    rotationMembers.length > 0 ? { members: [...rotationMembers], start: Math.min(rotationStart, rotationMembers.length - 1) } : null;
+  const toggleMember = (memberId: string, on: boolean) => {
+    setRotationMembers((current) => (on ? [...current, memberId] : current.filter((id) => id !== memberId)));
+    setRotationStart(0);
+  };
   const request = () => ({ operationId: crypto.randomUUID(), taskId: task.id, expectedVersion: task.version });
   const active = detail?.occurrences.find((item) => item.taskId === task.id && item.state === "Active");
   return (
@@ -323,11 +354,70 @@ export function RecurrenceEditor({
             <Button
               type="button"
               disabled={disabled || (!!detail?.rule && !active)}
-              onClick={() => void execute(() => (detail?.rule ? api.revise : api.start)({ ...request(), rule }))}
+              onClick={() =>
+                void execute(() =>
+                  detail?.rule
+                    ? api.revise({ ...request(), rule, rotation: null })
+                    : api.start({ ...request(), rule, rotation: rotationDto() }),
+                )
+              }
             >
               {detail?.rule ? "Change this and future" : "Start repeating"}
             </Button>
           </div>
+          {people.length > 1 && (
+            <FieldGroup legend="Rotation">
+              <p className="text-sm text-muted-foreground">
+                Hand each new occurrence to the next member in turn. A change applies from the next occurrence.
+              </p>
+              {people.map((person) => {
+                const memberId = person.actorId.slice("person:".length);
+                return (
+                  <label key={person.actorId} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={rotationMembers.includes(memberId)}
+                      disabled={disabled}
+                      onChange={(e) => toggleMember(memberId, e.target.checked)}
+                    />
+                    <span>{person.displayName}</span>
+                  </label>
+                );
+              })}
+              {rotationMembers.length > 1 && (
+                <Field label="Starts with">
+                  <NativeSelect
+                    value={String(rotationStart)}
+                    disabled={disabled}
+                    onChange={(e) => setRotationStart(Number(e.target.value))}
+                  >
+                    {rotationMembers.map((memberId, index) => (
+                      <NativeSelectOption key={memberId} value={String(index)}>
+                        {people.find((p) => p.actorId === `person:${memberId}`)?.displayName ?? memberId}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              )}
+              {!!detail?.nextHosts?.length && (
+                <p role="status" className="text-sm">
+                  Next: {detail.nextHosts.map((host) => host.displayName).join(", then ")}
+                </p>
+              )}
+              {detail?.rule && active && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() => void execute(() => api.setRotation({ ...request(), rotation: rotationDto() }))}
+                  >
+                    {rotationMembers.length > 0 ? "Save rotation" : "Remove rotation"}
+                  </Button>
+                </div>
+              )}
+            </FieldGroup>
+          )}
           {preview.length > 0 && (
             <div>
               <p className="text-sm font-semibold">

@@ -35,7 +35,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         pad_drawing=strokes,preview
         scratch_task_link=anchor
         pad_tag=deleted
-        recurrence_series=create,rule,ended,deleted
+        recurrence_series=create,rule,rotation,ended,deleted
         recurrence_occurrence=create,task,state,edit,series,deleted
         recurrence_exception=exception
         reminder_rule=create,rule,deleted

@@ -375,7 +375,10 @@ test("app undo: the newest change is offered, Ctrl+Z outside text fields undoes 
       list: async () => ({ ok: true, containers: [], error: null }),
       listDeleted: async () => ({ ok: true, containers: [], error: null }),
     },
-    recurrenceRpc: { ...recurrenceRpc, get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null }) },
+    recurrenceRpc: {
+      ...recurrenceRpc,
+      get: async () => ({ ok: true, rule: null, ended: false, occurrences: [], error: null, rotation: null, nextHosts: null }),
+    },
     tagRpc: {
       ...tagRpc,
       list: async () => ({ ok: true, tags: [], error: null }),

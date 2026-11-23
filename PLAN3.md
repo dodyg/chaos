@@ -1824,7 +1824,9 @@ rebuild). **Read:** 9.6, 9.7.
 **Exit:** two members write on the same pad note and page, and draw on the same drawing, at the same time, and
 nothing is lost.
 
-### [ ] Q12: Rotating repeating tasks
+### [x] Q12: Rotating repeating tasks (rotation, hosts across devices)
+
+**Progress note 2026-11-23 (completion).** Added `Chaos.Domain.Recurrence.Rotation` (index, host with skipping of members who left, upcoming hosts), migration 045 (`RecurrenceSeries.RotationJson`, `RecurrenceOccurrences.RotationIndex`), a `rotation` sync group on `recurrence_series` (client schema 9) and `RotationIndex` in the occurrence `create` group. Starting a recurrence can take a rotation, `RecurrenceCommands.SetRotationAsync` edits or clears it from the next occurrence on, and `AdvanceAsync` gives the successor its index and host at materialization. The editor's Repeat tab has a Rotation panel with "Next: Omar, then Sara"; quick add has no rotation syntax (decisions 2026-11-23). Tests: two devices completing the same occurrence make the same successor and host and converge, a removed member is skipped, editing applies from the next occurrence, Personal is refused, plus 6 Rotation domain tests and a frontend test. Full gate against PostgreSQL 18.7 via `wslc` (fsync off, test-only): Domain 322, Application 125, Infrastructure 781, Sync 31, Server 216, Desktop 100 (1,575 total), no skips; Slopwatch 0 issues. Desktop frontend 321 passed; web 17 passed; web lint passed with its existing warning. Not done: the rotation panel only shows when the space has two or more owners or editors, and editing the members always restarts from the chosen start. Smallest next action: begin Q13.
 
 **Depends on:** Q7. **Migration:** `045_rotation.sql`. **Read:** 9.10.
 

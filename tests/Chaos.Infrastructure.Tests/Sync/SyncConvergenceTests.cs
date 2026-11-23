@@ -883,6 +883,149 @@ public sealed class SyncConvergenceTests
         // page and the two roots do not converge on PageTags yet.
     }
 
+    private const string TeamSpace = "aaaaaaaa-0000-0000-0000-000000000001";
+    private const string TeamList = "aaaaaaaa-0000-0000-0000-000000000002";
+    private const string Omar = "bbbbbbbb-0000-0000-0000-000000000001";
+    private const string Sara = "bbbbbbbb-0000-0000-0000-000000000002";
+    private const string Lee = "bbbbbbbb-0000-0000-0000-000000000003";
+
+    /// <summary>A shared Team space with three more editors on every device, and a monthly task in it that rotates.</summary>
+    private static async Task<TaskRecord> StartRotatingTaskAsync(DataHost a, IReadOnlyList<DataHost> others, Rotation rotation)
+    {
+        foreach (var host in new[] { a }.Concat(others))
+            await host.Store.ExecuteAsync(async (session, token) =>
+            {
+                var profile = (await session.Profiles.GetPrimaryAsync(token))!;
+                using var command = session.Connection().CreateCommand();
+                command.CommandText = """
+                    INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ($space,$profile,2,'Team',$now,$now);
+                    INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,Role,JoinedAtUtc) VALUES
+                      ($r0,$space,$profile,1,'Me',1,$now), ($r1,$space,$omar,1,'Omar',2,$now), ($r2,$space,$sara,1,'Sara',2,$now), ($r3,$space,$lee,1,'Lee',2,$now);
+                    """;
+                command.Parameters.AddWithValue("$space", TeamSpace);
+                command.Parameters.AddWithValue("$profile", profile.Id);
+                command.Parameters.AddWithValue("$omar", Omar);
+                command.Parameters.AddWithValue("$sara", Sara);
+                command.Parameters.AddWithValue("$lee", Lee);
+                for (var i = 0; i < 4; i++) command.Parameters.AddWithValue("$r" + i, "cccccccc-0000-0000-0000-00000000000" + i);
+                command.Parameters.AddWithValue("$now", StorageFormats.Instant(host.Clock.Now));
+                await command.ExecuteNonQueryAsync(token);
+                return 0;
+            });
+        var task = await CaptureTaskAsync(a, "Host book club");
+        await a.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ($list,$space,1,'Team','team',0,$now,$now); UPDATE Tasks SET SpaceId=$space, ContainerId=$list WHERE Id=$task;";
+            command.Parameters.AddWithValue("$list", TeamList);
+            command.Parameters.AddWithValue("$space", TeamSpace);
+            command.Parameters.AddWithValue("$task", task.Id);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(a.Clock.Now));
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        });
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Month, 1, new(2026, 11, 10), null, "UTC", [], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        task = (await a.Tasks.GetAsync(task.Id))!;
+        await new RecurrenceCommands(a.Store, a.Ids, a.Clock).StartAsync(new(Op(), task.Id, task.Version, rule, rotation));
+        return (await a.Tasks.GetAsync(task.Id))!;
+    }
+
+    private static async Task<List<string>> AssigneesOfAsync(DataHost host, string taskId) =>
+        [.. (await host.Store.QueryAsync((session, token) => session.Tasks.ListAssigneesAsync(taskId, token)))
+            .Where(row => row.DeletedAtUtc is null).Select(row => row.MemberId)];
+
+    private static async Task<TaskRecord> CompleteAsync(DataHost host, string taskId)
+    {
+        var task = (await host.Tasks.GetAsync(taskId))!;
+        await host.Tasks.SetStatusAsync(new(Op(), task.Id, task.Version, TaskItemStatus.Done, null));
+        return (await host.Tasks.GetAsync(task.Id))!;
+    }
+
+    private static async Task<string> ActiveTaskAsync(DataHost host) =>
+        (await SyncTestHelpers.TextAsync(host, "SELECT TaskId FROM RecurrenceOccurrences WHERE State = 0 AND DeletedAtUtc IS NULL;"))!;
+
+    [Test]
+    public async Task Rotation_TwoDevicesCompletingTheSameOccurrenceMakeTheSameSuccessorAndHost()
+    {
+        var (a, b) = await StartTwoAsync();
+        using (a)
+        using (b)
+        {
+            var first = await StartRotatingTaskAsync(a, [b], new Rotation([Omar, Sara, Lee], 0));
+            await Assert.That(await AssigneesOfAsync(a, first.Id)).IsEquivalentTo(new[] { Omar });
+            await ExchangeAsync(a, b);
+            await CompleteAsync(a, first.Id);
+            await CompleteAsync(b, first.Id);
+            await ExchangeAsync(a, b);
+            foreach (var host in new[] { a, b })
+            {
+                var successor = await ActiveTaskAsync(host);
+                await Assert.That(successor).IsNotEqualTo(first.Id);
+                await Assert.That(await AssigneesOfAsync(host, successor)).IsEquivalentTo(new[] { Sara });
+                await Assert.That(await CountAsync(host, "SELECT count(*) FROM RecurrenceOccurrences WHERE RotationIndex = 1;")).IsEqualTo(1L);
+            }
+            await AssertConvergedAsync(a, b);
+            // The host keeps rotating: Lee, then Omar again.
+            await CompleteAsync(a, await ActiveTaskAsync(a));
+            await Assert.That(await AssigneesOfAsync(a, await ActiveTaskAsync(a))).IsEquivalentTo(new[] { Lee });
+            await CompleteAsync(a, await ActiveTaskAsync(a));
+            await Assert.That(await AssigneesOfAsync(a, await ActiveTaskAsync(a))).IsEquivalentTo(new[] { Omar });
+        }
+    }
+
+    [Test]
+    public async Task Rotation_ASkippedOverMemberWhoLeftIsNotAssigned()
+    {
+        using var a = await StartAsync();
+        var first = await StartRotatingTaskAsync(a, [], new Rotation([Omar, Sara, Lee], 0));
+        await a.Store.ExecuteAsync(async (session, token) =>
+        {
+            using var command = session.Connection().CreateCommand();
+            command.CommandText = "UPDATE SpaceMembers SET RemovedAtUtc=$now WHERE MemberId=$sara;";
+            command.Parameters.AddWithValue("$sara", Sara);
+            command.Parameters.AddWithValue("$now", StorageFormats.Instant(a.Clock.Now));
+            await command.ExecuteNonQueryAsync(token);
+            return 0;
+        });
+        await CompleteAsync(a, first.Id);
+        var second = await ActiveTaskAsync(a);
+        await Assert.That(await AssigneesOfAsync(a, second)).IsEquivalentTo(new[] { Lee });
+        // The index still advances by one: index 1 (Sara, gone) went to Lee, index 2 is Lee, index 3 wraps to Omar.
+        await CompleteAsync(a, second);
+        await Assert.That(await AssigneesOfAsync(a, await ActiveTaskAsync(a))).IsEquivalentTo(new[] { Lee });
+        await CompleteAsync(a, await ActiveTaskAsync(a));
+        await Assert.That(await AssigneesOfAsync(a, await ActiveTaskAsync(a))).IsEquivalentTo(new[] { Omar });
+    }
+
+    [Test]
+    public async Task Rotation_EditingAppliesFromTheNextOccurrence()
+    {
+        using var a = await StartAsync();
+        var first = await StartRotatingTaskAsync(a, [], new Rotation([Omar, Sara, Lee], 0));
+        var recurrence = new RecurrenceCommands(a.Store, a.Ids, a.Clock);
+        await recurrence.SetRotationAsync(new(Op(), first.Id, first.Version, new Rotation([Lee, Omar], 0)));
+        // The current occurrence keeps its host.
+        await Assert.That(await AssigneesOfAsync(a, first.Id)).IsEquivalentTo(new[] { Omar });
+        var detail = await recurrence.GetForTaskAsync(first.Id);
+        await Assert.That(detail!.NextHosts!.Select(host => host.DisplayName)).IsEquivalentTo(new[] { "Lee", "Omar" });
+        await CompleteAsync(a, first.Id);
+        var second = await ActiveTaskAsync(a);
+        await Assert.That(await AssigneesOfAsync(a, second)).IsEquivalentTo(new[] { Lee });
+        await CompleteAsync(a, second);
+        await Assert.That(await AssigneesOfAsync(a, await ActiveTaskAsync(a))).IsEquivalentTo(new[] { Omar });
+    }
+
+    [Test]
+    public async Task Rotation_IsRefusedInThePersonalSpace()
+    {
+        using var a = await StartAsync();
+        var personal = await CaptureTaskAsync(a);
+        var rule = new RecurrenceRule(RecurrenceMode.FixedSchedule, RecurrenceFrequency.Week, 1, new(2026, 11, 10), null, "UTC", [DayOfWeek.Tuesday], null, null, null, null, RecurrenceEndKind.Never, null, null);
+        var commands = new RecurrenceCommands(a.Store, a.Ids, a.Clock);
+        await Assert.That(async () => await commands.StartAsync(new(Op(), personal.Id, personal.Version, rule, new Rotation([Omar], 0))))
+            .Throws<AppException>();
+    }
+
     [Test]
     public async Task Legacy_duplicate_occurrences_remove_the_loser_and_raise_attention()
     {

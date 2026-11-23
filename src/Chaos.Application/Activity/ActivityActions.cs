@@ -244,6 +244,7 @@ public static class ActivityActions
         "recurrence.move",
         "recurrence.preview",
         "recurrence.revise",
+        "recurrence.setRotation",
         "recurrence.skip",
         "recurrence.start",
         "recurrence.upcoming",
