@@ -141,11 +141,17 @@ test("outlines and paths are produced for strokes of any length", () => {
 test("a v1 drawing upgrades with IDs in order, and the first erase records the stroke as erased", () => {
   const v1: Drawing = { v: 1, strokes: [line(0, 0, 100, 0), line(0, 50, 100, 50)] };
   const upgraded = upgradeDrawing(v1);
-  assert.deepEqual(upgraded.strokes.map((stroke) => stroke.id), ["legacy-0", "legacy-1"]);
+  assert.deepEqual(
+    upgraded.strokes.map((stroke) => stroke.id),
+    ["legacy-0", "legacy-1"],
+  );
   const erased = eraseAt(v1, 50, 3, 5);
   assert.equal(erased.v, 2);
   assert.deepEqual(erased.erased, ["legacy-1"]);
-  assert.deepEqual(erased.strokes.map((stroke) => stroke.id), ["legacy-0"]);
+  assert.deepEqual(
+    erased.strokes.map((stroke) => stroke.id),
+    ["legacy-0"],
+  );
   const round = parseDrawing(serializeDrawing(erased));
   assert.equal(round.v, 2);
   assert.deepEqual(round.erased, ["legacy-1"]);
@@ -158,7 +164,10 @@ test("drawings from two members unite by stroke ID, minus what either erased, in
   const a: Drawing = { v: 2, strokes: [mine, gone], erased: [] };
   const b: Drawing = { v: 2, strokes: [yours], erased: ["c"] };
   const united = mergeDrawings(a, b);
-  assert.deepEqual(united.strokes.map((stroke) => stroke.id), ["b", "a"]);
+  assert.deepEqual(
+    united.strokes.map((stroke) => stroke.id),
+    ["b", "a"],
+  );
   assert.deepEqual(united.erased, ["c"]);
   assert.deepEqual(mergeDrawings(b, a), united);
   assert.deepEqual(mergeDrawings(united, united), united);

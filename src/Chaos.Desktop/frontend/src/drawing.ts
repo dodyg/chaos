@@ -231,7 +231,10 @@ export function mergeDrawings(a: Drawing, b: Drawing): Drawing & { v: 2; erased:
   const right = upgradeDrawing(b);
   const erased = new Set([...left.erased, ...right.erased]);
   const byId = new Map<string, Stroke>();
-  for (const stroke of [...left.strokes, ...right.strokes]) if (stroke.id && !erased.has(stroke.id) && !byId.has(stroke.id)) byId.set(stroke.id, stroke);
-  const strokes = [...byId.values()].sort((x, y) => (x.createdAt ?? 0) - (y.createdAt ?? 0) || (x.id! < y.id! ? -1 : x.id! > y.id! ? 1 : 0));
+  for (const stroke of [...left.strokes, ...right.strokes])
+    if (stroke.id && !erased.has(stroke.id) && !byId.has(stroke.id)) byId.set(stroke.id, stroke);
+  const strokes = [...byId.values()].sort(
+    (x, y) => (x.createdAt ?? 0) - (y.createdAt ?? 0) || (x.id! < y.id! ? -1 : x.id! > y.id! ? 1 : 0),
+  );
   return { v: 2, strokes, erased: [...erased].sort() };
 }
