@@ -92,6 +92,7 @@ public static class JsonArchive
         ["AttachmentLocalState"] = "which attachment bytes this device holds, device-local",
         ["AttachmentStreamState"] = "attachment transfer status per stream, device-local",
         ["OfflineContainers"] = "lists and projects this device keeps offline, device-local",
+        ["TimeBlockState"] = "the runner device's Google change-feed position, device-local",
         ["DeviceSettings"] = "this device's identity and device-only settings",
     };
 

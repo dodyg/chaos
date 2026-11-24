@@ -34,6 +34,24 @@ public sealed record GoogleSignIn(string Subject, string Email, string RefreshTo
 public sealed record GoogleCalendarInfo(string Id, string Name, string? Color, bool Primary);
 
 /// <summary>
+/// An event the app writes to the calendar it created (PLAN3 §11). A null <paramref name="Summary"/> is a Busy block;
+/// <paramref name="Id"/> is the client event id, so two devices can never make two events for one task (null on a patch).
+/// </summary>
+public sealed record GoogleEventBody(string? Id, string? Summary, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string TimeZoneId);
+
+/// <summary>
+/// What Google answered to an insert or a patch. A 409 on insert means the event already exists (patch it); a 404 on
+/// a patch means it is gone (insert it again).
+/// </summary>
+public sealed record GoogleEventWrite(bool Conflict, bool NotFound, string? ETag, DateTimeOffset? UpdatedUtc);
+
+/// <summary>One entry of the app calendar's change feed (PLAN3 §11). A cancelled event carries no times.</summary>
+public sealed record GoogleEventChange(string Id, string? ETag, DateTimeOffset? UpdatedUtc, bool Cancelled, string? Summary, DateTimeOffset? StartUtc, DateTimeOffset? EndUtc, string? TimeZoneId);
+
+/// <summary>A page of the change feed. <paramref name="TokenExpired"/> means Google no longer knows the sync token: start over without one.</summary>
+public sealed record GoogleSyncPage(IReadOnlyList<GoogleEventChange> Items, string? NextPageToken, string? NextSyncToken, bool TokenExpired);
+
+/// <summary>
 /// Google Calendar over its REST API with read-only scopes (PLAN2 §10.3). Tokens are handed in and out by
 /// the caller; nothing here writes them to disk.
 /// </summary>
@@ -51,6 +69,12 @@ public interface IGoogleCalendarClient
     /// <exception cref="GoogleCalendarException">Cancelled, timed out, refused, or not configured.</exception>
     Task<GoogleSignIn> SignInAsync(CancellationToken ct);
 
+    /// <summary>
+    /// The sign-in that asks for more scopes than the read-only ones (incremental consent, PLAN3 §11): Google prompts for
+    /// the new scope only and keeps the earlier grants. Without an implementation the plain sign-in is used.
+    /// </summary>
+    Task<GoogleSignIn> SignInAsync(IReadOnlyList<string> extraScopes, CancellationToken ct) => SignInAsync(ct);
+
     Task<IReadOnlyList<GoogleCalendarInfo>> ListCalendarsAsync(string refreshToken, CancellationToken ct);
 
     /// <summary>Events overlapping the window with recurring events expanded; cancelled and declined ones are left out.</summary>
@@ -58,4 +82,25 @@ public interface IGoogleCalendarClient
 
     /// <summary>Revokes the token at Google. Best effort: false when Google could not be reached.</summary>
     Task<bool> RevokeAsync(string refreshToken, CancellationToken ct);
+
+    // ---- Time blocking (PLAN3 §11): the calendar the app created, and only its events ---------------------------
+
+    /// <summary>Creates a secondary calendar and returns its id.</summary>
+    Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct);
+
+    /// <summary>Deletes the app calendar. A calendar that is already gone counts as deleted.</summary>
+    Task DeleteCalendarAsync(string refreshToken, string calendarId, CancellationToken ct);
+
+    Task<GoogleEventWrite> InsertEventAsync(string refreshToken, string calendarId, GoogleEventBody body, CancellationToken ct);
+
+    Task<GoogleEventWrite> PatchEventAsync(string refreshToken, string calendarId, string eventId, GoogleEventBody body, CancellationToken ct);
+
+    /// <summary>A 404 (already deleted in Google) is not an error.</summary>
+    Task DeleteEventAsync(string refreshToken, string calendarId, string eventId, CancellationToken ct);
+
+    /// <summary>
+    /// The calendar's change feed with a sync token (incremental), or everything when the token is null. Cancelled events
+    /// are included; the first page without a token ends with the next sync token.
+    /// </summary>
+    Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct);
 }

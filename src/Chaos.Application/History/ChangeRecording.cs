@@ -283,6 +283,7 @@ public sealed class RecordingDataSession : IDataSession
     public IBoardStore Boards => _inner.Boards;
     public ISavedViewStore SavedViews => _inner.SavedViews;
     public ICalendarStore Calendars => _inner.Calendars;
+    public ITimeBlockStore TimeBlocks => _inner.TimeBlocks;
     public IAttachmentStore Attachments => _attachments ??= new RecordingAttachmentStore(this, _inner.Attachments);
     public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
@@ -758,6 +759,7 @@ internal sealed class RecordingTaskStore(RecordingDataSession recorder, ITaskSto
     public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) => inner.GetAsync(taskId, ct);
     public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => inner.GetIncludingDeletedAsync(taskId, ct);
     public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => inner.ListByContainerAsync(containerId, ct);
+    public Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct) => inner.ListPlannedAsync(spaceIds, ct);
     public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct) => inner.ListDeletedByContainerAsync(containerId, ct);
     public Task<long> GetNextPositionAsync(string containerId, CancellationToken ct) => inner.GetNextPositionAsync(containerId, ct);
 

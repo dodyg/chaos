@@ -1966,7 +1966,7 @@ Server 226 and Desktop 103 (1,690 total), no skips; Slopwatch found 0 issues. De
 frontends pass `format:check`. The PWA shows neither spaces nor GitHub (Q21), so it is untouched. Smallest next action:
 Q16.
 
-### [ ] Q16: Google Calendar time blocking
+### [x] Q16: Google Calendar time blocking
 
 **Depends on:** Q7 (for "assigned to me" on shared tasks). **Migration:** `049_time_blocking.sql`. **Read:** section
 11.
@@ -1987,6 +1987,41 @@ Q16.
 
 **Exit:** tasks with a time and estimate appear as blocks in a separate Google calendar, and moving a block moves
 the task.
+
+**Progress note 2026-11-24.** Scope check recorded in `docs/decisions.md`: Google's reference lists `calendar.app.created` for
+`calendars.insert`/`delete` and `events.insert`/`patch`/`delete`/`list`, with sync tokens on the list (410 → full read), so Q16
+asks for that scope only and never for `calendar` or `calendar.events`; the Internal client needs no verification and a public
+release adds the scope (Q22). Migration 049 adds the profile's `timeblock` group (client schema 13: enabled, account, titles or
+Busy, runner device, calendar id, spaces json) and `TimeBlockEvents` (kind `time_block_event`, Account, keyed by task; event id
+`cb` + base32hex of 16 bytes; removals travel as purges); `TimeBlockState` (sync token, page token, last problem) is
+device-local. `GoogleCalendarClient` gains the incremental sign-in (`include_granted_scopes=true`), calendar create/delete,
+event insert/patch/delete (409 → the event exists, patch it; 404 on a patch → insert it) and the change feed with sync tokens.
+`TimeBlockCommands`: enable (a device without a token signs in with the write scope; a kept calendar of the same account is
+reused), update, run on this device, disable (the calendar is deleted at Google first when asked; a kept one is remembered with its
+account), sign in again, and the pass. The pass runs on the runner only, when a task or assignment changed since the last pass or every
+five minutes (`TimeBlockScheduler`), and makes no request at all when the feature is off or on another device. Inbound comes before
+outbound, so a change already in Google is applied (or loses) before the outbound half would push the older local time over it; the
+outbound plan is read again after the inbound half. Conflict rule: when the task's planned group changed here since the last push, the
+newer of Google's `updated` and the planned group's HLC wall time wins and the loser goes to history (`google.conflict`, the loser in
+the before snapshot); every such edit is a normal task update with `Source=sync`, actor `google` and action `timeblock.apply`. A Google
+delete clears the planned time and zone, keeps the date and writes `google.cleared`; changes older than the row's last sync are
+skipped, so a full re-read after an expired token applies nothing of the app's own. Settings → Calendars → Time blocking
+(`TimeBlockingSettings.tsx`, RPC `timeBlock.*`): turn on with account, titles or Busy and spaces; change titles and spaces; Run on
+this device; Sign in again; Sync now; Turn off with "Delete the Chaos calendar in Google" ticked by default. Help and the preview
+backend cover it; the PWA is untouched. Tests: Infrastructure `TimeBlockTests` (15: nothing when off; eligible tasks only and only the
+app calendar ever written; keep or delete the calendar on turning off and reuse it; one event per task through 409 → patch; Busy sends
+no title; chosen spaces; a local edit is pushed next pass and a done task loses its block; a Google move moves the task with history as
+`sync`/`google`; a Google delete clears the time and keeps the date; a conflict resolves to the newest both ways with the loser in
+history; an expired sync token means a full read that applies nothing of the app's own; a non-runner makes no request and Run on this
+device works; a missing token signs in for the write scope; a failed pass keeps the rows and recovers), `GoogleCalendarClientTests`
+(write URLs and bodies, 409/404/410, Busy without a summary, the incremental scope), migration 049 and the flush-coverage scenario for
+`time_block_event`; Desktop `TimeBlockRpcTests`; frontend `timeBlocking.test.tsx` (4). The Infrastructure suite now runs its tests one
+at a time (`tests/Chaos.Infrastructure.Tests/Parallelism.cs`, an assembly-level TUnit `ParallelLimiter`): at TUnit's default it took
+every core for 14 minutes and the host failed after the last test. The full gate (`eng/verify.ps1`) against disposable PostgreSQL 18.7
+via `wslc` passed: Domain 337, Application 141, Infrastructure 824, Sync 82, Server 226 and Desktop 104 (1,714 total), no skips;
+Slopwatch found 0 issues. Desktop frontend `npm test` passed 341; web passed 17 and lint exited 0 with its existing
+hook-dependency warning; both frontends pass `format:check`. Not done: the live check with the SilverKey Internal client, because no
+interactive desktop was available to the implementing agent; it is a release gate (Q22). Smallest next action: Q17.
 
 ### [ ] Q17: Agent foundation (identity, claims, Ready for agent, limits, revert)
 
@@ -2129,7 +2164,8 @@ green. Q21 adds the shared-space behaviour.
    - logging redaction
    - email content
    - presence leakage
-   - the Google write scope
+   - the Google write scope, and the live check of time blocking with the SilverKey Internal client deferred from Q16: blocks
+     appear in the Chaos calendar, moving one moves the task, and no other calendar is ever written
    - GitHub forged baselines
 2. **Privacy and offline.** A fresh install with nothing configured makes no network requests. A local MCP agent
    makes none. Each configured feature contacts only its hosts.

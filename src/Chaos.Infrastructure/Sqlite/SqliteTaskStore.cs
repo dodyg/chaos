@@ -78,6 +78,32 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         return tasks;
     }
 
+    /// <summary>Live tasks with a planned date, in the given spaces or every space, ordered by (PlannedDate, Id) (PLAN3 §11).</summary>
+    public async Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        var filter = string.Empty;
+        if (spaceIds is { Count: > 0 } chosen)
+        {
+            // One parameter per space: the person has at most a hundred shared spaces, far below SQLite's parameter limit.
+            filter = " AND SpaceId IN (" + string.Join(", ", chosen.Select((_, index) => "$space" + index)) + ")";
+            for (var index = 0; index < chosen.Count; index++)
+            {
+                command.Parameters.AddWithValue("$space" + index, chosen[index]);
+            }
+        }
+
+        command.CommandText = "SELECT * FROM Tasks WHERE DeletedAtUtc IS NULL AND PlannedDate IS NOT NULL" + filter + " ORDER BY PlannedDate, Id;";
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var tasks = new List<TaskRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            tasks.Add(ReadTask(reader));
+        }
+
+        return tasks;
+    }
+
     public async Task AddAsync(TaskRecord task, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

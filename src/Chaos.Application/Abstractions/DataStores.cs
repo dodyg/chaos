@@ -40,6 +40,7 @@ public interface IDataSession
     IBoardStore Boards { get; }
     ISavedViewStore SavedViews { get; }
     ICalendarStore Calendars { get; }
+    ITimeBlockStore TimeBlocks { get; }
     IAttachmentStore Attachments { get; }
     /// <summary>Device-only writers note their changes here (PLAN2 §6.4 rule 3).</summary>
     Chaos.Application.Activity.IActivityRecorder Activity { get; }
@@ -369,6 +370,8 @@ public interface IProfileStore
     Task<ProfileRecord?> UpdateSummarySettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
     /// <summary>Optimistic update of the display name, time zone, date format and desktop shell settings (PLAN §13).</summary>
     Task<ProfileRecord?> UpdateGeneralSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
+    /// <summary>Optimistic update of the Google time blocking settings (PLAN3 §11).</summary>
+    Task<ProfileRecord?> UpdateTimeBlockSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct);
 }
 
 public interface ISpaceStore
@@ -425,6 +428,8 @@ public interface ITaskStore
     Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct);
     /// <summary>Active top-level tasks of one container, ordered by (Position, Id).</summary>
     Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct);
+    /// <summary>Live tasks with a planned date in the given spaces (null or empty: every space), ordered by (PlannedDate, Id).</summary>
+    Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct);
     Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct);
     Task AddAsync(TaskRecord task, CancellationToken ct);
     /// <summary>
@@ -648,6 +653,30 @@ public interface ICalendarStore
     Task<CalendarEventLinkRecord?> FindLinkAsync(string taskId, CancellationToken ct);
     Task<IReadOnlyList<CalendarEventLinkRecord>> ListLinksAsync(IReadOnlyList<string> taskIds, CancellationToken ct);
     Task AddLinkAsync(CalendarEventLinkRecord link, CancellationToken ct);
+}
+
+/// <summary>
+/// Google time blocking (PLAN3 §11; migration 049). The settings are the profile's <c>timeblock</c> group, written
+/// through <see cref="IProfileStore"/>; the event rows are synced aggregates keyed by task; the sync position and
+/// the device identity belong to this device.
+/// </summary>
+public interface ITimeBlockStore
+{
+    Task<IReadOnlyList<TimeBlockEventRecord>> ListEventsAsync(CancellationToken ct);
+    Task<TimeBlockEventRecord?> FindByEventIdAsync(string eventId, CancellationToken ct);
+    Task AddEventAsync(TimeBlockEventRecord record, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<TimeBlockEventRecord?> UpdateEventAsync(TimeBlockEventRecord updated, long expectedVersion, CancellationToken ct);
+    /// <summary>A hard delete that travels as a purge once sync is on.</summary>
+    Task DeleteEventAsync(string taskId, CancellationToken ct);
+    Task<TimeBlockState?> GetStateAsync(CancellationToken ct);
+    Task SaveStateAsync(TimeBlockState state, CancellationToken ct);
+    /// <summary>The newest activity-log seq after <paramref name="since"/> that touched a task or an assignment, by anyone but the inbound time block pass; null when none.</summary>
+    Task<long?> TaskActivityHeadAsync(DateTimeOffset? since, CancellationToken ct);
+    /// <summary>The wall time of the task's <c>planned</c> group clock, or null when the task was never synced.</summary>
+    Task<DateTimeOffset?> PlannedGroupTimeAsync(string taskId, CancellationToken ct);
+    /// <summary>This device's id from <c>DeviceSettings</c>.</summary>
+    Task<string> GetDeviceIdAsync(CancellationToken ct);
 }
 
 /// <summary>Attachment metadata and this device's byte state (PLAN2 §9.1; migration 031). The bytes themselves are in <c>IAttachmentFileStore</c>.</summary>

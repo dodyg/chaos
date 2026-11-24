@@ -39,7 +39,31 @@ public sealed record ProfileRecord : AggregateRecord
     public string? PadShortcut { get; init; } = "Ctrl+Alt+P";
     /// <summary>Closing the window leaves Chaos running in the notification area.</summary>
     public bool KeepRunningInTray { get; init; } = true;
+    // Q16 time blocking (group timeblock, client schema 13): null spaces means every space.
+    public bool TimeBlockEnabled { get; init; }
+    public string? TimeBlockAccountId { get; init; }
+    public bool TimeBlockShowTitles { get; init; } = true;
+    public string? TimeBlockRunnerDeviceId { get; init; }
+    public string? TimeBlockCalendarId { get; init; }
+    public string? TimeBlockSpacesJson { get; init; }
 }
+
+/// <summary>
+/// The one Google event the runner keeps for a task (PLAN3 §11). <see cref="AggregateRecord.Id"/> is the task id;
+/// <see cref="EventId"/> is derived from it, so two devices can never make two events for one task. The hash covers
+/// the title, start, end and visibility that were pushed, so a pass knows whether Google still matches the task.
+/// </summary>
+public sealed record TimeBlockEventRecord : AggregateRecord
+{
+    public required string EventId { get; init; }
+    public string? ETag { get; init; }
+    public string? PushedHash { get; init; }
+    public DateTimeOffset? LastSyncedAtUtc { get; init; }
+    public DateTimeOffset? RemoteMovedAtUtc { get; init; }
+}
+
+/// <summary>This device's position in the app calendar's change feed (device-local: the runner reads it).</summary>
+public sealed record TimeBlockState(string? CalendarId, string? SyncToken, string? PageToken, DateTimeOffset? LastPassUtc, string? LastError, bool NeedsSignIn);
 
 public sealed record SpaceRecord : AggregateRecord
 {

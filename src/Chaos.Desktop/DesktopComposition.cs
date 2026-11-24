@@ -78,6 +78,8 @@ internal sealed class DesktopComposition : IDisposable
     private readonly Chaos.Application.Attachments.AttachmentCommands _attachmentCommands;
     private readonly CalendarRefresher _calendarRefresher;
     private readonly GoogleCalendarCommands _googleCommands;
+    private readonly TimeBlockCommands _timeBlocks;
+    private readonly TimeBlockScheduler _timeBlockScheduler;
     private readonly CalendarCommands _calendarCommands;
     private readonly SiteNoteCommands _siteNotes;
     private readonly Chaos.Infrastructure.Updates.GitHubReleaseFeed _releaseFeed;
@@ -185,11 +187,14 @@ internal sealed class DesktopComposition : IDisposable
             _calendarRefresher = new CalendarRefresher(store, secrets, feedClient, new IcsParser(), clock, googleClient);
             _googleCommands = new GoogleCalendarCommands(store, secrets, googleClient, clock);
             _googleCommands.LoadSavedClientAsync().GetAwaiter().GetResult();
+            // Time blocking (PLAN3 §11) shares the Google client and the secret store; one device, the runner, passes every few minutes.
+            _timeBlocks = new TimeBlockCommands(store, secrets, googleClient, ids, clock);
+            _timeBlockScheduler = Own(new TimeBlockScheduler(_timeBlocks, clock, jobRuns));
             _calendarCommands = new CalendarCommands(store, secrets, ids, clock, new CaptureCommands(store, ids, clock));
             var calendarScheduler = Own(new CalendarRefreshScheduler(_calendarRefresher, clock, jobRuns));
 
             // Restore and reset replace database files, so every background worker stops first.
-            protection.Quiesce = ComposePausePipeline(protection, notifications, _calendarRefresher, _githubScheduler, _githubEngine, _reminderEngine);
+            protection.Quiesce = ComposePausePipeline(protection, notifications, _calendarRefresher, _timeBlockScheduler, _githubScheduler, _githubEngine, _reminderEngine);
 
             // "New site" (pad): pages are fetched here and summarized by a small local model (Ollama), falling back to a
             // model-free extractive summary when Ollama is not running.
@@ -209,6 +214,7 @@ internal sealed class DesktopComposition : IDisposable
             _syncEngine.Start();
             _attachmentTransfer.Start();
             calendarScheduler.Start();
+            _timeBlockScheduler.Start();
         }
         catch
         {
@@ -226,19 +232,21 @@ internal sealed class DesktopComposition : IDisposable
     public ProfileSettingsCommands ProfileSettings { get; }
 
     /// <summary>
-    /// The pause order that restore, reset and joining an account run inside. Outermost first: calendars, the GitHub
-    /// scheduler (wakes once the engine is back), the GitHub engine, then reminders, which also take back OS
+    /// The pause order that restore, reset and joining an account run inside. Outermost first: calendars, time blocking, the
+    /// GitHub scheduler (wakes once the engine is back), the GitHub engine, then reminders, which also take back OS
     /// notification schedules just before the work runs.
     /// </summary>
     private static Func<Func<Task>, CancellationToken, Task> ComposePausePipeline(
         DataProtectionService protection,
         INotificationAdapter notifications,
         CalendarRefresher calendarRefresher,
+        TimeBlockScheduler timeBlockScheduler,
         GitHubSyncScheduler githubScheduler,
         GitHubSyncEngine githubEngine,
         ReminderEngine reminderEngine) =>
         PausePipeline.Compose(
             (inner, ct) => calendarRefresher.RunPausedAsync(inner, ct),
+            (inner, ct) => timeBlockScheduler.RunPausedAsync(inner, ct),
             async (inner, ct) =>
             {
                 try { await inner(); }
@@ -287,6 +295,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddCalendarRpcService(new CalendarRpcService(_calendarQueries));
         rpc.AddCalendarsRpcService(new CalendarsRpcService(_calendarCommands, _calendarRefresher));
         rpc.AddGoogleCalendarRpcService(new GoogleCalendarRpcService(_googleCommands, _calendarRefresher));
+        rpc.AddTimeBlockRpcService(new TimeBlockRpcService(_timeBlocks, _timeBlockScheduler));
         rpc.AddSyncStatusRpcService(new SyncStatusRpcService(_syncStatus, _syncEngine));
         rpc.AddAccountRpcService(new AccountRpcService(_serviceClient, _serviceAddress, _accountJoin));
         rpc.AddHistoryRpcService(new HistoryRpcService(_history, _githubEngine));

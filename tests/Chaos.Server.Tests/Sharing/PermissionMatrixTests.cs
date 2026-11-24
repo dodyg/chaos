@@ -9,7 +9,7 @@ namespace Chaos.Server.Tests.Sharing;
 public sealed class PermissionMatrixTests(PostgresServer postgres)
 {
     private static readonly Dictionary<string, string[]> ExpectedGroups = Parse("""
-        profile=create,name,zone,locale,dates,planning,reminders,quiet,appearance,day_background,deleted
+        profile=create,name,zone,locale,dates,planning,reminders,quiet,appearance,day_background,timeblock,deleted
         space=create,name,look,settings,deleted
         space_member=create,profile,role,state
         container=create,name,position,deadline,archived,category,deleted
@@ -28,6 +28,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         task_delegation=create,brief,state,deleted
         nudge=record
         calendar_event_link=create,deleted
+        time_block_event=create,state
         subtask=create,title,notes,status,position,deleted
         task_tag=deleted
         subtask_tag=deleted

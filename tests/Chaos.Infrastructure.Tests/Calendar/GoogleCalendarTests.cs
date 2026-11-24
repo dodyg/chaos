@@ -53,6 +53,13 @@ public sealed class GoogleCalendarTests
             Revoked.Add(refreshToken);
             return Task.FromResult(RevokeSucceeds);
         }
+
+        public Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
+        public Task DeleteCalendarAsync(string refreshToken, string calendarId, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
+        public Task<GoogleEventWrite> InsertEventAsync(string refreshToken, string calendarId, GoogleEventBody body, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
+        public Task<GoogleEventWrite> PatchEventAsync(string refreshToken, string calendarId, string eventId, GoogleEventBody body, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
+        public Task DeleteEventAsync(string refreshToken, string calendarId, string eventId, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
+        public Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct) => throw new InvalidOperationException("no time blocking in this test");
     }
 
     private sealed class MemorySecrets : ISecretStore
@@ -420,6 +427,12 @@ public sealed class GoogleCalendarTests
         public Task<IReadOnlyList<GoogleCalendarInfo>> ListCalendarsAsync(string refreshToken, CancellationToken ct) => throw new InvalidOperationException();
         public Task<IReadOnlyList<ParsedMeeting>> ListEventsAsync(string refreshToken, string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct) => throw new InvalidOperationException();
         public Task<bool> RevokeAsync(string refreshToken, CancellationToken ct) => throw new InvalidOperationException();
+        public Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct) => throw new InvalidOperationException();
+        public Task DeleteCalendarAsync(string refreshToken, string calendarId, CancellationToken ct) => throw new InvalidOperationException();
+        public Task<GoogleEventWrite> InsertEventAsync(string refreshToken, string calendarId, GoogleEventBody body, CancellationToken ct) => throw new InvalidOperationException();
+        public Task<GoogleEventWrite> PatchEventAsync(string refreshToken, string calendarId, string eventId, GoogleEventBody body, CancellationToken ct) => throw new InvalidOperationException();
+        public Task DeleteEventAsync(string refreshToken, string calendarId, string eventId, CancellationToken ct) => throw new InvalidOperationException();
+        public Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct) => throw new InvalidOperationException();
     }
 }
 

@@ -98,6 +98,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ISavedViewStore SavedViews => throw new NotSupportedException("This test store does not implement saved views; they are tested against SQLite.");
         public Chaos.Application.Activity.IActivityRecorder Activity => Chaos.Application.Activity.NullActivityRecorder.Instance;
         public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
+        public ITimeBlockStore TimeBlocks => throw new NotSupportedException("This test store does not implement time blocking; it is tested against SQLite.");
         public IAttachmentStore Attachments => throw new NotSupportedException("This test store does not implement attachments; they are tested against SQLite.");
     }
 }
@@ -395,6 +396,9 @@ public sealed class FakeProfileStore(List<ProfileRecord> rows) : IProfileStore
     public Task<ProfileRecord?> UpdateGeneralSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
         UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
 
+    public Task<ProfileRecord?> UpdateTimeBlockSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct) =>
+        UpdateFirstWeekdayAsync(profile, expectedVersion, ct);
+
     public Task<ProfileRecord?> UpdateFirstWeekdayAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
     {
         var index = rows.FindIndex(row => row.Id == profile.Id && row.Version == expectedVersion);
@@ -474,6 +478,7 @@ public sealed class FakeTaskStore(List<TaskRecord> rows, List<TaskAssigneeRecord
     public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == id && x.DeletedAtUtc is not null).OrderByDescending(x => x.DeletedAtUtc).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetIncludingDeletedAsync(string taskId, CancellationToken ct) => Task.FromResult(rows.FirstOrDefault(x => x.Id == taskId));
     public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.ContainerId == containerId && x.DeletedAtUtc is null).OrderBy(x => x.Position).ThenBy(x => x.Id).ToList());
+    public Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.DeletedAtUtc is null && x.PlannedDate is not null && (spaceIds is not { Count: > 0 } || spaceIds.Contains(x.SpaceId))).OrderBy(x => x.PlannedDate).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) =>
         Task.FromResult(rows.FirstOrDefault(row => row.Id == taskId && row.DeletedAtUtc is null));
 

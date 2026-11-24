@@ -13,6 +13,10 @@ public static class ActivityActions
     public const string CalendarRefresh = "calendar.refresh";
     public const string BackupCheck = "backup.check";
     public const string GitHubSync = "github.sync";
+    /// <summary>One time block pass (the 5-minute timer, a task change or the Sync now button): outbound then inbound.</summary>
+    public const string TimeBlockSync = "timeblock.sync";
+    /// <summary>A task edit Google made (a moved or deleted block), written as <c>sync</c> with actor <c>google</c>.</summary>
+    public const string TimeBlockApply = "timeblock.apply";
     public const string RemoteApply = "sync.apply";
     public const string ActivityPrune = "activity.prune";
 
@@ -358,6 +362,13 @@ public static class ActivityActions
         "views.run",
         "views.save",
         "views.setPinned",
+        "timeBlock.disable",
+        "timeBlock.enable",
+        "timeBlock.runOnThisDevice",
+        "timeBlock.signIn",
+        "timeBlock.status",
+        "timeBlock.syncNow",
+        "timeBlock.update",
         "updates.check",
         "updates.openReleases",
         "waiting.clear",
@@ -373,7 +384,7 @@ public static class ActivityActions
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
-        Unscoped, Seed, ReminderTick, CalendarRefresh, BackupCheck, GitHubSync, RemoteApply, ActivityPrune,
+        Unscoped, Seed, ReminderTick, CalendarRefresh, BackupCheck, GitHubSync, TimeBlockSync, TimeBlockApply, RemoteApply, ActivityPrune,
     };
 
     static ActivityActions()
