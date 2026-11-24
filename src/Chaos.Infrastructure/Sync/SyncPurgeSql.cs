@@ -159,6 +159,7 @@ internal static class SyncPurgeSql
         [
             "DELETE FROM GitHubLabelTags WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0);",
             "DELETE FROM GitHubMilestoneProjects WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0);",
+            "DELETE FROM GitHubPullRequestLinks WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0));",
             "DELETE FROM GitHubChecklistItems WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0));",
             "DELETE FROM GitHubCommentLinks WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0));",
             "DELETE FROM GitHubIssueWrites WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId IN (SELECT Id FROM GitHubRepositories WHERE ConnectionId = $k0));",
@@ -173,6 +174,7 @@ internal static class SyncPurgeSql
         [
             "DELETE FROM GitHubLabelTags WHERE RepositorySubscriptionId = $k0;",
             "DELETE FROM GitHubMilestoneProjects WHERE RepositorySubscriptionId = $k0;",
+            "DELETE FROM GitHubPullRequestLinks WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId = $k0);",
             "DELETE FROM GitHubChecklistItems WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId = $k0);",
             "DELETE FROM GitHubCommentLinks WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId = $k0);",
             "DELETE FROM GitHubIssueWrites WHERE IssueLinkId IN (SELECT Id FROM GitHubIssueLinks WHERE RepositorySubscriptionId = $k0);",
@@ -183,6 +185,7 @@ internal static class SyncPurgeSql
         ],
         "github_issue_link" =>
         [
+            "DELETE FROM GitHubPullRequestLinks WHERE IssueLinkId = $k0;",
             "DELETE FROM GitHubChecklistItems WHERE IssueLinkId = $k0;",
             "DELETE FROM GitHubCommentLinks WHERE IssueLinkId = $k0;",
             "DELETE FROM GitHubIssueWrites WHERE IssueLinkId = $k0;",

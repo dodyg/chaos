@@ -1179,7 +1179,7 @@ Section 9 except pull requests. **Tests:** frontend states, keyboard and screen-
 `dir="auto"` on GitHub text. **Exit:** a connected task can be understood and fixed (error →
 Retry, conflict → Dismiss, Keep as ordinary task) using only the keyboard.
 
-### [ ] G9 — Linked pull requests
+### [x] G9 — Linked pull requests
 
 **Depends on:** G7. **Files:** `Migrations/022_github_pull_requests.sql`, store methods,
 `GitHubCliClient` GraphQL query, sync pass step (after inbound, only for issues updated this pass
@@ -1188,6 +1188,19 @@ plus a daily refresh of open PR links), `GitHubTask.tsx` list.
 **Tests:** GraphQL batching ≤50 IDs, mapping of state/draft/merged/review decision, removal of a
 PR that no longer references the issue, GraphQL errors classified. **Exit:** a PR with
 "Fixes #n" shows on the task with its state and review decision, updating as it merges.
+
+**Progress (2026-11-23, PLAN3 Q15):** Delivered with phase 3 as `GitHubPullRequestLinks`
+(migration 048, synced kind `github_pull_request_link`, parent `github_issue_link`, written by the
+runner, who is an owner): `(IssueLinkId, PullRequestId)` with repository, number, title, state (open,
+draft, merged, closed), review decision (none, approved, changes requested, review required), URL and
+last refresh. The GraphQL query, already carrying `reviewDecision`, runs in batches of at most 50 issue
+node IDs outside any transaction while issues are fetched, and once a day for issues whose open pull
+requests were last refreshed more than a day ago, because a merge or a review need not move the issue's
+`updated_at`. A failed read leaves the rows and the next pass asks again; a pull request that no longer
+references the issue is removed. The baseline now also keeps the issue author and issue type. The task's
+GitHub notice and mark list the pull requests with state and review; the view fields `githubAuthor`,
+`githubLinkedPr`, `githubPrReview` and `githubIssueType` read them. Offline tests cover the mapping, the
+refresh and the view fields; the live merge check belongs to the G10 acceptance run.
 
 ### [ ] G10 — Documentation and acceptance
 
@@ -1222,6 +1235,23 @@ anyone but yourself; webhooks or any server component; creating issues from task
 Projects (v2), sub-issues, reactions, issue templates and attachments upload; GitHub Enterprise
 Server UI; custom views and alerts over GitHub fields (they arrive with custom views); agents
 acting through the connection; other connections (Jira, GitLab, Org folders).
+
+## 15. Phase 3: GitHub in shared spaces (Q15)
+
+The parts section 14 kept out of this plan arrived with sharing in `PLAN3.md` section 10 and package Q15.
+This file stays the design record of the connection itself; `PLAN3.md` and `docs/decisions.md` (2026-11-23,
+Q15) hold the phase 3 decisions:
+
+- Only owners manage a shared space's connection and its repositories, and only an owner's device runs the
+  engine; the service clears the runner when its owner is demoted or leaves. Members need no setup.
+- Members set a GitHub login in the space's Members tab. The runner matches issue assignees to members by
+  login in both directions; assigning a member with a login puts the login on the issue. The earlier
+  "self-assign only" rule still applies to the Personal space.
+- A comment posted for another member's diary entry is signed `— <member name> (via Chaos)` and read back
+  without that line (decision E4).
+- Adding a private repository to a space with other members, or inviting someone into such a space, asks the
+  owner to confirm that everyone in the space will see its issues.
+- G9 (linked pull requests) and the remaining baseline fields (author, issue type) are stored; see the G9 note.
 
 ### Superseded G0 candidate: account-bound GitHub CLI fork
 

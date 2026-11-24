@@ -60,6 +60,9 @@ public sealed class SyncKindsTests
             foreach (var group in kind.Groups)
                 await Assert.That(Enum.IsDefined(group.Write)).IsTrue();
         await Assert.That(SyncKinds.Find("github_issue_link")!.Route.Group).IsEqualTo("state");
+        await Assert.That(SyncKinds.Find("github_pull_request_link")!.Route.Kind).IsEqualTo(SyncRouteKind.Parent);
+        // The GitHub engine's groups stay with the runner, who is an owner (PLAN3 10.2).
+        await Assert.That(SyncKinds.All.Where(kind => kind.Kind.StartsWith("github_", StringComparison.Ordinal)).SelectMany(kind => kind.Groups).All(group => group.Write == SyncWrite.Owner)).IsTrue();
     }
     [Test]
     public async Task GitHubRunnerGroups_RequireSchemaThree()
@@ -72,7 +75,7 @@ public sealed class SyncKindsTests
     public async Task SyncKinds_MatchTheClientCatalog()
     {
         var catalog = SyncCatalog.Tables.Where(table => table.Mode != SyncMode.LocalOnly).OrderBy(table => table.ApplyOrder).ToList();
-        string[] parentKinds = ["section", "subtask", "task_assignee", "task_delegation", "nudge", "diary_entry", "task_history", "github_issue_link", "pad_drawing", "scratch_task_link", "recurrence_occurrence", "recurrence_exception", "page_task_link", "github_repository", "github_checklist_item", "github_comment_link", "github_label_tag", "github_milestone_project", "board_setting"];
+        string[] parentKinds = ["section", "subtask", "task_assignee", "task_delegation", "nudge", "diary_entry", "task_history", "github_issue_link", "github_pull_request_link", "pad_drawing", "scratch_task_link", "recurrence_occurrence", "recurrence_exception", "page_task_link", "github_repository", "github_checklist_item", "github_comment_link", "github_label_tag", "github_milestone_project", "board_setting"];
         string[] tagLinks = ["task_tag", "subtask_tag", "pad_tag", "page_tag"];
         await Assert.That(SyncKinds.All.Select(kind => kind.Kind)).IsEquivalentTo(catalog.Select(table => table.Kind));
         foreach (var table in catalog)

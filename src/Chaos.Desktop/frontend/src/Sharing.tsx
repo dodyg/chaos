@@ -1,6 +1,7 @@
 import React from "react";
 import {
   collaborationRpc,
+  gitHubRpc,
   spaceRpc,
   spaceUpdateRpc,
   tagRpc,
@@ -21,6 +22,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { EmptyState, Field, InlineError, PageHeader } from "@/components/common";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { MarkdownPreview } from "./markdown";
+import { GitHubSettings } from "./GitHubSettings";
 
 /** Roles as the service numbers them (PLAN3 §8.3). */
 export const OWNER = 1;
@@ -47,6 +49,7 @@ export type SpaceApi = Pick<
   | "changeRole"
   | "removeMember"
   | "setMyName"
+  | "setMyGitHubLogin"
   | "invites"
   | "invite"
   | "revokeInvite"
@@ -263,12 +266,18 @@ export function InviteDialog({
   space,
   onClose,
   api = spaceRpc,
+  githubApi = gitHubRpc,
 }: {
   space: { spaceId: string; name: string };
   onClose: () => void;
   api?: Pick<SpaceApi, "invite" | "invites" | "revokeInvite">;
+  /** The space's GitHub connection, for the private-repository warning (PLAN3 10.5). */
+  githubApi?: Pick<typeof gitHubRpc, "status">;
 }) {
   const [mode, setMode] = React.useState<"email" | "link">("email");
+  // A private repository connected to the space would become visible to whoever accepts the invitation.
+  const [privateRepos, setPrivateRepos] = React.useState<readonly string[] | null>(null);
+  const [acknowledged, setAcknowledged] = React.useState(false);
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState(EDITOR);
   const [expiry, setExpiry] = React.useState("7");
@@ -286,6 +295,22 @@ export function InviteDialog({
   React.useEffect(() => {
     void load().catch(() => undefined);
   }, [load]);
+  React.useEffect(() => {
+    let active = true;
+    setPrivateRepos(null);
+    setAcknowledged(false);
+    void githubApi
+      .status({ spaceId: space.spaceId })
+      .then((result) => {
+        if (active) setPrivateRepos(result.ok ? result.repositories.filter((r) => r.isPrivate).map((r) => r.fullName) : []);
+      })
+      .catch(() => {
+        if (active) setPrivateRepos([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [githubApi, space.spaceId]);
 
   async function create() {
     setLink(null);
@@ -366,6 +391,18 @@ export function InviteDialog({
             </Field>
           </div>
         )}
+        {privateRepos && privateRepos.length > 0 && (
+          <div role="alert" className="grid gap-2 rounded-lg border border-amber-500/50 p-3 text-sm">
+            <p>
+              Everyone in {space.name} will see issues from {privateRepos.join(", ")}, including people without access to{" "}
+              {privateRepos.length === 1 ? "it" : "them"} on GitHub.
+            </p>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-0.5" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} />I
+              understand; invite anyway
+            </label>
+          </div>
+        )}
         {error && <InlineError>{error}</InlineError>}
         {sent && (
           <p role="status" className="text-sm">
@@ -393,7 +430,9 @@ export function InviteDialog({
           <Button type="button" variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button disabled={busy || (mode === "email" && !email.trim())}>{mode === "email" ? "Send invitation" : "Create link"}</Button>
+          <Button disabled={busy || (mode === "email" && !email.trim()) || ((privateRepos?.length ?? 0) > 0 && !acknowledged)}>
+            {mode === "email" ? "Send invitation" : "Create link"}
+          </Button>
         </div>
       </form>
       <section aria-label="Open invitations" className="grid gap-1 border-t pt-3">
@@ -613,7 +652,7 @@ export function DeleteSpaceDialog({
   );
 }
 
-type HomeTab = "overview" | "members" | "notifications" | "tags" | "settings";
+type HomeTab = "overview" | "members" | "notifications" | "tags" | "settings" | "connections";
 
 function SpaceNotifications({ spaceId }: { spaceId: string }) {
   const [settings, setSettings] = React.useState<SpaceNotificationPreference | null>(null);
@@ -989,6 +1028,7 @@ export function SpaceHome({
   onChanged,
   api = spaceRpc,
   updatesApi = spaceUpdateRpc,
+  connectionsApi = gitHubRpc,
   revision = 0,
 }: {
   space: SpaceResponse;
@@ -999,6 +1039,8 @@ export function SpaceHome({
   api?: SpaceApi;
   /** Standups of the space (Q14); the real client unless a test answers. */
   updatesApi?: typeof spaceUpdateRpc;
+  /** The space's GitHub connection (Q15); the real client unless a test answers. */
+  connectionsApi?: typeof gitHubRpc;
   /** Bumps when anything on this computer changed, so standups posted by other members appear. */
   revision?: number;
 }) {
@@ -1008,6 +1050,7 @@ export function SpaceHome({
   const [inviting, setInviting] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [myName, setMyName] = React.useState("");
+  const [myGitHubLogin, setMyGitHubLogin] = React.useState("");
   const [notice, setNotice] = React.useState<string | null>(null);
   const { busy, error, run } = useAction();
 
@@ -1016,12 +1059,14 @@ export function SpaceHome({
     if (result.ok) {
       setMembers([...result.members]);
       setMyName((current) => current || (result.members.find((m) => m.isMe)?.name ?? ""));
+      setMyGitHubLogin((current) => current || (result.members.find((m) => m.isMe)?.gitHubLogin ?? ""));
     }
   }, [api, space.spaceId]);
   React.useEffect(() => {
     setTab("overview");
     setMembers([]);
     setMyName("");
+    setMyGitHubLogin("");
   }, [space.spaceId]);
   React.useEffect(() => {
     if (tab === "members") void loadMembers().catch(() => undefined);
@@ -1032,7 +1077,12 @@ export function SpaceHome({
     ["members", "Members"],
     ["notifications", "Notifications"],
     ...(access.canEdit ? ([["tags", "Tags"]] as [HomeTab, string][]) : []),
-    ...(access.isOwner ? ([["settings", "Settings"]] as [HomeTab, string][]) : []),
+    ...(access.isOwner
+      ? ([
+          ["settings", "Settings"],
+          ["connections", "Connections"],
+        ] as [HomeTab, string][])
+      : []),
   ];
   const projects = lists.filter((list) => list.kind === "Project");
   const plain = lists.filter((list) => list.kind !== "Project");
@@ -1102,6 +1152,7 @@ export function SpaceHome({
                 <span className="min-w-0 flex-1 truncate">
                   {member.name}
                   {member.isMe && <span className="text-muted-foreground"> (you)</span>}
+                  {member.gitHubLogin && <span className="text-xs text-muted-foreground"> · @{member.gitHubLogin}</span>}
                 </span>
                 {access.isOwner ? (
                   <NativeSelect
@@ -1165,6 +1216,33 @@ export function SpaceHome({
               Save my name
             </Button>
           </form>
+          <form
+            className="grid max-w-sm gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(() => api.setMyGitHubLogin({ spaceId: space.spaceId, gitHubLogin: myGitHubLogin.trim() || null })).then(
+                async (result) => {
+                  if (!result) return;
+                  setNotice(myGitHubLogin.trim() ? "Your GitHub login was saved." : "Your GitHub login was cleared.");
+                  await loadMembers();
+                },
+              );
+            }}
+          >
+            <Field label="My GitHub login">
+              <Input
+                value={myGitHubLogin}
+                maxLength={40}
+                onChange={(e) => setMyGitHubLogin(e.target.value)}
+                autoComplete="off"
+                placeholder="octocat"
+              />
+            </Field>
+            <p className="text-xs text-muted-foreground">Used to match GitHub assignees to you. It is not verified against GitHub.</p>
+            <Button className="w-fit" disabled={busy}>
+              {myGitHubLogin.trim() ? "Save GitHub login" : "Clear GitHub login"}
+            </Button>
+          </form>
           <div className="border-t pt-3">
             <Button
               type="button"
@@ -1192,6 +1270,11 @@ export function SpaceHome({
           <SpaceTagSettings spaceId={space.spaceId} />
         </div>
       )}
+      {tab === "connections" && access.isOwner && (
+        <div role="tabpanel" aria-label="Connections" className="grid gap-4">
+          <GitHubSettings api={connectionsApi} spaceId={space.spaceId} onSynced={onChanged} />
+        </div>
+      )}
       {tab === "settings" && access.isOwner && (
         <div role="tabpanel" aria-label="Settings" className="grid max-w-lg gap-3">
           <SpaceDefaultReminder spaceId={space.spaceId} />
@@ -1207,7 +1290,7 @@ export function SpaceHome({
         </div>
       )}
 
-      {inviting && <InviteDialog space={space} api={api} onClose={() => setInviting(false)} />}
+      {inviting && <InviteDialog space={space} api={api} githubApi={connectionsApi} onClose={() => setInviting(false)} />}
       {deleting && (
         <DeleteSpaceDialog
           space={space}

@@ -84,6 +84,16 @@ export function GitHubTaskNotice({
       </p>
     );
   if (!info?.connected) return null;
+  function openExternal(url: string) {
+    void markdownRpc
+      .openExternal({ url })
+      .then((result) => {
+        if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the link.");
+      })
+      .catch(() => {
+        if (selectedTask.current === taskId) setMessage("Could not open the link.");
+      });
+  }
   async function action(kind: "retryTask" | "dismissConflict" | "keepAsOrdinaryTask") {
     if (!info?.linkVersion) return;
     setWorking(true);
@@ -140,31 +150,42 @@ export function GitHubTaskNotice({
           {info.repository && <span dir="auto">{info.repository}</span>}
           {info.assignees && <span dir="auto">{info.assignees.length ? `Assigned to ${info.assignees.join(", ")}` : "Unassigned"}</span>}
           {info.issueUrl && (
-            <button
-              type="button"
-              className="w-fit underline"
-              onClick={() => {
-                void markdownRpc
-                  .openExternal({ url: info.issueUrl! })
-                  .then((result) => {
-                    if (!result.ok && selectedTask.current === taskId) setMessage(result.error?.message ?? "Could not open the issue.");
-                  })
-                  .catch(() => {
-                    if (selectedTask.current === taskId) setMessage("Could not open the issue.");
-                  });
-              }}
-            >
+            <button type="button" className="w-fit underline" onClick={() => openExternal(info.issueUrl!)}>
               Open issue on GitHub
             </button>
+          )}
+          {info.pullRequests && info.pullRequests.length > 0 && (
+            <ul aria-label="Linked pull requests" className="grid gap-0.5">
+              {info.pullRequests.map((pull) => (
+                <li key={pull.repository + "#" + pull.number} className="flex flex-wrap gap-x-1">
+                  <button type="button" className="w-fit underline" onClick={() => openExternal(pull.url)}>
+                    {pull.repository}#{pull.number} · {pull.state}
+                    {pull.review !== "None" ? ` · ${pull.review}` : ""}
+                  </button>
+                  <span dir="auto">{pull.title}</span>
+                </li>
+              ))}
+            </ul>
           )}
           {info.assignedToMe !== null && info.state === "Linked" && (
             <button type="button" className="w-fit underline" disabled={working} onClick={() => void assign()}>
               {info.assignedToMe ? "Unassign me" : "Assign me"}
             </button>
           )}
-          <button type="button" className="w-fit underline" disabled={working} onClick={() => void action("keepAsOrdinaryTask")}>
-            Keep as ordinary task
-          </button>
+          {info.unsentAssignees && info.unsentAssignees.length > 0 && (
+            <span>
+              Not sent to GitHub: {info.unsentAssignees.join(", ")} {info.unsentAssignees.length === 1 ? "has" : "have"} no GitHub login
+              set.
+            </span>
+          )}
+          {info.commentsSigned && info.postedAs && (
+            <span className="text-muted-foreground">Comments you post go to GitHub as @{info.postedAs}, signed with your name.</span>
+          )}
+          {info.canManage && (
+            <button type="button" className="w-fit underline" disabled={working} onClick={() => void action("keepAsOrdinaryTask")}>
+              Keep as ordinary task
+            </button>
+          )}
           <span className="text-muted-foreground">Sync sends issue changes and selected diary entries.</span>
         </div>
       </details>

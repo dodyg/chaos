@@ -203,7 +203,9 @@ including issue and comment text from private repositories. GitHub credentials a
 of either format. JSON exports omit sync-run diagnostics and reset ETags, incremental cursors,
 rate-limit/reset times, retry times and attempt counts. Markdown task exports retain the
 issue's source URL. Permanently purging a linked task removes checklist/comment mappings
-and keeps an ignored issue identity so synchronization cannot import that issue again.
+and keeps an ignored issue identity so synchronization cannot import that issue again. The pull
+requests linked to an issue (schema 48) are archived with it; a merge import leaves them out, and the
+runner reads them again on its next pass.
 
 GitHub links in a JSON merge are retained only when the same connection and repository
 subscription exist locally and no local issue/link identity collides. Otherwise the preview

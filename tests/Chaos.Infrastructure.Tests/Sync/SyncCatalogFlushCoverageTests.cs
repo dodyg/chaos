@@ -107,6 +107,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["github_connection"] = GitHub,
         ["github_repository"] = GitHub,
         ["github_issue_link"] = GitHub,
+        ["github_pull_request_link"] = GitHub,
         ["github_checklist_item"] = GitHub,
         ["github_comment_link"] = GitHub,
         ["github_label_tag"] = GitHub,
@@ -489,6 +490,10 @@ public sealed class SyncCatalogFlushCoverageTests
         var comment = new GitHubComment(5, "A comment", new(2, "other"), DataHost.Start, DataHost.Start, "https://github.com/person/repo/issues/1#issuecomment-5");
         await new GitHubInboundComments(host.Store, host.Ids, host.Clock).ApplyAsync(link.Id, link.Version, [comment], true);
         expected["github_comment_link"] = (await TextsAsync(host, "SELECT DiaryEntryId FROM GitHubCommentLinks;"))[0];
+        var refresh = await new GitHubInboundCommands(host.Store, host.Ids, host.Clock).ApplyPullRequestsAsync(repo.Id, repo.Version, link.Id,
+            [new GitHubPullRequestRef(77, "PR_77", "person/repo", 7, "Fix the flush", "https://github.com/person/repo/pull/7", "OPEN", false, false, "APPROVED")], DataHost.Start, CancellationToken.None);
+        await Assert.That(refresh).IsTrue();
+        expected["github_pull_request_link"] = (await TextsAsync(host, "SELECT IssueLinkId || '|' || PullRequestId FROM GitHubPullRequestLinks;"))[0];
     }
 
     /// <summary>A list whose board is configured with a grouping and a WIP limit.</summary>

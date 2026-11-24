@@ -1906,7 +1906,7 @@ in `Chaos.Server.Tests`); the same build and the rerun passed without any change
 shows neither summaries nor spaces yet (Q21), so it is untouched. The test container was removed. Nothing remains open
 for Q14; smallest next action is Q15.
 
-### [ ] Q15: GitHub in shared spaces and the missing GitHub fields
+### [x] Q15: GitHub in shared spaces and the missing GitHub fields
 
 **Depends on:** Q9. **Migration:** `048_github_sharing.sql` (`GitHubPullRequestLinks`, `assignee_intent` as a set,
 baseline author). **Read:** section 10, `GITHUB.md` §1–§3, PLAN2 §7.11.
@@ -1929,6 +1929,42 @@ baseline author). **Read:** section 10, `GITHUB.md` §1–§3, PLAN2 §7.11.
 
 **Exit:** a team shares a repository's issues in a space. Members need no GitHub setup. Owners alone manage the
 connection.
+
+**Progress note 2026-11-23 (implementation and verification).** Owners alone manage a space's connection and only an
+owner's device runs the engine: every GitHub command names a space (null is the Personal space; `GitHubSpaces`
+resolves it), a non-owner is refused before any GitHub CLI call with "Only owners of <space> manage its GitHub
+connection", and the engine contexts accept the Personal owner or a current owner member instead of the
+connection's `ProfileId`. The service keeps every `github_*` group Owner-only (an Editor's forged
+`github_issue_link.base`, `runner` change or `github_pull_request_link` is `forbidden`), accepts a member's
+`github_comment_link` only for a diary entry whose stored author is the caller and only as a post from Chaos, and
+clears the connection's `runner` group when the runner's owner is demoted or removed; the scheduler serves every
+connection whose runner is this device, each on its own cadence. Members set a GitHub login from the Members tab
+(`PATCH members/me`; an empty login clears it). Assignees are compared as logins (`SetAssignmentAsync(login)`); in a
+shared space the runner derives the intent from the task's `task_assignee` rows rather than a stored set: a live row
+puts the member's login on the issue, a tombstoned row takes it off, and a member with no row yet waits for the
+inbound pass, which creates the row for a merged login that matches a current owner or editor and tombstones it when
+the merge drops it. Members without a login stay app-only and the task notice says "Not sent to GitHub: <name> has no
+GitHub login set". A member's diary post goes out under the owner's login with a last line `— <name> (via Chaos)`;
+the exact line is kept on the comment link before the post and stripped with the marker on every read-back. G9:
+`GitHubPullRequestLinks` (kind `github_pull_request_link`, client schema 12) is refreshed from GraphQL in batches of
+50 during the issue fetch and once a day for open pull requests; the baseline gains `authorLogin` and `issueType`;
+views gain `githubAuthor`, `githubLinkedPr`, `githubPrReview` and `githubIssueType`; the task notice and mark list
+the pull requests. A private repository added to a space with other members, and an invite into a space with a
+private repository, need the owner's confirmation. Migration 048 also rebuilds `GitHubConnections` without the
+`Profiles` foreign key on `ProfileId`, because that key parked the connection, its repositories and its links on
+every member's device. Labels already mapped to space tags in Q9. Tests: PostgreSQL covers the forged baseline,
+runner and pull-request refusals, a member's own post accepted and another's refused, the runner cleared on demotion
+and on leave, the login set and cleared, and the two-account flow (Omar sets his login, assigns himself, edits the
+title and posts an update; Sara's device sends the title, assigns `omar` and posts the signed comment; Omar's device
+reads his words back unsigned). Real SQLite covers owner-only management without CLI calls, a member's edit through a
+shared connection, assignee matching both ways and the late-login case, self-assignment, the signed post round trip,
+pull request refresh and the four view fields, migration 048 and the catalog guards. Desktop frontend tests cover the
+private-repository warning (shown, and not shown for an owner alone), the read-only view for a member, the
+Members-tab login, the invite warning and the pull request list. The full gate (`eng/verify.ps1 -MaxParallelTests 1`)
+against disposable PostgreSQL 18.7 via `wslc` passed: Domain 337, Application 141, Infrastructure 801, Sync 82,
+Server 226 and Desktop 103 (1,690 total), no skips; Slopwatch found 0 issues. Desktop frontend `npm test` passed 337; web passed 17; web lint exited 0 with its existing hook-dependency warning; both
+frontends pass `format:check`. The PWA shows neither spaces nor GitHub (Q21), so it is untouched. Smallest next action:
+Q16.
 
 ### [ ] Q16: Google Calendar time blocking
 
@@ -2212,7 +2248,7 @@ If a number is taken when you start, use the next free number and update this ta
 | 045 | Q12 | Rotation |
 | 046 | Q13 | TaskDelegations, Nudges, FollowUps.DelegationId |
 | 047 | Q14 | SpaceUpdates |
-| 048 | Q15 | GitHub pull request links, assignee intent set, author |
+| 048 | Q15 | GitHub pull request links, comment attribution line, assignee dirty triggers |
 | 049 | Q16 | Time blocking settings and events |
 | 050 | Q17 | Claim and agent groups, local agents, access, tokens, proposals |
 | S004 | (PLAN2 P18) | Reserved: calendar feed tokens |

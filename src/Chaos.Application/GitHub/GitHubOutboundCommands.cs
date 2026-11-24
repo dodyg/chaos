@@ -6,9 +6,13 @@ using Chaos.Domain.GitHub;
 namespace Chaos.Application.GitHub;
 
 // Hashes identify only fields included in one PATCH. They contain no issue text.
-public sealed record GitHubIssueWriteIntent(string? TitleHash, string? BodyHash, string? StateHash, long? LabelId = null, bool? LabelPresent = null, bool? SelfAssigned = null, string? CommentEntryId = null, long? CommentId = null, string? CommentBodyHash = null, long? TaskVersion = null, long? LinkVersion = null);
+/// <summary><see cref="SelfAssigned"/> is the pre-schema-12 form of <see cref="Assigned"/> for the connected account; <see cref="AssigneeLogin"/> names any login.</summary>
+public sealed record GitHubIssueWriteIntent(string? TitleHash, string? BodyHash, string? StateHash, long? LabelId = null, bool? LabelPresent = null, bool? SelfAssigned = null, string? CommentEntryId = null, long? CommentId = null, string? CommentBodyHash = null, long? TaskVersion = null, long? LinkVersion = null,
+    string? AssigneeLogin = null, bool? Assigned = null);
 public sealed record GitHubOutboundResult(int Pushed, int Updated, int Conflicts);
-internal sealed record GitHubSetWrite(string? Label, bool Present, bool IsAssignment);
+internal sealed record GitHubSetWrite(string? Label, bool Present, bool IsAssignment, string? Login = null);
+
+
 
 /// <summary>Prepares issue writes against a fresh read and recovers interrupted PATCHes before inbound merging.</summary>
 public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi api, GitHubInboundCommands inbound, TimeProvider clock)
@@ -79,7 +83,7 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
                         if (setWrite is null) break;
                         var deferred = await Revalidate(repo, connection, candidate.Id, issue, ct);
                         if (deferred is not null) { updated += deferred.Updated; conflicts += deferred.Conflicts; break; }
-                        if (setWrite.IsAssignment) await api.SetSelfAssignmentAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Present, ct);
+                        if (setWrite.IsAssignment) await api.SetAssignmentAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Login!, setWrite.Present, ct);
                         else if (setWrite.Present) await api.AddLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
                         else await api.RemoveLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
                         pushed++;
@@ -111,7 +115,7 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
             var task = await s.Tasks.GetAsync(link.TaskId, token);
             if (task is null) return null;
             var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson) ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
-            var local = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection.AccountId, token);
+            var local = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection, token);
             var remote = GitHubIssueSnapshot.From(issue).Projection();
             var merge = SyncMerge.Issue(baseline.Projection(), local, remote);
             if (local.Title.Length > 256) throw AppException.Validation("title", "A GitHub issue title can hold at most 256 characters.");
@@ -137,10 +141,12 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         var task = await s.Tasks.GetAsync(link.TaskId, token);
         if (task is null) return null;
         var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson) ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
-        var local = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection.AccountId, token);
+        var local = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection, token);
         var merge = SyncMerge.Issue(baseline.Projection(), local, GitHubIssueSnapshot.From(issue).Projection());
         var mappings = await s.GitHub.ListLabelTagsAsync(repo.Id, token);
         var labelId = merge.Push.AddLabels.Order().Select(id => (long?)id).FirstOrDefault() ?? merge.Push.RemoveLabels.Order().Select(id => (long?)id).FirstOrDefault();
+        // One assignee at a time, in a stable order, so an interrupted write is recovered exactly.
+        var login = merge.Push.AddAssignees.Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault() ?? merge.Push.RemoveAssignees.Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault();
         GitHubIssueWriteIntent intent;
         GitHubSetWrite write;
         if (labelId is { } id)
@@ -150,11 +156,11 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
             write = new(mapping.LabelName, present, false);
             intent = new(null, null, null, id, present);
         }
-        else if (merge.Push.AddAssignees.Contains(connection.AccountId) || merge.Push.RemoveAssignees.Contains(connection.AccountId))
+        else if (login is not null)
         {
-            var present = merge.Push.AddAssignees.Contains(connection.AccountId);
-            write = new(null, present, true);
-            intent = new(null, null, null, SelfAssigned: present);
+            var present = merge.Push.AddAssignees.Contains(login);
+            write = new(null, present, true, login);
+            intent = new(null, null, null, AssigneeLogin: login, Assigned: present);
         }
         else return null;
         await s.GitHub.AddIssueWriteAsync(new(link.Id, StoredJsonFormats.Snapshot(intent with { TaskVersion = task.Version, LinkVersion = link.Version }), clock.GetUtcNow()), token);
@@ -264,34 +270,53 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
             if (labelPresent) labelIds.Add(label); else labelIds.Remove(label);
         }
         var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token) ?? throw AppException.VersionConflict("The GitHub connection changed during recovery.");
+        // An intent written before schema 12 named only the connected account.
+        var login = attempted.AssigneeLogin ?? connection.AccountLogin;
+        var wanted = attempted.Assigned ?? attempted.SelfAssigned;
+        var onIssue = issue.Assignees.FirstOrDefault(a => GitHubLogin.Matches(a.Login, login));
+        var assignmentAcknowledged = wanted is { } assigned && (onIssue is not null) == assigned;
+        // Ids and logins stay aligned, both ordered by id as GitHubIssueSnapshot.From leaves them.
+        var entries = baseline.AssigneeLogins is { } known
+            ? baseline.AssigneeIds.Select((id, index) => (Id: id, Login: index < known.Length ? known[index] : "")).ToList()
+            : null;
         var assignees = baseline.AssigneeIds.ToHashSet();
-        var logins = baseline.AssigneeLogins?.ToList();
-        var assignmentAcknowledged = attempted.SelfAssigned is { } assigned && remote.AssigneeIds.Contains(connection.AccountId) == assigned;
         if (assignmentAcknowledged)
         {
-            if (attempted.SelfAssigned == true) assignees.Add(connection.AccountId); else assignees.Remove(connection.AccountId);
-            logins?.RemoveAll(l => l.Equals(connection.AccountLogin, StringComparison.OrdinalIgnoreCase));
-            if (attempted.SelfAssigned == true) logins?.Add(connection.AccountLogin);
+            if (entries is not null)
+            {
+                entries.RemoveAll(entry => GitHubLogin.Matches(entry.Login, login) || onIssue is { } added && entry.Id == added.Id);
+                if (onIssue is not null) entries.Add((onIssue.Id, onIssue.Login));
+                entries.Sort((left, right) => left.Id.CompareTo(right.Id));
+                assignees = entries.Select(entry => entry.Id).ToHashSet();
+            }
+            else
+            {
+                var index = Array.FindIndex(baseline.AssigneeLogins ?? [], l => GitHubLogin.Matches(l, login));
+                if (index >= 0 && index < baseline.AssigneeIds.Length) assignees.Remove(baseline.AssigneeIds[index]);
+                if (onIssue is not null) assignees.Add(onIssue.Id);
+            }
         }
         var next = baseline with {
             Title = attempted.TitleHash is not null && attempted.TitleHash == StoredJsonFormats.Hash(remote.Title) ? remote.Title : baseline.Title,
             Body = attempted.BodyHash is not null && attempted.BodyHash == StoredJsonFormats.Hash(remote.Body) ? remote.Body : baseline.Body,
             Open = attempted.StateHash is not null && attempted.StateHash == StateHash(remoteState) ? remote.Open : baseline.Open,
             Reason = attempted.StateHash is not null && attempted.StateHash == StateHash(remoteState) ? remote.Reason : baseline.Reason,
-            LabelIds = labelIds.Order().ToArray(), AssigneeIds = assignees.Order().ToArray(), AssigneeLogins = logins?.ToArray() };
-        var clearIntent = assignmentAcknowledged && link.LocalAssigneeIntent == (attempted.SelfAssigned == true ? 1 : 0);
+            LabelIds = labelIds.Order().ToArray(), AssigneeIds = assignees.Order().ToArray(),
+            AssigneeLogins = entries is null ? null : entries.Select(entry => entry.Login).ToArray() };
+        var clearIntent = assignmentAcknowledged && GitHubLogin.Matches(login, connection.AccountLogin) && link.LocalAssigneeIntent == (wanted == true ? 1 : 0);
         if (await s.GitHub.UpdateIssueLinkAsync(link with { BaseJson = StoredJsonFormats.Snapshot(next), LocalAssigneeIntent = clearIntent ? null : link.LocalAssigneeIntent, IssueEtag = null, LocalDirty = true, LocalDirtySinceUtc = link.LocalDirtySinceUtc ?? clock.GetUtcNow() }, link.Version, token) is null)
             throw AppException.VersionConflict("The GitHub link changed during recovery.");
         await s.GitHub.DeleteIssueWriteAsync(link.Id, token);
         return true;
     }, ct);
 
+    /// <summary>The repository and its live connection, on a device whose person owns the connection's space (the runner).</summary>
     private Task<(GitHubRepositoryRecord, GitHubConnectionRecord)> Context(string repositoryId, CancellationToken ct) => store.QueryAsync(async (s, token) =>
     {
-        var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+        var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
         var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
         var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-        if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id)
+        if (repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.State != 0 || !await GitHubSpaces.CanRunAsync(s, connection, profile, token))
             throw AppException.VersionConflict("The GitHub subscription is no longer active.");
         return (repo, connection);
     }, ct);

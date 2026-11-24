@@ -118,6 +118,25 @@ public sealed record GitHubCommentLinkRecord
     public string? LastErrorMessage { get; init; }
     public int ErrorAttempts { get; init; }
     public DateTimeOffset? NextAttemptUtc { get; init; }
+    /// <summary>The line added when a member's entry was posted under the owner's login (PLAN3 10.4); null for the owner's own entries.</summary>
+    public string? Attribution { get; init; }
+}
+
+/// <summary>A pull request that closes a linked issue, as last reported by GitHub (G9).</summary>
+public sealed record GitHubPullRequestLinkRecord
+{
+    public required string IssueLinkId { get; init; }
+    public required string PullRequestId { get; init; }
+    public required string RepositoryFullName { get; init; }
+    public long Number { get; init; }
+    public required string Title { get; init; }
+    /// <summary>0 Open, 1 Draft, 2 Merged, 3 Closed.</summary>
+    public int State { get; init; }
+    /// <summary>0 None, 1 Approved, 2 Changes requested, 3 Review required.</summary>
+    public int ReviewState { get; init; }
+    public required string Url { get; init; }
+    /// <summary>When the runner last read this pull request from GitHub (open ones are re-read once a day).</summary>
+    public required DateTimeOffset RefreshedAtUtc { get; init; }
 }
 
 public sealed record GitHubLabelTagRecord

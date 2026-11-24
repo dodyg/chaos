@@ -510,6 +510,18 @@ public sealed class SyncService(
 
         var viewerDiaryAttachment = role == SpaceMember.ViewerRole && kind.Kind == "attachment"
             && await IsViewerDiaryAttachmentAsync(account, streamId, change, ct);
+        if (kind.Kind == "github_comment_link" && role != SpaceMember.OwnerRole)
+        {
+            // The GitHub engine's links stay with the runner (an owner), except that any member may queue their own
+            // diary entry as a post (PLAN3 10.4): the entry must be theirs and the link must come from Chaos.
+            if (change.Groups.TryGetValue("create", out var created)
+                && (created.Values.Values.GetValueOrDefault("Origin") is not long origin || origin != 1L)) return SyncRejection.Forbidden;
+            var entry = await db.SyncEntities.FindAsync([streamId, "diary_entry", change.EntityKey], ct);
+            if (entry is null || entry.PurgedAt is not null || entry.MovedTo is not null
+                || SyncJson.ReadGroups(entry.Groups).GetValueOrDefault("create")?.Values.Values.GetValueOrDefault("AuthorProfileId")?.ToString() is not { } author
+                || !Guid.TryParse(author, out var authorId) || authorId != account.ProfileId) return SyncRejection.Forbidden;
+            return null;
+        }
         foreach (var group in change.Groups.Keys)
         {
             var required = kind.Group(group)!.Write;

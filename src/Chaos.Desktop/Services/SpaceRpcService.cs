@@ -19,7 +19,8 @@ public sealed record SpaceDeleteRequest(string SpaceId, string TypedName);
 public sealed record SpaceRoleRequest(string SpaceId, string MemberId, int Role);
 public sealed record SpaceMemberRequest(string SpaceId, string MemberId);
 public sealed record SpaceMyNameRequest(string SpaceId, string DisplayName);
-public sealed record SpaceMemberResponse(string MemberId, string Name, int Role, int Kind, string JoinedAt, bool IsMe);
+public sealed record SpaceMyGitHubLoginRequest(string SpaceId, string? GitHubLogin);
+public sealed record SpaceMemberResponse(string MemberId, string Name, int Role, int Kind, string JoinedAt, bool IsMe, string? GitHubLogin = null);
 public sealed record SpaceMembersResponse(bool Ok, IReadOnlyList<SpaceMemberResponse> Members, TaskErrorResponse? Error);
 public sealed record SpaceInviteRequest(string SpaceId, string? Email, int Role, int? ExpiresInDays, int? MaxUses);
 public sealed record SpaceInviteResponseItem(string Id, string? Email, int Role, string CreatedAt, string? ExpiresAt, int? MaxUses, int Uses, bool Revoked);
@@ -118,7 +119,8 @@ public sealed class SpaceRpcService(SpaceQueries queries, SpaceCommands commands
             var members = await commands.MembersAsync(request.SpaceId, ct);
             return new SpaceMembersResponse(true,
                 [.. members.Where(member => member.RemovedAt is null).Select(member => new SpaceMemberResponse(member.MemberId, member.Name, member.Role, member.Kind,
-                    member.JoinedAt, mine is not null && mine.EndsWith(member.MemberId, StringComparison.OrdinalIgnoreCase)))], null);
+                    member.JoinedAt, mine is not null && mine.EndsWith(member.MemberId, StringComparison.OrdinalIgnoreCase),
+                    local.FirstOrDefault(person => person.ActorId.EndsWith(member.MemberId, StringComparison.OrdinalIgnoreCase))?.GitHubLogin))], null);
         }, error => new SpaceMembersResponse(false, [], error));
 
     [NeoRpcMethod("changeRole")]
@@ -132,6 +134,10 @@ public sealed class SpaceRpcService(SpaceQueries queries, SpaceCommands commands
     [NeoRpcMethod("setMyName")]
     public ValueTask<SpaceDoneResponse> SetMyNameAsync(SpaceMyNameRequest request, CancellationToken ct) =>
         Rpc.Run("spaces.setMyName", () => Ok(commands.SetMyNameAsync(request.SpaceId, request.DisplayName, ct)), Failed);
+
+    [NeoRpcMethod("setMyGitHubLogin")]
+    public ValueTask<SpaceDoneResponse> SetMyGitHubLoginAsync(SpaceMyGitHubLoginRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.setMyGitHubLogin", () => Ok(commands.SetMyGitHubLoginAsync(request.SpaceId, request.GitHubLogin, ct)), Failed);
 
     [NeoRpcMethod("invites")]
     public ValueTask<SpaceInvitesResponse> InvitesAsync(SpaceIdRequest request, CancellationToken ct) =>

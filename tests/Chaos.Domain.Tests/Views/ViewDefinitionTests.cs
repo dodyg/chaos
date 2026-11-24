@@ -71,7 +71,10 @@ public sealed class ViewDefinitionTests
     [Arguments("{\"field\":\"githubState\",\"op\":\"is\",\"value\":\"Merged\"}")]
     [Arguments("{\"field\":\"githubState\",\"op\":\"in\",\"value\":[\"Open\"]}")]
     [Arguments("{\"field\":\"githubLabel\",\"op\":\"is\",\"value\":\"bug\"}")]
-    [Arguments("{\"field\":\"githubAuthor\",\"op\":\"contains\",\"value\":\"x\"}")]
+    [Arguments("{\"field\":\"githubPrReview\",\"op\":\"contains\",\"value\":\"x\"}")]
+    [Arguments("{\"field\":\"githubPrReview\",\"op\":\"is\",\"value\":\"Merged\"}")]
+    [Arguments("{\"field\":\"githubLinkedPr\",\"op\":\"contains\",\"value\":\"x\"}")]
+    [Arguments("{\"field\":\"githubLinkedPr\",\"op\":\"is\",\"value\":\"yes\"}")]
     [Arguments("{\"field\":\"githubRepository\",\"op\":\"is\",\"value\":[\"a\",\"b\"]}")]
     [Arguments("{\"field\":\"tag\",\"op\":\"hasAnyOf\"}")]
     public async Task Parse_BadCondition_IsRejected(string condition)
@@ -98,6 +101,11 @@ public sealed class ViewDefinitionTests
     [Arguments("{\"field\":\"githubLabel\",\"op\":\"contains\",\"value\":\"bug\"}")]
     [Arguments("{\"field\":\"githubMilestone\",\"op\":\"isEmpty\"}")]
     [Arguments("{\"field\":\"githubAssignee\",\"op\":\"contains\",\"value\":\"octocat\"}")]
+    [Arguments("{\"field\":\"githubAuthor\",\"op\":\"contains\",\"value\":\"octo\"}")]
+    [Arguments("{\"field\":\"githubAuthor\",\"op\":\"isEmpty\"}")]
+    [Arguments("{\"field\":\"githubLinkedPr\",\"op\":\"is\",\"value\":true}")]
+    [Arguments("{\"field\":\"githubPrReview\",\"op\":\"is\",\"value\":\"Changes requested\"}")]
+    [Arguments("{\"field\":\"githubIssueType\",\"op\":\"isEmpty\"}")]
     [Arguments("{\"field\":\"tag\",\"op\":\"hasNone\",\"value\":[\"x\"]}")]
     public async Task Parse_GoodCondition_IsAccepted(string condition)
     {

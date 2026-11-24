@@ -138,7 +138,15 @@ const taskAssignments = new Map<string, { mode: string; assignees: { memberId: s
 
 /** Two shared spaces for the preview (PLAN3 Q5): one the sample person owns, one where they are only a viewer. */
 type PreviewSpace = { spaceId: string; name: string; kind: "Personal" | "Shared"; role: number | null };
-type PreviewMember = { memberId: string; name: string; role: number; kind: number; joinedAt: string; isMe: boolean };
+type PreviewMember = {
+  memberId: string;
+  name: string;
+  role: number;
+  kind: number;
+  joinedAt: string;
+  isMe: boolean;
+  gitHubLogin?: string | null;
+};
 type PreviewInvite = {
   id: string;
   email: string | null;
@@ -2136,6 +2144,11 @@ const handlers: Record<string, Handler> = {
     if (me) me.name = r.displayName.trim();
     return ok({});
   },
+  "spaces.setMyGitHubLogin": (r: { spaceId: string; gitHubLogin: string | null }) => {
+    const me = (spaceMembers.get(r.spaceId) ?? []).find((m) => m.isMe);
+    if (me) me.gitHubLogin = r.gitHubLogin;
+    return ok({});
+  },
   "spaces.invites": (r: { spaceId: string }) => ok({ invites: (spaceInvites.get(r.spaceId) ?? []).filter((i) => !i.revoked) }),
   "spaces.invite": (r: { spaceId: string; email: string | null; role: number; expiresInDays: number | null; maxUses: number | null }) => {
     const invite: PreviewInvite = {
@@ -2342,6 +2355,22 @@ const handlers: Record<string, Handler> = {
       syncError: null,
       syncing: false,
       assignees: linked ? previewIssueAssignees : null,
+      canManage: linked,
+      pullRequests: linked
+        ? [
+            {
+              number: "9",
+              title: "Fix the preview",
+              state: "Open",
+              review: "Approved",
+              url: "https://github.com/example/chaos/pull/9",
+              repository: "example/chaos",
+            },
+          ]
+        : null,
+      unsentAssignees: null,
+      postedAs: linked ? "preview-user" : null,
+      commentsSigned: false,
     };
   },
   "github.setSelfAssignment": (r: { assigned: boolean }) => {

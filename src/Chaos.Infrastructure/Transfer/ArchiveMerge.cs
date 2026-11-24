@@ -31,6 +31,7 @@ public static class ArchiveMerge
             CommentId = row.Text("CommentId") is null ? null : row.Long("CommentId"), AuthorLogin = row.Text("AuthorLogin"),
             HtmlUrl = row.Text("HtmlUrl"), Origin = (int)row.Long("Origin"), State = (int)row.Long("State"),
             BaseBody = row.Text("BaseBody"), BaseRemoteUpdatedUtc = StorageFormats.ParseInstant(row.Text("BaseRemoteUpdatedUtc")),
+            Attribution = row.Text("Attribution"),
         }, StringComparer.Ordinal);
         var containers = Rows(archive, "Containers").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);
         var tagRows = Rows(archive, "Tags").Where(row => row.Text("DeletedAtUtc") is null).ToDictionary(row => row.Text("Id")!, StringComparer.Ordinal);

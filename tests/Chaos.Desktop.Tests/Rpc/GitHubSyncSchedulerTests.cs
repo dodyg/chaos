@@ -70,7 +70,7 @@ public sealed class GitHubSyncSchedulerTests
         var runner = new RetryRunner(() => { });
         var selected = false;
         using var engine = new GitHubSyncEngine(runner, clock);
-        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult(new GitHubSchedule(Active() with { IsRunner = selected }, null, [])), clock);
+        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(Active() with { IsRunner = selected }, null, [])]), clock);
         scheduler.Start();
         await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(30));
         clock.Advance(TimeSpan.FromSeconds(30));
@@ -90,7 +90,7 @@ public sealed class GitHubSyncSchedulerTests
         var pending = true;
         var runner = new RetryRunner(() => pending = false);
         using var engine = new GitHubSyncEngine(runner, clock);
-        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult(new GitHubSchedule(Active(), null, pending ? [link] : [])), clock);
+        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(Active(), null, pending ? [link] : [])]), clock);
         scheduler.Start();
         await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(10));
         clock.Advance(TimeSpan.FromSeconds(10));
@@ -109,7 +109,7 @@ public sealed class GitHubSyncSchedulerTests
         var runner = new RetryRunner(() => { });
         var deadline = clock.GetUtcNow().AddMinutes(2);
         using var engine = new GitHubSyncEngine(runner, clock);
-        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult(new GitHubSchedule(Active(), deadline, [])), clock);
+        using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(Active(), deadline, [])]), clock);
         scheduler.Start();
         await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromMinutes(2));
         clock.Advance(TimeSpan.FromSeconds(119));
@@ -139,7 +139,7 @@ public sealed class GitHubSyncSchedulerTests
         {
             var result = connected ? Active() : new GitHubStatus(null, []);
             inspected.TrySetResult();
-            return Task.FromResult(new GitHubSchedule(result, null, []));
+            return Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(result, null, [])]);
         }, TimeProvider.System);
         scheduler.Start();
         await inspected.Task.WaitAsync(TimeSpan.FromSeconds(10));

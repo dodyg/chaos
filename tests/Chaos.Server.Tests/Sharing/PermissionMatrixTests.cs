@@ -59,6 +59,7 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         github_connection=create,settings,runner,state,deleted
         github_repository=create,settings,state,deleted
         github_issue_link=create,base,state,assignee_intent
+        github_pull_request_link=create,state
         github_checklist_item=base
         github_comment_link=create,state
         github_label_tag=mapping
@@ -240,6 +241,60 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
             Guid.NewGuid().ToString("D"), "create",
             new { SpaceId = space.ToString("D"), OwnerProfileId = editor.ProfileId.ToString("D"), CreatedAtUtc = Instant() })))
             .Rejections()).Contains(SyncRejection.Forbidden);
+
+        // PLAN3 10.2: the GitHub engine's groups are the runner's (an owner); an editor cannot forge a baseline, a
+        // pull request link or the runner, while a member may queue their own diary entry as a post.
+        var connection = Guid.NewGuid().ToString("D");
+        var repository = Guid.NewGuid().ToString("D");
+        var link = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(owner, new[]
+        {
+            SharingHarness.Change("github_connection", connection, "create",
+                new { SpaceId = space.ToString("D"), ProfileId = owner.ProfileId.ToString("D"), WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", AccountId = 1L, AccountLogin = "owner", CreatedAtUtc = Instant() }),
+            SharingHarness.Change("github_connection", connection, "runner", new { RunnerDeviceId = owner.DeviceId.ToString("D"), RunnerDeviceName = "Desk" }),
+        })).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("github_repository", repository, "create",
+            new { ConnectionId = connection, RepositoryId = 10L, Owner = "o", Name = "r", FullName = "o/r", HtmlUrl = "https://github.com/o/r", IsPrivate = 0L, TargetContainerId = (string?)null, CreatedAtUtc = Instant() })))
+            .Rejections()).IsEmpty();
+        var createLink = SharingHarness.Change("github_issue_link", link, "create",
+            new { RepositorySubscriptionId = repository, ConnectionId = connection, IssueId = 1L, IssueNodeId = "I_1", IssueNumber = 1L, HtmlUrl = "https://github.com/o/r/issues/1", CreatedAtUtc = Instant() });
+        // The link routes through its task, named in the state group, so both groups travel in one change.
+        createLink = createLink with
+        {
+            Groups = new Dictionary<string, RawGroup>(createLink.Groups) { ["state"] = createLink.Groups["create"] with { Values = new { TaskId = parentTask, State = 0L, PlacementManaged = 1L } } },
+        };
+        await Assert.That((await world.PushAsync(owner, createLink)).Rejections()).IsEmpty();
+        var forgedBaseline = SharingHarness.Change("github_issue_link", link, "base", new { BaseJson = "{}", BaseRemoteUpdatedUtc = Instant() });
+        await Assert.That((await world.PushAsync(editor, forgedBaseline)).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, forgedBaseline)).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(editor, SharingHarness.Change("github_connection", connection, "runner",
+            new { RunnerDeviceId = editor.DeviceId.ToString("D"), RunnerDeviceName = "Editor's desk" }))).Rejections()).Contains(SyncRejection.Forbidden);
+        // The pull request kind arrived with client schema 12, so its groups are only read from a device that new.
+        async Task<RawResponse> PullRequest(SharingCaller actor, RawChange change) =>
+            await world.CallAsync(actor, HttpMethod.Post, "/v2/sync/push", System.Text.Json.JsonSerializer.Serialize(new { changes = new[] { change } }), schema: 12);
+        await Assert.That((await PullRequest(editor, SharingHarness.Change("github_pull_request_link", link + "|PR_1", "create",
+            new { IssueLinkId = link, RepositoryFullName = "o/r", Number = 1L }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await PullRequest(viewer, SharingHarness.Change("github_pull_request_link", link + "|PR_1", "create",
+            new { IssueLinkId = link, RepositoryFullName = "o/r", Number = 1L }))).Rejections()).Contains(SyncRejection.Forbidden);
+
+        var memberPost = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("diary_entry", memberPost, "create",
+            new { TaskId = parentTask, AuthorProfileId = viewer.ProfileId.ToString("D"), EntryAtUtc = Instant(), CreatedAtUtc = Instant() })))
+            .Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "create",
+            new { IssueLinkId = link, Origin = 1L }))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "state", new { State = 1L })))
+            .Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(editor, SharingHarness.Change("github_comment_link", memberPost, "state", new { State = 2L })))
+            .Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "create",
+            new { IssueLinkId = link, Origin = 0L }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(editor, SharingHarness.Change("github_comment_link", memberPost, "create",
+            new { IssueLinkId = link, Origin = 1L }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("github_issue_link", link, "base",
+            new { BaseJson = "{}", BaseRemoteUpdatedUtc = Instant() }))).Rejections()).IsEmpty();
+        await Assert.That((await PullRequest(owner, SharingHarness.Change("github_pull_request_link", link + "|PR_1", "create",
+            new { IssueLinkId = link, RepositoryFullName = "o/r", Number = 1L }))).Rejections()).IsEmpty();
 
         await Assert.That((await world.CallAsync(editor, HttpMethod.Patch,
             $"/v2/spaces/{space:D}/members/{viewer.ProfileId:D}", new MemberRoleRequest(SpaceMember.EditorRole))).Status)

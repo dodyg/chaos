@@ -8,7 +8,7 @@ namespace Chaos.Application.People;
 /// <summary>A member as retained on the device, including members who have left.</summary>
 public sealed record DirectoryMember(string ActorId, string DisplayName);
 
-public sealed record PersonDisplay(string ActorId, string DisplayName, string Initials, int ColorIndex, ActorKind? Kind, bool IsMe, int? Role = null, bool Former = false);
+public sealed record PersonDisplay(string ActorId, string DisplayName, string Initials, int ColorIndex, ActorKind? Kind, bool IsMe, int? Role = null, bool Former = false, string? GitHubLogin = null);
 
 /// <summary>Resolves actor identities without treating absent or former members as errors.</summary>
 public static class PeopleDirectory

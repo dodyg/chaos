@@ -11,32 +11,37 @@ using Chaos.Domain.Tasks;
 
 namespace Chaos.Desktop.Services;
 
-public sealed record GitHubStatusRequest();
+/// <summary>The space a GitHub request is about; null is the Personal space.</summary>
+public sealed record GitHubStatusRequest(string? SpaceId = null);
 public sealed record GitHubTaskSyncRequest(string TaskId);
 public sealed record GitHubAttachmentRequest(string TaskId, string Url);
 public sealed record GitHubAttachmentResponse(bool Ok, string? ContentType, string? Base64, string? IssueUrl, TaskErrorResponse? Error);
 public sealed record GitHubSelfAssignmentRequest(string OperationId, string TaskId, bool Assigned);
 public sealed record GitHubTaskActionRequest(string OperationId, string TaskId, string ExpectedVersion);
+public sealed record GitHubPullRequestDto(string Number, string Title, string State, string Review, string Url, string Repository);
 public sealed record GitHubTaskSyncResponse(bool Ok, bool Connected, bool Pending, string? State, TaskErrorResponse? Error, bool? AssignedToMe = null, bool PostDiaryByDefault = false,
-    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false, bool Syncing = false, IReadOnlyList<string>? Assignees = null);
-public sealed record GitHubConnectRequest(string OperationId);
-public sealed record GitHubCandidatesRequest(string? Cursor);
-public sealed record GitHubLookupRequest(string Owner, string Name);
+    string? LinkVersion = null, bool HasConflict = false, string? SyncError = null, string? IssueUrl = null, string? Repository = null, bool DueDateManaged = false, bool Syncing = false, IReadOnlyList<string>? Assignees = null,
+    bool CanManage = false, IReadOnlyList<GitHubPullRequestDto>? PullRequests = null, IReadOnlyList<string>? UnsentAssignees = null, string? PostedAs = null, bool CommentsSigned = false);
+public sealed record GitHubConnectRequest(string OperationId, string? SpaceId = null);
+public sealed record GitHubCandidatesRequest(string? Cursor, string? SpaceId = null);
+public sealed record GitHubLookupRequest(string Owner, string Name, string? SpaceId = null);
 public sealed record GitHubChangeRequest(string OperationId, string Id, string ExpectedVersion, bool Paused);
 public sealed record GitHubSettingsRequest(string OperationId, string Id, string ExpectedVersion, bool PostDiaryByDefault, bool CreateLabelsForTags);
 public sealed record GitHubFilterDto(IReadOnlyList<string> Labels, string LabelMode, string Assignee, string? Milestone, bool NoMilestone, int IncludeClosedDays);
 public sealed record GitHubAddRequest(string OperationId, string ConnectionId, string ExpectedVersion, string Owner, string Name, string RepositoryId, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
 public sealed record GitHubUpdateRequest(string OperationId, string Id, string ExpectedVersion, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string? TaskCategory = null);
 public sealed record GitHubConnectionDto(string Id, string Version, string AccountId, string AccountLogin, string State, bool PostDiaryByDefault, bool CreateLabelsForTags, string? RunnerDeviceName = null, bool IsRunner = false);
-public sealed record GitHubRepositoryDto(string Id, string Version, string RepositoryId, string FullName, string State, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string TaskCategory);
+public sealed record GitHubRepositoryDto(string Id, string Version, string RepositoryId, string FullName, string State, string TargetContainerId, string? TargetSectionId, GitHubFilterDto Filter, bool MilestonesAsProjects, string TaskCategory, bool IsPrivate = false);
 public sealed record GitHubCandidateDto(string RepositoryId, string Owner, string Name, string FullName, bool IsPrivate, bool HasIssues, bool AlreadyAdded);
 public sealed record GitHubSectionDto(string Id, string Title);
 public sealed record GitHubTargetDto(string Id, string Name, IReadOnlyList<GitHubSectionDto> Sections);
-public sealed record GitHubStatusResponse(bool Ok, GitHubConnectionDto? Connection, IReadOnlyList<GitHubRepositoryDto> Repositories, IReadOnlyList<GitHubTargetDto> Targets, TaskErrorResponse? Error, GitHubSyncDto? Sync = null);
+/// <summary><see cref="IsOwner"/> says this person manages the connection; <see cref="MemberCount"/> is who sees what it brings in.</summary>
+public sealed record GitHubStatusResponse(bool Ok, GitHubConnectionDto? Connection, IReadOnlyList<GitHubRepositoryDto> Repositories, IReadOnlyList<GitHubTargetDto> Targets, TaskErrorResponse? Error, GitHubSyncDto? Sync = null,
+    bool IsOwner = false, string? SpaceId = null, string? SpaceName = null, int MemberCount = 1);
 public sealed record GitHubOperationResponse(bool Ok, TaskErrorResponse? Error);
 public sealed record GitHubCandidatesResponse(bool Ok, IReadOnlyList<GitHubCandidateDto> Repositories, string? NextCursor, TaskErrorResponse? Error);
 
-public sealed record GitHubSyncRequest(string? RepositoryId);
+public sealed record GitHubSyncRequest(string? RepositoryId, string? SpaceId = null);
 public sealed record GitHubSyncDto(bool Running, string? StartedAtUtc, string? FinishedAtUtc, int? Created, int? Updated, int? CommentChanges, int? Conflicts, bool MorePages, TaskErrorResponse? Error);
 public sealed record GitHubSyncResponse(bool Ok, GitHubSyncDto? Sync, TaskErrorResponse? Error);
 
@@ -46,18 +51,18 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     [NeoRpcMethod("status")]
     public ValueTask<GitHubStatusResponse> StatusAsync(GitHubStatusRequest request, CancellationToken ct) =>
         Rpc.Run<GitHubStatusResponse>("github.status", async () => {
-            var status = await commands.StatusAsync(ct);
-            var targets = await store.QueryAsync(async (s, token) =>
+            var status = await commands.StatusAsync(request.SpaceId, ct);
+            var (targets, members) = await store.QueryAsync(async (s, token) =>
             {
-                var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
-                var space = await s.Spaces.GetPersonalByOwnerAsync(profile.Id, token) ?? throw AppException.NotFound("Personal space is unavailable.");
+                var (_, space) = await GitHubSpaces.ResolveAsync(s, request.SpaceId, token);
                 var result = new List<GitHubTargetDto>();
                 foreach (var container in (await s.Containers.ListBySpaceAsync(space.Id, token)).Where(c => c.ArchivedAtUtc is null))
                     result.Add(new(container.Id, container.Name, (await s.Sections.ListByContainerAsync(container.Id, token)).Select(section => new GitHubSectionDto(section.Id, section.Title)).ToArray()));
-                return result;
+                return (result, space.Kind == SpaceKind.Shared ? (await s.People.ListAsync(space.Id, token)).Count(person => !person.Former) : 1);
             }, ct);
             return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags, c.RunnerDeviceName, status.IsRunner) : null,
-                status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString())).ToArray(), targets, null, SyncStatus(status.Connection));
+                status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString(), r.IsPrivate)).ToArray(), targets, null, SyncStatus(status.Connection),
+                status.IsOwner, status.SpaceId, status.SpaceName, members);
         },
             error => new(false, null, [], [], error));
 
@@ -67,13 +72,12 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             return await store.QueryAsync(async (s, token) =>
             {
                 var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
-                var space = await s.Spaces.GetPersonalByOwnerAsync(profile.Id, token) ?? throw AppException.NotFound("Personal space is unavailable.");
-                var task = await s.Tasks.GetIncludingDeletedAsync(request.TaskId, token);
-                if (task is null || task.SpaceId != space.Id) throw AppException.NotFound("Task was not found.");
+                var task = await s.Tasks.GetIncludingDeletedAsync(request.TaskId, token) ?? throw AppException.NotFound("Task was not found.");
+                var space = await s.Spaces.GetAsync(task.SpaceId, token) ?? throw AppException.NotFound("Task was not found.");
                 var link = await s.GitHub.FindLinkByTaskAsync(task.Id, token);
                 if (link is null || link.State == 4) return new GitHubTaskSyncResponse(true, false, false, null, null);
                 var c = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
-                if (c is null || c.DeletedAtUtc is not null || c.ProfileId != profile.Id || c.SpaceId != space.Id) return new(true, false, false, null, null);
+                if (c is null || c.DeletedAtUtc is not null || !await GitHubSpaces.IsMemberAsync(s, space, profile, token)) return new(true, false, false, null, null);
                 var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
                 var state = c.State == 1 || repo?.State == 1 ? "Paused" : c.State == 2 ? "Needs sign-in" : link.State switch { 0 when link.LastErrorKind is not null => "Needs attention", 0 => "Linked", 1 => "Out of scope", 2 => "Unavailable", _ => "Ignored" };
                 var baseline = StoredJsonFormats.ReadSnapshot<GitHubIssueSnapshot>(link.BaseJson);
@@ -83,8 +87,19 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 var activity = sync?.TaskStatus(task.Id);
                 if (link.LocalDirty && error is null && activity?.GitHubError is { } failure) error = Error(new(failure)).Message;
                 if (link.LocalDirty && error is null && activity?.AppError is { } appError) error = TaskRpcService.ToErrorResponse(appError).Message;
+                var pullRequests = (await s.GitHub.ListPullRequestLinksAsync(link.Id, token))
+                    .Select(pr => new GitHubPullRequestDto(Number(pr.Number), pr.Title, PullRequestState(pr.State), ReviewState(pr.ReviewState), pr.Url, pr.RepositoryFullName)).ToArray();
+                IReadOnlyList<string> unsent = [];
+                if (space.Kind == SpaceKind.Shared)
+                {
+                    var people = await s.People.ListAsync(space.Id, token);
+                    unsent = (await s.Tasks.ListAssigneesAsync(task.Id, token)).Where(row => row.DeletedAtUtc is null)
+                        .Select(row => people.FirstOrDefault(person => string.Equals(person.ActorId, "person:" + row.MemberId, StringComparison.OrdinalIgnoreCase)))
+                        .Where(person => person is not null && string.IsNullOrEmpty(person.GitHubLogin)).Select(person => person!.DisplayName).ToArray();
+                }
                 return new(true, true, link.LocalDirty, state, null, assigned, c.PostDiaryByDefault, Number(link.Version), link.ConflictNoticeUtc is not null,
-                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true, assignees);
+                    error, GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null, repo?.FullName, baseline?.MilestoneDue is not null, activity?.Running == true, assignees,
+                    await GitHubSpaces.IsOwnerAsync(s, space, profile, token), pullRequests, unsent, c.AccountLogin, space.Kind == SpaceKind.Shared);
             }, ct);
         },
             error => new(false, false, false, null, error));
@@ -97,6 +112,9 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         if (localIntent is { } intent ? intent == 1 : known.Contains(accountLogin, StringComparer.OrdinalIgnoreCase)) result.Insert(0, accountLogin);
         return result;
     }
+
+    public static string PullRequestState(int state) => state switch { 1 => "Draft", 2 => "Merged", 3 => "Closed", _ => "Open" };
+    public static string ReviewState(int state) => state switch { 1 => "Approved", 2 => "Changes requested", 3 => "Review required", _ => "None" };
 
     [NeoRpcMethod("attachment")]
     public async ValueTask<GitHubAttachmentResponse> AttachmentAsync(GitHubAttachmentRequest request, CancellationToken ct)
@@ -111,15 +129,15 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             var context = await store.QueryAsync(async (s, token) =>
             {
                 var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
-                var space = await s.Spaces.GetPersonalByOwnerAsync(profile.Id, token) ?? throw AppException.NotFound("Personal space is unavailable.");
                 var task = await s.Tasks.GetIncludingDeletedAsync(request.TaskId, token);
-                if (task is null || task.DeletedAtUtc is not null || task.SpaceId != space.Id || !task.Notes.Contains(request.Url, StringComparison.Ordinal))
+                if (task is null || task.DeletedAtUtc is not null || !task.Notes.Contains(request.Url, StringComparison.Ordinal))
                     throw AppException.NotFound("Attachment was not found in this task.");
+                var space = await s.Spaces.GetAsync(task.SpaceId, token) ?? throw AppException.NotFound("Task was not found.");
+                if (!await GitHubSpaces.IsMemberAsync(s, space, profile, token)) throw AppException.NotFound("Attachment was not found in this task.");
                 var link = await s.GitHub.FindLinkByTaskAsync(task.Id, token);
                 if (link is null || link.State == 4) throw AppException.NotFound("Task is not connected to GitHub.");
                 var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
-                if (connection is null || connection.DeletedAtUtc is not null || connection.ProfileId != profile.Id || connection.SpaceId != space.Id)
-                    throw AppException.NotFound("GitHub connection is unavailable.");
+                if (connection is null || connection.DeletedAtUtc is not null) throw AppException.NotFound("GitHub connection is unavailable.");
                 return (Account: new GitHubAccount(connection.AccountId, connection.AccountLogin), IssueUrl: GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null);
             }, ct);
             issueUrl = context.IssueUrl;
@@ -134,10 +152,11 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     public ValueTask<GitHubSyncResponse> SyncNowAsync(GitHubSyncRequest request, CancellationToken ct) =>
         Rpc.Run<GitHubSyncResponse>("github.syncNow", async () => {
             ct.ThrowIfCancellationRequested();
-            if (sync is null) throw new AppException(AppErrorKind.UnsupportedCapability, "GitHub sync is not configured in this host.");
-            var current = await commands.StatusAsync(ct);
+            var current = await commands.StatusAsync(request.SpaceId, ct);
             var connection = current.Connection ?? throw AppException.NotFound("Connect to GitHub first.");
+            if (!current.IsOwner) throw AppException.Validation("spaceId", GitHubSpaces.OwnerOnly(current.SpaceName ?? "this space"));
             if (!current.IsRunner) throw AppException.Validation("runner", "GitHub sync runs on another device. Select this device in GitHub settings first.");
+            if (sync is null) throw new AppException(AppErrorKind.UnsupportedCapability, "GitHub sync is not configured in this host.");
             var activity = sync.RequestSync(string.IsNullOrWhiteSpace(request.RepositoryId) ? null : request.RepositoryId, connection.Id);
             return new(true, MapSync(activity), null);
         },
@@ -160,7 +179,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     public async ValueTask<GitHubOperationResponse> ConnectAsync(GitHubConnectRequest request, CancellationToken ct)
     {
         using var rpcScope = ActivityScope.Rpc("github.connect");
-        return await Run(async () => { await commands.ConnectAsync(new(request.OperationId), ct); scheduler?.Wake(); });
+        return await Run(async () => { await commands.ConnectAsync(new(request.OperationId, request.SpaceId), ct); scheduler?.Wake(); });
     }
     [NeoRpcMethod("runOnThisDevice")]
     public async ValueTask<GitHubOperationResponse> RunOnThisDeviceAsync(GitHubChangeRequest request, CancellationToken ct)
@@ -181,7 +200,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         using var rpcScope = ActivityScope.Rpc("github.listRepositories");
         try
         {
-            var result = await commands.ListReachableRepositoriesAsync(request.Cursor, ct);
+            var result = await commands.ListReachableRepositoriesAsync(request.Cursor, request.SpaceId, ct);
             return new(true, result.Repositories.Select(c => Candidate(c.Repository, c.AlreadyAdded)).ToArray(), result.NextCursor, null);
         }
         catch (AppException e) { return new(false, [], null, TaskRpcService.ToErrorResponse(e)); }
@@ -191,7 +210,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     public async ValueTask<GitHubCandidatesResponse> LookupRepositoryAsync(GitHubLookupRequest request, CancellationToken ct)
     {
         using var rpcScope = ActivityScope.Rpc("github.lookupRepository");
-        try { var result = await commands.LookupRepositoryAsync(request.Owner, request.Name, ct); return new(true, [Candidate(result.Repository, result.AlreadyAdded)], null, null); }
+        try { var result = await commands.LookupRepositoryAsync(request.Owner, request.Name, request.SpaceId, ct); return new(true, [Candidate(result.Repository, result.AlreadyAdded)], null, null); }
         catch (AppException e) { return new(false, [], null, TaskRpcService.ToErrorResponse(e)); }
         catch (GitHubApiException e) { return new(false, [], null, Error(e)); }
     }

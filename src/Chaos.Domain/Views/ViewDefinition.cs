@@ -46,14 +46,18 @@ public static class ViewFieldCatalog
         new("hasPadLink", ViewFieldType.Flag, ["is"]),
         new("hasPageMention", ViewFieldType.Flag, ["is"]),
         new("recurring", ViewFieldType.Flag, ["is"]),
-        // GitHub group (D7, personal views): answered from the stored issue baseline and the label and
-        // milestone mappings, so only what the app already keeps. Author and linked pull requests are
-        // not stored by the sync and are therefore not offered.
+        // GitHub group (D7, personal views and shared views since Q10): answered from the stored issue baseline, the
+        // label and milestone mappings and the linked pull requests the runner keeps (Q15 completes G9), so only
+        // what the app already holds. "None" for a review means no linked pull request has a review decision.
         new("githubRepository", ViewFieldType.Id, ["is", "isNot", "in"]),
         new("githubState", ViewFieldType.Choice, ["is"], ["Open", "Closed"]),
         new("githubLabel", ViewFieldType.Text, ["contains", "isEmpty"]),
         new("githubMilestone", ViewFieldType.Text, ["contains", "isEmpty"]),
         new("githubAssignee", ViewFieldType.Text, ["contains", "isEmpty"]),
+        new("githubAuthor", ViewFieldType.Text, ["contains", "isEmpty"]),
+        new("githubLinkedPr", ViewFieldType.Flag, ["is"]),
+        new("githubPrReview", ViewFieldType.Choice, ["is"], ["None", "Approved", "Changes requested", "Review required"]),
+        new("githubIssueType", ViewFieldType.Text, ["contains", "isEmpty"]),
     ];
 
     public static ViewFieldInfo? Find(string name) => All.FirstOrDefault(field => field.Name == name);

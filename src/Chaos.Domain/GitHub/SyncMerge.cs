@@ -6,7 +6,7 @@ public readonly record struct FieldMerge<T>(T Value, bool Push, bool Conflict);
 public sealed record IssueConflicts(string? Title, string? Body, GitHubIssueState? State);
 public sealed record IssuePush(string? Title, string? Body, GitHubIssueState? State,
     IReadOnlySet<long> AddLabels, IReadOnlySet<long> RemoveLabels,
-    IReadOnlySet<long> AddAssignees, IReadOnlySet<long> RemoveAssignees);
+    IReadOnlySet<string> AddAssignees, IReadOnlySet<string> RemoveAssignees);
 public sealed record IssueMerge(IssueProjection Value, IssuePush Push, IssueConflicts Conflicts);
 
 public static class SyncMerge
@@ -17,19 +17,19 @@ public static class SyncMerge
         var body = Field(@base.Body, local.Body, remote.Body);
         var state = Field(@base.State, local.State, remote.State);
         var labels = Set(@base.LabelIds, local.LabelIds, remote.LabelIds);
-        var assignees = Set(@base.AssigneeIds, local.AssigneeIds, remote.AssigneeIds);
+        var assignees = Set(@base.Assignees, local.Assignees, remote.Assignees, IssueProjection.LoginComparer);
         var value = new IssueProjection(title.Value, body.Value, state.Value, labels, assignees);
         var push = new IssuePush(title.Push ? title.Value : null, body.Push ? body.Value : null,
             state.Push ? state.Value : null,
             Difference(labels, remote.LabelIds), Difference(remote.LabelIds, labels),
-            Difference(assignees, remote.AssigneeIds), Difference(remote.AssigneeIds, assignees));
+            Difference(assignees, remote.Assignees, IssueProjection.LoginComparer), Difference(remote.Assignees, assignees, IssueProjection.LoginComparer));
         return new(value, push, new(title.Conflict ? local.Title : null,
             body.Conflict ? local.Body : null, state.Conflict ? local.State : null));
     }
 
-    private static HashSet<long> Difference(IEnumerable<long> left, IEnumerable<long> right)
+    private static HashSet<T> Difference<T>(IEnumerable<T> left, IEnumerable<T> right, IEqualityComparer<T>? comparer = null)
     {
-        var difference = new HashSet<long>(left);
+        var difference = new HashSet<T>(left, comparer);
         difference.ExceptWith(right);
         return difference;
     }
@@ -45,6 +45,7 @@ public static class SyncMerge
 
     public static HashSet<T> Set<T>(IEnumerable<T> @base, IEnumerable<T> local, IEnumerable<T> remote, IEqualityComparer<T>? comparer = null)
     {
+        comparer ??= EqualityComparer<T>.Default;
         var original = new HashSet<T>(@base, comparer);
         var current = new HashSet<T>(local, comparer);
         var result = new HashSet<T>(remote, comparer);

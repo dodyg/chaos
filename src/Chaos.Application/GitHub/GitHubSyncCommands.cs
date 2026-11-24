@@ -6,7 +6,7 @@ namespace Chaos.Application.GitHub;
 public sealed record GitHubSyncResult(int Created, int Updated, int CommentChanges, int Conflicts, bool MorePages);
 public interface IGitHubSyncRunner
 {
-    Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null);
+    Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? connectionId = null);
     Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct);
 }
 
@@ -18,14 +18,14 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
     {
         var context = await store.QueryAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var task = await s.Tasks.GetAsync(taskId, token);
             var link = await s.GitHub.FindLinkByTaskAsync(taskId, token);
-            if (task is null || task.SpaceId != space.Id || link is not { State: 0 or 2, LocalDirty: true } || link.NextAttemptUtc > clock.GetUtcNow()) return null;
+            if (task is null || link is not { State: 0 or 2, LocalDirty: true } || link.NextAttemptUtc > clock.GetUtcNow()) return null;
             var repo = await s.GitHub.GetRepositoryAsync(link.RepositorySubscriptionId, token);
             var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
             if (repo is not { State: 0, DeletedAtUtc: null } || connection is not { State: 0, DeletedAtUtc: null }
-                || connection.ProfileId != profile.Id || connection.SpaceId != space.Id || connection.RunnerDeviceId != await s.GitHub.GetDeviceIdAsync(token) || connection.RateLimitResetUtc > clock.GetUtcNow()
+                || !await GitHubSpaces.CanRunAsync(s, connection, profile, token) || connection.RunnerDeviceId != await s.GitHub.GetDeviceIdAsync(token) || connection.RateLimitResetUtc > clock.GetUtcNow()
                 || await s.GitHub.GetConnectionRetryAsync(connection.Id, token) > clock.GetUtcNow()) return null;
             return new { Link = link, Repo = repo, Connection = connection };
         }, ct);
@@ -67,17 +67,26 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
         }
     }
 
-    public async Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? expectedConnectionId = null)
+    /// <summary>One pass of one connection: the one named, or else the Personal space's. The device must be the connection's runner.</summary>
+    public async Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? connectionId = null)
     {
         var (connection, repositories) = await store.QueryAsync(async (s, token) =>
         {
-            var (_, space) = await GitHubConnectionCommands.Context(s, token);
-            var connection = await s.GitHub.GetConnectionForSpaceAsync(space.Id, token) ?? throw AppException.NotFound("Connect to GitHub first.");
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
+            GitHubConnectionRecord? connection = connectionId is null
+                ? await s.GitHub.GetConnectionForSpaceAsync((await GitHubSpaces.ResolveAsync(s, null, token)).Space.Id, token)
+                : await s.GitHub.GetConnectionAsync(connectionId, token);
+            // A pass asked for a connection that has since gone is a stale request, not a missing setup.
+            if (connection is null || connection.DeletedAtUtc is not null)
+            {
+                if (connectionId is null) throw AppException.NotFound("Connect to GitHub first.");
+                throw AppException.VersionConflict("The GitHub connection changed before sync started. Try again.");
+            }
             if (connection.RunnerDeviceId != await s.GitHub.GetDeviceIdAsync(token)) throw AppException.Validation("runner", "GitHub sync runs on another device. Select this device in GitHub settings first.");
+            if (!await GitHubSpaces.CanRunAsync(s, connection, profile, token)) throw AppException.Validation("spaceId", GitHubSpaces.OwnerOnly(await GitHubSpaces.SpaceOfAsync(s, connection, token)));
             var all = await s.GitHub.ListSubscriptionsAsync(connection.Id, token);
             if (repositoryId is not null && !all.Any(r => r.Id == repositoryId)) throw AppException.NotFound("Repository subscription was not found.");
             var selected = all.Where(r => r.State == 0 && (repositoryId is null || r.Id == repositoryId)).ToArray();
-            if (expectedConnectionId is not null && connection.Id != expectedConnectionId) throw AppException.VersionConflict("The GitHub connection changed before sync started. Try again.");
             return (connection, selected);
         }, ct);
         if (connection.State == 1) throw AppException.Validation("connection", "Resume the GitHub connection first.");

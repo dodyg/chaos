@@ -1,6 +1,7 @@
 using System.Text;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
+using Chaos.Application.People;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
 using Chaos.Domain.GitHub;
@@ -12,7 +13,26 @@ namespace Chaos.Application.GitHub;
 
 public sealed record GitHubInboundResult(int Created, int Updated, int Conflicts);
 
-/// <summary>Applies fetched issue snapshots in short transactions. No network, undo entry or credential access.</summary>
+/// <summary>The pull request states and review decisions as the app keeps them (GITHUB.md migration 019, PLAN3 10.6).</summary>
+public static class GitHubPullRequestState
+{
+    public const int Open = 0, Draft = 1, Merged = 2, Closed = 3;
+    public const int NoReview = 0, Approved = 1, ChangesRequested = 2, ReviewRequired = 3;
+
+    public static int Of(GitHubPullRequestRef pullRequest) => pullRequest.Merged || string.Equals(pullRequest.State, "MERGED", StringComparison.OrdinalIgnoreCase) ? Merged
+        : string.Equals(pullRequest.State, "CLOSED", StringComparison.OrdinalIgnoreCase) ? Closed
+        : pullRequest.IsDraft || string.Equals(pullRequest.State, "DRAFT", StringComparison.OrdinalIgnoreCase) ? Draft : Open;
+
+    public static int ReviewOf(string? decision) => decision?.ToUpperInvariant() switch
+    {
+        "APPROVED" => Approved,
+        "CHANGES_REQUESTED" => ChangesRequested,
+        "REVIEW_REQUIRED" => ReviewRequired,
+        _ => NoReview,
+    };
+}
+
+///<summary>Applies fetched issue snapshots in short transactions. No network, undo entry or credential access.</summary>
 public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
     public Task<GitHubInboundResult> ApplyAsync(string repositoryId, long expectedRepositoryVersion, IReadOnlyList<GitHubIssue> issues, CancellationToken ct = default)
@@ -20,11 +40,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         if (issues.Count > 50) throw new ArgumentOutOfRangeException(nameof(issues), "Inbound batches contain at most 50 issues.");
         return store.ExecuteAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
-            var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
-            var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token) ?? throw AppException.NotFound("GitHub connection was not found.");
-            if (repo.DeletedAtUtc is not null || connection.DeletedAtUtc is not null || connection.SpaceId != space.Id || connection.ProfileId != profile.Id || repo.State != 0 || connection.State != 0)
-                throw AppException.VersionConflict("The GitHub subscription is no longer active.");
+            var (profile, space, repo, connection) = await ActiveAsync(s, repositoryId, token);
             if (repo.Version != expectedRepositoryVersion) throw AppException.VersionConflict("Repository settings changed during the fetch. Run sync again.");
             var filter = GitHubIssueScope.Parse(repo.FilterJson);
             var now = clock.GetUtcNow();
@@ -76,7 +92,7 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                     ?? throw AppException.Validation("issue", "The GitHub issue baseline could not be read.");
                 if (link is not null && issue.UpdatedAt < link.BaseRemoteUpdatedUtc) continue;
                 if (transferred) baseline = baseline with { LabelIds = remote.LabelIds };
-                var local = task is null ? remote.Projection() : await Project(s, repo, link!, task, baseline, connection.AccountId, token);
+                var local = task is null ? remote.Projection() : await Project(s, repo, link!, task, baseline, connection, token);
                 var merge = SyncMerge.Issue(baseline.Projection(), local, remote.Projection());
                 var conflict = merge.Conflicts.Title is not null || merge.Conflicts.Body is not null || merge.Conflicts.State is not null;
                 var dirty = !merge.Value.EquivalentTo(remote.Projection()) || link is not null && (await s.GitHub.ListCommentLinksAsync(link.Id, token)).Any(comment => comment.State is 1 or 2 or 3);
@@ -117,6 +133,8 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
                 }
                 await Checklist(s, link!, task, now, token);
                 await Labels(s, profile.Id, repo, task.Id, issue.Labels, merge.Value.LabelIds, now, token);
+                // Member assignees follow the merged logins (PLAN3 10.3); written before the link's dirty flag is settled below.
+                task = await MemberAssignees(s, task, merge.Value.Assignees, baseline, now, token);
                 var after = await Snapshot(s, task, token);
                 if (before is not null && task.Version == before.Task.Version && StoredJsonFormats.Hash(before) != StoredJsonFormats.Hash(after))
                 {
@@ -142,7 +160,28 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         }, ct);
     }
 
-    internal static async Task<IssueProjection> Project(IDataSession s, GitHubRepositoryRecord repo, GitHubIssueLinkRecord link, TaskRecord task, GitHubIssueSnapshot baseline, long accountId, CancellationToken ct)
+    /// <summary>
+    /// The active repository and connection of a pass, on a device whose person owns the connection's space (the
+    /// Personal owner or a current owner member): the only device that may write what GitHub holds.
+    /// </summary>
+    private static async Task<(ProfileRecord Profile, SpaceRecord Space, GitHubRepositoryRecord Repo, GitHubConnectionRecord Connection)> ActiveAsync(IDataSession s, string repositoryId, CancellationToken ct)
+    {
+        var profile = await s.Profiles.GetPrimaryAsync(ct) ?? throw AppException.NotFound("Local profile is unavailable.");
+        var repo = await s.GitHub.GetRepositoryAsync(repositoryId, ct) ?? throw AppException.NotFound("Repository subscription was not found.");
+        var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, ct);
+        if (repo.DeletedAtUtc is not null || !await GitHubSpaces.CanRunAsync(s, connection, profile, ct))
+            throw AppException.VersionConflict("The GitHub subscription is no longer active.");
+        return (profile, await GitHubSpaces.SpaceOfAsync(s, connection!, ct), repo, connection!);
+    }
+
+    /// <summary>
+    /// The local projection of a linked task. Assignees are logins: the baseline's, plus what the person did locally.
+    /// In the Personal space that is the link's own "assign me" intent; in a shared space every member with a GitHub
+    /// login who is assigned to the task is on the issue, and one who was on it at the baseline but is no longer
+    /// assigned leaves it (PLAN3 10.3). A baseline from before logins were kept cannot be adjusted; the next pass
+    /// refreshes it.
+    /// </summary>
+    internal static async Task<IssueProjection> Project(IDataSession s, GitHubRepositoryRecord repo, GitHubIssueLinkRecord link, TaskRecord task, GitHubIssueSnapshot baseline, GitHubConnectionRecord connection, CancellationToken ct)
     {
         var subtasks = await s.Subtasks.ListByTaskAsync(task.Id, ct);
         var mappings = await s.GitHub.ListChecklistItemsAsync(link.Id, ct);
@@ -165,11 +204,39 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         }
         var labels = baseline.LabelIds.Where(id => !labelMappings.Any(m => m.LabelId == id)).ToHashSet();
         foreach (var mapping in labelMappings) if (tags.Contains(mapping.TagId)) labels.Add(mapping.LabelId);
-        var assignees = baseline.AssigneeIds.ToHashSet();
-        if (link.LocalAssigneeIntent == 1) assignees.Add(accountId);
-        else if (link.LocalAssigneeIntent == 0) assignees.Remove(accountId);
-        return new(task.Title, body, IssueStateMapping.FromTask(task.Status, new(baseline.Open, baseline.Reason)), labels, assignees);
+        return new(task.Title, body, IssueStateMapping.FromTask(task.Status, new(baseline.Open, baseline.Reason)), labels, await Assignees(s, link, task, baseline, connection, ct));
     }
+
+    /// <summary>The issue's assignee logins as the task would have them; see <see cref="Project"/>.</summary>
+    internal static async Task<HashSet<string>> Assignees(IDataSession s, GitHubIssueLinkRecord link, TaskRecord task, GitHubIssueSnapshot baseline, GitHubConnectionRecord connection, CancellationToken ct)
+    {
+        var logins = baseline.Projection().Assignees.ToHashSet(IssueProjection.LoginComparer);
+        if (baseline.AssigneeLogins is null) return logins;
+        if ((await s.Spaces.GetAsync(task.SpaceId, ct))?.Kind != SpaceKind.Shared)
+        {
+            if (link.LocalAssigneeIntent == 1) logins.Add(connection.AccountLogin);
+            else if (link.LocalAssigneeIntent == 0) logins.Remove(connection.AccountLogin);
+            return logins;
+        }
+        // A live assignee row puts the member's login on the issue; a tombstoned row (unassigned here) takes it off. A member
+        // with no row yet has not been matched by the inbound pass, so the issue's word stands until then.
+        var rows = await s.Tasks.ListAssigneesAsync(task.Id, ct);
+        foreach (var member in await MatchableMembersAsync(s, task.SpaceId, ct))
+        {
+            var row = rows.FirstOrDefault(candidate => string.Equals(candidate.MemberId, MemberGuid(member), StringComparison.OrdinalIgnoreCase));
+            if (row is { DeletedAtUtc: null }) logins.Add(member.GitHubLogin!);
+            else if (row is not null) logins.Remove(member.GitHubLogin!);
+        }
+        return logins;
+    }
+
+    /// <summary>Current owners and editors who set a GitHub login: the only people an issue's assignees can be matched to.</summary>
+    internal static async Task<IReadOnlyList<SpacePerson>> MatchableMembersAsync(IDataSession s, string spaceId, CancellationToken ct) =>
+        (await s.People.ListAsync(spaceId, ct)).Where(person => !person.Former && person.Role is 1 or 2 && !string.IsNullOrEmpty(person.GitHubLogin)).ToArray();
+
+    /// <summary>The member id as <c>TaskAssignees</c> stores it: the bare profile GUID, without the <c>person:</c> prefix.</summary>
+    internal static string MemberGuid(SpacePerson person) =>
+        person.ActorId.StartsWith("person:", StringComparison.Ordinal) ? person.ActorId["person:".Length..] : person.ActorId;
 
     private async Task Checklist(IDataSession s, GitHubIssueLinkRecord link, TaskRecord task, DateTimeOffset now, CancellationToken ct)
     {
@@ -233,6 +300,43 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
         }
     }
 
+    /// <summary>
+    /// Assignee matching both ways in a shared space (PLAN3 10.3): a merged login that belongs to a current owner or
+    /// editor with that GitHub login makes the member an assignee of the task; a member whose login the merge dropped
+    /// (GitHub removed it, and nobody re-assigned them here) loses the assignment row. Members without a login, and
+    /// logins no member claims, are left alone. Returns the task, its version moved when an assignment changed.
+    /// </summary>
+    private async Task<TaskRecord> MemberAssignees(IDataSession s, TaskRecord task, IReadOnlySet<string> merged, GitHubIssueSnapshot baseline, DateTimeOffset now, CancellationToken ct)
+    {
+        if ((await s.Spaces.GetAsync(task.SpaceId, ct))?.Kind != SpaceKind.Shared) return task;
+        var members = await MatchableMembersAsync(s, task.SpaceId, ct);
+        if (members.Count == 0) return task;
+        var rows = (await s.Tasks.ListAssigneesAsync(task.Id, ct)).Where(row => row.DeletedAtUtc is null).Select(row => row.MemberId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taskChanged = false;
+        foreach (var member in members)
+        {
+            var memberId = MemberGuid(member);
+            if (merged.Contains(member.GitHubLogin!))
+            {
+                if (rows.Add(memberId))
+                {
+                    await s.Tasks.SaveAssigneeAsync(new TaskAssigneeRecord(task.Id, memberId, now, null, null), ct);
+                    taskChanged = true;
+                }
+            }
+            else if (rows.Remove(memberId) && baseline.Projection().Assignees.Contains(member.GitHubLogin!))
+            {
+                var existing = (await s.Tasks.ListAssigneesAsync(task.Id, ct)).First(row => string.Equals(row.MemberId, memberId, StringComparison.OrdinalIgnoreCase));
+                await s.Tasks.SaveAssigneeAsync(existing with { DeletedAtUtc = now }, ct);
+                taskChanged = true;
+            }
+        }
+        if (!taskChanged) return task;
+        // The task's version moves so boards and views that read assignments refresh; the link's dirty flag is settled by the caller.
+        return await s.Tasks.UpdateAsync(task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, ct)
+            ?? throw AppException.VersionConflict("The task changed during GitHub import.");
+    }
+
     private async Task<(string ContainerId, string? SectionId)> Placement(IDataSession s, GitHubRepositoryRecord repo, GitHubMilestone? milestone, string space, DateTimeOffset now, CancellationToken ct)
     {
         if (!repo.MilestonesAsProjects || milestone is null) return (repo.TargetContainerId, repo.TargetSectionId);
@@ -271,10 +375,8 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
 
     public Task<bool> ApplyCatalogAsync(string repositoryId, long expectedVersion, IReadOnlyList<GitHubLabel> labels, IReadOnlyList<GitHubMilestone> milestones, CancellationToken ct) => store.ExecuteAsync(async (s, token) =>
     {
-        var (profile, space) = await GitHubConnectionCommands.Context(s, token);
-        var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
-        var connection = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-        if (repo.Version != expectedVersion || repo.State != 0 || repo.DeletedAtUtc is not null || connection is null || connection.SpaceId != space.Id || connection.ProfileId != profile.Id || connection.State != 0 || connection.DeletedAtUtc is not null) throw AppException.VersionConflict("Repository settings changed during catalog retrieval.");
+        var (profile, space, repo, connection) = await ActiveAsync(s, repositoryId, token);
+        if (repo.Version != expectedVersion || repo.State != 0 || connection.State != 0) throw AppException.VersionConflict("Repository settings changed during catalog retrieval.");
         var mappings = await s.GitHub.ListLabelTagsAsync(repo.Id, token);
         foreach (var label in labels)
         {
@@ -286,6 +388,22 @@ public sealed class GitHubInboundCommands(IApplicationStore store, IIdGenerator 
             if (projects.Any(m => m.MilestoneId == milestone.Id)) await Placement(s, repo, milestone, space.Id, clock.GetUtcNow(), token);
         return true;
     }, ct);
+
+    /// <summary>The complete set of pull requests GitHub reports as closing the linked issue (G9). No network here.</summary>
+    public Task<bool> ApplyPullRequestsAsync(string repositoryId, long expectedRepositoryVersion, string issueLinkId, IReadOnlyList<GitHubPullRequestRef> pullRequests, DateTimeOffset refreshedAtUtc, CancellationToken ct) =>
+        store.ExecuteAsync(async (s, token) =>
+        {
+            var (_, _, repo, connection) = await ActiveAsync(s, repositoryId, token);
+            var link = await s.GitHub.GetIssueLinkAsync(issueLinkId, token) ?? throw AppException.NotFound("GitHub issue link was not found.");
+            if (repo.Version != expectedRepositoryVersion || repo.State != 0 || link.RepositorySubscriptionId != repo.Id || link.ConnectionId != connection.Id || pullRequests.Count > 100)
+                throw AppException.VersionConflict("The GitHub issue link changed during retrieval.");
+            await s.GitHub.ReplacePullRequestLinksAsync(link.Id, [.. pullRequests.Select(pr => new GitHubPullRequestLinkRecord
+            {
+                IssueLinkId = link.Id, PullRequestId = pr.NodeId, RepositoryFullName = pr.RepositoryFullName, Number = pr.Number, Title = pr.Title,
+                State = GitHubPullRequestState.Of(pr), ReviewState = GitHubPullRequestState.ReviewOf(pr.ReviewDecision), Url = pr.HtmlUrl, RefreshedAtUtc = refreshedAtUtc,
+            })], token);
+            return true;
+        }, ct);
 
     private static async Task ValidatePlacement(IDataSession s, string containerId, string? sectionId, CancellationToken ct)
     {

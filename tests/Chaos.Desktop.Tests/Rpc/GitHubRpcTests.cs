@@ -8,6 +8,7 @@ using Chaos.Application.GitHub;
 using Chaos.Desktop.Services;
 using Chaos.Desktop.Tests.Testing;
 using Chaos.Infrastructure.Bootstrap;
+using Chaos.Infrastructure.Sqlite;
 using Chaos.Infrastructure.Tests.Testing;
 
 namespace Chaos.Desktop.Tests.Rpc;
@@ -68,6 +69,68 @@ public sealed class GitHubRpcTests
         await Assert.That(allowed.Ok).IsTrue();
         await Assert.That(allowed.ContentType).IsEqualTo("image/png");
         await Assert.That(allowed.Base64).IsEqualTo("AQID");
+    }
+
+    [Test]
+    public async Task SharedSpace_StatusSaysWhoManages_AndTaskSyncShowsPullRequestsAndUnsentAssignees()
+    {
+        const string space = "7e5e1a2b-9d3c-4f6e-8a1b-0c2d3e4f5a6b";
+        var clock = new FixedTimeProvider(new(2026, 11, 12, 8, 0, 0, TimeSpan.Zero));
+        var ids = new SequentialIdGenerator();
+        using var storage = await StorageBootstrap.StartAsync(StorageOptions.FromDataRoot(TestPaths.NewDataRoot()), "0.1.0", ids, clock, CancellationToken.None);
+        await storage.Store.ExecuteAsync((s, ct) =>
+        {
+            using var command = s.Connection().CreateCommand();
+            command.CommandText = """
+                INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) SELECT $space,Id,2,'Team','2026-11-12T08:00:00Z','2026-11-12T08:00:00Z' FROM Profiles LIMIT 1;
+                INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,GitHubLogin,Role,JoinedAtUtc) VALUES
+                  ('m-me',$space,(SELECT Id FROM Profiles LIMIT 1),1,'Me',NULL,1,'2026-11-12T08:00:00Z'),
+                  ('m-omar',$space,'11111111-1111-1111-1111-111111111111',1,'Omar','omar',2,'2026-11-12T08:00:00Z');
+                INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('team-inbox',$space,0,'Inbox','inbox',0,'2026-11-12T08:00:00Z','2026-11-12T08:00:00Z');
+                """;
+            command.Parameters.AddWithValue("$space", space);
+            return command.ExecuteNonQueryAsync(ct);
+        }, CancellationToken.None);
+        var api = new FakeGitHub { Account = new(1, "person") };
+        api.PutRepository(new(9, "R9", "repo", "person/repo", new(1, "person"), "https://github.com/person/repo", true, true));
+        api.PutIssue("person/repo", new GitHubIssue(1, "I_1", 1, "https://github.com/person/repo/issues/1", "Issue", "Body", "open", null, new(2, "octocat"), [], [], null, null, clock.GetUtcNow(), clock.GetUtcNow(), null, 0, null));
+        var commands = new GitHubConnectionCommands(storage.Store, api, ids, clock);
+        var connection = await commands.ConnectAsync(new(Op(), space));
+        var repo = await commands.AddRepositoryAsync(new(Op(), connection.Id, connection.Version, "person", "repo", 9, "team-inbox", null, GitHubFilter.Empty, false));
+        var inbound = new GitHubInboundCommands(storage.Store, ids, clock);
+        await inbound.ApplyAsync(repo.Id, repo.Version, [await api.GetIssueAsync(api.Account, "person", "repo", 1, CancellationToken.None)]);
+        var link = (await storage.Store.QueryAsync((s, ct) => s.GitHub.FindLinkByIssueAsync(connection.Id, 1, ct)))!;
+        await inbound.ApplyPullRequestsAsync(repo.Id, repo.Version, link.Id,
+            [new GitHubPullRequestRef(77, "PR_77", "person/repo", 7, "Fixes #1", "https://github.com/person/repo/pull/7", "OPEN", false, false, "REVIEW_REQUIRED")], clock.GetUtcNow(), CancellationToken.None);
+        var profile = (await storage.Store.QueryAsync((s, ct) => s.Profiles.GetPrimaryAsync(ct), CancellationToken.None))!;
+        await new TaskCommands(storage.Store, ids, clock).ChangeAssigneeAsync(new(Op(), link.TaskId!, 1, profile.Id, true), CancellationToken.None);
+        var rpc = new GitHubRpcService(commands, storage.Store);
+
+        var status = await rpc.StatusAsync(new(space), CancellationToken.None);
+        await Assert.That((status.IsOwner, status.SpaceName, status.MemberCount, status.Repositories.Single().IsPrivate, status.Connection!.IsRunner)).IsEqualTo((true, "Team", 2, true, true));
+        var detail = await rpc.TaskSyncAsync(new(link.TaskId!), CancellationToken.None);
+        await Assert.That((detail.Connected, detail.CanManage, detail.CommentsSigned, detail.PostedAs)).IsEqualTo((true, true, true, "person"));
+        await Assert.That(detail.PullRequests!.Single()).IsEqualTo(new GitHubPullRequestDto("7", "Fixes #1", "Open", "Review required", "https://github.com/person/repo/pull/7", "person/repo"));
+        await Assert.That(detail.UnsentAssignees).IsEquivalentTo(["Me"]);
+        var refused = await rpc.SyncNowAsync(new(null, space), CancellationToken.None);
+        await Assert.That(refused.Error!.Message).IsNotEqualTo("Only owners of Team manage its GitHub connection.");
+
+        await storage.Store.ExecuteAsync((s, ct) => Sql(s, "UPDATE SpaceMembers SET Role=2 WHERE Id='m-me';", ct), CancellationToken.None);
+        status = await rpc.StatusAsync(new(space), CancellationToken.None);
+        await Assert.That(status.IsOwner).IsFalse();
+        detail = await rpc.TaskSyncAsync(new(link.TaskId!), CancellationToken.None);
+        await Assert.That((detail.Connected, detail.CanManage)).IsEqualTo((true, false));
+        refused = await rpc.SyncNowAsync(new(null, space), CancellationToken.None);
+        await Assert.That(refused.Error!.Message).IsEqualTo("Only owners of Team manage its GitHub connection.");
+        await Assert.That((await rpc.ConnectAsync(new(Op(), space), CancellationToken.None)).Error!.Message).IsEqualTo("Only owners of Team manage its GitHub connection.");
+        await Assert.That(api.Requests).IsEqualTo(3); // setup account, repository lookup, the issue read; nothing for the refusals
+    }
+
+    private static Task<int> Sql(IDataSession s, string sql, CancellationToken ct)
+    {
+        using var command = s.Connection().CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteNonQueryAsync(ct);
     }
 
     private static string Op() => Guid.NewGuid().ToString();

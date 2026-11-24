@@ -52,6 +52,7 @@ public interface IGitHubApi
     Task AddLabelAsync(GitHubAccount account, string owner, string name, long number, string label, CancellationToken ct);
     Task RemoveLabelAsync(GitHubAccount account, string owner, string name, long number, string label, CancellationToken ct);
     Task<GitHubLabel> CreateLabelAsync(GitHubAccount account, string owner, string name, string label, CancellationToken ct);
-    Task SetSelfAssignmentAsync(GitHubAccount account, string owner, string name, long number, bool assign, CancellationToken ct);
+    /// <summary>Adds or removes one assignee by login: the connected account, or a member's GitHub login (PLAN3 10.3).</summary>
+    Task SetAssignmentAsync(GitHubAccount account, string owner, string name, long number, string login, bool assign, CancellationToken ct);
     Task<IReadOnlyDictionary<string, IReadOnlyList<GitHubPullRequestRef>>> GetClosingPullRequestsAsync(GitHubAccount account, IReadOnlyList<string> issueNodeIds, CancellationToken ct);
 }

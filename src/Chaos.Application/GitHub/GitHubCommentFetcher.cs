@@ -38,10 +38,10 @@ public sealed class GitHubCommentFetcher(IApplicationStore store, IGitHubApi api
     {
         var (repo, account, checkpoint, rotationRow) = await store.QueryAsync(async (s, token) =>
         {
-            var (profile, space) = await GitHubConnectionCommands.Context(s, token);
+            var profile = await s.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
             var repo = await s.GitHub.GetRepositoryAsync(repositoryId, token) ?? throw AppException.NotFound("Repository subscription was not found.");
             var c = await s.GitHub.GetConnectionAsync(repo.ConnectionId, token);
-            if (repo.DeletedAtUtc is not null || repo.State != 0 || c is null || c.State != 0 || c.DeletedAtUtc is not null || c.ProfileId != profile.Id || c.SpaceId != space.Id) throw Changed();
+            if (repo.DeletedAtUtc is not null || repo.State != 0 || c is null || c.State != 0 || !await GitHubSpaces.CanRunAsync(s, c, profile, token)) throw Changed();
             return (repo, new GitHubAccount(c.AccountId, c.AccountLogin), await s.GitHub.GetCheckpointAsync(repo.Id, "comments", token), await s.GitHub.GetCheckpointAsync(repo.Id, "comment-check", token));
         }, ct);
         var previous = checkpoint?.RepositoryVersion == repo.Version ? StoredJsonFormats.ReadSnapshot<GitHubCommentScan>(checkpoint.PayloadJson) : null;
