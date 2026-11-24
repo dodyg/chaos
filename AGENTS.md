@@ -12,6 +12,8 @@ During development, build affected projects and run focused tests, including rea
 server changes. Before handing off a coherent change or completing a package, run the full gate described in
 `PLAN3.md` section 0; rerun affected checks after later changes. Report skipped checks and actual test counts.
 `eng/verify.ps1` reports step and project timings and stops on test failures without rerunning the suite.
+`tests/Chaos.Infrastructure.Tests` runs its tests one at a time (`Parallelism.cs`, an assembly-level TUnit `ParallelLimiter`):
+its file-backed SQLite tests saturate the machine at TUnit's default of one test per logical processor. Keep that cap.
 
 ## Server test PostgreSQL speed
 

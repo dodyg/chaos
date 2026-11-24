@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Calendar;
 
 namespace Chaos.Infrastructure.Calendar;
 
@@ -46,6 +47,8 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 {
     public const string ScopeCalendarList = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
     public const string ScopeEvents = "https://www.googleapis.com/auth/calendar.events.readonly";
+    /// <summary>Create secondary calendars and manage only their events (PLAN3 §11); asked for only when time blocking is turned on.</summary>
+    public const string ScopeAppCreated = GoogleCalendarScopes.AppCreated;
     public const string Scopes = "openid email " + ScopeCalendarList + " " + ScopeEvents;
 
     public const string AuthorizeEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -87,7 +90,13 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 
     // ---- Sign-in ---------------------------------------------------------------------------------
 
-    public async Task<GoogleSignIn> SignInAsync(CancellationToken ct)
+    public Task<GoogleSignIn> SignInAsync(CancellationToken ct) => SignInAsync([], ct);
+
+    /// <summary>
+    /// Incremental consent (PLAN3 §11): the extra scopes join the read-only ones and <c>include_granted_scopes</c> keeps
+    /// what the person granted before, so a sign-in for time blocking does not take the calendars away.
+    /// </summary>
+    public async Task<GoogleSignIn> SignInAsync(IReadOnlyList<string> extraScopes, CancellationToken ct)
     {
         var config = _config ?? throw new GoogleCalendarException(GoogleFailure.NotConfigured, "Google sign-in is not set up in this build of Chaos.");
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
@@ -97,10 +106,11 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var redirect = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
+        var scope = extraScopes is { Count: > 0 } ? Scopes + " " + string.Join(" ", extraScopes) : Scopes;
         var url = new Uri(AuthorizeEndpoint + "?" + Query(
-            ("client_id", config.ClientId), ("redirect_uri", redirect), ("response_type", "code"), ("scope", Scopes),
+            ("client_id", config.ClientId), ("redirect_uri", redirect), ("response_type", "code"), ("scope", scope),
             ("code_challenge", challenge), ("code_challenge_method", "S256"), ("state", state),
-            ("access_type", "offline"), ("prompt", "consent select_account")));
+            ("access_type", "offline"), ("prompt", "consent select_account"), ("include_granted_scopes", "true")));
         if (!_browser.Open(url))
         {
             throw new GoogleCalendarException(GoogleFailure.Other, "Chaos could not open your web browser to sign in to Google.");
@@ -345,6 +355,180 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 
     private static string? Https(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? uri.AbsoluteUri : null;
 
+    // ---- Time blocking (PLAN3 §11): the app calendar ----------------------------------------------------
+
+    public async Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct)
+    {
+        using var document = await ApiAsync(refreshToken, HttpMethod.Post, "calendars", "{\"summary\":" + JsonText(name) + "}", ct);
+        var id = Text(document.RootElement, "id");
+        if (id is null)
+        {
+            throw new GoogleCalendarException(GoogleFailure.Other, "Google did not say which calendar it created. Try again.");
+        }
+
+        return new GoogleCalendarInfo(id, Text(document.RootElement, "summary") ?? name, Text(document.RootElement, "backgroundColor"), false);
+    }
+
+    public async Task DeleteCalendarAsync(string refreshToken, string calendarId, CancellationToken ct)
+    {
+        var response = await SendApiAsync(refreshToken, HttpMethod.Delete, CalendarPath(calendarId), null, ct);
+        if (response.Status == HttpStatusCode.NotFound)
+        {
+            return; // already gone: the goal is met
+        }
+
+        using (var document = ParseJson(response.Body))
+        {
+            if (!response.Success)
+            {
+                throw ApiError(response.Status, document);
+            }
+        }
+    }
+
+    public async Task<GoogleEventWrite> InsertEventAsync(string refreshToken, string calendarId, GoogleEventBody body, CancellationToken ct)
+    {
+        var response = await SendApiAsync(refreshToken, HttpMethod.Post, CalendarPath(calendarId) + "/events", EventJson(body), ct);
+        using var document = ParseJson(response.Body);
+        if (response.Status == HttpStatusCode.Conflict)
+        {
+            return new GoogleEventWrite(true, false, Text(document.RootElement, "etag"), Updated(document.RootElement));
+        }
+
+        if (!response.Success)
+        {
+            throw ApiError(response.Status, document);
+        }
+
+        return new GoogleEventWrite(false, false, Text(document.RootElement, "etag"), Updated(document.RootElement));
+    }
+
+    public async Task<GoogleEventWrite> PatchEventAsync(string refreshToken, string calendarId, string eventId, GoogleEventBody body, CancellationToken ct)
+    {
+        var response = await SendApiAsync(refreshToken, HttpMethod.Patch, EventPath(calendarId, eventId), EventJson(body with { Id = null }), ct);
+        if (response.Status == HttpStatusCode.NotFound)
+        {
+            return new GoogleEventWrite(false, true, null, null);
+        }
+
+        using var document = ParseJson(response.Body);
+        if (!response.Success)
+        {
+            throw ApiError(response.Status, document);
+        }
+
+        return new GoogleEventWrite(false, false, Text(document.RootElement, "etag"), Updated(document.RootElement));
+    }
+
+    public async Task DeleteEventAsync(string refreshToken, string calendarId, string eventId, CancellationToken ct)
+    {
+        var response = await SendApiAsync(refreshToken, HttpMethod.Delete, EventPath(calendarId, eventId), null, ct);
+        if (response.Success || response.Status == HttpStatusCode.NotFound || response.Status == HttpStatusCode.Gone)
+        {
+            return;
+        }
+
+        using var document = ParseJson(response.Body);
+        throw ApiError(response.Status, document);
+    }
+
+    public async Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct)
+    {
+        var query = new List<(string, string)>
+        {
+            ("showDeleted", "true"), ("maxResults", "250"),
+            ("fields", "nextPageToken,nextSyncToken,items(id,etag,updated,status,summary,start,end)"),
+        };
+        if (pageToken is not null)
+        {
+            query.Add(("pageToken", pageToken));
+        }
+        else if (syncToken is not null)
+        {
+            query.Add(("syncToken", syncToken));
+        }
+
+        var response = await SendApiAsync(refreshToken, HttpMethod.Get, CalendarPath(calendarId) + "/events?" + Query([.. query]), null, ct);
+        if (response.Status == HttpStatusCode.Gone)
+        {
+            return new GoogleSyncPage([], null, null, true);
+        }
+
+        using var document = ParseJson(response.Body);
+        if (!response.Success)
+        {
+            throw ApiError(response.Status, document);
+        }
+
+        var root = document.RootElement;
+        var items = new List<GoogleEventChange>();
+        if (root.TryGetProperty("items", out var array) && array.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in array.EnumerateArray())
+            {
+                if (MapChange(item) is { } change)
+                {
+                    items.Add(change);
+                }
+            }
+        }
+
+        return new GoogleSyncPage(items, Text(root, "nextPageToken"), Text(root, "nextSyncToken"), false);
+    }
+
+    /// <summary>One change-feed entry: a cancelled event has an id, an etag and nothing else.</summary>
+    internal static GoogleEventChange? MapChange(JsonElement item)
+    {
+        var id = Text(item, "id");
+        if (id is null)
+        {
+            return null;
+        }
+
+        var cancelled = Text(item, "status") == "cancelled";
+        if (cancelled || !item.TryGetProperty("start", out var start) || !item.TryGetProperty("end", out var end)
+            || Text(start, "dateTime") is not { } startText || Text(end, "dateTime") is not { } endText
+            || !DateTimeOffset.TryParse(startText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var startInstant)
+            || !DateTimeOffset.TryParse(endText, CultureInfo.InvariantCulture, DateTimeStyles.None, out var endInstant))
+        {
+            return new GoogleEventChange(id, Text(item, "etag"), Updated(item), cancelled, null, null, null, null);
+        }
+
+        return new GoogleEventChange(id, Text(item, "etag"), Updated(item), false, Text(item, "summary"), startInstant.ToUniversalTime(), endInstant.ToUniversalTime(), Text(start, "timeZone"));
+    }
+
+    private static string CalendarPath(string calendarId) => "calendars/" + Uri.EscapeDataString(calendarId);
+
+    private static string EventPath(string calendarId, string eventId) => CalendarPath(calendarId) + "/events/" + Uri.EscapeDataString(eventId);
+
+    private static string EventJson(GoogleEventBody body)
+    {
+        var builder = new System.Text.StringBuilder(160);
+        builder.Append('{');
+        if (body.Id is not null)
+        {
+            builder.Append("\"id\":").Append(JsonText(body.Id)).Append(',');
+        }
+
+        if (body.Summary is not null)
+        {
+            builder.Append("\"summary\":").Append(JsonText(body.Summary)).Append(',');
+        }
+
+        // An event without a summary is Busy; opaque keeps the block busy on the person's calendar either way.
+        builder.Append("\"start\":{\"dateTime\":\"").Append(Instant(body.StartUtc)).Append("\",\"timeZone\":").Append(JsonText(body.TimeZoneId)).Append("},");
+        builder.Append("\"end\":{\"dateTime\":\"").Append(Instant(body.EndUtc)).Append("\",\"timeZone\":").Append(JsonText(body.TimeZoneId)).Append("},");
+        builder.Append("\"transparency\":\"opaque\"}");
+        return builder.ToString();
+    }
+
+    private static string Instant(DateTimeOffset instant) => instant.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    private static string JsonText(string value) => System.Text.Json.JsonSerializer.Serialize(value);
+
+    private static DateTimeOffset? Updated(JsonElement item) => Text(item, "updated") is { } text
+        && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var instant) ? instant.ToUniversalTime() : null;
+
     // ---- Revoke ------------------------------------------------------------------------------------
 
     public async Task<bool> RevokeAsync(string refreshToken, CancellationToken ct)
@@ -369,14 +553,11 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 
     // ---- HTTP, tokens and errors -------------------------------------------------------------------
 
-    private async Task<JsonDocument> GetAsync(string refreshToken, string relative, CancellationToken ct)
+    private async Task<JsonDocument> ApiAsync(string refreshToken, HttpMethod method, string relative, string? json, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var access = await AccessTokenAsync(refreshToken, ct);
-            using var request = new HttpRequestMessage(HttpMethod.Get, ApiRoot + relative);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access);
-            var response = await SendAsync(request, ct);
+            var response = await SendApiAsync(refreshToken, method, relative, json, ct);
             if (response.Status == HttpStatusCode.Unauthorized && attempt == 0)
             {
                 lock (_gate)
@@ -399,6 +580,22 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
             }
         }
     }
+
+    /// <summary>One authorized call with the current access token, without the 401 retry.</summary>
+    private async Task<Reply> SendApiAsync(string refreshToken, HttpMethod method, string relative, string? json, CancellationToken ct)
+    {
+        var access = await AccessTokenAsync(refreshToken, ct);
+        using var request = new HttpRequestMessage(method, ApiRoot + relative);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access);
+        if (json is not null)
+        {
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        }
+
+        return await SendAsync(request, ct);
+    }
+
+    private Task<JsonDocument> GetAsync(string refreshToken, string relative, CancellationToken ct) => ApiAsync(refreshToken, HttpMethod.Get, relative, null, ct);
 
     private async Task<string> AccessTokenAsync(string refreshToken, CancellationToken ct)
     {
@@ -509,6 +706,8 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
             HttpStatusCode.Unauthorized => new GoogleCalendarException(GoogleFailure.SignInAgain, GoogleCalendarMessages.SignInAgain),
             HttpStatusCode.Forbidden when reason is "rateLimitExceeded" or "userRateLimitExceeded" or "quotaExceeded" =>
                 new GoogleCalendarException(GoogleFailure.Other, "Google Calendar is limiting requests. Chaos will try again."),
+            HttpStatusCode.Forbidden when reason is "insufficientPermissions" =>
+                new GoogleCalendarException(GoogleFailure.SignInAgain, "Google Calendar did not allow that change. Sign in again so Chaos can update its own calendar."),
             HttpStatusCode.Forbidden => new GoogleCalendarException(GoogleFailure.Blocked, "Google Calendar is blocked for this account or calendar. A Google Workspace administrator may need to allow it."),
             HttpStatusCode.NotFound => new GoogleCalendarException(GoogleFailure.Other, "Google no longer shows that calendar to this account."),
             HttpStatusCode.TooManyRequests => new GoogleCalendarException(GoogleFailure.Other, "Google Calendar is limiting requests. Chaos will try again."),

@@ -15,6 +15,7 @@ import type {
   TagResponse,
   TaskQueryRequest,
   TaskResponse,
+  TimeBlockStatusDto,
   UndoEntryResponse,
   WeekBoardDto,
   WeekOverviewDto,
@@ -1023,6 +1024,144 @@ function googleHandlers(): Record<string, Handler> {
       if (index >= 0) googleAccounts.splice(index, 1);
       for (let i = calendarSources.length - 1; i >= 0; i--) if (calendarSources[i].provider === "Google") calendarSources.splice(i, 1);
       return ok({ revoked: true });
+    },
+  };
+}
+// Time blocking (PLAN3 §11): one fake status with the preview's spaces; enabling pretends a calendar was created.
+let timeBlock: TimeBlockStatus = {
+  enabled: false,
+  accountId: null,
+  accountEmail: null,
+  showTitles: true,
+  calendarId: null,
+  isRunner: false,
+  lastPassUtc: null,
+  lastError: null,
+  needsSignIn: false,
+  eventCount: 0,
+  profileVersion: "1",
+};
+type TimeBlockStatus = Omit<TimeBlockStatusDto, "spaces" | "accounts">;
+let timeBlockSpaces: Set<string> | null = null;
+function timeBlockView(): TimeBlockStatusDto {
+  return {
+    ...timeBlock,
+    spaces: spaces.map((space) => ({
+      id: space.spaceId,
+      name: space.name,
+      personal: space.kind === "Personal",
+      chosen: timeBlockSpaces === null || timeBlockSpaces.has(space.spaceId),
+    })),
+    accounts: googleAccounts.map((account) => ({ id: account.id, email: account.email, signedInHere: account.signedInHere })),
+  };
+}
+function timeBlockHandlers(): Record<string, Handler> {
+  return {
+    "timeBlock.status": () => ok({ configured: googleConfigured, status: timeBlockView() }),
+    "timeBlock.enable": (r: { accountId: string; showTitles: boolean; spaceIds: string[] | null }) => {
+      const account = googleAccounts.find((a) => a.id === r.accountId);
+      if (!account)
+        return {
+          ok: false,
+          status: null,
+          error: {
+            kind: "Validation",
+            message: "Choose a Google account that is connected on this device.",
+            fields: [],
+            correlationId: "c",
+          },
+        };
+      timeBlock = {
+        ...timeBlock,
+        enabled: true,
+        accountId: account.id,
+        accountEmail: account.email,
+        showTitles: r.showTitles,
+        calendarId: timeBlock.calendarId ?? "chaos_calendar",
+        isRunner: true,
+        lastPassUtc: now(),
+        lastError: null,
+        needsSignIn: false,
+        eventCount: 2,
+        profileVersion: String(Number(timeBlock.profileVersion) + 1),
+      };
+      timeBlockSpaces = r.spaceIds && r.spaceIds.length > 0 ? new Set(r.spaceIds) : null;
+      return ok({ status: timeBlockView() });
+    },
+    "timeBlock.update": (r: { expectedVersion: string; showTitles: boolean; spaceIds: string[] | null }) => {
+      if (r.expectedVersion !== timeBlock.profileVersion)
+        return {
+          ok: false,
+          status: null,
+          error: {
+            kind: "VersionConflict",
+            message: "That setting changed elsewhere. Refresh and try again.",
+            fields: [],
+            correlationId: "c",
+          },
+        };
+      timeBlock = { ...timeBlock, showTitles: r.showTitles, profileVersion: String(Number(timeBlock.profileVersion) + 1) };
+      timeBlockSpaces = r.spaceIds && r.spaceIds.length > 0 ? new Set(r.spaceIds) : null;
+      return ok({ status: timeBlockView() });
+    },
+    "timeBlock.runOnThisDevice": (r: { expectedVersion: string }) => {
+      if (r.expectedVersion !== timeBlock.profileVersion)
+        return {
+          ok: false,
+          status: null,
+          error: {
+            kind: "VersionConflict",
+            message: "That setting changed elsewhere. Refresh and try again.",
+            fields: [],
+            correlationId: "c",
+          },
+        };
+      timeBlock = { ...timeBlock, isRunner: true, profileVersion: String(Number(timeBlock.profileVersion) + 1) };
+      return ok({ status: timeBlockView() });
+    },
+    "timeBlock.syncNow": () =>
+      ok({
+        pass: {
+          ran: timeBlock.enabled && timeBlock.isRunner,
+          error: null,
+          needsSignIn: false,
+          pushed: 0,
+          updated: 2,
+          removed: 0,
+          moved: 0,
+          conflicts: 0,
+        },
+        status: timeBlockView(),
+      }),
+    "timeBlock.signIn": () => ok({ status: { ...timeBlockView(), needsSignIn: false, lastError: null } }),
+    "timeBlock.disable": (r: { expectedVersion: string; deleteCalendar: boolean }) => {
+      if (r.expectedVersion !== timeBlock.profileVersion)
+        return {
+          ok: false,
+          status: null,
+          calendarDeleted: false,
+          error: {
+            kind: "VersionConflict",
+            message: "That setting changed elsewhere. Refresh and try again.",
+            fields: [],
+            correlationId: "c",
+          },
+        };
+      const deleted = r.deleteCalendar && !!timeBlock.calendarId;
+      timeBlock = {
+        ...timeBlock,
+        enabled: false,
+        accountId: r.deleteCalendar ? null : timeBlock.accountId,
+        accountEmail: r.deleteCalendar ? null : timeBlock.accountEmail,
+        calendarId: r.deleteCalendar ? null : timeBlock.calendarId,
+        isRunner: false,
+        eventCount: 0,
+        lastError: null,
+        needsSignIn: false,
+        profileVersion: String(Number(timeBlock.profileVersion) + 1),
+      };
+      timeBlockSpaces = null;
+      return ok({ status: timeBlockView(), calendarDeleted: deleted });
     },
   };
 }
@@ -2312,6 +2451,7 @@ const handlers: Record<string, Handler> = {
   ...calendarHandlers(),
   ...calendarsHandlers(),
   ...googleHandlers(),
+  ...timeBlockHandlers(),
   ...accountHandlers(),
   ...syncStatusHandlers(),
   ...viewHandlers(),

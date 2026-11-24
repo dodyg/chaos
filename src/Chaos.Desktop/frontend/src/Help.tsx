@@ -201,7 +201,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       title: "Calendar and meetings",
       icon: <CalendarDays />,
       keywords:
-        "calendar month week day agenda drag reschedule planned due repeat unscheduled meetings google ics feed webcal busy sign in connect account decline refresh focus",
+        "calendar month week day agenda drag reschedule planned due repeat unscheduled meetings google ics feed webcal busy sign in connect account decline refresh focus time blocking block chaos calendar titles busy",
       body: (
         <>
           <p>
@@ -230,6 +230,14 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
               read). The first time, paste the client ID and secret of a Desktop OAuth client from Google Cloud. Then choose which calendars
               to show, with a colour and a busy-time choice each. Google calendars refresh every 5 minutes and when you return to the
               window; <em>Refresh now</em> fetches straight away, and a meeting you decline in Google disappears on the next refresh.
+            </li>
+            <li>
+              <strong>Time blocking.</strong> Turn it on under Settings → Calendars to show tasks with a planned time and an estimate as
+              blocks in a separate Google calendar named <em>Chaos</em>, which the app creates. Choose whether blocks show task titles or
+              just Busy, and which spaces count (a shared task only when it is assigned to you). Move a block in Google and the task's
+              planned time moves with it; delete the block and the task keeps its date but loses its time. If the task also changed here,
+              the newer change wins and the other one is kept in the task's history. Chaos never writes to any other calendar. One device of
+              yours keeps the calendar up to date every few minutes; turn time blocking off there, or move it to this device.
             </li>
           </ul>
           <p>

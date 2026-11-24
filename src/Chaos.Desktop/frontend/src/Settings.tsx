@@ -1,6 +1,7 @@
 import { GitHubSettings } from "./GitHubSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
+import { TimeBlockingSettings } from "./TimeBlockingSettings";
 import { AccountSettings } from "./AccountSettings";
 import React from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -379,6 +380,7 @@ export function Settings({
         <TabsContent value="calendars" className="grid gap-4">
           <CalendarSettings onChanged={onCalendarsChanged} />
           <GoogleCalendarSettings onChanged={onCalendarsChanged} />
+          <TimeBlockingSettings onChanged={onCalendarsChanged} />
         </TabsContent>
         <TabsContent value="account">
           <AccountSettings syncApi={syncStatusRpc} />

@@ -136,6 +136,29 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
     }
 
+    /// <summary>Q16: the time blocking settings (one synced group), in their own optimistic update.</summary>
+    public async Task<ProfileRecord?> UpdateTimeBlockSettingsAsync(ProfileRecord profile, long expectedVersion, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Profiles SET TimeBlockEnabled = $enabled, TimeBlockAccountId = $account, TimeBlockShowTitles = $titles,
+                TimeBlockRunnerDeviceId = $runner, TimeBlockCalendarId = $calendar, TimeBlockSpacesJson = $spaces,
+                Version = $version, UpdatedAtUtc = $updated
+            WHERE Id = $id AND Version = $expected AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", profile.Id);
+        command.Parameters.AddWithValue("$enabled", profile.TimeBlockEnabled ? 1L : 0L);
+        command.Parameters.AddWithValue("$account", OptionalValue(profile.TimeBlockAccountId));
+        command.Parameters.AddWithValue("$titles", profile.TimeBlockShowTitles ? 1L : 0L);
+        command.Parameters.AddWithValue("$runner", OptionalValue(profile.TimeBlockRunnerDeviceId));
+        command.Parameters.AddWithValue("$calendar", OptionalValue(profile.TimeBlockCalendarId));
+        command.Parameters.AddWithValue("$spaces", OptionalValue(profile.TimeBlockSpacesJson));
+        command.Parameters.AddWithValue("$version", profile.Version);
+        command.Parameters.AddWithValue("$updated", StorageFormats.Instant(profile.UpdatedAtUtc));
+        command.Parameters.AddWithValue("$expected", expectedVersion);
+        return await command.ExecuteNonQueryAsync(ct) == 1 ? profile : null;
+    }
+
     internal static ProfileRecord ReadProfile(SqliteDataReader r) => new()
     {
         Id = r.S("Id"),
@@ -156,6 +179,12 @@ public sealed class SqliteProfileStore(SqliteConnection connection) : IProfileSt
         CaptureShortcut = r.Sn("CaptureShortcut"),
         PadShortcut = r.Sn("PadShortcut"),
         KeepRunningInTray = r.B("KeepRunningInTray"),
+        TimeBlockEnabled = r.B("TimeBlockEnabled"),
+        TimeBlockAccountId = r.Sn("TimeBlockAccountId"),
+        TimeBlockShowTitles = r.B("TimeBlockShowTitles"),
+        TimeBlockRunnerDeviceId = r.Sn("TimeBlockRunnerDeviceId"),
+        TimeBlockCalendarId = r.Sn("TimeBlockCalendarId"),
+        TimeBlockSpacesJson = r.Sn("TimeBlockSpacesJson"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

@@ -120,6 +120,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["calendar_source"] = Calendars,
         ["calendar_event_link"] = Calendars,
         ["google_account"] = Calendars,
+        ["time_block_event"] = Calendars,
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -531,12 +532,20 @@ public sealed class SyncCatalogFlushCoverageTests
             return 0;
         });
         // A connected Google account (P6): the row syncs, the token stays in the secret store.
-        var google = new Chaos.Application.Calendar.GoogleCalendarCommands(host.Store, new NoSecrets(), new FlushGoogle(), host.Clock);
+        var secrets = new DictionarySecrets();
+        var google = new Chaos.Application.Calendar.GoogleCalendarCommands(host.Store, secrets, new FlushGoogle(), host.Clock);
         var account = await google.ConnectAsync();
         expected["google_account"] = account.Account.Id;
 
         var made = await calendars.MakeTaskAsync(new(Op(), source.Id, "evt-1", null));
         expected["calendar_event_link"] = Chaos.Application.Abstractions.StorageFormats.NameBasedId(Chaos.Sync.NameBasedId.Names.CalendarEventLink(made.Task.Id));
+
+        // Time blocking (Q16): the runner's row for one task's event syncs; the sync token is device-local and never in the outbox.
+        var blocks = new Chaos.Application.Calendar.TimeBlockCommands(host.Store, secrets, new FlushGoogle(), host.Ids, host.Clock);
+        var blocked = (await new CaptureCommands(host.Store, host.Ids, host.Clock).CreateAsync(new(Op(),
+            [new CaptureTaskDraft { Title = "Flush block", PlannedDate = DateOnly.FromDateTime(host.Clock.Now.DateTime), PlannedTime = new TimeOnly(9, 0), ZoneId = "UTC", EstimateMinutes = 60 }]))).Tasks[0];
+        await blocks.EnableAsync(new(account.Account.Id, true, null));
+        expected["time_block_event"] = blocked.Id;
     }
 
     private sealed class FlushGoogle : IGoogleCalendarClient
@@ -546,6 +555,20 @@ public sealed class SyncCatalogFlushCoverageTests
         public Task<IReadOnlyList<GoogleCalendarInfo>> ListCalendarsAsync(string refreshToken, CancellationToken ct) => Task.FromResult<IReadOnlyList<GoogleCalendarInfo>>([]);
         public Task<IReadOnlyList<ParsedMeeting>> ListEventsAsync(string refreshToken, string calendarId, DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct) => Task.FromResult<IReadOnlyList<ParsedMeeting>>([]);
         public Task<bool> RevokeAsync(string refreshToken, CancellationToken ct) => Task.FromResult(true);
+        public Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct) => Task.FromResult(new GoogleCalendarInfo("flush-calendar", name, null, false));
+        public Task DeleteCalendarAsync(string refreshToken, string calendarId, CancellationToken ct) => Task.CompletedTask;
+        public Task<GoogleEventWrite> InsertEventAsync(string refreshToken, string calendarId, GoogleEventBody body, CancellationToken ct) => Task.FromResult(new GoogleEventWrite(false, false, "\"flush\"", null));
+        public Task<GoogleEventWrite> PatchEventAsync(string refreshToken, string calendarId, string eventId, GoogleEventBody body, CancellationToken ct) => Task.FromResult(new GoogleEventWrite(false, false, "\"flush\"", null));
+        public Task DeleteEventAsync(string refreshToken, string calendarId, string eventId, CancellationToken ct) => Task.CompletedTask;
+        public Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct) => Task.FromResult(new GoogleSyncPage([], null, "flush-sync", false));
+    }
+
+    private sealed class DictionarySecrets : ISecretStore
+    {
+        private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+        public Task SetAsync(string key, string value, CancellationToken ct = default) { _values[key] = value; return Task.CompletedTask; }
+        public Task<string?> GetAsync(string key, CancellationToken ct = default) => Task.FromResult(_values.GetValueOrDefault(key));
+        public Task DeleteAsync(string key, CancellationToken ct = default) { _values.Remove(key); return Task.CompletedTask; }
     }
 
     private sealed class NoSecrets : ISecretStore

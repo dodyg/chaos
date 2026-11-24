@@ -20,12 +20,13 @@ public sealed class UndoCoverageTests
 
     /// <summary>
     /// Stores that pass through on purpose: read models, history and undo bookkeeping themselves, device-local or synced
-    /// state that is not undone with a task edit, and the plumbing around a transaction.
+    /// state that is not undone with a task edit, and the plumbing around a transaction. Time block rows are the sync
+    /// pass's record of what Google holds; undoing a task edit does not undo the block.
     /// </summary>
     private static readonly string[] PassThroughOnPurpose =
     [
         "Profiles", "People", "Queries", "History", "Undo", "ChecklistConversions", "Notifications", "DayPlans", "Weeks",
-        "Summaries", "SpaceUpdates", "Receipts", "Backups", "Imports", "GitHub", "Boards", "SavedViews", "Calendars", "Activity",
+        "Summaries", "SpaceUpdates", "Receipts", "Backups", "Imports", "GitHub", "Boards", "SavedViews", "Calendars", "TimeBlocks", "Activity",
     ];
 
     [Test]

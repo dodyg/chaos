@@ -31,7 +31,7 @@ public static class SyncKinds
 {
     private static readonly IReadOnlyList<SyncKindInfo> Definitions =
     [
-        new("profile", 1, 10, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("zone", 1), new("locale", 1), new("dates", 1), new("planning", 1), new("reminders", 1), new("quiet", 1), new("appearance", 2), new("day_background", 2), new("deleted", 1) }),
+        new("profile", 1, 10, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("zone", 1), new("locale", 1), new("dates", 1), new("planning", 1), new("reminders", 1), new("quiet", 1), new("appearance", 2), new("day_background", 2), new("timeblock", 13), new("deleted", 1) }),
         new("space", 1, 20, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("look", 4), new("settings", 4), new("deleted", 1) }),
         new("space_member", 1, 21, true, new SyncGroupInfo[] { new("create", 4), new("profile", 4), new("role", 4), new("state", 4) }),
         new("container", 1, 30, true, ["create", "name", "position", "deadline", "archived", "category", "deleted"]),
@@ -47,6 +47,7 @@ public static class SyncKinds
         new("view_alert_setting", 1, 59, false, new SyncGroupInfo[] { new("create", 8), new("settings", 8) }),
         new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1) }),
         new("task_assignee", 2, 61, false, new SyncGroupInfo[] { new("create", 5), new("done", 5), new("deleted", 5) }),
+        new("time_block_event", 1, 66, false, new SyncGroupInfo[] { new("create", 13), new("state", 13) }),
         new("task_delegation", 1, 62, false, new SyncGroupInfo[] { new("create", 10), new("brief", 10), new("state", 10), new("deleted", 10) }),
         new("nudge", 1, 63, false, new SyncGroupInfo[] { new("record", 10) }),
         new("calendar_event_link", 1, 65, false, ["create", "deleted"]),
@@ -98,7 +99,7 @@ public static class SyncKinds
     {
         var route = kind.Kind switch
         {
-            "profile" or "view_alert_setting" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
+            "profile" or "view_alert_setting" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "time_block_event" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
             "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
             "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),

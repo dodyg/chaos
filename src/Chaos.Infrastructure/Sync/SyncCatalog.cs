@@ -72,6 +72,7 @@ public static class SyncCatalog
                 new("quiet", ["QuietHoursEnabled", "QuietStart", "QuietEnd"]),
                 new("appearance", ["AppearanceTheme"]),
                 new("day_background", ["DayBackground"]),
+                new("timeblock", ["TimeBlockEnabled", "TimeBlockAccountId", "TimeBlockShowTitles", "TimeBlockRunnerDeviceId", "TimeBlockCalendarId", "TimeBlockSpacesJson"]), // Q16: the time blocking choice follows the person
                 new("deleted", ["DeletedAtUtc"]),
             ],
             LocalColumns: ["Version", "CaptureShortcut", "PadShortcut", "KeepRunningInTray"],
@@ -272,6 +273,17 @@ public static class SyncCatalog
         new SyncTable("TaskAssignees", "task_assignee", SyncMode.Merge, ["TaskId", "MemberId"],
             Groups: [new("create", ["AddedAtUtc"]), new("done", ["CompletedAtUtc"]), new("deleted", ["DeletedAtUtc"])],
             ApplyOrder: 61),
+
+        // Q16 time blocking (PLAN3 §11): one Google event per task, keyed by the task id; the account stream carries it so a
+        // new runner device knows what exists. No tombstone: a removal is a hard delete that travels as a purge, like a label mapping.
+        new SyncTable("TimeBlockEvents", "time_block_event", SyncMode.Merge, ["TaskId"],
+            Groups:
+            [
+                new("create", ["EventId", "CreatedAtUtc"]),
+                new("state", ["ETag", "PushedHash", "LastSyncedAtUtc", "RemoteMovedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 66),
 
         // Q13 delegation. The brief (message, done-looks-like, due date, review) is the delegator's;
         // the state group moves only along the transition table (Chaos.Sync DelegationTransitions),
@@ -711,6 +723,7 @@ public static class SyncCatalog
         new SyncTable("SyncAttention", "sync_attention", SyncMode.LocalOnly, ["Id"], ApplyOrder: 526), // notices for the person (§7.9)
         new SyncTable("TextBase", "text_base", SyncMode.LocalOnly, ["Kind", "EntityKey"], ApplyOrder: 544), // last agreed text for three-way merge (§9.9)
         new SyncTable("CollaborationNotices", "collaboration_notice", SyncMode.LocalOnly, ["Id"], ApplyOrder: 543),
+        new SyncTable("TimeBlockState", "time_block_state", SyncMode.LocalOnly, ["Id"], ApplyOrder: 545), // the runner's Google change-feed position (Q16)
         new SyncTable("ActivityLog", "activity_log", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 535), // system event stream (PLAN2 §6.4)
         new SyncTable("ActivityLogEntities", "activity_log_entity", SyncMode.LocalOnly, ["Seq", "Kind", "EntityKey"], ApplyOrder: 536),
         new SyncTable("ActivityCursors", "activity_cursor", SyncMode.LocalOnly, ["Consumer"], ApplyOrder: 537),

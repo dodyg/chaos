@@ -265,6 +265,133 @@ public sealed class GoogleCalendarClientTests
         await Assert.That(calls).IsEqualTo(0);
     }
 
+    // ---- Time blocking (PLAN3 §11) -----------------------------------------------------------------
+
+    [Test]
+    public async Task InsertEvent_PostsTheClientEventIdToTheAppCalendar_AndA409MeansTheEventExists()
+    {
+        var (client, handler) = ApiClient(request => request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/events", StringComparison.Ordinal)
+            ? Json(HttpStatusCode.Conflict, """{"id":"cbabc","etag":"\"existing\"","updated":"2026-11-20T09:00:00Z"}""")
+            : Json(HttpStatusCode.OK, "{}"));
+
+        var write = await client.InsertEventAsync(Refresh, "calendar_1@group.v.calendar.google.com", new GoogleEventBody("cbabc", "Write the plan", new DateTimeOffset(2026, 11, 20, 9, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 20, 10, 0, 0, TimeSpan.Zero), "Europe/Paris"), CancellationToken.None);
+
+        await Assert.That(write.Conflict).IsTrue();
+        await Assert.That(write.NotFound).IsFalse();
+        await Assert.That(write.ETag).IsEqualTo("\"existing\"");
+        var call = handler.Calls.Single(call => call.Request.Method == HttpMethod.Post && call.Request.RequestUri!.AbsolutePath.Contains("/events", StringComparison.Ordinal));
+        await Assert.That(call.Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars/calendar_1%40group.v.calendar.google.com/events");
+        await Assert.That(call.Request.Content!.Headers.ContentType!.MediaType).IsEqualTo("application/json");
+        using var body = System.Text.Json.JsonDocument.Parse(call.Body!);
+        await Assert.That(body.RootElement.GetProperty("id").GetString()).IsEqualTo("cbabc");
+        await Assert.That(body.RootElement.GetProperty("summary").GetString()).IsEqualTo("Write the plan");
+        await Assert.That(body.RootElement.GetProperty("start").GetProperty("dateTime").GetString()).IsEqualTo("2026-11-20T09:00:00Z");
+        await Assert.That(body.RootElement.GetProperty("start").GetProperty("timeZone").GetString()).IsEqualTo("Europe/Paris");
+        await Assert.That(body.RootElement.GetProperty("end").GetProperty("dateTime").GetString()).IsEqualTo("2026-11-20T10:00:00Z");
+        await Assert.That(body.RootElement.GetProperty("transparency").GetString()).IsEqualTo("opaque");
+    }
+
+    [Test]
+    public async Task BusyBlocks_CarryNoSummary_AndAPatchCarriesNoId()
+    {
+        var (client, handler) = ApiClient(request => request.Method == HttpMethod.Patch
+            ? Json(HttpStatusCode.OK, """{"id":"cbabc","etag":"\"e2\"","updated":"2026-11-20T09:05:00Z"}""")
+            : Json(HttpStatusCode.OK, "{}"));
+        var busy = new GoogleEventBody("cbabc", null, new DateTimeOffset(2026, 11, 20, 9, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 11, 20, 10, 0, 0, TimeSpan.Zero), "UTC");
+
+        await client.InsertEventAsync(Refresh, "calendar_1", busy, CancellationToken.None);
+        var insert = handler.Calls.Single(call => call.Request.Method == HttpMethod.Post && call.Request.RequestUri!.AbsolutePath.EndsWith("/events", StringComparison.Ordinal)).Body!;
+        await Assert.That(insert).DoesNotContain("summary");
+
+        var write = await client.PatchEventAsync(Refresh, "calendar_1", "cbabc", busy with { Id = null }, CancellationToken.None);
+        await Assert.That(write.ETag).IsEqualTo("\"e2\"");
+        await Assert.That(write.UpdatedUtc).IsEqualTo(new DateTimeOffset(2026, 11, 20, 9, 5, 0, TimeSpan.Zero));
+        var patch = handler.Calls.Single(call => call.Request.Method == HttpMethod.Patch);
+        await Assert.That(patch.Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars/calendar_1/events/cbabc");
+        await Assert.That(patch.Body!).DoesNotContain("\"id\"");
+    }
+
+    [Test]
+    public async Task APatchOfAGoneEvent_SaysNotFound_AndDeletingAGoneEventIsFine()
+    {
+        var (client, handler) = ApiClient(request => request.Method == HttpMethod.Patch ? Json(HttpStatusCode.NotFound, """{"error":{"code":404}}""") : Json(HttpStatusCode.NotFound, "{}"));
+
+        var patch = await client.PatchEventAsync(Refresh, "calendar_1", "cbgone", new(null, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1), "UTC"), CancellationToken.None);
+        await Assert.That(patch.NotFound).IsTrue();
+        await client.DeleteEventAsync(Refresh, "calendar_1", "cbgone", CancellationToken.None);
+        await Assert.That(handler.Calls.Single(call => call.Request.Method == HttpMethod.Delete).Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars/calendar_1/events/cbgone");
+    }
+
+    [Test]
+    public async Task TheChangeFeed_UsesTheSyncToken_AndAGoneTokenMeansStartOver()
+    {
+        var (client, handler) = ApiClient(request => request.RequestUri!.Query.Contains("syncToken=st-1", StringComparison.Ordinal)
+            ? Json(HttpStatusCode.Gone, """{"error":{"code":410,"errors":[{"reason":"gone"}]}}""")
+            : Json(HttpStatusCode.OK, """
+                {"nextSyncToken":"st-2","items":[
+                  {"id":"cba","etag":"\"e1\"","updated":"2026-11-20T09:00:00Z","summary":"Moved","start":{"dateTime":"2026-11-20T15:00:00+01:00","timeZone":"Europe/Paris"},"end":{"dateTime":"2026-11-20T16:00:00+01:00","timeZone":"Europe/Paris"}},
+                  {"id":"cbb","etag":"\"e2\"","updated":"2026-11-20T10:00:00Z","status":"cancelled"}]}
+                """));
+
+        var gone = await client.ListEventChangesAsync(Refresh, "calendar_1", "st-1", null, CancellationToken.None);
+        await Assert.That(gone.TokenExpired).IsTrue();
+        var page = await client.ListEventChangesAsync(Refresh, "calendar_1", null, null, CancellationToken.None);
+
+        await Assert.That(page.NextSyncToken).IsEqualTo("st-2");
+        await Assert.That(page.NextPageToken).IsNull();
+        await Assert.That(page.Items.Count).IsEqualTo(2);
+        var moved = page.Items[0];
+        await Assert.That(moved.StartUtc).IsEqualTo(new DateTimeOffset(2026, 11, 20, 14, 0, 0, TimeSpan.Zero));
+        await Assert.That(moved.TimeZoneId).IsEqualTo("Europe/Paris");
+        await Assert.That(moved.Summary).IsEqualTo("Moved");
+        await Assert.That(page.Items[1].Cancelled).IsTrue();
+        await Assert.That(page.Items[1].StartUtc).IsNull();
+        var reads = handler.Calls.Where(call => call.Request.Method == HttpMethod.Get && call.Request.RequestUri!.AbsolutePath.EndsWith("/events", StringComparison.Ordinal)).Select(call => call.Request.RequestUri!.Query).ToList();
+        await Assert.That(reads[0]).Contains("syncToken=st-1");
+        await Assert.That(reads[0]).DoesNotContain("pageToken");
+        await Assert.That(reads[1]).DoesNotContain("syncToken");
+        await Assert.That(reads[1]).Contains("showDeleted=true");
+        await Assert.That(reads[1]).DoesNotContain("singleEvents");
+    }
+
+    [Test]
+    public async Task CreateAndDeleteCalendar_UseTheCalendarsResource()
+    {
+        var (client, handler) = ApiClient(request => request.Method == HttpMethod.Post
+            ? Json(HttpStatusCode.OK, """{"id":"calendar_1@group.v.calendar.google.com","summary":"Chaos","backgroundColor":"#9a9cff"}""")
+            : Json(HttpStatusCode.NotFound, "{}"));
+
+        var calendar = await client.CreateCalendarAsync(Refresh, "Chaos", CancellationToken.None);
+        await Assert.That(calendar.Id).IsEqualTo("calendar_1@group.v.calendar.google.com");
+        await Assert.That(calendar.Name).IsEqualTo("Chaos");
+        var post = handler.Calls.Single(call => call.Request.Method == HttpMethod.Post && call.Request.RequestUri!.AbsolutePath.EndsWith("/calendars", StringComparison.Ordinal));
+        await Assert.That(post.Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars");
+        await Assert.That(post.Body).IsEqualTo("{\"summary\":\"Chaos\"}");
+
+        // Deleting a calendar that is already gone is not an error.
+        await client.DeleteCalendarAsync(Refresh, calendar.Id, CancellationToken.None);
+        await Assert.That(handler.Calls.Single(call => call.Request.Method == HttpMethod.Delete).Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars/calendar_1%40group.v.calendar.google.com");
+    }
+
+    [Test]
+    public async Task SignIn_ForTimeBlocking_AsksForTheNewScopeOnly_AndKeepsTheGrants()
+    {
+        var browser = new LoopbackBrowser();
+        var idToken = "x." + Convert.ToBase64String(Encoding.UTF8.GetBytes("""{"sub":"1234567890","email":"me@example.com"}""")).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".y";
+        using var http = new HttpClient(new Handler((request, _) => request.RequestUri!.AbsoluteUri.StartsWith(GoogleCalendarClient.TokenEndpoint, StringComparison.Ordinal)
+            ? Json(HttpStatusCode.OK, $"{{\"access_token\":\"a\",\"expires_in\":3600,\"refresh_token\":\"{Refresh}\",\"id_token\":\"{idToken}\"}}")
+            : Json(HttpStatusCode.NotFound, "{}")));
+        using var client = new GoogleCalendarClient(Config, browser, TimeProvider.System, http);
+
+        var signIn = await client.SignInAsync([GoogleCalendarClient.ScopeAppCreated], CancellationToken.None);
+
+        await Assert.That(signIn.RefreshToken).IsEqualTo(Refresh);
+        var query = System.Web.HttpUtility.ParseQueryString(browser.Opened!.Query);
+        await Assert.That(query["scope"]!).IsEqualTo(GoogleCalendarClient.Scopes + " " + GoogleCalendarClient.ScopeAppCreated);
+        await Assert.That(query["include_granted_scopes"]).IsEqualTo("true");
+        await Assert.That(query["scope"]!).DoesNotContain("auth/calendar "); // never the full-access scope
+    }
+
     /// <summary>Plays the person's browser: reads the sign-in address, then visits the loopback redirect the way Google would.</summary>
     private sealed class LoopbackBrowser : ISystemBrowser
     {

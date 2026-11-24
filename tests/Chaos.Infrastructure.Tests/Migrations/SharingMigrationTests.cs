@@ -41,6 +41,46 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate049_AddsTheTimeBlockSettings_TheEventTableAndTheDeviceState()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 48);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('personal','person',1,'Personal','now','now');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('inbox','personal',0,'Inbox','inbox',0,'now','now');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('task','personal','inbox','Task',0,0,'now','now');
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+
+        // The settings are profile columns with off/busy-free defaults: time blocking is off and shows titles until turned on.
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_table_info('Profiles') WHERE name LIKE 'TimeBlock%';"))).IsEqualTo(6L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT TimeBlockEnabled FROM Profiles WHERE Id='person';"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT TimeBlockShowTitles FROM Profiles WHERE Id='person';"))).IsEqualTo(1L);
+        await Assert.That(Scalar(connection, "SELECT TimeBlockAccountId FROM Profiles WHERE Id='person';") is DBNull).IsTrue();
+
+        // The event rows sync (three catalog triggers, inserts pend both groups); the device state does not.
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_TimeBlockEvents_%';"))).IsEqualTo(3L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_TimeBlockState_%';"))).IsEqualTo(0L);
+        Execute(connection, "INSERT INTO TimeBlockEvents (TaskId,EventId,ETag,PushedHash,LastSyncedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc) VALUES ('task','cb0123456789abcdefghijklmnopqr','\"e1\"','abc','now',1,'now','now');");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='time_block_event' AND EntityKey='task' AND GroupName IN ('create','state');"))).IsEqualTo(2L);
+
+        // Shapes Google needs are enforced here too: the event id length and the single state row.
+        var shortId = false;
+        try { Execute(connection, "UPDATE TimeBlockEvents SET EventId='cb';"); }
+        catch (Microsoft.Data.Sqlite.SqliteException) { shortId = true; }
+        await Assert.That(shortId).IsTrue();
+        var secondState = false;
+        try { Execute(connection, "INSERT INTO TimeBlockState (Id,CalendarId) VALUES (2,'x');"); }
+        catch (Microsoft.Data.Sqlite.SqliteException) { secondState = true; }
+        await Assert.That(secondState).IsTrue();
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Migrate048_AddsPullRequestLinks_AttributionAndAssigneeDirtyTriggers()
     {
         using var connection = Open();
