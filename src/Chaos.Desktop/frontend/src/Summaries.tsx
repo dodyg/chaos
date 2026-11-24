@@ -614,6 +614,12 @@ function SummaryDetail({
                       </ul>
                     </div>
                   )}
+                  {space.completedByOthers.length +
+                    space.newByOthers.length +
+                    space.newlyBlocked.length +
+                    space.deadlines.length +
+                    space.projects.length ===
+                    0 && <p className="text-xs text-muted-foreground">Nothing from other members in this period.</p>}
                   {space.projects.length > 0 && (
                     <ul className="grid gap-1 text-sm">
                       {space.projects.map((project) => (

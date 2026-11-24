@@ -44,6 +44,8 @@ public sealed record TimeBlockDisableResult(TimeBlockStatus Status, bool Calenda
 public static class TimeBlockEventId
 {
     public const string Prefix = "cb";
+    /// <summary>The length of every derived id: the prefix and 26 base32hex characters.</summary>
+    public const int Length = 28;
     private const string Alphabet = "0123456789abcdefghijklmnopqrstuv";
 
     public static string Of(string taskId)
@@ -105,7 +107,8 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
         store.QueryAsync((session, token) => StatusOfAsync(session, token), ct);
 
     /// <summary>The sign-in for a device whose token expired or was revoked ("sign in again"): the write scope only, then a pass.</summary>
-    public async Task<TimeBlockStatus> SignInAgainAsync(CancellationToken ct = default)
+    /// <remarks>With <paramref name="runPass"/> false the caller runs the pass itself (the desktop runs it through the scheduler's gate, so it never overlaps a scheduled pass or a restore).</remarks>
+    public async Task<TimeBlockStatus> SignInAgainAsync(CancellationToken ct = default, bool runPass = true)
     {
         var account = await store.QueryAsync(async (session, token) =>
         {
@@ -113,7 +116,11 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
             return profile is { TimeBlockEnabled: true, TimeBlockAccountId: { } id } ? await session.Calendars.GetAccountAsync(id, token) : null;
         }, ct) ?? throw AppException.Validation("timeBlock", "Turn on time blocking first.");
         await SignInForAsync(account, ct);
-        await SyncAsync(ct);
+        if (runPass)
+        {
+            await SyncAsync(ct);
+        }
+
         return await StatusAsync(ct);
     }
 
@@ -147,7 +154,7 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
     /// (incremental consent: Google asks for the new permission only). The app calendar is created when the account has
     /// none yet, this device becomes the runner, and a first pass runs at once.
     /// </summary>
-    public async Task<TimeBlockStatus> EnableAsync(EnableTimeBlockCommand command, CancellationToken ct = default)
+    public async Task<TimeBlockStatus> EnableAsync(EnableTimeBlockCommand command, CancellationToken ct = default, bool runPass = true)
     {
         var account = string.IsNullOrWhiteSpace(command.AccountId)
             ? null
@@ -156,16 +163,33 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
         {
             throw AppException.Validation("accountId", "Choose a Google account that is connected on this device.");
         }
-        var refreshToken = await secrets.GetAsync(GoogleCalendarCommands.SecretKey(account.Id), ct) ?? await SignInForAsync(account, ct);
+
+        var stored = await secrets.GetAsync(GoogleCalendarCommands.SecretKey(account.Id), ct);
+        var refreshToken = stored ?? await SignInForAsync(account, ct);
         var spaceIds = await ValidatedSpacesAsync(command.SpaceIds, null, ct);
         var previous = await store.QueryAsync(async (session, token) => await session.Profiles.GetPrimaryAsync(token), ct);
         string calendarId;
         try
         {
             // The calendar of the same account is reused (turned off without deleting it); another account gets its own.
-            calendarId = previous is { TimeBlockAccountId: { } owner, TimeBlockCalendarId: { } kept } && owner == account.Id
-                ? kept
-                : (await google.CreateCalendarAsync(refreshToken, CalendarName, ct)).Id;
+            if (previous is { TimeBlockAccountId: { } owner, TimeBlockCalendarId: { } kept } && owner == account.Id)
+            {
+                calendarId = kept;
+            }
+            else
+            {
+                try
+                {
+                    calendarId = (await google.CreateCalendarAsync(refreshToken, CalendarName, ct)).Id;
+                }
+                catch (GoogleCalendarException error) when (error.Kind == GoogleFailure.SignInAgain && stored is not null)
+                {
+                    // The token on this device came from connecting the account, which asks for the read-only scopes: Google
+                    // refuses the write. Sign in once for the time blocking permission (incremental consent) and try again.
+                    refreshToken = await SignInForAsync(account, ct);
+                    calendarId = (await google.CreateCalendarAsync(refreshToken, CalendarName, ct)).Id;
+                }
+            }
         }
         catch (GoogleCalendarException error)
         {
@@ -191,7 +215,11 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
             await session.TimeBlocks.SaveStateAsync(new TimeBlockState(calendarId, null, null, null, null, false), token);
             return 0;
         }, ct);
-        await SyncAsync(ct);
+        if (runPass)
+        {
+            await SyncAsync(ct);
+        }
+
         return await StatusAsync(ct);
     }
 
@@ -250,16 +278,29 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
     /// </summary>
     public async Task<TimeBlockDisableResult> DisableAsync(long expectedVersion, bool deleteCalendar, CancellationToken ct = default)
     {
-        var (calendarId, refreshToken) = await store.QueryAsync(async (session, token) =>
+        var (calendarId, refreshToken, version) = await store.QueryAsync(async (session, token) =>
         {
-            var profile = await session.Profiles.GetPrimaryAsync(token);
-            return profile is null ? (null, null) : (profile.TimeBlockCalendarId, await secrets.GetAsync(GoogleCalendarCommands.SecretKey(profile.TimeBlockAccountId ?? string.Empty), token));
+            var profile = await session.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Local profile is unavailable.");
+            return (profile.TimeBlockCalendarId, await secrets.GetAsync(GoogleCalendarCommands.SecretKey(profile.TimeBlockAccountId ?? string.Empty), token), profile.Version);
         }, ct);
-        if (deleteCalendar && calendarId is not null && refreshToken is not null)
+        // A stale version fails before Google is touched, so a refused turn-off never leaves the setting on with a deleted calendar.
+        if (version != expectedVersion)
+        {
+            throw Conflict();
+        }
+
+        if (deleteCalendar && calendarId is not null && refreshToken is null)
+        {
+            // Without the token here the calendar cannot be deleted; clearing its id would orphan it in Google.
+            throw new AppException(AppErrorKind.UnsupportedCapability,
+                "Sign in to Google on this device to delete the Chaos calendar, or turn off and keep the calendar.");
+        }
+
+        if (deleteCalendar && calendarId is not null)
         {
             try
             {
-                await google.DeleteCalendarAsync(refreshToken, calendarId, ct);
+                await google.DeleteCalendarAsync(refreshToken!, calendarId, ct);
             }
             catch (GoogleCalendarException error)
             {
@@ -342,6 +383,14 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
             // Inbound first: a change already in Google is applied to its task, or loses to a newer local change under the
             // conflict rule, before the outbound pass would overwrite it with what the task held before that change.
             var inbound = await InboundAsync(plan, refreshToken, ct);
+            if (inbound.Error is not null)
+            {
+                // Google's changes could not be read: pushing now could overwrite a move made in Google with no conflict
+                // check. Nothing is written; the next pass tries both halves again.
+                await SaveStateAsync(plan, state => state with { LastPassUtc = now, LastError = inbound.Error, NeedsSignIn = inbound.NeedsSignIn }, ct);
+                return new TimeBlockPassResult(true, inbound.Error, inbound.NeedsSignIn, 0, 0, 0, inbound.Moved, inbound.Conflicts);
+            }
+
             // The inbound pass may have moved tasks: plan the outbound half again on the tasks as they are now, so nothing
             // pushes a time the conflict rule just replaced.
             var outbound = await store.QueryAsync(PlanAsync, ct) ?? plan;
@@ -401,8 +450,18 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
                 await store.ExecuteAsync(async (session, token) => { await session.TimeBlocks.DeleteEventAsync(row.Id, token); return 0; }, ct);
             }
 
-            await SaveStateAsync(plan, state => state with { LastPassUtc = now, LastError = inbound.Error, NeedsSignIn = inbound.NeedsSignIn }, ct);
-            return new TimeBlockPassResult(true, inbound.Error, inbound.NeedsSignIn, pushed, updated, removed, inbound.Moved, inbound.Conflicts);
+            // App events with no row (a calendar kept when time blocking was turned off, or a write whose row was never
+            // saved) that belong to no eligible task are leftovers: nothing else would ever remove them.
+            var wanted = outbound.Eligible.Select(entry => outbound.Events.GetValueOrDefault(entry.Task.Id)?.EventId ?? TimeBlockEventId.Of(entry.Task.Id))
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var eventId in inbound.Untracked.Where(id => !wanted.Contains(id)))
+            {
+                await google.DeleteEventAsync(refreshToken, outbound.CalendarId, eventId, ct);
+                removed++;
+            }
+
+            await SaveStateAsync(plan, state => state with { LastPassUtc = now, LastError = null, NeedsSignIn = false }, ct);
+            return new TimeBlockPassResult(true, null, false, pushed, updated, removed, inbound.Moved, inbound.Conflicts);
         }
         catch (GoogleCalendarException error)
         {
@@ -452,8 +511,12 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
     public static Block Describe(TaskRecord task, bool showTitles, TimeZoneInfo fallbackZone)
     {
         var zone = Zone(task.PlannedZoneId) ?? fallbackZone;
-        var local = task.PlannedDate!.Value.ToDateTime(task.PlannedTime!.Value);
-        var start = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), zone));
+        var local = DateTime.SpecifyKind(task.PlannedDate!.Value.ToDateTime(task.PlannedTime!.Value), DateTimeKind.Unspecified);
+        // A time inside a spring-forward gap does not exist (ConvertTimeToUtc throws): the offset in force before the gap
+        // places the block just after it, as reminders do.
+        var start = zone.IsInvalidTime(local)
+            ? new DateTimeOffset(local, zone.GetUtcOffset(local.AddHours(-12))).ToUniversalTime()
+            : new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(local, zone));
         var end = start.AddMinutes(task.EstimateMinutes!.Value);
         var title = showTitles ? task.Title : null;
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{title}\n{start:o}\n{end:o}\n{showTitles}")));
@@ -462,8 +525,10 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
 
     private static GoogleEventBody Body(string? eventId, Block block) => new(eventId, block.Title, block.StartUtc, block.EndUtc, block.TimeZoneId);
 
-    private async Task<(int Moved, int Conflicts, string? Error, bool NeedsSignIn)> InboundAsync(Plan plan, string refreshToken, CancellationToken ct)
+    private async Task<(int Moved, int Conflicts, string? Error, bool NeedsSignIn, IReadOnlySet<string> Untracked)> InboundAsync(Plan plan, string refreshToken, CancellationToken ct)
     {
+        // Live app events this device has no row for, by the shape of the derived id (the prefix and its 28 characters).
+        var untracked = new HashSet<string>(StringComparer.Ordinal);
         var state = plan.State ?? new TimeBlockState(null, null, null, null, null, false);
         if (!string.Equals(state.CalendarId, plan.CalendarId, StringComparison.Ordinal))
         {
@@ -491,14 +556,28 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
             }
             catch (GoogleCalendarException error)
             {
-                return (moved, conflicts, GoogleCalendarCommands.MessageOf(error), error.Kind == GoogleFailure.SignInAgain);
+                return (moved, conflicts, GoogleCalendarCommands.MessageOf(error), error.Kind == GoogleFailure.SignInAgain, untracked);
             }
 
             foreach (var change in page.Items)
             {
-                if (!change.Id.StartsWith(TimeBlockEventId.Prefix, StringComparison.Ordinal) || !byEvent.TryGetValue(change.Id, out var taskId))
+                if (!change.Id.StartsWith(TimeBlockEventId.Prefix, StringComparison.Ordinal))
                 {
-                    continue; // not the app's event, or one this device no longer tracks
+                    continue; // not the app's event
+                }
+
+                if (!byEvent.TryGetValue(change.Id, out var taskId))
+                {
+                    if (change.Cancelled)
+                    {
+                        untracked.Remove(change.Id);
+                    }
+                    else if (change.Id.Length == TimeBlockEventId.Length)
+                    {
+                        untracked.Add(change.Id);
+                    }
+
+                    continue; // one this device does not track: the outbound pass adopts it or removes it
                 }
 
                 var outcome = await ApplyAsync(plan, plan.Events[taskId], change, ct);
@@ -515,7 +594,7 @@ public sealed class TimeBlockCommands(IApplicationStore store, ISecretStore secr
         }
 
         await store.ExecuteAsync(async (session, token) => { await session.TimeBlocks.SaveStateAsync(state with { SyncToken = syncToken, PageToken = pageToken }, token); return 0; }, ct);
-        return (moved, conflicts, null, false);
+        return (moved, conflicts, null, false, untracked);
     }
 
     /// <summary>One change from Google applied to its task, under the conflict rule of PLAN3 §11: the most recent of Google's move and the task's own change wins, the loser goes to history.</summary>

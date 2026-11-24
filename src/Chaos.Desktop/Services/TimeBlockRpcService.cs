@@ -54,7 +54,10 @@ public sealed class TimeBlockRpcService(TimeBlockCommands commands, Chaos.Deskto
     [NeoRpcMethod("enable")]
     public ValueTask<TimeBlockEnableResponse> EnableAsync(TimeBlockEnableRequest request, CancellationToken ct) =>
         Rpc.Run<TimeBlockEnableResponse>("timeBlock.enable", async () =>
-            new(true, Map(await commands.EnableAsync(new EnableTimeBlockCommand(request.AccountId ?? string.Empty, request.ShowTitles, request.SpaceIds), ct)), null),
+        {
+            await commands.EnableAsync(new EnableTimeBlockCommand(request.AccountId ?? string.Empty, request.ShowTitles, request.SpaceIds), ct, runPass: false);
+            return new(true, Map(await PassThenStatusAsync(ct)), null);
+        },
             error => new(false, null, error));
 
     [NeoRpcMethod("update")]
@@ -90,8 +93,19 @@ public sealed class TimeBlockRpcService(TimeBlockCommands commands, Chaos.Deskto
 
     [NeoRpcMethod("signIn")]
     public ValueTask<TimeBlockSignInResponse> SignInAsync(TimeBlockSignInRequest request, CancellationToken ct) =>
-        Rpc.Run<TimeBlockSignInResponse>("timeBlock.signIn", async () => new(true, Map(await commands.SignInAgainAsync(ct)), null),
+        Rpc.Run<TimeBlockSignInResponse>("timeBlock.signIn", async () =>
+        {
+            await commands.SignInAgainAsync(ct, runPass: false);
+            return new(true, Map(await PassThenStatusAsync(ct)), null);
+        },
             error => new(false, null, error));
+
+    /// <summary>The first pass after turning on or signing in, through the scheduler's gate so it never overlaps a scheduled pass or a restore.</summary>
+    private async Task<TimeBlockStatus> PassThenStatusAsync(CancellationToken ct)
+    {
+        await scheduler.RunNowAsync(ct);
+        return await commands.StatusAsync(ct);
+    }
 
     private static TimeBlockStatusDto Map(TimeBlockStatus status) => new(
         status.Enabled, status.AccountId, status.AccountEmail, status.ShowTitles,

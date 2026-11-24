@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.ServerSentEvents;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
@@ -9,6 +10,11 @@ using Microsoft.Extensions.Options;
 
 namespace Chaos.Server.Web;
 
+/// <summary>
+/// The PWA's wake-up stream. The app refreshes the open view on any event, so the stream sends a tick whenever a
+/// readable stream advanced (the account's or a member space's, PLAN3 7.8) or the membership changed, and the number
+/// only orders the ticks. The content of a change never travels here.
+/// </summary>
 internal static class WebEvents
 {
     internal static IResult Stream(HttpContext http, Guid device, ChaosDbContext db, SyncBroadcaster broadcaster, IOptions<SyncOptions> options)
@@ -24,34 +30,35 @@ internal static class WebEvents
         TimeSpan keepAlive, [EnumeratorCancellation] CancellationToken ct)
     {
         var queue = Channel.CreateUnbounded<long>(new UnboundedChannelOptions { SingleReader = true });
-        using var subscription = broadcaster.Subscribe(caller.AccountId, seq => queue.Writer.TryWrite(seq));
-        var current = await db.SyncStreams.AsNoTracking().Where(a => a.Id == caller.AccountId).Select(a => a.NextSeq - 1).FirstOrDefaultAsync(ct);
-        yield return new SseItem<string>(current.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        var sent = current;
+        using var streams = broadcaster.SubscribeStreams(caller.AccountId, (_, seq) => queue.Writer.TryWrite(seq));
+        using var membership = broadcaster.SubscribeMembership(caller.AccountId, version => queue.Writer.TryWrite(version));
+        long tick = 0;
+        yield return new SseItem<string>(tick.ToString(CultureInfo.InvariantCulture));
         while (!ct.IsCancellationRequested)
         {
             using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
             idle.CancelAfter(keepAlive);
-            long? latest = null;
+            bool woke;
             try
             {
-                latest = await queue.Reader.ReadAsync(idle.Token);
-                while (queue.Reader.TryRead(out var more)) latest = Math.Max(latest.Value, more);
+                await queue.Reader.ReadAsync(idle.Token);
+                while (queue.Reader.TryRead(out _)) { }
+                woke = true;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                latest = null; // Recheck the web device even when no changes arrive.
+                woke = false; // Recheck the web device even when no changes arrive.
             }
 
             var active = await db.Devices.AsNoTracking().AnyAsync(d => d.Id == caller.DeviceId && d.AccountId == caller.AccountId &&
                 d.Platform == WebSession.Platform && d.RevokedAt == null && db.Accounts.Any(a => a.Id == d.AccountId && a.DeletedAt == null), ct);
             if (!active) yield break;
-            if (latest > sent)
+            if (woke)
             {
-                sent = latest.Value;
-                yield return new SseItem<string>(sent.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                tick++;
+                yield return new SseItem<string>(tick.ToString(CultureInfo.InvariantCulture));
             }
-            else if (latest is null)
+            else
             {
                 yield return new SseItem<string>("", "heartbeat");
             }

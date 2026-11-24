@@ -9,6 +9,32 @@ public sealed class ServerChangeWriter(ChaosDbContext db, TimeProvider clock, Sy
 {
     public static readonly Guid DeviceId = new("00000000-0000-0000-0000-000000000007");
 
+    /// <summary>
+    /// PLAN3 10.1: the GitHub engine runs on a device of an owner. When a member stops being an owner, leaves, or deletes
+    /// their account, the space's connection loses a runner that was one of that member's devices; an owner then chooses a new one.
+    /// </summary>
+    public async Task ClearGitHubRunnerAsync(Guid spaceId, Guid actor, Guid? affectedAccountId, CancellationToken ct)
+    {
+        if (affectedAccountId is null) return;
+        var connections = await db.SyncEntities.AsNoTracking()
+            .Where(e => e.AccountId == spaceId && e.Kind == "github_connection" && e.PurgedAt == null && e.MovedTo == null)
+            .Select(e => new { e.EntityKey, e.Groups }).ToListAsync(ct);
+        foreach (var connection in connections)
+        {
+            var groups = SyncJson.ReadGroups(connection.Groups);
+            if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null) continue;
+            if (groups.GetValueOrDefault("runner")?.Values.Values.GetValueOrDefault("RunnerDeviceId")?.ToString() is not { Length: > 0 } runner
+                || !Guid.TryParse(runner, out var deviceId)
+                || !await db.Devices.AsNoTracking().AnyAsync(d => d.Id == deviceId && d.AccountId == affectedAccountId, ct)) continue;
+            var hlc = await NextHlcAsync(spaceId, "github_connection", connection.EntityKey, ct);
+            await AppendAsync(spaceId, actor, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "github_connection", connection.EntityKey,
+                new Dictionary<string, SyncGroupState>
+                {
+                    ["runner"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?> { ["RunnerDeviceId"] = null, ["RunnerDeviceName"] = null })),
+                }), ct);
+        }
+    }
+
     public async Task TombstoneAssignmentsAsync(Guid spaceId, Guid memberId, Guid actorId, DateTimeOffset now, CancellationToken ct)
     {
         var suffix = "|" + memberId.ToString("D");

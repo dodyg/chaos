@@ -68,11 +68,11 @@ export async function forgetOfflineSession() {
   }
 }
 
-function storeViews(deviceId, path, data, lists, appearance) {
+function storeViews(deviceId, path, data, groups, appearance) {
   const updatedAt = new Date().toISOString();
   return cacheTransaction((previous) => {
     if (previous.deviceId !== deviceId) return previous;
-    const snapshot = { ...previous, lists: { data: lists, updatedAt }, appearance };
+    const snapshot = { ...previous, lists: { data: groups, updatedAt }, appearance };
     delete snapshot.today;
     if (path === "/today") snapshot.myDay = { data, updatedAt };
     if (path.startsWith("/lists/")) snapshot.lastList = { path, data, updatedAt };
@@ -89,9 +89,11 @@ async function readOffline(path) {
     ?.slice("chaos.web-offline=".length);
   if (!snapshot.deviceId || snapshot.deviceId !== marker || !(Date.parse(snapshot.expiresAt) > Date.now())) {
     if (snapshot.deviceId) await forgetOfflineSession();
-    return { data: null, lists: [] };
+    return { data: null, lists: [], spaces: [] };
   }
   const { myDay, lists, lastList } = snapshot;
+  // The picker's groups (WebLists) as last saved; the flat list is what the screens look a list up by.
+  const spaces = lists?.data?.spaces ?? [];
   let record;
   if (path === "/today") record = myDay;
   else if (path === "/lists") record = lists;
@@ -104,7 +106,13 @@ async function readOffline(path) {
       .find((entry) => entry.data.tasks.some((task) => task.id === id));
     if (source) record = { ...source, data: source.data.tasks.find((task) => task.id === id) };
   }
-  return { data: record?.data ?? null, updatedAt: record?.updatedAt, lists: lists?.data ?? [], appearance: snapshot.appearance ?? null };
+  return {
+    data: record?.data ?? null,
+    updatedAt: record?.updatedAt,
+    spaces,
+    lists: spaces.flatMap((space) => space.lists),
+    appearance: snapshot.appearance ?? null,
+  };
 }
 
 async function request(path, { signal, session, method = "GET", body } = {}) {
@@ -152,7 +160,7 @@ async function request(path, { signal, session, method = "GET", body } = {}) {
   }
 }
 
-const emptyView = { mode: "loading", data: null, lists: [], session: null };
+const emptyView = { mode: "loading", data: null, lists: [], spaces: [], session: null };
 
 export function useMobileData(path) {
   const [state, setState] = useState(emptyView);
@@ -222,14 +230,15 @@ export function useMobileData(path) {
         if (signal.aborted) return;
         const options = { signal, session };
         const listPicker = request("/lists", options);
-        const [data, lists, appearance] = await Promise.all([
+        const [data, groups, appearance] = await Promise.all([
           path === "/lists" ? listPicker : request(path, options),
           listPicker,
           request("/appearance", options),
         ]);
         if (signal.aborted) return;
-        setState({ mode: "ready", path, data, lists, appearance, session });
-        void storeViews(session.deviceId, path, data, lists, appearance).catch(() => undefined);
+        const spaces = groups.spaces;
+        setState({ mode: "ready", path, data, spaces, lists: spaces.flatMap((space) => space.lists), appearance, session });
+        void storeViews(session.deviceId, path, data, groups, appearance).catch(() => undefined);
       } catch (error) {
         if (signal.aborted) return;
         if (error.status === 401) {
@@ -251,7 +260,10 @@ export function useMobileData(path) {
     return () => controller.abort();
   }, [path, refresh, revision]);
 
-  const current = state.path === path ? state : { ...emptyView, lists: state.lists, session: state.session, appearance: state.appearance };
+  const current =
+    state.path === path
+      ? state
+      : { ...emptyView, lists: state.lists, spaces: state.spaces, session: state.session, appearance: state.appearance };
   return { ...current, connected, refresh };
 }
 

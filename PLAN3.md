@@ -2132,7 +2132,29 @@ appear live on members' desktops.
 **Exit:** each agent behaviour in the spec's "What an agent can do" and "Handing work to agents" lists is
 demonstrated end to end.
 
-### [ ] Q21: The PWA with shared spaces
+### [x] Q21: The PWA with shared spaces
+
+**Progress note 2026-11-24 (completion).** `WebReadModel` builds a scope per request from the account's membership
+version and reads the account stream plus every member space stream: `GET /v1/web/lists` groups lists by space with the
+caller's role and `canChange` (`WebLists`), tasks carry `spaceId`, `canChange` and assignees, the task detail carries
+the diary with its authors, and search and task images cover the readable streams (pad notes and pages stay Personal).
+Web writes are pushed with protocol 2, so a shared task's change is routed to its space stream and permission-checked by
+the service: a viewer gets 403 with a plain message and the app disables the controls; My Day membership stays a personal
+overlay. `/v1/web/events` wakes the app for any member stream and for membership changes. The PWA groups the picker by
+space, says the role once per screen, shows assignees and updates with their authors, and offers only writable lists when
+capturing. `web-dto.json` is regenerated and its snapshot test passes again (the test now also maps `short` to
+`number`). Tests: `WebSharingTests` 3 (a member sees, completes and captures into a shared list, with the change in the
+space stream and the owner's snapshot showing it; a viewer reads but gets 403 and can still plan the task on My Day; a
+removed member loses the lists, tasks, search hits and My Day item at once, while a space write wakes a member's web
+stream), the adjusted `WebReadTests` and `WebSessionTests`, and PWA `TaskViews.test.jsx` 4. Full gate
+`pwsh -File eng/verify.ps1` with PostgreSQL 18.7 through `wslc` (disposable, fsync off) and
+`DOTNET_PROCESSOR_COUNT=4`: Domain 337, Application 141, Infrastructure 835, Sync 82, Server 230 and Desktop 104 (1,729
+total), no skips; Slopwatch 0 issues. Desktop frontend `npm test` passed 342; web passed 21; web lint exited 0 with the
+existing hook-dependency warning; `format:check` passes. A first gate attempt stopped at the Release build because a
+running Chaos Desktop held its output DLLs; the owner closed it and the rerun is the one recorded. Not done: a task whose
+assignees must each complete it is completed directly on the phone (recorded in `docs/decisions.md`); task history rows,
+shared pads and pages, and editing a task's text or dates stay off the phone. The test container was removed. Smallest next
+action: Q17.
 
 **Depends on:** Q10. **Migration:** none. **Read:** `docs/mobile-web.md`.
 

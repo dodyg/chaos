@@ -309,6 +309,32 @@ public sealed class GoogleCalendarClientTests
         var patch = handler.Calls.Single(call => call.Request.Method == HttpMethod.Patch);
         await Assert.That(patch.Request.RequestUri!.AbsoluteUri).IsEqualTo("https://www.googleapis.com/calendar/v3/calendars/calendar_1/events/cbabc");
         await Assert.That(patch.Body!).DoesNotContain("\"id\"");
+        // Google keeps a deleted event as cancelled under its id: the patch after a 409 must bring it back.
+        using var patched = System.Text.Json.JsonDocument.Parse(patch.Body!);
+        await Assert.That(patched.RootElement.GetProperty("status").GetString()).IsEqualTo("confirmed");
+    }
+
+    [Test]
+    public async Task TimeBlockWrites_RefreshAnExpiredAccessTokenOnce_LikeTheReads()
+    {
+        var tokens = 0;
+        var (client, _) = ClientOf((request, _) =>
+        {
+            if (request.RequestUri!.AbsoluteUri.StartsWith(GoogleCalendarClient.TokenEndpoint, StringComparison.Ordinal))
+            {
+                tokens++;
+                return Json(HttpStatusCode.OK, $"{{\"access_token\":\"access-{tokens}\",\"expires_in\":3600}}");
+            }
+
+            return request.Headers.Authorization!.Parameter == "access-1"
+                ? Json(HttpStatusCode.Unauthorized, """{"error":{"code":401}}""")
+                : Json(HttpStatusCode.OK, """{"id":"cbabc","etag":"\"e1\"","updated":"2026-11-20T09:00:00Z"}""");
+        });
+
+        var write = await client.InsertEventAsync(Refresh, "calendar_1", new GoogleEventBody("cbabc", null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1), "UTC"), CancellationToken.None);
+
+        await Assert.That(write.ETag).IsEqualTo("\"e1\"");
+        await Assert.That(tokens).IsEqualTo(2);
     }
 
     [Test]

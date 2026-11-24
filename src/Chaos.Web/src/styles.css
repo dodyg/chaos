@@ -473,6 +473,54 @@ h2 {
   color: var(--muted-foreground);
   font-size: 0.92rem;
 }
+.space-role {
+  margin: -8px 0 12px;
+}
+.task-updates {
+  margin-top: 24px;
+}
+.task-updates h2 {
+  margin-bottom: 10px;
+}
+.task-updates h2 span {
+  color: var(--muted-foreground);
+  padding-left: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.task-updates > .reading-meta {
+  margin: 0;
+}
+.task-updates ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.task-updates li {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+}
+.task-updates li.removed {
+  border-style: dashed;
+  box-shadow: none;
+}
+.task-updates header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+}
+.task-updates header strong {
+  color: var(--foreground);
+  font-size: 0.9rem;
+}
 
 .dock {
   position: fixed;

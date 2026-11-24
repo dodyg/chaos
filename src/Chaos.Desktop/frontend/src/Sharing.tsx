@@ -1330,8 +1330,12 @@ export function SpaceStandups({
   const [notice, setNotice] = React.useState<string | null>(null);
   const { busy, error, run } = useAction();
 
+  // The space on screen: a list that answers after the person moved to another space is dropped, not shown there.
+  const currentSpace = React.useRef(spaceId);
+  currentSpace.current = spaceId;
   const load = React.useCallback(async () => {
     const result = await api.list({ spaceId });
+    if (currentSpace.current !== spaceId) return;
     if (result.ok) {
       setItems([...result.updates]);
       setLoadError(null);

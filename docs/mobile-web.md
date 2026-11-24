@@ -19,7 +19,8 @@ It also refreshes every ten seconds while visible as a fallback, and on reconnec
 foreground. Desktop clients receive sync events through the existing service. The app keeps My Day, the list picker and the last opened
 list in the browser. The active desktop appearance and My Day color or built-in scene sync to the
 web app and are cached for offline use. Custom desktop background images remain on that computer.
-Task notes are fetched while connected. Signing out clears the saved views.
+Task notes are fetched while connected. Signing out clears the saved views. Lists of the shared spaces you belong
+to appear under Personal, grouped by space with your role there; see "Shared spaces" below.
 
 ## Goal
 
@@ -47,10 +48,39 @@ connection.
 | D2 | How does a phone reach the server? | The server's trusted HTTPS URL. Deployment can use a public host or private HTTPS through Tailscale. |
 | W1 | Which screens are in the first release? | My Day, list picker, lists and task detail, with task capture, complete, reopen and My Day membership. |
 
+## Shared spaces
+
+The app reads the account stream and the stream of every shared space the person belongs to (PLAN3 Q21).
+
+- **Lists are grouped by space.** `GET /v1/web/lists` returns Personal first, then each shared space by name,
+  with the caller's role. The list picker shows each space as its own group, and a shared list's screen names
+  its space and says, once, "You are a viewer of this space" (or owner, or editor).
+- **The same rules as the desktop.** Every web write is pushed through `SyncService` with protocol 2, so a
+  change to a shared task is routed to the space stream and checked against the member's role on the server.
+  Owners and editors add tasks to the space's lists and complete or reopen its tasks. A viewer's write is
+  refused with 403 and a plain message; the app disables the check box and the complete button with
+  "Viewers cannot change tasks". The server's `canChange` on each task and space is what the app reflects.
+- **Assignees and authors are shown.** Shared tasks carry their assignees' names (the signed-in person is
+  "You") in list rows and in the task's details. The task detail lists the task's updates and comments with
+  their authors; an entry an owner removed keeps a "Removed by an owner" placeholder.
+- **Personal choices stay personal.** Adding a shared task to My Day is an overlay in the account stream, so a
+  viewer can do it too.
+- **Live changes and removal.** `/v1/web/events` wakes the app for any stream the person can read and for a
+  membership change, so a change in a shared list, or the person's removal from the space, refreshes the open
+  view at once. After a removal, the space's lists and tasks answer 404.
+- **Search** covers the tasks of shared lists. The pad and pages stay the Personal ones.
+- **Not on the phone:** completing a task whose assignees must each complete it (the phone writes the status
+  directly; the desktop computes the rule), recurring task completion, editing a task's text or dates, shared
+  pads and pages, and the task history (field changes).
+
 ## Sync mapping
 
+- A change to a task in a shared space is routed to the space's stream and checked against the member's role
+  like any device's change; My Day items and other personal overlays go to the account stream whatever the
+  task's space.
 - Capture writes the task's `create`, `title`, `notes`, `status`, `place`, `position`, `priority`,
-  `estimate`, `category`, `planned`, `due` and `deleted` groups. The account's Inbox is the default.
+  `estimate`, `category`, `planned`, `due` and `deleted` groups. The account's Inbox is the default, and a
+  list chosen in the picker may be a shared one.
 - Complete and reopen write `status` and its terminal timestamps. Reopen resets the status to
   **Not started**. Complete leaves subtasks in their current state. Recurring task completion and
   reopening use the desktop recurrence controls.

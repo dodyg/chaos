@@ -3,22 +3,20 @@ import { createRoot } from "react-dom/client";
 import {
   BookOpen,
   CalendarDays,
-  Check,
   ChevronLeft,
   ChevronRight,
   Download,
-  Inbox,
   List,
   LogOut,
   Plus,
   RefreshCw,
-  Repeat2,
   Search,
   StickyNote,
   WifiOff,
   X,
 } from "lucide-react";
 import { forgetOfflineSession, useMobileData, writeTask } from "./mobileData.js";
+import { canChangeIn, ListPicker, roleSentence, spaceOf, TaskDetail, TaskList, VIEWER } from "./TaskViews.jsx";
 import { usePwa } from "./usePwa.js";
 import { MarkdownNotes } from "./MarkdownNotes.jsx";
 import { SearchScreen } from "./SearchScreen.jsx";
@@ -33,17 +31,11 @@ import { dayBackgroundStyle, sceneBackgroundStyle } from "./appearance.js";
 import { pageContent } from "./pageContent.js";
 import "./styles.css";
 
-const statuses = ["Not started", "In progress", "Waiting on someone", "Needs review", "Done", "Cancelled"];
 const guid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const dateFormat = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
 const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-const timestamp = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const readDate = (date, format = shortDate) => format.format(new Date(date + "T00:00:00Z"));
-
-function schedule(date, time, zone) {
-  if (!date) return "—";
-  return [readDate(date), time?.slice(0, 5), time && zone].filter(Boolean).join(" · ");
-}
+const timestamp = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 function getRoute(hash) {
   const [path, query] = hash.slice(1).split("?");
@@ -102,7 +94,7 @@ function App() {
   const [feedback, setFeedback] = useState(null);
   const inFlight = useRef(false);
   const canWrite = view.mode === "ready" && view.connected;
-  const canAdd = canWrite && view.lists.some((list) => !list.isArchived);
+  const canAdd = canWrite && view.lists.some((list) => !list.isArchived && canChangeIn(view.spaces, list.spaceId));
 
   async function save(path, body, message) {
     if (!canWrite || inFlight.current) return false;
@@ -285,7 +277,8 @@ function App() {
 
       {composer && (
         <Capture
-          lists={view.lists.filter((list) => !list.isArchived)}
+          lists={view.lists.filter((list) => !list.isArchived && canChangeIn(view.spaces, list.spaceId))}
+          spaces={view.spaces}
           listId={route.kind === "list" ? route.id : undefined}
           disabled={!canWrite || busy}
           onCancel={() => setComposer(false)}
@@ -301,7 +294,7 @@ function App() {
 }
 
 function Screen({ route, view, canWrite, act }) {
-  const { data, mode, lists } = view;
+  const { data, mode, lists, spaces } = view;
   if (route.kind === "search" && mode !== "loading" && mode !== "error")
     return <SearchScreen initialQuery={route.query} session={view.session} offline={mode === "offline" || !view.connected} />;
   if (mode === "loading")
@@ -345,6 +338,7 @@ function Screen({ route, view, canWrite, act }) {
       <TaskDetail
         task={data}
         list={lists.find((list) => list.id === data.listId)}
+        space={spaceOf(spaces, data.spaceId)}
         back={route.back}
         canWrite={canWrite}
         offline={mode === "offline"}
@@ -352,10 +346,13 @@ function Screen({ route, view, canWrite, act }) {
       />
     );
   }
-  if (route.kind === "lists") return <ListPicker lists={data} />;
+  if (route.kind === "lists") return <ListPicker spaces={data.spaces} />;
   if (route.kind === "pad" || route.kind === "pages") return <ReadingView route={route} items={data} />;
 
   const today = route.kind === "today";
+  // A shared list carries its space and the caller's role there; a viewer reads it, as on the desktop.
+  const space = today ? null : spaceOf(spaces, data.list.spaceId);
+  const viewer = space?.isShared === true && space.role === VIEWER;
   const tasks = data.tasks;
   const open = tasks.filter((task) => !task.isTerminal);
   const closed = tasks.filter((task) => task.isTerminal);
@@ -378,6 +375,11 @@ function Screen({ route, view, canWrite, act }) {
           {open.length} open
         </Badge>
       </div>
+      {space?.isShared && (
+        <p className={viewer ? "notice" : "reading-meta"} role={viewer ? "status" : undefined}>
+          {space.name} · {roleSentence(space.role)}
+        </p>
+      )}
       {today && data.meetings?.length > 0 && (
         <section className="meetings" aria-label="Meetings today">
           <h2>Meetings today</h2>
@@ -409,7 +411,9 @@ function Screen({ route, view, canWrite, act }) {
               ? "Connect Chaos on your desktop and sync your Inbox to get started."
               : today
                 ? "Open a task from Lists to add it to My Day."
-                : "Tasks you add to this list will appear here."}
+                : viewer
+                  ? "Tasks in this list will appear here."
+                  : "Tasks you add to this list will appear here."}
           </p>
         </div>
       )}
@@ -547,144 +551,7 @@ function ReadingView({ route, items }) {
   );
 }
 
-function ListPicker({ lists }) {
-  return (
-    <>
-      <div className="screen-heading">
-        <h1>Lists</h1>
-        <Badge variant="secondary" className="count">
-          {lists.length} {lists.length === 1 ? "list" : "lists"}
-        </Badge>
-      </div>
-      {lists.length === 0 ? (
-        <div className="empty">
-          <div className="empty-icon">
-            <List />
-          </div>
-          <h2>No synced lists yet</h2>
-          <p>Connect Chaos on your desktop and sync your Inbox to get started.</p>
-        </div>
-      ) : (
-        <ul className="rows">
-          {lists.map((list) => (
-            <li key={list.id}>
-              <a className="list-row" href={`#list/${list.id}`}>
-                <span className="list-icon">{list.isInbox ? <Inbox /> : <List />}</span>
-                <span className="row-title">
-                  {list.name}
-                  {list.isArchived && <small>Archived</small>}
-                </span>
-                <ChevronRight className="row-arrow" size={18} />
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
-  );
-}
-
-function TaskList({ tasks, route, canWrite, act }) {
-  return (
-    <ul className="rows">
-      {tasks.map((task) => (
-        <li className={`task-row ${task.isTerminal ? "terminal" : ""}`} key={task.id}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="task-check"
-            disabled={!canWrite || task.isTerminal || task.isRecurring}
-            aria-label={task.isTerminal ? statuses[task.status] : task.isRecurring ? "Complete on desktop" : `Complete ${task.title}`}
-            title={task.isRecurring ? "Complete on desktop" : undefined}
-            onClick={() => act(task, "complete")}
-          >
-            <span>{task.status === 4 ? <Check size={15} /> : task.status === 5 ? <X size={14} /> : null}</span>
-          </Button>
-          <a className="task-link" href={`#task/${task.id}?from=${encodeURIComponent(route.href)}`}>
-            <span className="row-title">
-              {task.title}
-              {(task.plannedDate || task.dueDate || task.isRecurring) && (
-                <small>
-                  {task.isRecurring && (
-                    <span>
-                      <Repeat2 size={14} />
-                      Recurring
-                    </span>
-                  )}
-                  {task.plannedDate && <span>Planned {readDate(task.plannedDate)}</span>}
-                  {task.dueDate && <span className="due-date">Due {readDate(task.dueDate)}</span>}
-                </small>
-              )}
-            </span>
-            <ChevronRight className="row-arrow" size={17} />
-          </a>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function TaskDetail({ task, list, back, canWrite, offline, act }) {
-  return (
-    <>
-      <a className="back" href={back}>
-        <ChevronLeft size={18} />
-        {back === "#my-day" ? "My Day" : back.startsWith("#search") ? "Search" : (list?.name ?? "Lists")}
-      </a>
-      <div className="screen-heading task-heading">
-        <h1>{task.title}</h1>
-      </div>
-      <dl className="task-fields">
-        <div>
-          <dt>Status</dt>
-          <dd>{statuses[task.status] ?? "Open"}</dd>
-        </div>
-        <div>
-          <dt>List</dt>
-          <dd>{list?.name ?? "—"}</dd>
-        </div>
-        <div>
-          <dt>Planned</dt>
-          <dd>{schedule(task.plannedDate, task.plannedTime, task.plannedZoneId)}</dd>
-        </div>
-        <div>
-          <dt>Due</dt>
-          <dd>{schedule(task.dueDate, task.dueTime, task.dueZoneId)}</dd>
-        </div>
-      </dl>
-      <section className="task-notes">
-        <h2>Notes</h2>
-        {offline ? <p>Notes are available online.</p> : task.notes?.trim() ? <MarkdownNotes>{task.notes}</MarkdownNotes> : <p>No notes.</p>}
-      </section>
-      <div className="task-actions">
-        {task.isRecurring ? (
-          <p className="inline-hint">
-            <Repeat2 size={17} />
-            {task.isTerminal ? "Reopen on desktop" : "Complete on desktop"}
-          </p>
-        ) : (
-          <Button className="mobile-action" disabled={!canWrite} onClick={() => act(task, task.isTerminal ? "reopen" : "complete")}>
-            {task.isTerminal ? <RefreshCw size={17} /> : <Check size={19} />}
-            {task.isTerminal ? "Reopen task" : "Complete task"}
-          </Button>
-        )}
-        {!task.isTerminal && (
-          <Button
-            variant="outline"
-            className="mobile-action"
-            disabled={!canWrite}
-            onClick={() => act(task, task.isOnMyDay ? "remove-from-my-day" : "add-to-my-day")}
-          >
-            <CalendarDays size={18} />
-            {task.isOnMyDay ? "Remove from My Day" : "Add to My Day"}
-          </Button>
-        )}
-      </div>
-    </>
-  );
-}
-
-function Capture({ lists, listId, disabled, onCancel, onSubmit }) {
+function Capture({ lists, spaces, listId, disabled, onCancel, onSubmit }) {
   const dialog = useRef(null);
   const request = useRef(null);
   const [error, setError] = useState(null);
@@ -735,11 +602,15 @@ function Capture({ lists, listId, disabled, onCancel, onSubmit }) {
               <NativeSelectOption value="" disabled>
                 Choose a list
               </NativeSelectOption>
-              {lists.map((item) => (
-                <NativeSelectOption key={item.id} value={item.id}>
-                  {item.name}
-                </NativeSelectOption>
-              ))}
+              {lists.map((item) => {
+                // A list in a shared space is named with its space, so two lists called "Planning" stay apart.
+                const space = spaceOf(spaces, item.spaceId);
+                return (
+                  <NativeSelectOption key={item.id} value={item.id}>
+                    {space?.isShared ? `${space.name} · ${item.name}` : item.name}
+                  </NativeSelectOption>
+                );
+              })}
             </NativeSelect>
           </div>
           <div>

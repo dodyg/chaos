@@ -138,9 +138,12 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
                 if (link is null || link.State == 4) throw AppException.NotFound("Task is not connected to GitHub.");
                 var connection = await s.GitHub.GetConnectionAsync(link.ConnectionId, token);
                 if (connection is null || connection.DeletedAtUtc is not null) throw AppException.NotFound("GitHub connection is unavailable.");
-                return (Account: new GitHubAccount(connection.AccountId, connection.AccountLogin), IssueUrl: GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null);
+                return (Account: new GitHubAccount(connection.AccountId, connection.AccountLogin), IssueUrl: GitHubIssueAddress.TryParse(link.HtmlUrl, out var address) ? address.WebUrl : null,
+                    Owner: await GitHubSpaces.IsOwnerAsync(s, space, profile, token));
             }, ct);
             issueUrl = context.IssueUrl;
+            // The connection's account is an owner's: a member's device makes no GitHub CLI call and opens the issue instead.
+            if (!context.Owner) throw new AppException(AppErrorKind.UnsupportedCapability, "Open the issue on GitHub to see this image.");
             var image = await attachments.ReadAttachmentAsync(context.Account, url, ct);
             return new(true, image.ContentType, Convert.ToBase64String(image.Data), issueUrl, null);
         }

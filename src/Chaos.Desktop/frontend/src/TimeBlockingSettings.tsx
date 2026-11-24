@@ -36,6 +36,7 @@ function SpacesPicker({
         <input type="checkbox" className="accent-primary" checked={every} onChange={(event) => onEvery(event.target.checked)} />
         Every space
       </label>
+      {/* An empty list means every space on the backend, so the last ticked space cannot be unticked. */}
       {!every && (
         <ul className="grid gap-1 pl-5">
           {spaces.map((space) => (
@@ -45,6 +46,7 @@ function SpacesPicker({
                   type="checkbox"
                   className="accent-primary"
                   checked={chosen.has(space.id)}
+                  disabled={chosen.has(space.id) && chosen.size === 1}
                   onChange={(event) => onToggle(space.id, event.target.checked)}
                 />
                 <span dir="auto">{space.name}</span>
@@ -141,6 +143,8 @@ export function TimeBlockingSettings({ api = timeBlockRpc, onChanged }: { api?: 
       every: patch.every ?? selection.every,
       chosen: patch.spaces ?? selection.chosen,
     };
+    // No spaces would be sent as an empty list, which the backend reads as every space.
+    if (!next.every && next.chosen.size === 0) return;
     setShowTitles(next.showTitles);
     setSelection({ every: next.every, chosen: next.chosen });
     await run(

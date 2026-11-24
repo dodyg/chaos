@@ -170,8 +170,9 @@ internal sealed class ViewPredicateCompiler(Func<object, string> p, List<string>
                 return BaselineText("issueType", c);
             case "githubLinkedPr":
             {
-                var linked = $"EXISTS ({link} AND EXISTS (SELECT 1 FROM GitHubPullRequestLinks gpr WHERE gpr.IssueLinkId = {gl}.Id))";
-                return c.Numbers[0] == 1 ? linked : $"NOT {linked}";
+                // Like the other GitHub fields, both answers need a task from GitHub: "no linked pull request" is not every other task.
+                var pr = $"EXISTS (SELECT 1 FROM GitHubPullRequestLinks gpr WHERE gpr.IssueLinkId = {gl}.Id)";
+                return c.Numbers[0] == 1 ? $"EXISTS ({link} AND {pr})" : $"EXISTS ({link} AND NOT {pr})";
             }
             default: // githubPrReview
             {

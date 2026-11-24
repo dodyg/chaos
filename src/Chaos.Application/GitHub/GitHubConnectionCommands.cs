@@ -203,6 +203,7 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
     {
         var status = await StatusAsync(spaceId, ct);
         var connection = status.Connection ?? throw AppException.NotFound("Connect to GitHub first.");
+        RequireOwner(status);
         var page = await api.ListRepositoriesAsync(Account(connection), cursor, null, ct);
         return new(page.Items.Select(repo => new GitHubRepositoryCandidate(repo, status.Repositories.Any(r => r.RepositoryId == repo.Id))).ToArray(), page.NextCursor);
     }
@@ -213,8 +214,15 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
             throw AppException.Validation("repository", "Enter owner/repository.");
         var status = await StatusAsync(spaceId, ct);
         var connection = status.Connection ?? throw AppException.NotFound("Connect to GitHub first.");
+        RequireOwner(status);
         var repo = await api.GetRepositoryAsync(Account(connection), owner, name, ct);
         return new(repo, status.Repositories.Any(r => r.RepositoryId == repo.Id));
+    }
+
+    /// <summary>Non-owners are refused before any GitHub CLI call: the connection's account is an owner's (PLAN3 10.1).</summary>
+    private static void RequireOwner(GitHubStatus status)
+    {
+        if (!status.IsOwner) throw AppException.Validation("spaceId", GitHubSpaces.OwnerOnly(status.SpaceName ?? "this space"));
     }
 
     public async Task<GitHubRepositoryRecord> AddRepositoryAsync(AddGitHubRepositoryCommand command, CancellationToken ct = default)

@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/components/ui/*": ["../Chaos.Desktop/frontend/src/components/ui/*"],
+      "@/lib/utils": ["../Chaos.Desktop/frontend/src/lib/utils.ts"],
+      "@/theme-accent": ["../Chaos.Desktop/frontend/src/theme-accent.ts"]
+    }
+  }
+}

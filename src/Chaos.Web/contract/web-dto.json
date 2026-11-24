@@ -5,7 +5,8 @@
   },
   "WebAttachment": {
     "mediaType": "string",
-    "sha256": "string"
+    "sha256": "string",
+    "streamId": "guid"
   },
   "WebCaptureRequest": {
     "listId": "guid?",
@@ -32,7 +33,11 @@
     "isArchived": "boolean",
     "isInbox": "boolean",
     "name": "string",
-    "position": "number"
+    "position": "number",
+    "spaceId": "guid"
+  },
+  "WebLists": {
+    "spaces": "list<WebSpace>"
   },
   "WebMeeting": {
     "allDay": "boolean",
@@ -65,6 +70,11 @@
     "position": "number",
     "title": "string"
   },
+  "WebPerson": {
+    "isMe": "boolean",
+    "memberId": "guid",
+    "name": "string"
+  },
   "WebSearchItem": {
     "detail": "string?",
     "id": "guid",
@@ -76,7 +86,19 @@
     "items": "list<WebSearchItem>",
     "truncated": "boolean"
   },
+  "WebSpace": {
+    "canChange": "boolean",
+    "colorKey": "string?",
+    "icon": "string?",
+    "id": "guid",
+    "isShared": "boolean",
+    "lists": "list<WebList>",
+    "name": "string",
+    "role": "number?"
+  },
   "WebTask": {
+    "assignees": "list<WebPerson>",
+    "canChange": "boolean",
     "dueDate": "date?",
     "dueTime": "time?",
     "dueZoneId": "string?",
@@ -91,12 +113,22 @@
     "plannedZoneId": "string?",
     "position": "number",
     "priority": "number",
+    "spaceId": "guid",
     "status": "number",
-    "title": "string"
+    "title": "string",
+    "updates": "list<WebUpdate>"
   },
   "WebToday": {
     "date": "date",
     "meetings": "list<WebMeeting>",
     "tasks": "list<WebTask>"
+  },
+  "WebUpdate": {
+    "at": "datetime",
+    "author": "string",
+    "id": "guid",
+    "isMine": "boolean",
+    "markdown": "string",
+    "removedByOwner": "boolean"
   }
 }
