@@ -69,9 +69,9 @@ The app reads the account stream and the stream of every shared space the person
   membership change, so a change in a shared list, or the person's removal from the space, refreshes the open
   view at once. After a removal, the space's lists and tasks answer 404.
 - **Search** covers the tasks of shared lists. The pad and pages stay the Personal ones.
-- **Not on the phone:** completing a task whose assignees must each complete it (the phone writes the status
-  directly; the desktop computes the rule), recurring task completion, editing a task's text or dates, shared
-  pads and pages, and the task history (field changes).
+- **Not on the phone:** completing a task whose assignees must each complete it (the desktop computes the
+  rule; the app disables Complete and the server refuses it, as for recurring tasks), recurring task
+  completion, editing a task's text or dates, shared pads and pages, and the task history (field changes).
 
 ## Sync mapping
 
@@ -84,6 +84,9 @@ The app reads the account stream and the stream of every shared space the person
 - Complete and reopen write `status` and its terminal timestamps. Reopen resets the status to
   **Not started**. Complete leaves subtasks in their current state. Recurring task completion and
   reopening use the desktop recurrence controls.
+- A task with `eachMustComplete` (every live assignee must complete it) is completed per person on the
+  desktop, where that rule runs. Complete answers 409 "Complete your part of this task on your desktop."
+  and the app shows "Complete on desktop" instead of the control; reopen stays available.
 - My Day shows open and finished tasks from the synced day plan in its saved order. It uses the
   synced profile time zone, with UTC as the fallback before a profile arrives.
 - If the day plan has not been initialized, My Day shows open tasks assigned to the date in the
@@ -140,6 +143,8 @@ Endpoints under `/v1/web`, filtered by `AccountId` from the cookie, never from t
 - **Recurring tasks:** completing one creates the next occurrence on the desktop (client logic in
   `Chaos.Application`). Do not reimplement it here. Disable Complete on recurring tasks with the
   text "Complete on desktop" until W7.
+- **Each-assignee tasks** (`eachMustComplete`): every live assignee completes their part on the desktop
+  (client logic too). Complete answers 409 and the app says "Complete on desktop" the same way.
 - Tests: two-client test where the desktop edits the same task concurrently and the merge is
   field-level, last write wins, replaced value kept in history (PLAN2 7.7).
 

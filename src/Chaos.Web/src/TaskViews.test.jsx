@@ -60,6 +60,7 @@ const task = (extra = {}) => ({
   plannedDate: null,
   dueDate: null,
   isRecurring: false,
+  eachMustComplete: false,
   priority: 2,
   position: 0,
   plannedTime: null,
@@ -156,6 +157,65 @@ test("a viewer's list is read-only while an editor's list can be completed", asy
     assert.deepEqual(acted, [[ids.task, "complete"]]);
   } finally {
     await editor.close();
+  }
+});
+
+test("a task whose assignees must each complete it is completed on the desktop; reopening and My Day stay here", async () => {
+  const acted = [];
+  const route = { href: `#list/${ids.planning}` };
+  const studio = { ...spaces[1], role: 2, canChange: true };
+  const each = (extra = {}) =>
+    task({ canChange: true, eachMustComplete: true, assignees: [person(ids.omar, "Omar"), person(ids.me, "Mina", true)], ...extra });
+  const onAct = (item, action) => acted.push(action);
+  assertServerShape("WebTask", each());
+  const list = await render(<TaskList tasks={[each()]} route={route} canWrite act={onAct} />);
+  try {
+    const check = list.host.querySelector("button.task-check");
+    assert.equal(check.disabled, true);
+    assert.equal(check.getAttribute("aria-label"), "Complete on desktop");
+    assert.equal(check.getAttribute("title"), "Complete on desktop");
+  } finally {
+    await list.close();
+  }
+
+  const open = await render(
+    <TaskDetail task={each()} list={studio.lists[0]} space={studio} back={route.href} canWrite offline={false} act={onAct} />,
+  );
+  try {
+    assert.match(open.host.querySelector(".task-actions .inline-hint").textContent, /Each assignee completes their part on desktop/);
+    const [myDay] = open.host.querySelectorAll(".task-actions button");
+    assert.equal(myDay.textContent, "Add to My Day");
+    assert.equal(myDay.disabled, false);
+    await act(async () => {
+      myDay.click();
+    });
+    assert.deepEqual(acted, ["add-to-my-day"]);
+  } finally {
+    await open.close();
+  }
+
+  const done = await render(
+    <TaskDetail
+      task={each({ status: 4, isTerminal: true })}
+      list={studio.lists[0]}
+      space={studio}
+      back={route.href}
+      canWrite
+      offline={false}
+      act={onAct}
+    />,
+  );
+  try {
+    assert.equal(done.host.querySelector(".task-actions .inline-hint"), null);
+    const [reopen] = done.host.querySelectorAll(".task-actions button");
+    assert.equal(reopen.textContent, "Reopen task");
+    assert.equal(reopen.disabled, false);
+    await act(async () => {
+      reopen.click();
+    });
+    assert.deepEqual(acted, ["add-to-my-day", "reopen"]);
+  } finally {
+    await done.close();
   }
 });
 

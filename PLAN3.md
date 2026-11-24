@@ -2156,6 +2156,18 @@ assignees must each complete it is completed directly on the phone (recorded in 
 shared pads and pages, and editing a task's text or dates stay off the phone. The test container was removed. Smallest next
 action: Q17.
 
+**Progress note 2026-11-24 (follow-up: each-assignee tasks).** A task whose assignees must each complete it is no longer
+completed directly on the phone. `WebTask` carries `eachMustComplete` (`assignment.AssignMode` is 1), the app disables its
+check box with "Complete on desktop" and shows the hint on the task screen, and `WebTaskWrites` refuses Complete with 409
+"Complete your part of this task on your desktop.", as for recurring tasks. The rule itself stays on the desktop: the server
+runs no client logic, and the web device's client schema 1 cannot write the `done` group. Reopen is unchanged and still writes
+`status` only. Tests: `WebSharingTests` 4 (the new case checks the flag on the list and detail rows, the 409, and that the web
+device wrote no change) and the server's other `Web*` classes, 13 in all, with PostgreSQL 18.7 through `wslc` (disposable,
+removed afterwards); `TaskViews.test.jsx` 5 and the web's 22 tests; lint 0 errors with the existing hook-dependency warning;
+Prettier clean; `web-dto.json` regenerated. Full gate `pwsh -File eng/verify.ps1` with the same PostgreSQL and
+`DOTNET_PROCESSOR_COUNT=4`: Domain 337, Application 141, Infrastructure 835, Sync 82, Server 231 and Desktop 104 (1,730
+total), no skips, 1,469 s; Slopwatch 0 issues; desktop frontend `npm test` passed 342. Smallest next action: unchanged (Q17).
+
 **Depends on:** Q10. **Migration:** none. **Read:** `docs/mobile-web.md`.
 
 1. `WebReadModel` reads the account stream plus member space streams. Lists are grouped by space.

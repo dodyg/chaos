@@ -97,6 +97,34 @@ public sealed class WebSharingTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task Member_CannotCompleteOnTheWebATaskWhoseAssigneesMustEachComplete()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        await using var shared = await SharedSpaceAsync(server);
+        using var editor = shared.EditorBrowser;
+        var session = await WebFlow.SessionAsync(editor);
+
+        // "Pay the deposit" is assigned to Sara with each-assignee completion; the app disables its check box on this flag.
+        var list = (await editor.GetFromJsonAsync<ListTasks>($"/v1/web/lists/{shared.List}/tasks"))!;
+        await Assert.That(list.Tasks.Single(task => task.Title == "Pay the deposit").EachMustComplete).IsTrue();
+        await Assert.That(list.Tasks.Single(task => task.Title == "Book the studio").EachMustComplete).IsFalse();
+        var detail = (await editor.GetFromJsonAsync<WebTask>($"/v1/web/tasks/{shared.Assigned}"))!;
+        await Assert.That(detail.EachMustComplete).IsTrue();
+        await Assert.That(detail.CanChange).IsTrue();
+
+        // The server refuses too: the rule that every live assignee completes first runs on the desktop, not here.
+        using var refused = await WebFlow.PostAsync(editor, session, $"/v1/web/tasks/{shared.Assigned}/complete");
+        await Assert.That(refused.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+        await Assert.That(await refused.Content.ReadAsStringAsync()).Contains("Complete your part of this task on your desktop.");
+        await using var db = ServerDatabase.Open(server.ConnectionString);
+        await Assert.That(await db.SyncChanges.AsNoTracking()
+            .AnyAsync(c => c.AccountId == shared.Space && c.EntityKey == shared.Assigned && c.OriginDevice == session.DeviceId)).IsFalse();
+        var stored = SyncJson.ReadGroups((await db.SyncEntities.AsNoTracking()
+            .SingleAsync(e => e.AccountId == shared.Space && e.Kind == "task" && e.EntityKey == shared.Assigned)).Groups);
+        await Assert.That(stored["status"].Values.Values["Status"]).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Viewer_ReadsASharedList_ButCannotChangeItsTasks_AndCanStillPlanItPersonally()
     {
         await using var server = await TestServer.StartAsync(postgres);

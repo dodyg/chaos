@@ -1,6 +1,6 @@
 // React is imported for the component tests, which run under tsx's classic JSX transform.
 import React from "react";
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Inbox, List, RefreshCw, Repeat2, X } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Inbox, List, RefreshCw, Repeat2, UserCheck, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownNotes } from "./MarkdownNotes.jsx";
@@ -92,23 +92,25 @@ export function TaskList({ tasks, route, canWrite, act }) {
     <ul className="rows">
       {tasks.map((task) => {
         const readOnly = task.canChange === false;
+        // Recurring and each-assignee completions run on the desktop, so the check box only says so.
+        const completesOnDesktop = task.isRecurring || task.eachMustComplete;
         return (
           <li className={`task-row ${task.isTerminal ? "terminal" : ""}`} key={task.id}>
             <Button
               variant="ghost"
               size="icon"
               className="task-check"
-              disabled={!canWrite || readOnly || task.isTerminal || task.isRecurring}
+              disabled={!canWrite || readOnly || task.isTerminal || completesOnDesktop}
               aria-label={
                 task.isTerminal
                   ? statuses[task.status]
-                  : task.isRecurring
+                  : completesOnDesktop
                     ? "Complete on desktop"
                     : readOnly
                       ? "Read only"
                       : `Complete ${task.title}`
               }
-              title={task.isRecurring ? "Complete on desktop" : readOnly ? "Viewers cannot change tasks" : undefined}
+              title={completesOnDesktop ? "Complete on desktop" : readOnly ? "Viewers cannot change tasks" : undefined}
               onClick={() => act(task, "complete")}
             >
               <span>{task.status === 4 ? <Check size={15} /> : task.status === 5 ? <X size={14} /> : null}</span>
@@ -223,6 +225,11 @@ export function TaskDetail({ task, list, space, back, canWrite, offline, act }) 
           <p className="inline-hint">
             <Repeat2 size={17} />
             {task.isTerminal ? "Reopen on desktop" : "Complete on desktop"}
+          </p>
+        ) : task.eachMustComplete && !task.isTerminal ? (
+          <p className="inline-hint">
+            <UserCheck size={17} />
+            Each assignee completes their part on desktop
           </p>
         ) : (
           <Button
