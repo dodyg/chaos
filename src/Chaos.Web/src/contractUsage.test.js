@@ -8,6 +8,9 @@ import { serverContract } from "./contractSupport.js";
 const holders = {
   task: ["WebTask"],
   list: ["WebList"],
+  space: ["WebSpace"],
+  update: ["WebUpdate"],
+  person: ["WebPerson"],
   meeting: ["WebMeeting"],
   item: ["WebSearchItem", "WebPage", "WebNote", "WebList"],
   page: ["WebPage"],
@@ -16,7 +19,7 @@ const holders = {
   parent: ["WebPage"],
   appearance: ["WebAppearance"],
 };
-const files = ["main.jsx", "SearchScreen.jsx", "mobileData.js", "pageContent.js"];
+const files = ["main.jsx", "TaskViews.jsx", "SearchScreen.jsx", "mobileData.js", "pageContent.js"];
 
 test("every property the PWA reads from a server record exists in the server contract", () => {
   const unknown = [];

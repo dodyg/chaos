@@ -148,8 +148,10 @@ public sealed class WebReadTests(PostgresServer postgres)
         await Assert.That(view.Tasks[0].PlannedDate).IsNull();
         await Assert.That(view.Tasks[2].IsTerminal).IsTrue();
         await Assert.That(view.Tasks[1].Notes).IsNull();
-        var lists = (await owner.GetFromJsonAsync<WebList[]>("/v1/web/lists"))!;
-        await Assert.That(lists.First().Id).IsEqualTo(list);
+        var groups = (await owner.GetFromJsonAsync<WebLists>("/v1/web/lists"))!;
+        await Assert.That(groups.Spaces.Single().Name).IsEqualTo("Personal");
+        await Assert.That(groups.Spaces.Single().Lists.Select(item => item.Id)).IsEquivalentTo([list, archivedList]);
+        await Assert.That(groups.Spaces.Single().Lists.First().SpaceId).IsEqualTo(space);
         var detail = (await owner.GetFromJsonAsync<WebTask>($"/v1/web/tasks/{planned}"))!;
         await Assert.That(detail.Notes).IsEqualTo("Synced notes");
         await Assert.That(detail.IsOnMyDay).IsTrue();

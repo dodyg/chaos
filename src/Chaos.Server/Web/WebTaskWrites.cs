@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security.Claims;
-using System.Text;
 using Chaos.Server.Data;
 using Chaos.Server.Sync;
 using Chaos.Sync;
@@ -19,6 +18,11 @@ internal enum WebTaskAction
     RemoveFromMyDay,
 }
 
+/// <summary>
+/// The PWA's task writes. Each becomes ordinary sync changes, pushed through <see cref="SyncService"/> with protocol 2, so a
+/// task in a shared space is routed to its space stream and checked against the member's role like any device's change
+/// (PLAN3 8.4). My Day membership is a personal overlay in the account stream whatever the task's space.
+/// </summary>
 internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncService sync, ServerChangeWriter changes, TimeProvider time)
 {
     public Task<IResult> CaptureAsync(WebCaller caller, WebCaptureRequest request, CancellationToken ct)
@@ -32,38 +36,44 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
         var id = request.RequestId ?? Guid.NewGuid();
         // The task ID doubles as the browser's idempotency key for an add with a lost response.
         var changeId = NameBasedId.Create($"web-task:{id:D}").ToString("D");
-        return PushAsync(caller, id, async (account, token) =>
+        return PushAsync(caller, id, async (scope, token) =>
         {
             var key = id.ToString("D");
+            var streams = scope.StreamIds;
             var existing = await db.SyncEntities.AsNoTracking()
-                .SingleOrDefaultAsync(e => e.AccountId == account.Id && e.Kind == "task" && e.EntityKey == key, token);
-            if (existing is not null)
+                .Where(e => streams.Contains(e.AccountId) && e.Kind == "task" && e.EntityKey == key).Take(2).ToListAsync(token);
+            if (existing.Count > 0)
             {
-                var entity = new WebEntity(existing);
-                return existing.PurgedAt is null && !entity.IsDeleted &&
-                    await db.SyncChanges.AnyAsync(row => row.AccountId == account.Id && row.ChangeId == Guid.Parse(changeId), token)
+                var entity = existing.Count == 1 ? new WebEntity(existing[0]) : null;
+                return entity is not null && existing[0].PurgedAt is null && !entity.IsDeleted && scope.IsReadable(existing[0].AccountId, entity)
+                    && await db.SyncChanges.AnyAsync(row => streams.Contains(row.AccountId) && row.ChangeId == Guid.Parse(changeId), token)
                     ? new PreparedPush([])
                     : Refuse("task-id-in-use");
             }
 
-            if (account.PersonalSpaceId is not { } space || (request.ListId ?? account.InboxId) is not { } listId)
+            if ((request.ListId ?? scope.Account.InboxId) is not { } listId)
             {
                 return Refuse("setup-required");
             }
 
-            if (await read.ListAsync(account, listId, token) is not { IsArchived: false })
+            if (await read.ListAsync(scope, listId, token) is not { IsArchived: false } list)
             {
                 return Refuse(request.ListId is null ? "setup-required" : "not-found");
             }
 
-            var tasks = await read.TasksInListAsync(account, listId, token);
+            if (!scope.CanChange(list.SpaceId))
+            {
+                return Refuse(SyncRejection.Forbidden);
+            }
+
+            var tasks = await read.TasksInListAsync(scope, listId, token);
             var lastPosition = tasks.Select(task => task.Position).DefaultIfEmpty(-1024).Max();
             var position = lastPosition <= long.MaxValue - 1024 ? Math.Max(0, lastPosition + 1024) : lastPosition;
             var now = time.GetUtcNow();
-            var hlc = await changes.NextHlcAsync(account.Id, "task", key, token);
+            var hlc = await changes.NextHlcAsync(scope.StreamOf(list.SpaceId), "task", key, token);
             return Change(changeId, id, new Dictionary<string, SyncGroupState>
             {
-                ["create"] = Group(hlc, ("SpaceId", space.ToString("D")), ("CreatedAtUtc", Instant(now)), ("RecurrenceOccurrenceKey", null)),
+                ["create"] = Group(hlc, ("SpaceId", list.SpaceId.ToString("D")), ("CreatedAtUtc", Instant(now)), ("RecurrenceOccurrenceKey", null)),
                 ["title"] = Group(hlc, ("Title", title)),
                 ["notes"] = Group(hlc, ("Notes", string.Empty)),
                 ["place"] = Group(hlc, ("ContainerId", listId.ToString("D")), ("SectionId", null)),
@@ -82,14 +92,14 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
     public Task<IResult> ActAsync(WebCaller caller, Guid id, WebTaskAction action, CancellationToken ct)
     {
         var changeId = Guid.NewGuid().ToString("D");
-        return PushAsync(caller, id, async (account, token) =>
+        return PushAsync(caller, id, async (scope, token) =>
         {
-            if (await read.TaskStateAsync(account, id, token) is not { } state)
+            if (await read.TaskStateAsync(scope, id, token) is not { } state)
             {
                 return Refuse("not-found");
             }
 
-            var (task, entity) = state;
+            var (task, entity, streamId) = state;
             if (task.IsRecurring && action is WebTaskAction.Complete or WebTaskAction.Reopen)
             {
                 return Refuse("recurring");
@@ -106,14 +116,20 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
                 return Refuse("task-closed");
             }
 
+            // The service refuses a viewer's task change with `forbidden`; saying it here keeps the message plain.
+            if (action is not (WebTaskAction.AddToMyDay or WebTaskAction.RemoveFromMyDay) && !task.CanChange)
+            {
+                return Refuse(SyncRejection.Forbidden);
+            }
+
             var now = time.GetUtcNow();
             var clock = new HybridClock(ServerChangeWriter.DeviceId, time);
             if (action is WebTaskAction.AddToMyDay or WebTaskAction.RemoveFromMyDay)
             {
-                return await ChangeMyDayAsync(account, id, action == WebTaskAction.AddToMyDay, clock, now, token);
+                return await ChangeMyDayAsync(scope, id, action == WebTaskAction.AddToMyDay, clock, now, token);
             }
 
-            var hlc = await changes.NextHlcAsync(account.Id, "task", id.ToString("D"), token);
+            var hlc = await changes.NextHlcAsync(streamId, "task", id.ToString("D"), token);
             if (hlc.WallMillis > Hlc.MaxWallMillis)
             {
                 return Refuse("clock-limit");
@@ -121,7 +137,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
 
             if (action is WebTaskAction.PlanToday)
             {
-                var (today, _) = await read.LocalDayAsync(account, now, token);
+                var (today, _) = await read.LocalDayAsync(scope.Account, now, token);
                 if (task.PlannedDate == today && entity.Text("planned", "PlannedTime") is null)
                 {
                     return new PreparedPush([]);
@@ -132,16 +148,16 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
 
             var status = action is WebTaskAction.Complete ? WebReadModel.Done : WebReadModel.NotStarted;
             var statusChange = Change(changeId, id, new Dictionary<string, SyncGroupState> { ["status"] = Status(hlc, status, now) });
-            if (action is WebTaskAction.Complete && account.ProfileId is { } profile)
+            if (action is WebTaskAction.Complete && scope.Account.ProfileId is { } profile)
             {
-                var (today, _) = await read.LocalDayAsync(account, now, token);
-                if (await read.DayPlanAsync(account, today, token) is { Exists: false } plan
+                var (today, _) = await read.LocalDayAsync(scope.Account, now, token);
+                if (await read.DayPlanAsync(scope, today, token) is { Exists: false } plan
                     && plan.Members.Any(item => item.TaskKey == id.ToString("D")))
                 {
                     // Preserve the membership of a task completed from a confirmed week's initial day.
                     var changes = InitializeMyDay(plan, profile, today, hlc, now);
                     changes.AddRange(plan.Members.Select(item => MyDayItem(plan, item, 1, removed: false, hlc, now)));
-                    return await PrepareMyDayChangesAsync(account, [.. changes, .. statusChange.Changes], token);
+                    return await PrepareMyDayChangesAsync(scope, [.. changes, .. statusChange.Changes], token);
                 }
             }
 
@@ -149,10 +165,10 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
         }, ct);
     }
 
-    private async Task<PreparedPush> ChangeMyDayAsync(Account account, Guid id, bool add, HybridClock clock, DateTimeOffset now, CancellationToken ct)
+    private async Task<PreparedPush> ChangeMyDayAsync(ReadScope scope, Guid id, bool add, HybridClock clock, DateTimeOffset now, CancellationToken ct)
     {
-        var (today, _) = await read.LocalDayAsync(account, now, ct);
-        if (account.ProfileId is not { } profile || await read.DayPlanAsync(account, today, ct) is not { } plan)
+        var (today, _) = await read.LocalDayAsync(scope.Account, now, ct);
+        if (scope.Account.ProfileId is not { } profile || await read.DayPlanAsync(scope, today, ct) is not { } plan)
         {
             return Refuse("setup-required");
         }
@@ -202,7 +218,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             }
         }
 
-        return await PrepareMyDayChangesAsync(account, changes, ct);
+        return await PrepareMyDayChangesAsync(scope, changes, ct);
     }
 
     private static List<IncomingChange> InitializeMyDay(WebDayPlan plan, Guid profile, DateOnly today, Hlc hlc, DateTimeOffset now) =>
@@ -216,10 +232,11 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
         }),
     ];
 
-    private async Task<PreparedPush> PrepareMyDayChangesAsync(Account account, IReadOnlyList<IncomingChange> changes, CancellationToken ct)
+    private async Task<PreparedPush> PrepareMyDayChangesAsync(ReadScope scope, IReadOnlyList<IncomingChange> changes, CancellationToken ct)
     {
         var newKeys = changes.Select(change => change.Change!.EntityKey).ToArray();
-        if (await db.SyncEntities.AnyAsync(row => row.AccountId == account.Id && row.PurgedAt != null
+        var accountId = scope.AccountId;
+        if (await db.SyncEntities.AnyAsync(row => row.AccountId == accountId && row.PurgedAt != null
             && (row.Kind == "day_plan" || row.Kind == "day_plan_item") && newKeys.Contains(row.EntityKey), ct))
         {
             return Refuse(SyncRejection.Purged);
@@ -251,9 +268,9 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
         return new IncomingChange(id, SyncChange.Upsert(id, kind, key, groups), null);
     }
 
-    private async Task<IResult> PushAsync(WebCaller caller, Guid taskId, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
+    private async Task<IResult> PushAsync(WebCaller caller, Guid taskId, Func<ReadScope, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
     {
-        var result = await sync.PushPreparedAsync(caller.AccountId, caller.DeviceId, WebSession.ClientSchema, async (account, token) =>
+        var result = await sync.PushPreparedAsync(caller.AccountId, caller.DeviceId, WebSession.ClientSchema, SyncProtocol.Version2, async (account, token) =>
         {
             // Like the account lock, hold the device row until the write commits so revocation and a
             // task write have a definite order even if they arrive at different server instances.
@@ -261,7 +278,15 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
                 SELECT * FROM "Devices" WHERE "Id" = {caller.DeviceId} AND "AccountId" = {account.Id}
                   AND "Platform" = {WebSession.Platform} AND "RevokedAt" IS NULL FOR UPDATE
                 """).AsNoTracking().FirstOrDefaultAsync(token);
-            return device is null ? Refuse("device-unavailable") : await prepare(account, token);
+            if (device is null)
+            {
+                return Refuse("device-unavailable");
+            }
+
+            // The scope is read under the account lock the push holds, so a removal that committed before this write is
+            // already reflected, and one that comes after waits for it.
+            var scope = await read.ScopeAsync(account.Id, token);
+            return scope is null ? Refuse("account-unavailable") : await prepare(scope, token);
         }, ct);
         var refusal = result.Refusal ?? result.Outcome?.Rejected.FirstOrDefault()?.Reason;
         if (refusal is not null)
@@ -269,21 +294,25 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
             return refusal switch
             {
                 "account-unavailable" or "device-unavailable" => Results.Unauthorized(),
-                "not-found" or SyncRejection.Purged => Results.NotFound(),
+                "not-found" or SyncRejection.Purged or SyncRejection.NotMember => Results.NotFound(),
                 "setup-required" => Conflict("Connect Chaos on your desktop and sync your Inbox before adding tasks here."),
                 "recurring" => Conflict("Complete or reopen this recurring task on your desktop."),
                 "task-closed" => Conflict("Reopen this task before updating it."),
                 "task-id-in-use" => Conflict("This task ID is already in use."),
+                SyncRejection.Forbidden => Results.Problem(ViewerMessage, statusCode: StatusCodes.Status403Forbidden),
                 SyncRejection.SchemaTooOld => Conflict("The server requires a newer task format."),
                 _ => Conflict("The change could not be synced."),
             };
         }
 
-        var current = await read.AccountAsync(caller.AccountId, ct);
-        return current is not null && await read.TaskStateAsync(current, taskId, ct) is { } state
-            ? Results.Ok(state.Task)
+        var current = await read.ScopeAsync(caller.AccountId, ct);
+        return current is not null && await read.TaskDetailAsync(current, taskId, ct) is { } task
+            ? Results.Ok(task)
             : Results.NotFound();
     }
+
+    private const string ViewerMessage =
+        "You are a viewer of this space, so you can read it but not change it. Ask an owner for editor access.";
 
     private static IResult Conflict(string detail) => Results.Problem(detail, statusCode: StatusCodes.Status409Conflict);
 

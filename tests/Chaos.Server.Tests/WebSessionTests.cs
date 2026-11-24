@@ -36,12 +36,12 @@ public sealed class WebSessionTests(PostgresServer postgres)
         var accountId = await db.Accounts.Where(a => a.PrimaryEmail == Email).Select(a => a.Id).SingleAsync(timeout.Token);
         var broadcaster = server.Factory.Services.GetRequiredService<SyncBroadcaster>();
         broadcaster.Publish(Guid.NewGuid(), 100);
-        broadcaster.Publish(accountId, 1);
+        broadcaster.PublishStream(accountId, accountId, 1);
         await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo("data: 1");
         await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsEqualTo(string.Empty);
 
         await db.Devices.Where(d => d.Id == session.DeviceId).ExecuteUpdateAsync(s => s.SetProperty(d => d.RevokedAt, DateTimeOffset.UtcNow), timeout.Token);
-        broadcaster.Publish(accountId, 2);
+        broadcaster.PublishStream(accountId, accountId, 2);
         await Assert.That(await reader.ReadLineAsync(timeout.Token)).IsNull();
         using var revoked = await browser.GetAsync($"/v1/web/events?device={session.DeviceId:D}");
         await Assert.That(revoked.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);

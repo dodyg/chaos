@@ -63,7 +63,7 @@ public sealed class WebContractTests
             return "boolean";
         }
 
-        if (type == typeof(long) || type == typeof(int))
+        if (type == typeof(long) || type == typeof(int) || type == typeof(short))
         {
             return "number";
         }
