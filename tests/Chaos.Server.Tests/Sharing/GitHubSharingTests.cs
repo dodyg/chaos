@@ -84,6 +84,41 @@ public sealed class GitHubSharingTests(PostgresServer postgres)
     }
 
     [Test]
+    public async Task ALoginIsOneMembersPerSpace_AndDeletingTheRunnersAccountClearsTheRunner()
+    {
+        await using var server = await TestServer.StartAsync(postgres);
+        await using var world = new SharingHarness(server);
+        var first = await world.SignInAsync("runner-delete-first@example.com");
+        var second = await world.SignInAsync("runner-delete-second@example.com");
+        var space = await world.CreateSpaceAsync(first);
+        await world.JoinAsync(second, await world.InviteLinkAsync(first, space, SpaceMember.EditorRole));
+        await Assert.That((await world.CallAsync(first, System.Net.Http.HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/{second.ProfileId:D}", new MemberRoleRequest(SpaceMember.OwnerRole))).Status).IsEqualTo(System.Net.HttpStatusCode.OK);
+
+        // Assignees are matched by login, so two members of a space cannot share one (in any letter case).
+        await Assert.That((await world.CallAsync(first, System.Net.Http.HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/me", new { gitHubLogin = "octo" })).Status).IsEqualTo(System.Net.HttpStatusCode.OK);
+        await Assert.That((await world.CallAsync(second, System.Net.Http.HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/me", new { gitHubLogin = "Octo" })).Status).IsEqualTo(System.Net.HttpStatusCode.BadRequest);
+        await Assert.That((await world.CallAsync(first, System.Net.Http.HttpMethod.Patch,
+            $"/v2/spaces/{space:D}/members/me", new { gitHubLogin = "octo" })).Status).IsEqualTo(System.Net.HttpStatusCode.OK); // keeping your own is fine
+
+        var connection = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(first, new[]
+        {
+            SharingHarness.Change("github_connection", connection, "create",
+                new { SpaceId = space.ToString("D"), ProfileId = first.ProfileId.ToString("D"), WebBaseUrl = "https://github.com", ApiBaseUrl = "https://api.github.com", AccountId = 1L, AccountLogin = "octo", CreatedAtUtc = Instant() }),
+            SharingHarness.Change("github_connection", connection, "runner", new { RunnerDeviceId = first.DeviceId.ToString("D"), RunnerDeviceName = "First desk" }),
+        })).Rejections()).IsEmpty();
+        await Assert.That(await RunnerAsync(server, space, connection)).IsEqualTo(first.DeviceId.ToString("D"));
+
+        await Assert.That((await world.CallAsync(first, System.Net.Http.HttpMethod.Delete, "/v1/account", new { confirmation = "DELETE" })).Status)
+            .IsEqualTo(System.Net.HttpStatusCode.NoContent);
+
+        await Assert.That(await RunnerAsync(server, space, connection)).IsNull();
+    }
+
+    [Test]
     public async Task MembersEditAssignmentAndPost_ReachGitHubThroughTheOwnersRunner_SignedWithTheMembersName()
     {
         await using var world = await SharingWorld.StartAsync(postgres);

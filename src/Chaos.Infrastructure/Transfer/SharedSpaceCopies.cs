@@ -58,7 +58,8 @@ internal static class SharedSpaceCopies
 
             using (var drop = connection.CreateCommand())
             {
-                drop.CommandText = "DELETE FROM SpaceMembers WHERE SpaceId = $space; DELETE FROM Spaces WHERE Id = $space;";
+                // Standups are posts to the members; a Personal copy cannot hold them (the service refuses the kind there).
+                drop.CommandText = "DELETE FROM SpaceUpdates WHERE SpaceId = $space; DELETE FROM SpaceMembers WHERE SpaceId = $space; DELETE FROM Spaces WHERE Id = $space;";
                 drop.Parameters.AddWithValue("$space", spaceId);
                 drop.ExecuteNonQuery();
             }

@@ -97,6 +97,12 @@ public sealed class AccountDeletion(
                     continue;
                 }
 
+                if (member.Role == SpaceMember.OwnerRole && member.AccountId is { } leaving)
+                {
+                    // Before the devices go with the account: a runner on one of them no longer exists.
+                    await changes.ClearGitHubRunnerAsync(member.SpaceId, member.MemberId, leaving, ct);
+                }
+
                 member.RemovedAt ??= now;
                 member.DisplayName = "Former member";
                 member.GitHubLogin = null;

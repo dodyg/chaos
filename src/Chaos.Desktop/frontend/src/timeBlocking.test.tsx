@@ -154,6 +154,23 @@ test("a device that is not the runner offers Run on this device; one that must s
   await screen.findByText(/on this device/);
 });
 
+test("the last ticked space cannot be unticked, since no spaces would mean every space", async () => {
+  const { api, calls } = rig(
+    enabled({
+      spaces: [
+        { id: "personal", name: "Personal", personal: true, chosen: false },
+        { id: "team", name: "Team", personal: false, chosen: true },
+      ],
+    }),
+  );
+  render(<TimeBlockingSettings api={api} />);
+  const team = (await screen.findByLabelText(/Team/)) as HTMLInputElement;
+  assert.equal(team.checked, true);
+  assert.equal(team.disabled, true);
+  assert.equal((screen.getByLabelText(/Personal/) as HTMLInputElement).disabled, false);
+  assert.equal(calls.length, 0);
+});
+
 test("titles and spaces are saved with the profile version; no Google account means no form", async () => {
   const user = userEvent.setup({ document: dom.window.document });
   const { api, calls } = rig(enabled());

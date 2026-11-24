@@ -656,7 +656,7 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
     public async Task ClearIssueMappingsAsync(string issueLinkId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM GitHubChecklistItems WHERE IssueLinkId=$id; DELETE FROM GitHubCommentLinks WHERE IssueLinkId=$id; DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId=$id;";
+        command.CommandText = "DELETE FROM GitHubChecklistItems WHERE IssueLinkId=$id; DELETE FROM GitHubCommentLinks WHERE IssueLinkId=$id; DELETE FROM GitHubCommentCheckpoints WHERE IssueLinkId=$id; DELETE FROM GitHubPullRequestLinks WHERE IssueLinkId=$id;";
         command.Parameters.AddWithValue("$id", issueLinkId);
         await command.ExecuteNonQueryAsync(ct);
     }

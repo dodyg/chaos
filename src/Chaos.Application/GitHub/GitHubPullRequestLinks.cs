@@ -52,9 +52,13 @@ public sealed class GitHubPullRequestLinks(IApplicationStore store, IGitHubApi a
             var byNode = batch.ToDictionary(target => target.NodeId, target => target.LinkId, StringComparer.Ordinal);
             IReadOnlyDictionary<string, IReadOnlyList<GitHubPullRequestRef>> found;
             try { found = await api.GetClosingPullRequestsAsync(account, [.. byNode.Keys], ct); }
-            catch (GitHubApiException error) when (error.Kind is GitHubErrorKind.Server or GitHubErrorKind.Validation or GitHubErrorKind.Forbidden)
+            catch (GitHubApiException error) when (error.Kind is GitHubErrorKind.Server or GitHubErrorKind.Validation or GitHubErrorKind.Forbidden
+                or GitHubErrorKind.NotFound or GitHubErrorKind.Gone or GitHubErrorKind.Network)
             {
-                continue; // supplementary data; the rows stay as they were and the next pass asks again
+                // Supplementary data; the rows stay as they were and the next pass asks again. A deleted issue's node (NotFound)
+                // must not stop the issue pass before its cursor or checkpoint is saved. Rate limits and sign-in failures
+                // still end the pass: every other request would fail the same way.
+                continue;
             }
             var now = clock.GetUtcNow();
             foreach (var (nodeId, linkId) in byNode)

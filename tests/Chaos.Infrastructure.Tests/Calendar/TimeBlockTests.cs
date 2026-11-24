@@ -34,6 +34,11 @@ public sealed class TimeBlockTests
         public HashSet<string> ExpiredTokens { get; } = [];
         public List<(string Method, string Url, string? Body)> Writes { get; } = [];
         public GoogleCalendarException? Fail { get; set; }
+        /// <summary>Only the change feed fails (a 429 or 5xx on the read), the writes would still go through.</summary>
+        public GoogleCalendarException? FailList { get; set; }
+        /// <summary>When set, creating a calendar needs a sign-in that asked for the time blocking scope, as Google does.</summary>
+        public bool RequireWriteScope { get; set; }
+        public bool WriteScopeGranted { get; private set; }
         public int Requests { get; private set; }
         public int TokenExpirations { get; private set; }
         private long _etag;
@@ -84,6 +89,7 @@ public sealed class TimeBlockTests
         public Task<GoogleSignIn> SignInAsync(IReadOnlyList<string> extraScopes, CancellationToken ct)
         {
             SignInScopes.Add(string.Join(" ", extraScopes));
+            WriteScopeGranted |= extraScopes.Contains(GoogleCalendarScopes.AppCreated);
             return Task.FromResult(new GoogleSignIn(Subject, "me@example.com", Token));
         }
 
@@ -98,6 +104,11 @@ public sealed class TimeBlockTests
         public Task<GoogleCalendarInfo> CreateCalendarAsync(string refreshToken, string name, CancellationToken ct)
         {
             Check();
+            if (RequireWriteScope && !WriteScopeGranted)
+            {
+                throw new GoogleCalendarException(GoogleFailure.SignInAgain, "Google Calendar did not allow that change. Sign in again so Chaos can update its own calendar.");
+            }
+
             var id = $"calendar_{Calendars.Count + 1}@group.v.calendar.google.com";
             Calendars[id] = name;
             Log[id] = [];
@@ -119,7 +130,8 @@ public sealed class TimeBlockTests
             Check();
             Require(calendarId);
             Writes.Add(("POST", $"calendars/{calendarId}/events", body.Id));
-            if (body.Id is not null && Live(calendarId).TryGetValue(body.Id, out var existing))
+            // Google keeps a deleted event as cancelled under its id: a second insert of the id is refused either way.
+            if (body.Id is not null && Log[calendarId].LastOrDefault(entry => entry.Id == body.Id) is { } existing)
             {
                 return Task.FromResult(new GoogleEventWrite(true, false, existing.ETag, existing.Updated));
             }
@@ -134,12 +146,13 @@ public sealed class TimeBlockTests
             Check();
             Require(calendarId);
             Writes.Add(("PATCH", $"calendars/{calendarId}/events/{eventId}", null));
-            if (!Live(calendarId).TryGetValue(eventId, out var current))
+            if (Log[calendarId].LastOrDefault(entry => entry.Id == eventId) is not { } current)
             {
                 return Task.FromResult(new GoogleEventWrite(false, true, null, null));
             }
 
-            var stored = current with { Summary = body.Summary, Start = body.StartUtc, End = body.EndUtc, ETag = NewEtag(), Updated = clock.GetUtcNow() };
+            // The client's patch carries "status":"confirmed", which brings a cancelled event back.
+            var stored = current with { Cancelled = false, Summary = body.Summary, Start = body.StartUtc, End = body.EndUtc, ETag = NewEtag(), Updated = clock.GetUtcNow() };
             Log[calendarId].Add(stored);
             return Task.FromResult(new GoogleEventWrite(false, false, stored.ETag, stored.Updated));
         }
@@ -160,6 +173,11 @@ public sealed class TimeBlockTests
         public Task<GoogleSyncPage> ListEventChangesAsync(string refreshToken, string calendarId, string? syncToken, string? pageToken, CancellationToken ct)
         {
             Check();
+            if (FailList is { } failure)
+            {
+                throw failure;
+            }
+
             Require(calendarId);
             Writes.Add(("GET", $"calendars/{calendarId}/events?syncToken={syncToken}", null));
             if (syncToken is not null && ExpiredTokens.Remove(syncToken))
@@ -181,8 +199,9 @@ public sealed class TimeBlockTests
                 entries = [.. Live(calendarId).Values];
             }
 
+            // The next token starts after everything this read returned, as Google's does: a change is delivered once.
             var token = $"sync-{Interlocked.Increment(ref _token)}";
-            Tokens[token] = calendarId + "|" + position;
+            Tokens[token] = calendarId + "|" + Log[calendarId].Count;
             return Task.FromResult(new GoogleSyncPage([.. entries.Select(Change)], null, token, false));
         }
 
@@ -733,5 +752,156 @@ public sealed class TimeBlockTests
         await Assert.That((await rig.Blocks.StatusAsync()).NeedsSignIn).IsFalse();
         await Assert.That(rig.Google.Live(calendarId).Count).IsEqualTo(1);
         await Assert.That(state!.SyncToken).IsNotNull();
+    }
+
+    [Test]
+    public async Task TurningOn_WithTheReadOnlyTokenFromConnecting_SignsInForTheWriteScope_AndCreatesTheCalendar()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        rig.Google.RequireWriteScope = true;
+        await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60);
+        var account = await rig.GoogleCommands.ConnectAsync(); // the read-only connect: a token is stored, without the write scope
+
+        var status = await rig.Blocks.EnableAsync(new EnableTimeBlockCommand(account.Account.Id, true, null));
+
+        await Assert.That(rig.Google.SignInScopes[^1]).IsEqualTo(GoogleCalendarScopes.AppCreated);
+        await Assert.That(status.Enabled).IsTrue();
+        await Assert.That(rig.Google.Calendars.Values).IsEquivalentTo(["Chaos"]);
+        await Assert.That(rig.Google.Live(status.CalendarId!).Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task APlannedTimeInsideASpringForwardGap_IsPlacedJustAfterIt_InsteadOfStoppingThePass()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        var captured = (await rig.CaptureAsync("Early", Day, new TimeOnly(9, 0), 30)).Tasks[0];
+        // 02:30 on 8 March 2026 does not exist in New York: the clocks go from 02:00 to 03:00.
+        var task = (await rig.TaskAsync(captured.Id)) with { PlannedDate = new DateOnly(2026, 3, 8), PlannedTime = new TimeOnly(2, 30), PlannedZoneId = "America/New_York" };
+
+        var block = TimeBlockCommands.Describe(task, true, TimeZoneInfo.Utc);
+
+        await Assert.That(block.StartUtc).IsEqualTo(new DateTimeOffset(2026, 3, 8, 7, 30, 0, TimeSpan.Zero)); // 03:30 EDT
+        await Assert.That(block.EndUtc - block.StartUtc).IsEqualTo(TimeSpan.FromMinutes(30));
+    }
+
+    [Test]
+    public async Task TurningOffAndDeleting_OnADeviceWithoutTheToken_IsRefused_AndLeavesEverythingAsItWas()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60);
+        var (_, calendarId) = await rig.EnableAsync();
+        rig.Secrets.Values.Clear(); // another device: the settings came with sync, the token did not
+
+        var version = (await rig.Blocks.StatusAsync()).ProfileVersion;
+        await Assert.That(async () => await rig.Blocks.DisableAsync(version, deleteCalendar: true)).Throws<AppException>();
+
+        var status = await rig.Blocks.StatusAsync();
+        await Assert.That(status.Enabled).IsTrue();
+        await Assert.That(status.CalendarId).IsEqualTo(calendarId);
+        await Assert.That(rig.Google.Calendars.ContainsKey(calendarId)).IsTrue();
+    }
+
+    [Test]
+    public async Task TurningOffWithAStaleVersion_DeletesNothingInGoogle()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60);
+        var (_, calendarId) = await rig.EnableAsync();
+        var stale = (await rig.Blocks.StatusAsync()).ProfileVersion;
+        await rig.Blocks.UpdateAsync(new UpdateTimeBlockCommand(stale, false, null)); // another change meanwhile
+
+        await Assert.That(async () => await rig.Blocks.DisableAsync(stale, deleteCalendar: true)).Throws<AppException>();
+
+        await Assert.That(rig.Google.Calendars.ContainsKey(calendarId)).IsTrue();
+        await Assert.That((await rig.Blocks.StatusAsync()).Enabled).IsTrue();
+    }
+
+    [Test]
+    public async Task AFailedRead_PushesNothing_SoAMoveInGoogleIsNotOverwritten()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        var task = (await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60)).Tasks[0];
+        await rig.EnableAsync();
+        var current = await rig.TaskAsync(task.Id);
+        await host.Store.ExecuteAsync(async (session, token) =>
+        {
+            await session.Tasks.UpdateAsync(current with { PlannedTime = new TimeOnly(11, 0), Version = current.Version + 1, UpdatedAtUtc = host.Clock.GetUtcNow() }, current.Version, token);
+            return 0;
+        });
+        rig.Google.FailList = new GoogleCalendarException(GoogleFailure.Other, "Google Calendar is limiting requests. Chaos will try again.");
+        var writes = rig.Google.Writes.Count;
+
+        var pass = await rig.SyncAsync();
+
+        await Assert.That(pass.Error).Contains("limiting");
+        await Assert.That(rig.Google.Writes.Count).IsEqualTo(writes);
+        await Assert.That((await rig.Blocks.StatusAsync()).LastError).Contains("limiting");
+    }
+
+    [Test]
+    public async Task ACompletedAndReopenedTask_GetsItsBlockBack_AndKeepsItsTime()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        var task = (await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60)).Tasks[0];
+        var (_, calendarId) = await rig.EnableAsync();
+        var eventId = TimeBlockEventId.Of(task.Id);
+
+        await rig.Tasks.SetStatusAsync(new SetTaskStatusCommand(DataHost.Op(), task.Id, (await rig.TaskAsync(task.Id)).Version, TaskItemStatus.Done, null));
+        await rig.SyncAsync();
+        await Assert.That(rig.Google.Live(calendarId).ContainsKey(eventId)).IsFalse();
+
+        await rig.Tasks.SetStatusAsync(new SetTaskStatusCommand(DataHost.Op(), task.Id, (await rig.TaskAsync(task.Id)).Version, TaskItemStatus.NotStarted, null));
+        await Assert.That((await rig.TaskAsync(task.Id)).PlannedTime).IsEqualTo(new TimeOnly(9, 0));
+        await rig.SyncAsync(); // the insert meets the cancelled event (409) and the patch brings it back
+        await Assert.That((await rig.TaskAsync(task.Id)).PlannedTime).IsEqualTo(new TimeOnly(9, 0));
+        await Assert.That(rig.Google.Live(calendarId).ContainsKey(eventId)).IsTrue();
+        await rig.SyncAsync(); // the next read must not take the old cancellation for a delete in Google
+
+        await Assert.That(rig.Google.Live(calendarId).ContainsKey(eventId)).IsTrue();
+        await Assert.That((await rig.TaskAsync(task.Id)).PlannedTime).IsEqualTo(new TimeOnly(9, 0));
+    }
+
+    [Test]
+    public async Task AKeptCalendar_LosesTheBlocksOfTasksThatEndedWhileOff_WhenTurnedOnAgain()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        var ended = (await rig.CaptureAsync("Ended while off", Day, new TimeOnly(9, 0), 60)).Tasks[0];
+        var still = (await rig.CaptureAsync("Still planned", Day, new TimeOnly(11, 0), 60)).Tasks[0];
+        var (accountId, calendarId) = await rig.EnableAsync();
+        await rig.Blocks.DisableAsync((await rig.Blocks.StatusAsync()).ProfileVersion, deleteCalendar: false);
+        await rig.Tasks.SetStatusAsync(new SetTaskStatusCommand(DataHost.Op(), ended.Id, (await rig.TaskAsync(ended.Id)).Version, TaskItemStatus.Done, null));
+
+        var status = await rig.Blocks.EnableAsync(new EnableTimeBlockCommand(accountId, true, null));
+
+        await Assert.That(status.CalendarId).IsEqualTo(calendarId);
+        var live = rig.Google.Live(calendarId);
+        await Assert.That(live.ContainsKey(TimeBlockEventId.Of(ended.Id))).IsFalse();
+        await Assert.That(live.ContainsKey(TimeBlockEventId.Of(still.Id))).IsTrue();
+        await Assert.That(status.EventCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DisconnectingTheAccount_TurnsTimeBlockingOff_AndDeletesTheCalendar()
+    {
+        using var host = await DataHost.StartAsync();
+        var rig = RigOf(host);
+        await rig.CaptureAsync("Eligible", Day, new TimeOnly(9, 0), 60);
+        var (accountId, calendarId) = await rig.EnableAsync();
+
+        await rig.GoogleCommands.DisconnectAsync(accountId);
+
+        var status = await rig.Blocks.StatusAsync();
+        await Assert.That(status.Enabled).IsFalse();
+        await Assert.That(status.CalendarId).IsNull();
+        await Assert.That(status.EventCount).IsEqualTo(0);
+        await Assert.That(rig.Google.Calendars.ContainsKey(calendarId)).IsFalse();
+        await Assert.That((await rig.SyncAsync()).Ran).IsFalse();
     }
 }

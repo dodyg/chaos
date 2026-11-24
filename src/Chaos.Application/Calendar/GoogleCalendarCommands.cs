@@ -267,10 +267,30 @@ public sealed class GoogleCalendarCommands(IApplicationStore store, ISecretStore
     /// go, the token is revoked at Google and removed from the secret store. A revoke that cannot reach Google does not stop
     /// the disconnect; the token is gone from this device either way.
     /// </summary>
-    public async Task<bool> DisconnectAsync(string accountId, CancellationToken ct = default)
+    /// <remarks>
+    /// When time blocking uses this account it is turned off too (PLAN3 §11): with <paramref name="deleteTimeBlockCalendar"/>
+    /// (the default) the Chaos calendar is deleted in Google first while the token still works, and the event rows go.
+    /// A delete that cannot reach Google does not stop the disconnect.
+    /// </remarks>
+    public async Task<bool> DisconnectAsync(string accountId, CancellationToken ct = default, bool deleteTimeBlockCalendar = true)
     {
         ct.ThrowIfCancellationRequested();
         var refreshToken = await secrets.GetAsync(SecretKey(accountId), ct);
+        var timeBlockCalendar = await store.QueryAsync(async (session, token) =>
+            await session.Profiles.GetPrimaryAsync(token) is { TimeBlockAccountId: { } owner, TimeBlockCalendarId: { } calendar } && owner == accountId ? calendar : null, ct);
+        if (deleteTimeBlockCalendar && timeBlockCalendar is not null && refreshToken is not null)
+        {
+            try
+            {
+                await google.DeleteCalendarAsync(refreshToken, timeBlockCalendar, ct);
+            }
+            catch (GoogleCalendarException error)
+            {
+                // Best effort, like the revoke below: the account is disconnected either way, and the calendar stays in Google.
+                System.Diagnostics.Trace.TraceWarning("The Chaos calendar could not be deleted while disconnecting: {0}", error.Kind);
+            }
+        }
+
         var found = await store.ExecuteAsync(async (session, token) =>
         {
             var account = await session.Calendars.GetAccountAsync(accountId, token);
@@ -280,6 +300,26 @@ public sealed class GoogleCalendarCommands(IApplicationStore store, ISecretStore
             }
 
             var now = clock.GetUtcNow();
+            if (await session.Profiles.GetPrimaryAsync(token) is { TimeBlockAccountId: { } owner } profile && owner == accountId)
+            {
+                var off = profile with
+                {
+                    TimeBlockEnabled = false, TimeBlockRunnerDeviceId = null, TimeBlockSpacesJson = null, TimeBlockAccountId = null, TimeBlockCalendarId = null,
+                    Version = profile.Version + 1, UpdatedAtUtc = now,
+                };
+                if (await session.Profiles.UpdateTimeBlockSettingsAsync(off, profile.Version, token) is null)
+                {
+                    throw AppException.VersionConflict("That setting changed elsewhere. Refresh and try again.");
+                }
+
+                foreach (var row in await session.TimeBlocks.ListEventsAsync(token))
+                {
+                    await session.TimeBlocks.DeleteEventAsync(row.Id, token);
+                }
+
+                await session.TimeBlocks.SaveStateAsync(new TimeBlockState(null, null, null, null, null, false), token);
+            }
+
             foreach (var source in (await session.Calendars.ListSourcesAsync(token)).Where(item => item.Provider == CalendarProvider.Google && item.AccountRef == accountId))
             {
                 await session.Calendars.UpdateSourceAsync(source with { DeletedAtUtc = now, UpdatedAtUtc = now, Version = source.Version + 1 }, source.Version, token);

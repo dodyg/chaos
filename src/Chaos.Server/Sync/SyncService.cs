@@ -460,6 +460,29 @@ public sealed class SyncService(
     private static object? Value(SyncChange change, string groupName, string column) =>
         change.Groups.GetValueOrDefault(groupName)?.Values.Values.GetValueOrDefault(column);
 
+    /// <summary>
+    /// True when every column except the <paramref name="free"/> ones holds what is stored, or, with nothing stored yet,
+    /// what <paramref name="fresh"/> says a new row holds (a column it does not name must be null). A column the change
+    /// leaves out counts as null, since the group replaces the stored one whole.
+    /// </summary>
+    private static bool SameAs(SyncGroupState incoming, SyncGroupState? stored, IReadOnlyDictionary<string, object?> fresh, params string[] free)
+    {
+        var expectedValues = stored?.Values.Values ?? fresh;
+        foreach (var column in incoming.Values.Values.Keys.Union(expectedValues.Keys, StringComparer.Ordinal))
+        {
+            if (free.Contains(column, StringComparer.Ordinal)) continue;
+            var value = incoming.Values.Values.GetValueOrDefault(column);
+            var expected = expectedValues.GetValueOrDefault(column);
+            if ((value is null) != (expected is null)
+                || !string.Equals(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture), Convert.ToString(expected, System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private async Task<string?> PermissionAsync(Account account, SyncKindInfo kind, SyncChange change, Guid streamId,
         IReadOnlyDictionary<Guid, short> roles, CancellationToken ct)
     {
@@ -514,12 +537,30 @@ public sealed class SyncService(
         {
             // The GitHub engine's links stay with the runner (an owner), except that any member may queue their own
             // diary entry as a post (PLAN3 10.4): the entry must be theirs and the link must come from Chaos.
-            if (change.Groups.TryGetValue("create", out var created)
-                && (created.Values.Values.GetValueOrDefault("Origin") is not long origin || origin != 1L)) return SyncRejection.Forbidden;
             var entry = await db.SyncEntities.FindAsync([streamId, "diary_entry", change.EntityKey], ct);
             if (entry is null || entry.PurgedAt is not null || entry.MovedTo is not null
                 || SyncJson.ReadGroups(entry.Groups).GetValueOrDefault("create")?.Values.Values.GetValueOrDefault("AuthorProfileId")?.ToString() is not { } author
                 || !Guid.TryParse(author, out var authorId) || authorId != account.ProfileId) return SyncRejection.Forbidden;
+
+            // Only the member's own moves are theirs: queuing the post (a create from Chaos with nothing GitHub said yet,
+            // state Queued) and asking for its removal (state Delete or Detach). What the runner learned from GitHub (the
+            // comment id, author, URL, base body and the attribution line) must stay as stored, or a member could point
+            // their link at someone else's comment, or post under the owner's login without their name.
+            var stored = await db.SyncEntities.FindAsync([streamId, "github_comment_link", change.EntityKey], ct);
+            var storedGroups = stored is null || stored.PurgedAt is not null ? null : SyncJson.ReadGroups(stored.Groups);
+            if (change.Groups.TryGetValue("create", out var created) && !SameAs(created, storedGroups?.GetValueOrDefault("create"),
+                    new Dictionary<string, object?> { ["CommentId"] = null, ["AuthorLogin"] = null, ["HtmlUrl"] = null, ["Origin"] = 1L },
+                    "IssueLinkId")) return SyncRejection.Forbidden;
+            if (change.Groups.TryGetValue("state", out var state))
+            {
+                if (Value(change, "state", "State") is not long next || next is not (1L or 3L or 5L)) return SyncRejection.Forbidden;
+                if (next == 1L && storedGroups?.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long current && current != 1L)
+                    return SyncRejection.Forbidden; // a post already handled is not queued again
+                if (!SameAs(state, storedGroups?.GetValueOrDefault("state"),
+                        new Dictionary<string, object?> { ["BaseBody"] = null, ["BaseRemoteUpdatedUtc"] = null, ["Attribution"] = null }, "State"))
+                    return SyncRejection.Forbidden;
+            }
+
             return null;
         }
         foreach (var group in change.Groups.Keys)

@@ -518,6 +518,9 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
         // An event without a summary is Busy; opaque keeps the block busy on the person's calendar either way.
         builder.Append("\"start\":{\"dateTime\":\"").Append(Instant(body.StartUtc)).Append("\",\"timeZone\":").Append(JsonText(body.TimeZoneId)).Append("},");
         builder.Append("\"end\":{\"dateTime\":\"").Append(Instant(body.EndUtc)).Append("\",\"timeZone\":").Append(JsonText(body.TimeZoneId)).Append("},");
+        // Google keeps a deleted event as cancelled under its id, and a second insert of that id is refused with 409: the
+        // patch that follows must bring it back, or the block stays invisible and reads as deleted on the next pass.
+        builder.Append("\"status\":\"confirmed\",");
         builder.Append("\"transparency\":\"opaque\"}");
         return builder.ToString();
     }
@@ -555,34 +558,38 @@ public sealed class GoogleCalendarClient : IGoogleCalendarClient, IDisposable
 
     private async Task<JsonDocument> ApiAsync(string refreshToken, HttpMethod method, string relative, string? json, CancellationToken ct)
     {
-        for (var attempt = 0; ; attempt++)
+        var response = await SendApiAsync(refreshToken, method, relative, json, ct);
+        var document = ParseJson(response.Body);
+        if (response.Success)
         {
-            var response = await SendApiAsync(refreshToken, method, relative, json, ct);
-            if (response.Status == HttpStatusCode.Unauthorized && attempt == 0)
-            {
-                lock (_gate)
-                {
-                    _accessTokens.Remove(refreshToken); // an expired access token: one retry with a fresh one
-                }
+            return document;
+        }
 
-                continue;
-            }
-
-            var document = ParseJson(response.Body);
-            if (response.Success)
-            {
-                return document;
-            }
-
-            using (document)
-            {
-                throw ApiError(response.Status, document);
-            }
+        using (document)
+        {
+            throw ApiError(response.Status, document);
         }
     }
 
-    /// <summary>One authorized call with the current access token, without the 401 retry.</summary>
+    /// <summary>One authorized call with the current access token; a 401 drops the cached access token and retries once with a fresh one.</summary>
     private async Task<Reply> SendApiAsync(string refreshToken, HttpMethod method, string relative, string? json, CancellationToken ct)
+    {
+        var response = await SendOnceAsync(refreshToken, method, relative, json, ct);
+        if (response.Status != HttpStatusCode.Unauthorized)
+        {
+            return response;
+        }
+
+        lock (_gate)
+        {
+            _accessTokens.Remove(refreshToken); // an expired access token: one retry with a fresh one
+        }
+
+        return await SendOnceAsync(refreshToken, method, relative, json, ct);
+    }
+
+    /// <summary>One authorized call with the current access token, without the 401 retry.</summary>
+    private async Task<Reply> SendOnceAsync(string refreshToken, HttpMethod method, string relative, string? json, CancellationToken ct)
     {
         var access = await AccessTokenAsync(refreshToken, ct);
         using var request = new HttpRequestMessage(method, ApiRoot + relative);

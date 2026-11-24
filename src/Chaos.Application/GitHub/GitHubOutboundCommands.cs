@@ -10,7 +10,7 @@ namespace Chaos.Application.GitHub;
 public sealed record GitHubIssueWriteIntent(string? TitleHash, string? BodyHash, string? StateHash, long? LabelId = null, bool? LabelPresent = null, bool? SelfAssigned = null, string? CommentEntryId = null, long? CommentId = null, string? CommentBodyHash = null, long? TaskVersion = null, long? LinkVersion = null,
     string? AssigneeLogin = null, bool? Assigned = null);
 public sealed record GitHubOutboundResult(int Pushed, int Updated, int Conflicts);
-internal sealed record GitHubSetWrite(string? Label, bool Present, bool IsAssignment, string? Login = null);
+internal sealed record GitHubSetWrite(string? Label, bool Present, bool IsAssignment, string? Login = null, long? LabelId = null);
 
 
 
@@ -73,19 +73,28 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
                         var recovered = await RecoverAsync(repo.Id, ct, issueLinkId);
                         updated += recovered.Updated; conflicts += recovered.Conflicts;
                     }
+                    var tried = new HashSet<string>(StringComparer.Ordinal);
                     for (var count = 0; count < 100; count++)
                     {
                         issue = await api.GetIssueAsync(account, repo.Owner, repo.Name, candidate.IssueNumber, ct);
                         CheckIdentity(repo, candidate, issue);
                         applied = await inbound.ApplyAsync(repo.Id, repo.Version, [issue], ct);
                         updated += applied.Updated; conflicts += applied.Conflicts;
-                        var setWrite = await PrepareSet(repo, connection, candidate.Id, issue, ct);
+                        var setWrite = await PrepareSet(repo, connection, candidate.Id, issue, tried, ct);
                         if (setWrite is null) break;
                         var deferred = await Revalidate(repo, connection, candidate.Id, issue, ct);
                         if (deferred is not null) { updated += deferred.Updated; conflicts += deferred.Conflicts; break; }
-                        if (setWrite.IsAssignment) await api.SetAssignmentAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Login!, setWrite.Present, ct);
-                        else if (setWrite.Present) await api.AddLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
-                        else await api.RemoveLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
+                        if (setWrite.IsAssignment)
+                        {
+                            tried.Add(AssigneeKey(setWrite.Login!, setWrite.Present));
+                            await api.SetAssignmentAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Login!, setWrite.Present, ct);
+                        }
+                        else
+                        {
+                            tried.Add(LabelKey(setWrite.LabelId!.Value, setWrite.Present));
+                            if (setWrite.Present) await api.AddLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
+                            else await api.RemoveLabelAsync(account, repo.Owner, repo.Name, issue.Number, setWrite.Label!, ct);
+                        }
                         pushed++;
                         var recovered = await RecoverAsync(repo.Id, ct, issueLinkId);
                         updated += recovered.Updated; conflicts += recovered.Conflicts;
@@ -128,7 +137,10 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
             return write;
         }, ct);
 
-    private Task<GitHubSetWrite?> PrepareSet(GitHubRepositoryRecord repo, GitHubConnectionRecord connection, string linkId, GitHubIssue issue, CancellationToken ct) => store.ExecuteAsync<GitHubSetWrite?>(async (s, token) =>
+    private static string LabelKey(long id, bool present) => $"label:{id}:{present}";
+    private static string AssigneeKey(string login, bool present) => $"assignee:{login.ToLowerInvariant()}:{present}";
+
+    private Task<GitHubSetWrite?> PrepareSet(GitHubRepositoryRecord repo, GitHubConnectionRecord connection, string linkId, GitHubIssue issue, IReadOnlySet<string> tried, CancellationToken ct) => store.ExecuteAsync<GitHubSetWrite?>(async (s, token) =>
     {
         var currentRepo = await s.GitHub.GetRepositoryAsync(repo.Id, token);
         var currentConnection = await s.GitHub.GetConnectionAsync(connection.Id, token);
@@ -144,21 +156,25 @@ public sealed class GitHubOutboundCommands(IApplicationStore store, IGitHubApi a
         var local = await GitHubInboundCommands.Project(s, repo, link, task, baseline, connection, token);
         var merge = SyncMerge.Issue(baseline.Projection(), local, GitHubIssueSnapshot.From(issue).Projection());
         var mappings = await s.GitHub.ListLabelTagsAsync(repo.Id, token);
-        var labelId = merge.Push.AddLabels.Order().Select(id => (long?)id).FirstOrDefault() ?? merge.Push.RemoveLabels.Order().Select(id => (long?)id).FirstOrDefault();
+        // A change already sent in this pass is not sent again: GitHub silently ignores an assignee who cannot be assigned
+        // (no access, or a mistyped login), so the same change would come back first every time and block the rest.
+        var labelId = merge.Push.AddLabels.Where(id => !tried.Contains(LabelKey(id, true))).Order().Select(id => (long?)id).FirstOrDefault()
+            ?? merge.Push.RemoveLabels.Where(id => !tried.Contains(LabelKey(id, false))).Order().Select(id => (long?)id).FirstOrDefault();
         // One assignee at a time, in a stable order, so an interrupted write is recovered exactly.
-        var login = merge.Push.AddAssignees.Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault() ?? merge.Push.RemoveAssignees.Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+        var login = merge.Push.AddAssignees.Where(name => !tried.Contains(AssigneeKey(name, true))).Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault()
+            ?? merge.Push.RemoveAssignees.Where(name => !tried.Contains(AssigneeKey(name, false))).Order(StringComparer.OrdinalIgnoreCase).FirstOrDefault();
         GitHubIssueWriteIntent intent;
         GitHubSetWrite write;
         if (labelId is { } id)
         {
             var mapping = mappings.FirstOrDefault(m => m.LabelId == id) ?? throw AppException.Validation("tags", "The GitHub label is no longer available. Refresh and try again.");
-            var present = merge.Push.AddLabels.Contains(id);
-            write = new(mapping.LabelName, present, false);
+            var present = merge.Push.AddLabels.Contains(id) && !tried.Contains(LabelKey(id, true));
+            write = new(mapping.LabelName, present, false, LabelId: id);
             intent = new(null, null, null, id, present);
         }
         else if (login is not null)
         {
-            var present = merge.Push.AddAssignees.Contains(login);
+            var present = merge.Push.AddAssignees.Contains(login) && !tried.Contains(AssigneeKey(login, true));
             write = new(null, present, true, login);
             intent = new(null, null, null, AssigneeLogin: login, Assigned: present);
         }

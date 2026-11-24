@@ -288,6 +288,26 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
             .Rejections()).IsEmpty();
         await Assert.That((await world.PushAsync(editor, SharingHarness.Change("github_comment_link", memberPost, "state", new { State = 2L })))
             .Rejections()).Contains(SyncRejection.Forbidden);
+        // What the runner learns from GitHub is not the member's to set: no comment id of their choosing, no unsigned post,
+        // no overwrite request, and a queued post is not queued again once handled.
+        var forgedPost = Guid.NewGuid().ToString("D");
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("diary_entry", forgedPost, "create",
+            new { TaskId = parentTask, AuthorProfileId = viewer.ProfileId.ToString("D"), EntryAtUtc = Instant(), CreatedAtUtc = Instant() })))
+            .Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", forgedPost, "create",
+            new { IssueLinkId = link, Origin = 1L, CommentId = 4242L }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "state",
+            new { State = 1L, Attribution = "" }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "state",
+            new { State = 2L }))).Rejections()).Contains(SyncRejection.Forbidden);
+        await Assert.That((await world.PushAsync(owner, SharingHarness.Change("github_comment_link", memberPost, "create",
+            new { IssueLinkId = link, Origin = 1L, CommentId = 77L }))).Rejections()).IsEmpty();
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "create",
+            new { IssueLinkId = link, Origin = 1L }))).Rejections()).Contains(SyncRejection.Forbidden); // would wipe the runner's comment id
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "state", new { State = 3L })))
+            .Rejections()).IsEmpty(); // asking for the post's removal stays the member's
+        await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "state", new { State = 1L })))
+            .Rejections()).Contains(SyncRejection.Forbidden);
         await Assert.That((await world.PushAsync(viewer, SharingHarness.Change("github_comment_link", memberPost, "create",
             new { IssueLinkId = link, Origin = 0L }))).Rejections()).Contains(SyncRejection.Forbidden);
         await Assert.That((await world.PushAsync(editor, SharingHarness.Change("github_comment_link", memberPost, "create",

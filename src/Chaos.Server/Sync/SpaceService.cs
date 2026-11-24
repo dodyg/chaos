@@ -176,7 +176,7 @@ public sealed class SpaceService(
             var wasOwner = target.Role == SpaceMember.OwnerRole;
             target.Role = role;
             await AppendMemberGroupAsync(stream, current.MemberId, target, "role", new() { ["Role"] = (long)role }, ct);
-            if (wasOwner) await ClearGitHubRunnerAsync(stream, current.MemberId, target.AccountId, ct);
+            if (wasOwner) await changes.ClearGitHubRunnerAsync(stream.Id, current.MemberId, target.AccountId, ct);
             db.AuditEvents.Add(new AuditEvent { AccountId = accountId, DeviceId = deviceId, Kind = AuditKinds.MemberRole, At = clock.GetUtcNow() });
             if (target.AccountId is { } affected)
             {
@@ -219,7 +219,7 @@ public sealed class SpaceService(
             var now = clock.GetUtcNow();
             target.RemovedAt = now;
             await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
-            if (target.Role == SpaceMember.OwnerRole) await ClearGitHubRunnerAsync(stream, current.MemberId, target.AccountId, ct);
+            if (target.Role == SpaceMember.OwnerRole) await changes.ClearGitHubRunnerAsync(stream.Id, current.MemberId, target.AccountId, ct);
             await changes.TombstoneAssignmentsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
             await changes.SettleDelegationsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
             if (target.AccountId is { } affected)
@@ -270,6 +270,18 @@ public sealed class SpaceService(
             }
             if (request.GitHubLogin is not null)
             {
+                // One member per login in a space: GitHub assignees are matched to members by login, so two members with
+                // the same one would assign and unassign each other.
+                if (githubLogin is not null)
+                {
+                    var lowered = githubLogin.ToLowerInvariant();
+                    if (await db.SpaceMembers.AnyAsync(other => other.SpaceId == spaceId && other.MemberId != member.MemberId && other.RemovedAt == null
+                            && other.GitHubLogin != null && other.GitHubLogin.ToLower() == lowered, ct))
+                    {
+                        return SpaceOperation<MemberDto>.Refuse("invalid-member", "Another member of this space already uses that GitHub login.");
+                    }
+                }
+
                 member.GitHubLogin = githubLogin; // an empty login clears it
             }
             await AppendMemberGroupAsync(stream, member.MemberId, member, "profile",
@@ -848,32 +860,6 @@ public sealed class SpaceService(
                 ["role"] = new() { ["Role"] = (long)role },
                 ["state"] = new() { ["RemovedAtUtc"] = null },
             })), ct);
-    }
-
-    /// <summary>
-    /// PLAN3 10.1: the GitHub engine runs on a device of an owner. When a member stops being an owner, or leaves, the
-    /// space's connection loses a runner that was one of that member's devices; an owner then chooses a new one.
-    /// </summary>
-    private async Task ClearGitHubRunnerAsync(SyncStream stream, Guid actor, Guid? affectedAccountId, CancellationToken ct)
-    {
-        if (affectedAccountId is null) return;
-        var connections = await db.SyncEntities.AsNoTracking()
-            .Where(e => e.AccountId == stream.Id && e.Kind == "github_connection" && e.PurgedAt == null && e.MovedTo == null)
-            .Select(e => new { e.EntityKey, e.Groups }).ToListAsync(ct);
-        foreach (var connection in connections)
-        {
-            var groups = SyncJson.ReadGroups(connection.Groups);
-            if (groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null) continue;
-            if (groups.GetValueOrDefault("runner")?.Values.Values.GetValueOrDefault("RunnerDeviceId")?.ToString() is not { Length: > 0 } runner
-                || !Guid.TryParse(runner, out var deviceId)
-                || !await db.Devices.AsNoTracking().AnyAsync(d => d.Id == deviceId && d.AccountId == affectedAccountId, ct)) continue;
-            var hlc = await changes.NextHlcAsync(stream.Id, "github_connection", connection.EntityKey, ct);
-            await changes.AppendAsync(stream.Id, actor, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "github_connection", connection.EntityKey,
-                new Dictionary<string, SyncGroupState>
-                {
-                    ["runner"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?> { ["RunnerDeviceId"] = null, ["RunnerDeviceName"] = null })),
-                }), ct);
-        }
     }
 
     private async Task AppendMemberGroupAsync(SyncStream stream, Guid actor, SpaceMember member, string group,

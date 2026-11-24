@@ -97,13 +97,54 @@ public sealed class SpaceSummaryTests
         await Assert.That(team.Deadlines.Single().Task.TaskId).IsEqualTo(venue);
         await Assert.That(team.Deadlines.Single().Assignees).IsEquivalentTo(new[] { "Omar" });
         await Assert.That(team.Projects).IsEmpty();
-        // The person's own completion in the space is not team news; the Personal one stays in the personal section.
+        // The person's own completion in the space is not team news: it joins the Personal one in the personal section, oldest first.
         await Assert.That(summary.Facts.Spaces.SelectMany(space => space.CompletedByOthers).Any(item => item.Task.TaskId == mine)).IsFalse();
-        await Assert.That(summary.Facts.Completions.Single().Task.Title).IsEqualTo("Personal thing");
+        await Assert.That(summary.Facts.Completions.Select(item => item.Task.Title)).IsEquivalentTo(new[] { "Mine", "Personal thing" });
+        await Assert.That(summary.Facts.Completions[0].Task.TaskId).IsEqualTo(mine);
         // A space the person does not belong to never appears.
         await Assert.That(summary.Facts.Spaces.Any(space => space.SpaceId == Club)).IsFalse();
         await Assert.That(summary.Counts.SpaceActivity).IsEqualTo(4);
         await Assert.That(summary.Summary.ResourceVersion).IsEqualTo(SummaryCommands.ResourceVersion);
+    }
+
+    [Test]
+    public async Task Spaces_CountACompletionReportedThroughADelegation()
+    {
+        using var host = await SummaryTests.Host.StartAsync(SummaryTests.At(Today.AddDays(-1), 9));
+        _ = SeedSpaces(host);
+        host.Clock.Now = SummaryTests.At(Today, 9);
+        var list = (await host.Containers.CreateAsync(new(SummaryTests.Op(), "Launch", ContainerKind.List, Team))).Container;
+        var delegated = (await host.Tasks.CaptureAsync(new(SummaryTests.Op(), list.Id, "Delegated job", null))).Task;
+        host.Clock.Now = SummaryTests.At(Today, 10);
+        await host.SetStatusAsync(delegated.Id, TaskItemStatus.Done);
+        // Omar reported the delegated task done: the history kind is the delegation's, not task.completed.
+        host.Run($"UPDATE TaskHistory SET Actor = 'person:{Omar}', EventKind = 'task.delegation-done' WHERE TaskId = '{delegated.Id}' AND EventKind = 'task.completed';");
+        host.Clock.Now = SummaryTests.At(Today, 19);
+
+        var summary = await host.GenerateAsync(SummaryKind.Daily, Today);
+
+        await Assert.That(summary.Facts.Spaces.Single().CompletedByOthers.Select(item => (item.Task.Title, item.Actor))).IsEquivalentTo(new[] { ("Delegated job", "Omar") });
+    }
+
+    [Test]
+    public async Task Spaces_KeepASpaceWhereOnlyThePersonWorked_SoTheStandupCanBePosted()
+    {
+        using var host = await SummaryTests.Host.StartAsync(SummaryTests.At(Today.AddDays(-1), 9));
+        _ = SeedSpaces(host);
+        host.Clock.Now = SummaryTests.At(Today, 9);
+        var list = (await host.Containers.CreateAsync(new(SummaryTests.Op(), "Launch", ContainerKind.List, Team))).Container;
+        var solo = (await host.Tasks.CaptureAsync(new(SummaryTests.Op(), list.Id, "Solo work", null))).Task;
+        // Only the person worked here today: nothing by others, nothing due, no project.
+        host.Clock.Now = SummaryTests.At(Today, 10);
+        await host.SetStatusAsync(solo.Id, TaskItemStatus.Done);
+        host.Clock.Now = SummaryTests.At(Today, 19);
+
+        var summary = await host.GenerateAsync(SummaryKind.Daily, Today);
+
+        var team = summary.Facts.Spaces.Single();
+        await Assert.That(team.SpaceId).IsEqualTo(Team);
+        await Assert.That(team.CompletedByOthers.Count + team.NewByOthers.Count + team.NewlyBlocked.Count + team.Deadlines.Count).IsEqualTo(0);
+        await Assert.That(summary.Facts.Completions.Select(item => item.Task.Title)).IsEquivalentTo(new[] { "Solo work" });
     }
 
     [Test]

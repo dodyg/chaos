@@ -137,9 +137,10 @@ internal sealed class SummaryFactsBuilder
         var unfinished = await UnfinishedAsync(period, [date]);
         var deadlines = await DueBetweenAsync(next, next);
         var (diary, diaryCount) = await DiaryAsync(period);
+        var (spaces, ownInSpaces) = await SpacesAsync(period);
         return new SummaryFacts
         {
-            Completions = await CompletionsAsync(period),
+            Completions = WithOwn(await CompletionsAsync(period), ownInSpaces),
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
@@ -150,7 +151,7 @@ internal sealed class SummaryFactsBuilder
             Suggested = await SuggestAsync(unfinished, deadlines, next, next),
             Week = await WeekProgressAsync(date, period),
             Meetings = await MeetingsAsync(next),
-            Spaces = await SpacesAsync(period),
+            Spaces = spaces,
         };
     }
 
@@ -162,9 +163,10 @@ internal sealed class SummaryFactsBuilder
         var unfinished = await UnfinishedAsync(period, dates);
         var deadlines = await DueBetweenAsync(nextStart, nextEnd);
         var (diary, diaryCount) = await DiaryAsync(period);
+        var (spaces, ownInSpaces) = await SpacesAsync(period);
         return new SummaryFacts
         {
-            Completions = await CompletionsAsync(period),
+            Completions = WithOwn(await CompletionsAsync(period), ownInSpaces),
             Projects = await ProjectsAsync(period),
             Unfinished = unfinished,
             Waiting = await WaitingAsync(),
@@ -174,25 +176,32 @@ internal sealed class SummaryFactsBuilder
             DiaryUpdateCount = diaryCount,
             Suggested = await SuggestAsync(unfinished, deadlines, nextStart, nextEnd),
             Week = await WeekProgressAsync(period.Start, period),
-            Spaces = await SpacesAsync(period),
+            Spaces = spaces,
         };
     }
 
+    /// <summary>The personal completions with the person's own completions in shared spaces, oldest first: their own work stays in the personal sections.</summary>
+    private static IReadOnlyList<CompletionFact> WithOwn(IReadOnlyList<CompletionFact> personal, IReadOnlyList<CompletionFact> ownInSpaces) =>
+        ownInSpaces.Count == 0 ? personal : Bounded(personal.Concat(ownInSpaces).OrderBy(item => item.CompletedAtUtc).ToList());
+
+    /// <summary>A transition into Done, whatever the event (completed, a delegation reported done or closed). Restoring a deleted finished task is not one.</summary>
+    private bool IsCompletion(TaskHistoryRecord row) =>
+        Read(row.SnapshotAfter)?.Task is { Status: TaskItemStatus.Done, DeletedAtUtc: null } && Read(row.SnapshotBefore)?.Task is not { Status: TaskItemStatus.Done };
+
     // ---------------------------------------------------------------- facts
 
-    /// <summary>Every transition into Done inside the capture, oldest first.</summary>
-    private async Task<IReadOnlyList<CompletionFact>> CompletionsAsync(SummaryPeriod period)
+    /// <summary>Every transition into Done inside the capture, oldest first; with <paramref name="actor"/> only the ones that actor made.</summary>
+    private async Task<IReadOnlyList<CompletionFact>> CompletionsAsync(SummaryPeriod period, string? actor = null)
     {
         var completions = new List<CompletionFact>();
         foreach (var row in _history.Where(row => row.EffectiveAtUtc < period.Cut))
         {
-            var after = Read(row.SnapshotAfter)?.Task;
-            var before = Read(row.SnapshotBefore)?.Task;
-            // Restoring a deleted finished task is not a new completion.
-            if (after is not { Status: TaskItemStatus.Done, DeletedAtUtc: null } || before is { Status: TaskItemStatus.Done })
+            if (!IsCompletion(row) || (actor is not null && !string.Equals(row.Actor, actor, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
+
+            var after = Read(row.SnapshotAfter)!.Task;
 
             var reopened = _historyByTask[row.TaskId].Any(later =>
                 later.EffectiveAtUtc > row.EffectiveAtUtc && later.EffectiveAtUtc < period.Cut
@@ -269,12 +278,14 @@ internal sealed class SummaryFactsBuilder
     /// What happened in each shared space the person belongs to (PLAN3 9.12): completions, new tasks and newly
     /// blocked work by other members, the open deadlines of the seven days after the period, and how each project
     /// moved. Only what this device holds; the person's own plans and meetings are never here. A space with
-    /// nothing to say is left out.
+    /// nothing to say is left out, unless the person has work of their own there to post as a standup.
+    /// Also returns the person's own completions in those spaces, which belong in the personal completions.
     /// </summary>
-    private async Task<IReadOnlyList<SpaceSummaryFact>> SpacesAsync(SummaryPeriod period)
+    private async Task<(IReadOnlyList<SpaceSummaryFact> Spaces, IReadOnlyList<CompletionFact> Own)> SpacesAsync(SummaryPeriod period)
     {
         var me = _context.Profile.Id;
         var facts = new List<SpaceSummaryFact>();
+        var own = new List<CompletionFact>();
         foreach (var space in (await _session.Spaces.ListAsync(_token)).Where(space => space.Kind == SpaceKind.Shared && space.DeletedAtUtc is null))
         {
             var people = await _session.People.ListAsync(space.Id, _token);
@@ -285,14 +296,18 @@ internal sealed class SummaryFactsBuilder
 
             // The space's own history drives a builder of its own, so progress is measured against that space alone.
             var part = new SummaryFactsBuilder(_session, _context, await _session.Summaries.ListHistorySinceAsync(space.Id, period.StartUtc, _token), _token);
-            var completed = await part.ActivityAsync(period, space.Id, "task.completed", null, people);
-            var added = await part.ActivityAsync(period, space.Id, "task.created", null, people);
-            var blocked = (await part.ActivityAsync(period, space.Id, "task.status-changed", SpaceBlockReason.Waiting, people))
-                .Concat(await part.ActivityAsync(period, space.Id, "task.delegation-decline", SpaceBlockReason.Declined, people))
+            var mine = (await part.CompletionsAsync(period, $"person:{me}")).Where(item => item.CompletedAtUtc >= period.StartUtc).ToList();
+            own.AddRange(mine);
+            var completed = await part.ActivityAsync(period, space.Id, (row, _) => part.IsCompletion(row), null, people);
+            var added = await part.ActivityAsync(period, space.Id, (row, _) => row.EventKind == "task.created", null, people);
+            var blocked = (await part.ActivityAsync(period, space.Id,
+                    (row, task) => row.EventKind == "task.status-changed" && task.Status == TaskItemStatus.WaitingOnSomeone, SpaceBlockReason.Waiting, people))
+                .Concat(await part.ActivityAsync(period, space.Id, (row, _) => row.EventKind == "task.delegation-decline", SpaceBlockReason.Declined, people))
                 .OrderBy(item => item.AtUtc).ThenBy(item => item.Task.TaskId, StringComparer.Ordinal).ToList();
             var deadlines = await part.SpaceDeadlinesAsync(space.Id, period.End.AddDays(1), period.End.AddDays(7), people);
             var projects = await part.ProjectsAsync(period, space.Id);
-            if (completed.Count + added.Count + blocked.Count + deadlines.Count + projects.Count == 0)
+            if (completed.Count + added.Count + blocked.Count + deadlines.Count + projects.Count == 0
+                && mine.Count == 0 && (await part.RowsAsync(new TaskQuerySpec { View = TaskView.AssignedToMe, FilterSpaceId = space.Id })).Count == 0)
             {
                 continue;
             }
@@ -300,27 +315,23 @@ internal sealed class SummaryFactsBuilder
             facts.Add(new SpaceSummaryFact(space.Id, space.Name, Bounded(completed), Bounded(added), Bounded(blocked), Bounded(deadlines), projects));
         }
 
-        return Bounded(facts);
+        return (Bounded(facts), own);
     }
 
     /// <summary>
-    /// History events of one kind in the space by actors other than the person (other people and agents):
-    /// the task as it was after the event, the actor's name and when. A status change counts only when the
-    /// task is Waiting afterwards; <paramref name="blockedBy"/> marks newly blocked work.
+    /// History events in the space that <paramref name="matches"/> by actors other than the person (other people
+    /// and agents): the task as it was after the event, the actor's name and when; <paramref name="blockedBy"/>
+    /// marks newly blocked work.
     /// </summary>
-    private async Task<List<SpaceActivityFact>> ActivityAsync(SummaryPeriod period, string spaceId, string eventKind, SpaceBlockReason? blockedBy, IReadOnlyList<SpacePerson> people)
+    private async Task<List<SpaceActivityFact>> ActivityAsync(SummaryPeriod period, string spaceId, Func<TaskHistoryRecord, TaskRecord, bool> matches,
+        SpaceBlockReason? blockedBy, IReadOnlyList<SpacePerson> people)
     {
         var myId = Guid.TryParse(_context.Profile.Id, out var parsed) ? parsed : Guid.Empty;
         var directory = people.Select(member => new DirectoryMember(member.ActorId, member.DisplayName)).ToList();
         var result = new List<SpaceActivityFact>();
-        foreach (var row in _history.Where(row => row.EventKind == eventKind && row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut))
+        foreach (var row in _history.Where(row => row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut))
         {
-            if (Read(row.SnapshotAfter)?.Task is not { } task || task.SpaceId != spaceId)
-            {
-                continue;
-            }
-
-            if (eventKind == "task.status-changed" && task.Status != TaskItemStatus.WaitingOnSomeone)
+            if (Read(row.SnapshotAfter)?.Task is not { } task || task.SpaceId != spaceId || !matches(row, task))
             {
                 continue;
             }
@@ -379,7 +390,7 @@ internal sealed class SummaryFactsBuilder
         var me = $"person:{_context.Profile.Id}";
         var done = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var row in _history.Where(row => row.EventKind == "task.completed" && row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut
+        foreach (var row in _history.Where(row => IsCompletion(row) && row.EffectiveAtUtc >= period.StartUtc && row.EffectiveAtUtc < period.Cut
                  && string.Equals(row.Actor, me, StringComparison.OrdinalIgnoreCase)))
         {
             if (Read(row.SnapshotAfter)?.Task is { } task && task.SpaceId == spaceId && seen.Add(task.Id))
