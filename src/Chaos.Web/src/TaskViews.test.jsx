@@ -149,8 +149,11 @@ test("a viewer's list is read-only while an editor's list can be completed", asy
     const check = editor.host.querySelector("button.task-check");
     assert.equal(check.disabled, false);
     assert.equal(check.getAttribute("aria-label"), "Complete Book the studio");
-    // The date follows the browser's locale; only its presence is checked.
-    assert.match(editor.host.querySelector(".row-title small").textContent, /^Omar, You.*Due \d{1,2} \w+$/);
+    assert.equal(editor.host.querySelector(".row-title small span").textContent, "Omar, You");
+    const dueDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(
+      new Date("2026-11-26T00:00:00Z"),
+    );
+    assert.equal(editor.host.querySelector(".due-date").textContent, `Due ${dueDate}`);
     await act(async () => {
       check.click();
     });
