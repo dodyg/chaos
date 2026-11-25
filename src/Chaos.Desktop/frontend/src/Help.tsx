@@ -379,8 +379,8 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             it without moving it.
           </p>
           <p>
-            <strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed, Assigned to me and
-            Delegated by me.
+            <strong>Views</strong> collect tasks from everywhere: Today, Upcoming, Overdue, Waiting, Recently completed, Assigned to me,
+            Delegated by me and Agent work.
           </p>
           <p>
             Open a task to add subtasks, a checklist, notes in Markdown, a repeat rule, reminders and dated diary updates. The history names

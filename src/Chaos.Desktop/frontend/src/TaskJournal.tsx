@@ -34,6 +34,15 @@ const eventNames: Record<string, string> = {
   "task.restored": "Restored",
   "task.section-cleared": "Section removed",
   "task.tags-changed": "Tags changed",
+  // Claims and agents (PLAN3 12.4, 12.7).
+  "task.claimed": "Claimed",
+  "task.unclaimed": "Released the claim",
+  "task.takeover": "Took over",
+  "task.claim-extended": "Kept the claim",
+  "task.claim-expired": "Claim expired",
+  "task.ready-for-agent": "Marked Ready for agent",
+  "task.not-ready-for-agent": "No longer Ready for agent",
+  "task.agent-reverted": "Undid the agent's changes",
   "subtask.added": "Subtask added",
   "subtask.updated": "Subtask edited",
   "subtask.completed": "Subtask completed",
@@ -98,25 +107,35 @@ export function describeEvent(event: HistoryEntryResponse): string {
 
 export const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+/** An agent's name as history and diary lines show it (6.1): "Build bot (agent)". */
+const named = (person: PersonResponse) => (person.kind === "agent" ? `${person.displayName} (agent)` : person.displayName);
+
 export function actorLabel(actor: string, people: readonly PersonResponse[] = []): string {
   if (actor === "local") return "You";
   if (actor.startsWith("person:") || actor.startsWith("agent:")) {
     const person = people.find((candidate) => candidate.actorId.toLowerCase() === actor.toLowerCase());
-    return person ? (person.isMe ? "You" : person.displayName) : "Unknown person";
+    if (!person) return actor.startsWith("agent:") ? "Unknown agent" : "Unknown person";
+    return person.isMe ? "You" : named(person);
   }
   if (actor.startsWith("github:")) return `GitHub: ${actor.slice(7)}`;
   if (actor === "sync") return "Sync";
   return "Unknown person";
 }
 
+/** A diary entry names its author by profile ID; an agent author (a claim that ran out) is stored the same way and resolves by its agent ID. */
+const diaryAuthor = (profileId: string, people: readonly PersonResponse[]) =>
+  people.find((candidate) => candidate.actorId.toLowerCase() === `person:${profileId}`.toLowerCase()) ??
+  people.find((candidate) => candidate.actorId.toLowerCase() === `agent:${profileId}`.toLowerCase());
+
 export function diaryAuthorLabel(profileId: string, people: readonly PersonResponse[]): string {
-  const person = people.find((candidate) => candidate.actorId.toLowerCase() === `person:${profileId}`.toLowerCase());
+  const person = diaryAuthor(profileId, people);
   if (!person) return "Unknown person";
+  if (person.kind === "agent") return named(person);
   return person.former ? `${person.displayName} (former member)` : person.isMe ? "You" : person.displayName;
 }
 
 function DiaryAuthor({ profileId, people }: { profileId: string; people: readonly PersonResponse[] }) {
-  const person = people.find((candidate) => candidate.actorId.toLowerCase() === `person:${profileId}`.toLowerCase());
+  const person = diaryAuthor(profileId, people);
   return (
     <span className="inline-flex items-center gap-1">
       {person && (

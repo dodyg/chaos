@@ -105,6 +105,13 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
                 return Refuse("recurring");
             }
 
+            // The rule that every live assignee completes first runs on the desktop, and this client schema cannot write
+            // a person's `done` group, so a status written here would make the task Done while others have not completed.
+            if (task.EachMustComplete && action == WebTaskAction.Complete)
+            {
+                return Refuse("each");
+            }
+
             if ((action is WebTaskAction.Complete && task.Status == WebReadModel.Done) ||
                 (action is WebTaskAction.Reopen && !task.IsTerminal))
             {
@@ -297,6 +304,7 @@ internal sealed class WebTaskWrites(ChaosDbContext db, WebReadModel read, SyncSe
                 "not-found" or SyncRejection.Purged or SyncRejection.NotMember => Results.NotFound(),
                 "setup-required" => Conflict("Connect Chaos on your desktop and sync your Inbox before adding tasks here."),
                 "recurring" => Conflict("Complete or reopen this recurring task on your desktop."),
+                "each" => Conflict("Complete your part of this task on your desktop."),
                 "task-closed" => Conflict("Reopen this task before updating it."),
                 "task-id-in-use" => Conflict("This task ID is already in use."),
                 SyncRejection.Forbidden => Results.Problem(ViewerMessage, statusCode: StatusCodes.Status403Forbidden),

@@ -39,6 +39,12 @@ internal sealed record WebTask(Guid Id, Guid ListId, string Title, string? Notes
     /// <summary>False in a space where the caller is a viewer: the service refuses changes to the task there.</summary>
     public bool CanChange { get; init; }
 
+    /// <summary>
+    /// Every live assignee must complete the task before it is Done. The rule runs on the desktop, so the phone refuses
+    /// Complete (<see cref="WebTaskWrites.ActAsync"/>).
+    /// </summary>
+    public bool EachMustComplete { get; init; }
+
     public IReadOnlyList<WebPerson> Assignees { get; init; } = [];
 
     /// <summary>The task's diary. Only <c>GET /tasks/{id}</c> fills it; rows in list and My Day responses leave it empty.</summary>
@@ -114,6 +120,9 @@ internal sealed class WebReadModel(ChaosDbContext db, SpaceMembershipCache membe
     internal const int NotStarted = 0;
     internal const int Done = 4;
     internal const int Cancelled = 5;
+
+    /// <summary><c>Tasks.AssignMode</c> 1: each assignee completes the task (0, anyone of them, is the default).</summary>
+    internal const long AssignModeEach = 1;
 
     public Task<Account?> AccountAsync(Guid accountId, CancellationToken ct) =>
         db.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == accountId && a.DeletedAt == null, ct);
@@ -632,6 +641,7 @@ internal sealed class WebReadModel(ChaosDbContext db, SpaceMembershipCache membe
             {
                 SpaceId = scope.SpaceOf(streamId, entity),
                 CanChange = scope.CanChange(scope.SpaceOf(streamId, entity)),
+                EachMustComplete = entity.Number("assignment", "AssignMode") == AssignModeEach,
             }
             : null;
 

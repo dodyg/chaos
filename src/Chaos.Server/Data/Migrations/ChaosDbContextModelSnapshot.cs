@@ -106,6 +106,52 @@ namespace Chaos.Server.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Chaos.Server.Data.AgentRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AddsInWindow")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ClaimsInWindow")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ClientId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("OwnerAccountId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PausedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("RateWindowStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("RemovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerAccountId", "RemovedAt")
+                        .HasDatabaseName("IX_Agents_Owner");
+
+                    b.ToTable("Agents", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Agents_Counters", "\"AddsInWindow\" BETWEEN 0 AND 60 AND \"ClaimsInWindow\" BETWEEN 0 AND 30");
+
+                            t.HasCheckConstraint("CK_Agents_Name", "length(\"Name\") BETWEEN 1 AND 100");
+                        });
+                });
+
             modelBuilder.Entity("Chaos.Server.Data.AttachmentBlobBinding", b =>
                 {
                     b.Property<Guid>("StreamId")
@@ -882,6 +928,15 @@ namespace Chaos.Server.Data.Migrations
                     b.HasOne("Chaos.Server.Data.Account", null)
                         .WithMany("Logins")
                         .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Chaos.Server.Data.AgentRow", b =>
+                {
+                    b.HasOne("Chaos.Server.Data.Account", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerAccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

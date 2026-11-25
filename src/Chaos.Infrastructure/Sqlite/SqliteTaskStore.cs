@@ -111,11 +111,13 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
             INSERT INTO Tasks (Id, SpaceId, ContainerId, SectionId, Title, Notes, Status, CustomStateId, Priority,
                 EstimateMinutes, CapacityCategory, PlannedDate, PlannedTime, PlannedZoneId,
                 DueDate, DueTime, DueZoneId, CompletedAtUtc, CancelledAtUtc, Position,
-                RecurrenceOccurrenceKey, AssignMode, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+                RecurrenceOccurrenceKey, AssignMode, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc,
+                ClaimedById, ClaimedAtUtc, ClaimExpiresAtUtc, AgentReady, AgentAssigneeId)
             VALUES ($id, $space, $container, $section, $title, $notes, $status, $customState, $priority,
                 $estimate, $category, $plannedDate, $plannedTime, $plannedZone,
                 $dueDate, $dueTime, $dueZone, $completed, $cancelled, $position,
-                $occurrenceKey, $assignMode, $version, $created, $updated, $deleted);
+                $occurrenceKey, $assignMode, $version, $created, $updated, $deleted,
+                $claimedBy, $claimedAt, $claimExpires, $agentReady, $agentAssignee);
             """;
         command.Parameters.AddWithValue("$id", task.Id);
         command.Parameters.AddWithValue("$space", task.SpaceId);
@@ -143,6 +145,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$created", StorageFormats.Instant(task.CreatedAtUtc));
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(task.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(task.DeletedAtUtc));
+        BindClaim(command, task);
         await command.ExecuteNonQueryAsync(ct);
         await IndexAsync(task, ct);
     }
@@ -163,7 +166,9 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
                 DueDate = $dueDate, DueTime = $dueTime, DueZoneId = $dueZone,
                 CompletedAtUtc = $completed, CancelledAtUtc = $cancelled,
                 RecurrenceOccurrenceKey = $occurrenceKey, AssignMode = $assignMode,
-                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted
+                Version = $newVersion, UpdatedAtUtc = $updated_at, DeletedAtUtc = $deleted,
+                ClaimedById = $claimedBy, ClaimedAtUtc = $claimedAt, ClaimExpiresAtUtc = $claimExpires,
+                AgentReady = $agentReady, AgentAssigneeId = $agentAssignee
             WHERE Id = $id AND Version = $expectedVersion;
             """;
         command.Parameters.AddWithValue("$container", updated.ContainerId);
@@ -189,6 +194,7 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$newVersion", updated.Version);
         command.Parameters.AddWithValue("$updated_at", StorageFormats.Instant(updated.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(updated.DeletedAtUtc));
+        BindClaim(command, updated);
         command.Parameters.AddWithValue("$id", updated.Id);
         command.Parameters.AddWithValue("$expectedVersion", expectedVersion);
 
@@ -209,6 +215,43 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         command.Parameters.AddWithValue("$container", containerId);
         var value = await command.ExecuteScalarAsync(ct);
         return Convert.ToInt64(value);
+    }
+
+    private static void BindClaim(SqliteCommand command, TaskRecord task)
+    {
+        command.Parameters.AddWithValue("$claimedBy", SqliteProfileStore.OptionalValue(task.ClaimedById));
+        command.Parameters.AddWithValue("$claimedAt", SqliteProfileStore.OptionalInstant(task.ClaimedAtUtc));
+        command.Parameters.AddWithValue("$claimExpires", SqliteProfileStore.OptionalInstant(task.ClaimExpiresAtUtc));
+        command.Parameters.AddWithValue("$agentReady", task.AgentReady ? 1 : 0);
+        command.Parameters.AddWithValue("$agentAssignee", SqliteProfileStore.OptionalValue(task.AgentAssigneeId));
+    }
+
+    public async Task<IReadOnlyList<TaskRecord>> ListClaimsExpiredAsync(DateTimeOffset before, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Tasks WHERE ClaimedById IS NOT NULL AND ClaimExpiresAtUtc <= $before AND DeletedAtUtc IS NULL ORDER BY ClaimExpiresAtUtc, Id;";
+        command.Parameters.AddWithValue("$before", StorageFormats.Instant(before));
+        return await ReadAllAsync(command, ct);
+    }
+
+    public async Task<IReadOnlyList<TaskRecord>> ListClaimedByAsync(string claimedById, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM Tasks WHERE ClaimedById = $claimed AND DeletedAtUtc IS NULL ORDER BY ClaimExpiresAtUtc, Id;";
+        command.Parameters.AddWithValue("$claimed", claimedById);
+        return await ReadAllAsync(command, ct);
+    }
+
+    private static async Task<IReadOnlyList<TaskRecord>> ReadAllAsync(SqliteCommand command, CancellationToken ct)
+    {
+        using var reader = await command.ExecuteReaderAsync(ct);
+        var tasks = new List<TaskRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            tasks.Add(ReadTask(reader));
+        }
+
+        return tasks;
     }
 
     internal static TaskRecord ReadTask(SqliteDataReader r) => new()
@@ -235,6 +278,11 @@ public sealed class SqliteTaskStore(SqliteConnection connection) : ITaskStore
         CancelledAtUtc = r.In("CancelledAtUtc"),
         Position = r.L("Position"),
         RecurrenceOccurrenceKey = r.Sn("RecurrenceOccurrenceKey"),
+        ClaimedById = r.Sn("ClaimedById"),
+        ClaimedAtUtc = r.In("ClaimedAtUtc"),
+        ClaimExpiresAtUtc = r.In("ClaimExpiresAtUtc"),
+        AgentReady = r.L("AgentReady") != 0,
+        AgentAssigneeId = r.Sn("AgentAssigneeId"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

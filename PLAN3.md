@@ -2061,6 +2061,31 @@ and keep `AUTOINCREMENT` continuing from the old maximum (copy `sqlite_sequence`
 
 **Exit:** the data model and rules for agents work through tests, without an MCP surface yet.
 
+**Progress note 2026-11-25 (Q17, Microsoft.Extensions.AI).** At the owner's direction the agent tools are Microsoft.Extensions.AI
+`AIFunction`s (decisions 2026-11-25): the pinned MCP SDK 2.4.0 serves and calls exactly that type, so the contract of 12.2 is made once
+with `AIFunctionFactory` and both surfaces share it. Q17 ships `claim_task`, `release_task` and `heartbeat` twice, from one contract
+in `Chaos.Sync/Agents.cs`: `Chaos.Application/Agents/LocalAgentTools` (the device's serialized writer, under an agent scope) and
+`Chaos.Server/Sync/AgentTools` (over `AgentService`). Server: `S012_Agents`; `/v2/agents` create, list, rename, pause, remove and revert;
+Members → Add agent with allowed lists, the space's `AgentsAllowed` (now settable: `spaces.setAgentSettings`, with claim minutes and
+`AllowAgentsToClose`), pause in a space and removal through the members endpoint; `POST /v2/tasks/{id}/claim|release|takeover|heartbeat`
+for people; `ClaimExpiryService` every minute; `SyncService.PushAsAgentAsync`, the identity seam Q19's OAuth endpoint will call (the
+Agent column of 8.4, E5, allowed lists, the E8 counters, `PreviousGroups` for revert). Client: migration 050 (the task's `claim` and
+`agent` groups, `LocalAgents`, `LocalAgentAccess`, `LocalAgentTokens`, `TaskProposals`, `ActivityLog` rebuilt with `agent` and an actor
+column with Seq and counter kept, `UndoEntries.ActorId`), client schema 14; `AgentCommands` (tokens shown once, kept as SHA-256),
+`ClaimCommands` for Personal tasks, `LocalAgentTools`, undo of an agent's operations newest first, claim expiry on the reminder tick,
+the Agent work view, My Day's "Waiting for your review", history labels, RPC `agents` and `claims`. Frontend: Settings → Agents
+(local and server agents, tokens, lists, undo, revert), claim controls and Ready for agent in the task editor, the Agent work view,
+Members → Add agent, the space's agent settings. Tests: Sync `AgentCountersTests`; Infrastructure `Agents/AgentTests` (local agents,
+tokens, claims and expiry, the tools as functions with paused/forbidden/rate-limited, undo by agent, the view), `Migrate050…`, flush
+coverage for the two new kinds; Server `Sharing/AgentTests` (the Agent column and the "Claim a task" row deferred from Q3, two
+concurrent agents with one winner, expiry with the note, the tools' schemas and codes, E5, counters, revert with a person's later change
+skipped); Desktop `Rpc/AgentRpcTests`; frontend tests. A review on 2026-11-26 fixed claim extension, list escapes, re-adding,
+resume and revert rights, Ready-for-agent by claim and release (E5), the 050 foreign keys and counter, and the agent undo (decisions
+2026-11-25, "Review fixes"). Full gate 2026-11-26 (`eng/verify.ps1`, PostgreSQL under `wslc`): Domain 337, Application 141,
+Infrastructure 849, Sync 85, Server 245, Desktop 106, all passing; Slopwatch 0 issues. Desktop frontend: 356 passing; web: 22 passing,
+lint 0 errors. Not done: the MCP client
+configuration snippet (Q18) and delegating to an agent (Q20); the `propose_tasks` writer (Q20). Smallest next action: Q18.
+
 ### [ ] Q18: Local MCP server
 
 **Depends on:** Q17. **Migration:** none. **Read:** 12.1, 12.2, 12.5, the Q0 spikes 1 and 3.
@@ -2155,6 +2180,18 @@ running Chaos Desktop held its output DLLs; the owner closed it and the rerun is
 assignees must each complete it is completed directly on the phone (recorded in `docs/decisions.md`); task history rows,
 shared pads and pages, and editing a task's text or dates stay off the phone. The test container was removed. Smallest next
 action: Q17.
+
+**Progress note 2026-11-24 (follow-up: each-assignee tasks).** A task whose assignees must each complete it is no longer
+completed directly on the phone. `WebTask` carries `eachMustComplete` (`assignment.AssignMode` is 1), the app disables its
+check box with "Complete on desktop" and shows the hint on the task screen, and `WebTaskWrites` refuses Complete with 409
+"Complete your part of this task on your desktop.", as for recurring tasks. The rule itself stays on the desktop: the server
+runs no client logic, and the web device's client schema 1 cannot write the `done` group. Reopen is unchanged and still writes
+`status` only. Tests: `WebSharingTests` 4 (the new case checks the flag on the list and detail rows, the 409, and that the web
+device wrote no change) and the server's other `Web*` classes, 13 in all, with PostgreSQL 18.7 through `wslc` (disposable,
+removed afterwards); `TaskViews.test.jsx` 5 and the web's 22 tests; lint 0 errors with the existing hook-dependency warning;
+Prettier clean; `web-dto.json` regenerated. Full gate `pwsh -File eng/verify.ps1` with the same PostgreSQL and
+`DOTNET_PROCESSOR_COUNT=4`: Domain 337, Application 141, Infrastructure 835, Sync 82, Server 231 and Desktop 104 (1,730
+total), no skips, 1,469 s; Slopwatch 0 issues; desktop frontend `npm test` passed 342. Smallest next action: unchanged (Q17).
 
 **Depends on:** Q10. **Migration:** none. **Read:** `docs/mobile-web.md`.
 

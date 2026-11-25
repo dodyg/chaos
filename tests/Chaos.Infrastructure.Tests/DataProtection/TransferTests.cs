@@ -380,6 +380,7 @@ public sealed class TransferTests
             public ICalendarStore Calendars => inner.Calendars;
             public ITimeBlockStore TimeBlocks => inner.TimeBlocks;
             public IAttachmentStore Attachments => inner.Attachments;
+            public IAgentStore Agents => inner.Agents;
             public Chaos.Application.Activity.IActivityRecorder Activity => inner.Activity;
         }
 
@@ -393,6 +394,8 @@ public sealed class TransferTests
             public Task<IReadOnlyList<TaskRecord>> ListByContainerAsync(string containerId, CancellationToken ct) => inner.ListByContainerAsync(containerId, ct);
             public Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct) => inner.ListPlannedAsync(spaceIds, ct);
             public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct) => inner.ListDeletedByContainerAsync(containerId, ct);
+            public Task<IReadOnlyList<TaskRecord>> ListClaimsExpiredAsync(DateTimeOffset before, CancellationToken ct) => inner.ListClaimsExpiredAsync(before, ct);
+            public Task<IReadOnlyList<TaskRecord>> ListClaimedByAsync(string claimedById, CancellationToken ct) => inner.ListClaimedByAsync(claimedById, ct);
             public Task<TaskRecord?> UpdateAsync(TaskRecord updated, long expectedVersion, CancellationToken ct) => inner.UpdateAsync(updated, expectedVersion, ct);
             public Task<long> GetNextPositionAsync(string containerId, CancellationToken ct) => inner.GetNextPositionAsync(containerId, ct);
 

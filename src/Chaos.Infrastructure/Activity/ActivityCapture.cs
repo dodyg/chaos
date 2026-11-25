@@ -84,8 +84,8 @@ internal static class ActivityCapture
         using (var insert = connection.CreateCommand())
         {
             insert.CommandText = """
-                INSERT INTO ActivityLog (OperationId, OccurredAtUtc, Source, Action, Outcome, JobRunId, DetailJson)
-                VALUES ($op, $at, $source, $action, 'ok', $job, $detail);
+                INSERT INTO ActivityLog (OperationId, OccurredAtUtc, Source, Action, Outcome, JobRunId, ActorId, DetailJson)
+                VALUES ($op, $at, $source, $action, 'ok', $job, $actor, $detail);
                 SELECT last_insert_rowid();
                 """;
             insert.Parameters.AddWithValue("$op", operationId);
@@ -93,6 +93,7 @@ internal static class ActivityCapture
             insert.Parameters.AddWithValue("$source", source);
             insert.Parameters.AddWithValue("$action", action);
             insert.Parameters.AddWithValue("$job", (object?)scope?.JobRunId ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$actor", (object?)scope?.ActorId ?? DBNull.Value);
             insert.Parameters.AddWithValue("$detail", notes.RemoteTextChanges.Count == 0 ? DBNull.Value : JsonSerializer.Serialize(notes.RemoteTextChanges));
             seq = Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
         }

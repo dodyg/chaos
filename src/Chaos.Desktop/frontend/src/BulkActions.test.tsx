@@ -42,6 +42,11 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
     ...patch,
   };
 }

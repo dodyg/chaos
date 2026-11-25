@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Local agent tools are AIFunctions (Q17, PLAN3 §12): Q18's pipe host hands them to the MCP server. -->
+    <PackageReference Include="Microsoft.Extensions.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Chaos.Domain\Chaos.Domain.csproj" />
     <ProjectReference Include="..\Chaos.Sync\Chaos.Sync.csproj" />
   </ItemGroup>

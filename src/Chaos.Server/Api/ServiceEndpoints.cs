@@ -65,6 +65,7 @@ public static class ServiceEndpoints
             .AddEndpointFilter<ActiveDeviceFilter>().AddEndpointFilter<SpaceEndpoints.V2ProtocolFilter>();
         v2.MapV2SyncEndpoints();
         v2.MapSpaceEndpoints();
+        v2.MapAgentEndpoints();
     }
 
     private static async Task<IResult> RegisterDevice(ClaimsPrincipal user, RegisterDeviceRequest request, DeviceRegistration devices, CancellationToken ct)

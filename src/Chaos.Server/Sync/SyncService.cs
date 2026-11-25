@@ -75,14 +75,54 @@ public sealed class SyncService(
         Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct) =>
         PushPreparedAsync(accountId, deviceId, clientSchema, SyncProtocol.Version1, prepare, ct);
 
-    internal async Task<(PushOutcome? Outcome, string? Refusal)> PushPreparedAsync(Guid accountId, Guid deviceId, int clientSchema,
-        int protocolVersion, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
+    internal Task<(PushOutcome? Outcome, string? Refusal)> PushPreparedAsync(Guid accountId, Guid deviceId, int clientSchema,
+        int protocolVersion, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct) =>
+        PushCoreAsync(accountId, deviceId, clientSchema, protocolVersion, agentId: null, prepare, ct);
+
+    /// <summary>
+    /// An agent's writes (PLAN3 §5 decision 10, 12.3): the merge path of a device's push under the agent's identity. Its
+    /// live agent memberships decide what it may write (<see cref="AgentPermissionAsync"/>), its ID is the actor, its
+    /// counters apply (E8) and the groups it replaces are kept for revert (12.7). The service MCP endpoint (Q19) calls
+    /// this once it has authenticated the agent; the identity seam is what the matrix tests exercise.
+    /// </summary>
+    internal async Task<PushOutcome> PushAsAgentAsync(Guid agentId, IReadOnlyList<IncomingChange> incoming, CancellationToken ct)
+    {
+        var result = await PushCoreAsync(Guid.Empty, Guid.Empty, LatestClientSchema, SyncProtocol.Version2, agentId,
+            (_, _) => Task.FromResult(new PreparedPush(incoming)), ct);
+        return result.Outcome ?? throw new AgentUnavailableException(result.Refusal);
+    }
+
+    /// <summary>Why the service could not act for an agent: gone, paused, or not a member of any live space.</summary>
+    public sealed class AgentUnavailableException(string? reason) : InvalidOperationException($"The agent cannot act: {reason}.");
+
+    private const int LatestClientSchema = 99;
+
+    internal async Task<(PushOutcome? Outcome, string? Refusal)> PushCoreAsync(Guid accountId, Guid deviceId, int clientSchema,
+        int protocolVersion, Guid? agentId, Func<Account, CancellationToken, Task<PreparedPush>> prepare, CancellationToken ct)
     {
         var strategy = db.Database.CreateExecutionStrategy();
         var result = await strategy.ExecuteAsync<(PushOutcome? Outcome, string? Refusal)>(async () =>
         {
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            AgentRow? agent = null;
+            if (agentId is { } writer)
+            {
+                agent = await db.Agents.FromSqlInterpolated($"""SELECT * FROM "Agents" WHERE "Id" = {writer} FOR UPDATE""")
+                    .SingleOrDefaultAsync(ct);
+                if (agent is null || agent.RemovedAt is not null)
+                {
+                    return (null, SyncRejection.NotMember);
+                }
+
+                if (agent.PausedAt is not null)
+                {
+                    return (null, AgentToolStatus.Paused);
+                }
+
+                accountId = agent.OwnerAccountId;
+            }
+
             var account = await db.Accounts
                 .FromSqlInterpolated($"""SELECT * FROM "Accounts" WHERE "Id" = {accountId} FOR UPDATE""")
                 .FirstOrDefaultAsync(ct);
@@ -92,7 +132,10 @@ public sealed class SyncService(
             }
 
             var readable = await memberships.GetAsync(db, account.Id, ct);
-            var streamIds = readable.Roles.Keys.Append(accountId).Distinct().ToArray();
+            var streamIds = agentId is { } member
+                ? (await db.SpaceMembers.AsNoTracking().Where(m => m.MemberId == member && m.MemberKind == SpaceMember.AgentKind && m.RemovedAt == null)
+                    .Select(m => m.SpaceId).Distinct().ToListAsync(ct)).ToArray()
+                : readable.Roles.Keys.Append(accountId).Distinct().ToArray();
             var streams = await db.SyncStreams
                 .FromSqlInterpolated($"""SELECT * FROM "SyncStreams" WHERE "Id" = ANY({streamIds}) ORDER BY "Id" FOR UPDATE""")
                 .ToDictionaryAsync(s => s.Id, ct);
@@ -187,6 +230,22 @@ public sealed class SyncService(
                     continue;
                 }
 
+                if (agent is null && route.StreamId != accountId && change.Kind == "task" && change.Groups.ContainsKey("claim"))
+                {
+                    // A claim in a shared space is the service's (PLAN3 5.6, 7.4). A device's change carries the claim group along
+                    // with every task edit because the capture pends whole groups, so the stored claim stands and the group is
+                    // dropped; a change that carried nothing else changes nothing.
+                    var rest = change.Groups.Where(pair => pair.Key != "claim").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                    if (rest.Count == 0)
+                    {
+                        accepted.Add(entry.ChangeId);
+                        acceptedStreams[entry.ChangeId] = route.StreamId;
+                        continue;
+                    }
+
+                    change = change with { Groups = rest };
+                }
+
                 var alreadyLogged = await db.SyncChanges.AsNoTracking()
                     .AnyAsync(c => c.AccountId == route.StreamId && c.ChangeId == changeId, ct);
                 if (alreadyLogged)
@@ -196,14 +255,23 @@ public sealed class SyncService(
                     continue;
                 }
 
-                var permission = await PermissionAsync(account, kind, change, route.StreamId, readable.Roles, ct);
+                var permission = agent is not null
+                    ? await AgentPermissionAsync(agent.Id, kind, change, route.StreamId, ct)
+                    : await PermissionAsync(account, kind, change, route.StreamId, readable.Roles, ct);
                 if (permission is not null)
                 {
                     rejected.Add(new(entry.ChangeId, permission));
                     continue;
                 }
 
-                var refusal = await MergeAsync(stream, change, changeId, deviceId, account.Id, account.ProfileId, now, ct);
+                if (agent is not null && !await CountsWithinLimitAsync(agent, kind, change, route.StreamId, now, ct))
+                {
+                    rejected.Add(new(entry.ChangeId, SyncRejection.RateLimited));
+                    continue;
+                }
+
+                var refusal = await MergeAsync(stream, change, changeId, deviceId, account.Id, agentId ?? account.ProfileId, now, ct,
+                    capturePrevious: agent is not null);
                 if (refusal is not null)
                 {
                     // A protocol 1 client cannot follow work that moved into a space: tell it to update.
@@ -211,6 +279,11 @@ public sealed class SyncService(
                         ? SyncRejection.SchemaTooOld
                         : refusal));
                     continue;
+                }
+
+                if (stream.Kind == SyncStream.SpaceKind && change.Kind == "task" && change.Groups.Keys.Any(group => group != "claim"))
+                {
+                    await ExtendClaimAsync(stream, change.EntityKey, agentId ?? account.ProfileId!.Value, now, ct);
                 }
 
                 accepted.Add(entry.ChangeId);
@@ -571,7 +644,7 @@ public sealed class SyncService(
                 SyncWrite.Owner => AllowsOwnerWrite(role),
                 SyncWrite.Editor => role is SpaceMember.OwnerRole or SpaceMember.EditorRole || viewerDiaryAttachment,
                 SyncWrite.Commenter => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.ViewerRole,
-                SyncWrite.Agent => role is SpaceMember.OwnerRole or SpaceMember.EditorRole or SpaceMember.AgentRole,
+                SyncWrite.Agent => role == SpaceMember.AgentRole, // a proposal is an agent's; a person cannot pose as one (12.6)
                 SyncWrite.Author => (group == "deleted" && role == SpaceMember.OwnerRole && Value(change, "deleted", "DeletedAtUtc") is not null)
                     || await IsAuthorAsync(account, streamId, change, ct),
                 SyncWrite.Server => false,
@@ -618,6 +691,117 @@ public sealed class SyncService(
     }
 
     internal static bool AllowsOwnerWrite(short role) => role == SpaceMember.OwnerRole;
+
+    /// <summary>
+    /// What an agent may write in a space (PLAN3 8.4, the Agent column; 12.2; E5): tasks, subtasks, its own diary
+    /// entries, pages and task proposals, and only within its allowed lists; never a purge, a setting, a member, a tag of
+    /// its own, an assignment, a delegation or the agent group (Ready for agent); and no closing a task unless the space
+    /// lets agents close (12.2). Tags it links must already exist in the space.
+    /// </summary>
+    private async Task<string?> AgentPermissionAsync(Guid agentId, SyncKindInfo kind, SyncChange change, Guid streamId, CancellationToken ct)
+    {
+        if (change.Op == SyncOp.Purge || await SpaceSettingAsync(streamId, "AgentsAllowed", ct) != "1")
+        {
+            return SyncRejection.Forbidden;
+        }
+
+        var allowedJson = await db.SpaceMembers.AsNoTracking().Where(m => m.SpaceId == streamId && m.MemberId == agentId && m.RemovedAt == null)
+            .Select(m => m.AllowedContainers).FirstOrDefaultAsync(ct);
+        var lists = allowedJson is null ? null : JsonSerializer.Deserialize<string[]>(allowedJson);
+        var me = agentId.ToString("D");
+
+        foreach (var group in change.Groups.Keys)
+        {
+            if (kind.Group(group)!.Write == SyncWrite.Server)
+            {
+                return SyncRejection.ServerOnly;
+            }
+
+            var refusal = (kind.Kind, group) switch
+            {
+                ("task", "assignment" or "agent") => SyncRejection.Forbidden,
+                ("task", _) => await TaskWithinListsAsync(change.EntityKey, change, streamId, lists, ct),
+                ("subtask", _) => await SubtaskWithinListsAsync(change.EntityKey, streamId, lists, ct),
+                ("diary_entry", "create") => string.Equals(Value(change, "create", "AuthorProfileId")?.ToString(), me, StringComparison.OrdinalIgnoreCase)
+                    ? null : SyncRejection.Forbidden,
+                ("diary_entry", "entry" or "deleted") => string.Equals(await StoredValueAsync(streamId, "diary_entry", change.EntityKey, "create", "AuthorProfileId", ct), me,
+                    StringComparison.OrdinalIgnoreCase) ? null : SyncRejection.Forbidden,
+                ("task_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct)
+                    ? await TaskWithinListsAsync(change.EntityKey.Split('|')[0], null, streamId, lists, ct) : SyncRejection.Forbidden,
+                ("subtask_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct)
+                    ? await SubtaskWithinListsAsync(change.EntityKey.Split('|')[0], streamId, lists, ct) : SyncRejection.Forbidden,
+                ("page_tag" or "pad_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct) ? null : SyncRejection.Forbidden,
+                ("page", _) => null,
+                ("page_task_link", "anchor") => await TaskWithinListsAsync(change.EntityKey.Split('|')[1], null, streamId, lists, ct),
+                ("task_proposal", "create") => string.Equals(Value(change, "create", "AgentId")?.ToString(), me, StringComparison.OrdinalIgnoreCase)
+                    ? null : SyncRejection.Forbidden,
+                _ => SyncRejection.Forbidden,
+            };
+            if (refusal is not null)
+            {
+                return refusal;
+            }
+        }
+
+        if (kind.Kind == "task" && change.Groups.TryGetValue("status", out var status)
+            && status.Values.Values.GetValueOrDefault("Status") is long next && TaskStatuses.IsTerminal(next))
+        {
+            var allowClose = next == TaskStatuses.Done && await SpaceSettingAsync(streamId, "AllowAgentsToClose", ct) == "1";
+            if (!allowClose)
+            {
+                return SyncRejection.Forbidden;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>One column of the space's <c>settings</c> group as text, or null: the settings the agent rules and the claim time read.</summary>
+    private async Task<string?> SpaceSettingAsync(Guid spaceId, string column, CancellationToken ct)
+    {
+        var json = await db.SyncEntities.AsNoTracking().Where(e => e.AccountId == spaceId && e.Kind == "space" && e.PurgedAt == null)
+            .Select(e => (string?)e.Groups).FirstOrDefaultAsync(ct);
+        return json is null ? null : SyncJson.ReadGroups(json).GetValueOrDefault("settings")?.Values.Values.GetValueOrDefault(column)?.ToString();
+    }
+
+    /// <summary>The tag exists in the space and is not trashed: an agent may link existing tags only (12.3).</summary>
+    private async Task<bool> StoredTagExistsAsync(Guid streamId, string tagId, CancellationToken ct) =>
+        Guid.TryParse(tagId, out _) && await db.SyncEntities.FromSqlInterpolated($"""
+            SELECT * FROM "SyncEntities" WHERE "StreamId" = {streamId} AND "Kind" = 'tag' AND "EntityKey" = {tagId}
+              AND "PurgedAt" IS NULL AND "MovedTo" IS NULL AND "Groups" -> 'deleted' -> 'values' ->> 'DeletedAtUtc' IS NULL
+            """).AnyAsync(ct);
+
+    private async Task<string?> StoredValueAsync(Guid streamId, string kind, string key, string group, string column, CancellationToken ct) =>
+        SyncJson.ReadGroups(await db.SyncEntities.AsNoTracking().Where(e => e.AccountId == streamId && e.Kind == kind && e.EntityKey == key
+            && e.PurgedAt == null && e.MovedTo == null).Select(e => e.Groups).FirstOrDefaultAsync(ct) ?? "{}")
+        .GetValueOrDefault(group)?.Values.Values.GetValueOrDefault(column)?.ToString();
+
+    private async Task<string?> SubtaskWithinListsAsync(string subtaskId, Guid streamId, string[]? lists, CancellationToken ct)
+    {
+        var parent = await StoredValueAsync(streamId, "subtask", subtaskId, "create", "TaskId", ct);
+        return parent is { Length: > 0 } ? await TaskWithinListsAsync(parent, null, streamId, lists, ct) : SyncRejection.ParentUnknown;
+    }
+
+    /// <summary>Within the agent's allowed lists (12.3): null or empty means every list of the space.</summary>
+    private async Task<string?> TaskWithinListsAsync(string taskId, SyncChange? change, Guid streamId, string[]? lists, CancellationToken ct)
+    {
+        if (lists is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        // A move is checked at both ends: the list the task is in now (when it exists) and the list it goes to, so an
+        // agent can neither move a task out of a list it may not touch nor into one.
+        var stored = await StoredValueAsync(streamId, "task", taskId, "place", "ContainerId", ct);
+        var moved = change is not null ? Value(change, "place", "ContainerId")?.ToString() : null;
+        if (stored is not null && !lists.Contains(stored, StringComparer.OrdinalIgnoreCase))
+        {
+            return SyncRejection.Forbidden;
+        }
+
+        var container = moved ?? stored;
+        return container is not null && lists.Contains(container, StringComparer.OrdinalIgnoreCase) ? null : SyncRejection.Forbidden;
+    }
 
     /// <summary>
     /// Delegations (PLAN3 9.11): the delegator alone creates a delegation (naming a live owner or editor as
@@ -806,8 +990,24 @@ public sealed class SyncService(
                 .GetValueOrDefault("TagsOwnerOnly") is 1L;
     }
 
+    /// <summary>
+    /// The hourly add limit (E8): an agent may add <see cref="AgentLimits.TasksAddedPerHour"/> tasks per window. A task it
+    /// creates, rather than edits, counts. The agent row is locked for the push, so the count is exact.
+    /// </summary>
+    private async Task<bool> CountsWithinLimitAsync(AgentRow agent, SyncKindInfo kind, SyncChange change, Guid streamId, DateTimeOffset now, CancellationToken ct)
+    {
+        if (kind.Kind != "task" || change.Op == SyncOp.Purge
+            || await db.SyncEntities.AsNoTracking().AnyAsync(e => e.AccountId == streamId && e.Kind == "task" && e.EntityKey == change.EntityKey
+                && e.PurgedAt == null && e.MovedTo == null, ct))
+        {
+            return true; // not a task, or a task that already exists: an edit, not an add
+        }
+
+        return AgentService.CountUse(agent, now, adds: true);
+    }
+
     private async Task<string?> MergeAsync(SyncStream stream, SyncChange change, Guid changeId, Guid deviceId,
-        Guid accountId, Guid? actorId, DateTimeOffset now, CancellationToken ct)
+        Guid accountId, Guid? actorId, DateTimeOffset now, CancellationToken ct, bool capturePrevious = false)
     {
         var entity = await db.SyncEntities.FindAsync([stream.Id, change.Kind, change.EntityKey], ct);
         if (entity?.MovedTo is not null)
@@ -877,8 +1077,60 @@ public sealed class SyncService(
         }
 
         Log(stream.Id, next, changeId, change, "upsert", SyncJson.WriteGroups(merge.Winners),
-            deviceId, actorId, now);
+            deviceId, actorId, now, capturePrevious ? merge.Replaced : null);
         return null;
+    }
+
+    /// <summary>
+    /// Any write by the claimant keeps its claim alive (12.4): the expiry moves to now plus the space's claim time. The
+    /// extension is a server change of its own, so every device sees the new expiry.
+    /// </summary>
+    private async Task ExtendClaimAsync(SyncStream stream, string taskId, Guid actor, DateTimeOffset now, CancellationToken ct)
+    {
+        var entity = await db.SyncEntities.FindAsync([stream.Id, "task", taskId], ct);
+        var stored = entity is null ? null : SyncJson.ReadGroups(entity.Groups);
+        var claim = stored?.GetValueOrDefault("claim")?.Values.Values;
+        if (claim?.GetValueOrDefault("ClaimedById") is not string by || claim.GetValueOrDefault("ClaimExpiresAtUtc") is not string untilText
+            || !string.Equals(by[(by.IndexOf(':') + 1)..], actor.ToString("D"), StringComparison.OrdinalIgnoreCase)
+            || !DateTimeOffset.TryParse(untilText, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var until)
+            || until <= now || stored is null)
+        {
+            return;
+        }
+
+        var minutes = await SpaceSettingAsync(stream.Id, "ClaimMinutes", ct) is { Length: > 0 } configured && long.TryParse(configured, out var parsed)
+            ? Math.Clamp((int)parsed, AgentLimits.MinClaimMinutes, AgentLimits.MaxClaimMinutes)
+            : AgentLimits.DefaultClaimMinutes;
+        var hybrid = new HybridClock(ServerChangeWriter.DeviceId, clock);
+        var clocks = stored.Values.Select(group => group.Hlc).ToList();
+        if (clocks.Count > 0)
+        {
+            hybrid.Receive(clocks.Max());
+        }
+
+        var extension = new Dictionary<string, SyncGroupState>
+        {
+            ["claim"] = new(hybrid.TickLocal(), new SyncGroupValues(new Dictionary<string, object?>
+            {
+                ["ClaimedById"] = by, ["ClaimedAtUtc"] = claim.GetValueOrDefault("ClaimedAtUtc"), ["ClaimExpiresAtUtc"] = now.AddMinutes(minutes).UtcDateTime.ToString("o"),
+            })),
+        };
+        var merge = Merge.Apply(stored, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "task", taskId, extension));
+        if (merge.Winners.Count == 0)
+        {
+            return;
+        }
+
+        var seq = stream.NextSeq++;
+        entity!.Groups = SyncJson.WriteGroups(merge.Merged);
+        entity.LastSeq = seq;
+        entity.UpdatedAt = now;
+        var changeId = Guid.NewGuid();
+        db.SyncChanges.Add(new SyncChangeRow
+        {
+            AccountId = stream.Id, Seq = seq, ChangeId = changeId, Kind = "task", EntityKey = taskId, Op = "upsert",
+            Groups = SyncJson.WriteGroups(merge.Winners), OriginDevice = ServerChangeWriter.DeviceId, ActorId = actor, CreatedAt = now,
+        });
     }
 
     /// <summary>
@@ -926,31 +1178,16 @@ public sealed class SyncService(
     }
 
     private void Log(Guid streamId, long seq, Guid changeId, SyncChange change, string op, string groupsJson,
-        Guid deviceId, Guid? actorId, DateTimeOffset now) =>
+        Guid deviceId, Guid? actorId, DateTimeOffset now, IReadOnlyDictionary<string, SyncGroupValues>? previous = null) =>
         db.SyncChanges.Add(new SyncChangeRow
         {
             AccountId = streamId, Seq = seq, ChangeId = changeId, Kind = change.Kind, EntityKey = change.EntityKey,
-            Op = op, Groups = groupsJson, OriginDevice = deviceId, ActorId = actorId, CreatedAt = now,
+            Op = op, Groups = groupsJson, OriginDevice = deviceId, ActorId = actorId,
+            PreviousGroups = previous is { Count: > 0 } ? JsonSerializer.Serialize(previous) : null, CreatedAt = now,
         });
 
-    private async Task NotifyAsync(Guid streamId, long seq, CancellationToken ct)
-    {
-        var members = await db.SpaceMembers.AsNoTracking()
-            .Where(m => m.SpaceId == streamId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null && m.AccountId != null)
-            .Select(m => m.AccountId!.Value)
-            .ToListAsync(ct);
-        if (members.Count == 0)
-        {
-            members.Add(streamId);
-        }
-        foreach (var accountId in members.Distinct())
-        {
-            broadcaster.PublishStream(accountId, streamId, seq);
-        }
-
-        var payload = SyncNotificationListener.Payload(streamId, seq);
-        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_notify({SyncNotificationListener.Channel}, {payload})", ct);
-    }
+    private Task NotifyAsync(Guid streamId, long seq, CancellationToken ct) =>
+        StreamNotifications.NotifyAsync(db, broadcaster, streamId, ct);
 
     public Task<PullPage> PullAsync(Guid accountId, Guid streamId, int clientSchema, long after, int limit, CancellationToken ct) =>
         PullAsync(accountId, streamId, clientSchema, SyncProtocol.Version2, after, limit, ct);

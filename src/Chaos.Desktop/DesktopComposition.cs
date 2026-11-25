@@ -1,5 +1,6 @@
 using Chaos.Application.Abstractions;
 using Chaos.Application.Activity;
+using Chaos.Application.Agents;
 using Chaos.Application.Boards;
 using Chaos.Application.Calendar;
 using Chaos.Application.Capture;
@@ -14,6 +15,7 @@ using Chaos.Application.Queries;
 using Chaos.Application.Reminders;
 using Chaos.Application.Settings;
 using Chaos.Application.Sites;
+using Chaos.Application.Spaces;
 using Chaos.Application.Summaries;
 using Chaos.Application.Tags;
 using Chaos.Application.Tasks;
@@ -128,9 +130,11 @@ internal sealed class DesktopComposition : IDisposable
             _reminders = new ReminderCommands(store, ids, clock, _tasks, notifications);
             // Plain summaries are generated on the same background tick at their scheduled times (PLAN §12).
             _summaries = new SummaryCommands(store, ids, clock);
+            // Personal-space claims whose time ran out go back to Ready for agent on the same tick (PLAN3 12.4).
+            var claims = new ClaimCommands(store, ids, clock);
             _reminderEngine = Own(new ReminderEngine(_reminders, notifications, clock, _summaries, _viewAlerts, jobRuns,
                 new Chaos.Infrastructure.Activity.CollaborationNoticeDeriver(store, clock),
-                new Chaos.Infrastructure.Activity.CollaborationInbox(store, clock)));
+                new Chaos.Infrastructure.Activity.CollaborationInbox(store, clock), claims));
 
             // Backups, restore, export, import and deletion (PLAN §14). Attachment bytes live behind IAttachmentFileStore
             // (PLAN2 §9.1); this is the one place the provider is chosen.
@@ -281,6 +285,9 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddTaskRpcService(new TaskRpcService(_tasks, _githubEngine));
         rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(store, ids, clock), _tasks));
         rpc.AddDelegationRpcService(new DelegationRpcService(new DelegationCommands(store, ids, clock)));
+        rpc.AddAgentRpcService(new AgentRpcService(store, new AgentCommands(store, ids, clock), new UndoCommands(store, ids, clock),
+            new ServiceAgentCommands(_serviceClient), _syncEngine));
+        rpc.AddClaimRpcService(new ClaimRpcService(store, new ClaimCommands(store, ids, clock), new SharedClaimCommands(_serviceClient), _syncEngine));
         rpc.AddSubtaskRpcService(new SubtaskRpcService(_tasks, new SubtaskCommands(store, ids, clock), _githubEngine));
         rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(store, ids, clock), _tasks));
         rpc.AddTemplateRpcService(new TemplateRpcService(new TemplateCommands(store, ids, clock)));

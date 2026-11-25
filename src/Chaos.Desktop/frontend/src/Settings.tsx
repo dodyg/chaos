@@ -1,4 +1,5 @@
 import { GitHubSettings } from "./GitHubSettings";
+import { AgentsSettings } from "./AgentsSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { GoogleCalendarSettings } from "./GoogleCalendarSettings";
 import { TimeBlockingSettings } from "./TimeBlockingSettings";
@@ -77,7 +78,7 @@ function ShortcutState({ status }: { status: ShortcutStatusDto | undefined }) {
 /**
  * Settings (PLAN §13): name, time zone and date format, the global capture and pad shortcuts
  * with whether Windows accepted them, keeping Chaos in the notification area, and Quit. Other
- * settings stay next to what they change and are linked from here.
+ * settings stay next to what they change and are linked from here, as tabs of their own.
  */
 export function Settings({
   api = shellRpc,
@@ -87,6 +88,7 @@ export function Settings({
   onNavigate,
   onGitHubSynced,
   onCalendarsChanged,
+  onAgentsChanged,
 }: {
   api?: Api;
   updatesApi?: UpdatesApi;
@@ -94,6 +96,8 @@ export function Settings({
   onSaved: (zoneChanged: boolean) => void;
   onGitHubSynced?: () => void;
   onCalendarsChanged?: () => void;
+  /** An agent, its access or its changes to tasks (an undo) changed: views and counts reload. */
+  onAgentsChanged?: () => void;
   onNavigate: (view: SettingsLink) => void;
 }) {
   const [saved, setSaved] = React.useState<ProfileSettingsResponse | null>(null);
@@ -205,6 +209,7 @@ export function Settings({
             <TabsTrigger value="account">Account</TabsTrigger>
             <TabsTrigger value="calendars">Calendars</TabsTrigger>
             <TabsTrigger value="github">GitHub</TabsTrigger>
+            <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="more">More settings</TabsTrigger>
           </TabsList>
         </div>
@@ -355,7 +360,7 @@ export function Settings({
               </Section>
             </TabsContent>
 
-            {tab !== "appearance" && tab !== "more" && tab !== "github" && tab !== "calendars" && tab !== "account" && (
+            {tab !== "appearance" && tab !== "more" && tab !== "github" && tab !== "calendars" && tab !== "account" && tab !== "agents" && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button disabled={busy || !dirty}>Save settings</Button>
                 <Button
@@ -387,6 +392,9 @@ export function Settings({
         </TabsContent>
         <TabsContent value="github">
           <GitHubSettings onSynced={onGitHubSynced} />
+        </TabsContent>
+        <TabsContent value="agents">
+          <AgentsSettings onChanged={onAgentsChanged} />
         </TabsContent>
 
         <TabsContent value="more">

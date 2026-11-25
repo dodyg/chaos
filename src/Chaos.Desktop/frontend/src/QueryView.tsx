@@ -33,6 +33,7 @@ import { Board } from "./Board";
 import { Calendar } from "./Calendar";
 import { defaultLayout, layoutFromJson, type Layout } from "./viewModel";
 import { AssigneeChips, useAssigneeChips } from "./assignees";
+import { ClaimedLine } from "./claims";
 
 /** A built-in view (PLAN §10) or a search; tag views carry the tag, search carries the words. */
 export type QueryState = { view: string; tagId?: string; text?: string; day?: string; viewId?: string };
@@ -52,6 +53,11 @@ export const builtInViews = [
     view: "DelegatedByMe",
     title: "Delegated by me",
     hint: "Tasks you delegated to members and that still await an answer or your review, by person then due date.",
+  },
+  {
+    view: "AgentWork",
+    title: "Agent work",
+    hint: "Tasks that are Ready for agent, that an agent holds a claim on, and that wait for your review after an agent handed them back.",
   },
 ] as const;
 
@@ -480,6 +486,8 @@ export function QueryView({
                                 Delegated to <bdi>{row.delegatedTo}</bdi>
                               </span>
                             )}
+                            {task.agentReady && <Badge variant="outline">Ready for agent</Badge>}
+                            {task.claimedById && <ClaimedLine task={task} />}
                             {row.nextFollowUpAtUtc && (
                               <Badge variant="outline">
                                 Follow up{" "}

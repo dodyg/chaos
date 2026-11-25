@@ -34,6 +34,9 @@ public sealed record UndoEntryRecord
     public required string ExpectedVersions { get; init; }
     public required DateTimeOffset AppliedAtUtc { get; init; }
     public DateTimeOffset? UndoneAtUtc { get; init; }
+
+    /// <summary>Who made the operation (<c>person:…</c> or <c>agent:…</c>); an agent's operations can be undone together (12.7).</summary>
+    public string? ActorId { get; init; }
 }
 
 /// <summary>Marker that one checklist item was already converted into a subtask (PLAN §9).</summary>

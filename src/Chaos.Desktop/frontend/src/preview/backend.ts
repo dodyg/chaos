@@ -90,6 +90,11 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
     spaceId: "personal",
     containerId: "inbox",
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
     notes: "",
     status: "NotStarted",
     priority: "Normal",
@@ -130,12 +135,47 @@ const tasks: TaskResponse[] = [
   }),
   task("task-4", "Water the plants", { containerId: "home", plannedDate: today, estimateMinutes: 15 }),
   task("task-5", "Call mum", { containerId: "social", dueDate: today }),
-  task("task-6", "Review pull requests", { containerId: "sprint", sectionId: "s-review", category: "Work", estimateMinutes: 45 }),
+  task("task-6", "Review pull requests", {
+    containerId: "sprint",
+    sectionId: "s-review",
+    category: "Work",
+    estimateMinutes: 45,
+    agentReady: true,
+  }),
   task("task-7", "Book dentist appointment", { dueDate: addDays(today, -1) }),
   task("task-8", "Write release notes", { containerId: "chaos", category: "Work", status: "Done" }),
 ];
 const deletedTasks: TaskResponse[] = [];
 const taskAssignments = new Map<string, { mode: string; assignees: { memberId: string; completedAtUtc: string | null }[] }>();
+// Local and server agents (PLAN3 Q17) in memory: a local agent works in the ticked Personal lists through a token.
+type PreviewAgent = { id: string; name: string; pausedAtUtc: string | null; version: number };
+type PreviewToken = { id: string; agentId: string; name: string; createdAtUtc: string; lastUsedAtUtc: string | null };
+const buildBot: PreviewAgent = { id: "11111111-1111-4111-8111-111111111113", name: "Build bot", pausedAtUtc: null, version: 1 };
+const localAgents: PreviewAgent[] = [buildBot];
+/** `agentId|containerId` → the agent may work in that Personal list. */
+const agentAccess = new Map<string, boolean>([[`${buildBot.id}|chaos`, true]]);
+const agentTokens: PreviewToken[] = [];
+type PreviewServerAgent = {
+  id: string;
+  name: string;
+  pausedAtUtc: string | null;
+  memberships: { spaceId: string; allowedContainerIds: string[] | null }[];
+};
+/** The preview person's actor id in the Personal space, where the directory has no members. */
+const me = "person:00000000-0000-4000-8000-000000000001";
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+// One task is held by the Build bot, so the Agent work view and the claim line have something to show.
+tasks.push(
+  task("task-9", "Draft the icon set", {
+    containerId: "chaos",
+    category: "Work",
+    status: "InProgress",
+    agentReady: true,
+    claimedById: `agent:${buildBot.id}`,
+    claimedAtUtc: minutesAgo(12),
+    claimExpiresAtUtc: new Date(Date.now() + 108 * 60_000).toISOString(),
+  }),
+);
 
 /** Two shared spaces for the preview (PLAN3 Q5): one the sample person owns, one where they are only a viewer. */
 type PreviewSpace = { spaceId: string; name: string; kind: "Personal" | "Shared"; role: number | null };
@@ -164,6 +204,9 @@ const containerSpace = new Map<string, string>([
   ["bins", "22222222-2222-4222-8222-222222222222"],
 ]);
 const designSpace = "11111111-1111-4111-8111-111111111111";
+const serverAgents: PreviewServerAgent[] = [
+  { id: buildBot.id, name: buildBot.name, pausedAtUtc: null, memberships: [{ spaceId: designSpace, allowedContainerIds: null }] },
+];
 const viewerSpace = "22222222-2222-4222-8222-222222222222";
 const spaces: PreviewSpace[] = [
   { spaceId: "personal", name: "Personal", kind: "Personal", role: null },
@@ -340,6 +383,8 @@ function matches(t: TaskResponse, request: TaskQueryRequest) {
       return (dayPlans.get(request.day ?? today) ?? []).includes(t.id);
     case "DelegatedByMe":
       return false; // the preview holds no delegations (Q13)
+    case "AgentWork":
+      return t.agentReady || t.claimedById?.startsWith("agent:") === true || (t.status === "NeedsReview" && t.agentReady);
     default:
       return true;
   }
@@ -1928,6 +1973,238 @@ function pageHandlers(): Record<string, Handler> {
   };
 }
 
+function personOf(member: PreviewMember) {
+  return {
+    actorId: `person:${member.memberId}`,
+    displayName: member.name,
+    initials: member.name
+      .split(/\s+/)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase(),
+    colorIndex: 0,
+    kind: "person",
+    isMe: member.isMe,
+    role: member.role,
+    former: false,
+  };
+}
+function agentPerson(agent: PreviewAgent) {
+  return {
+    actorId: `agent:${agent.id}`,
+    displayName: agent.name,
+    initials: agent.name[0].toUpperCase(),
+    colorIndex: 0,
+    kind: "agent",
+    isMe: false,
+    role: null,
+    former: false,
+  };
+}
+const liveClaim = (t: TaskResponse) => !!t.claimedById && (!t.claimExpiresAtUtc || Date.parse(t.claimExpiresAtUtc) > Date.now());
+const releaseClaim = (t: TaskResponse) =>
+  Object.assign(t, {
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: true,
+    status: t.status === "InProgress" ? "NotStarted" : t.status,
+  });
+
+/** Local agents with their lists and tokens, and the account's server agents (PLAN3 12.3, 12.7). The preview keeps no agent operations to undo. */
+function agentHandlers(): Record<string, Handler> {
+  const allowedFor = (agentId: string, containerId: string) => agentAccess.get(`${agentId}|${containerId}`) === true;
+  const view = (agent: PreviewAgent) => ({
+    agent: { id: agent.id, name: agent.name, pausedAtUtc: agent.pausedAtUtc, version: String(agent.version) },
+    lists: containers
+      .filter((c) => !containerSpace.has(c.id))
+      .map((c) => ({ containerId: c.id, containerName: c.name, allowed: allowedFor(agent.id, c.id) })),
+    tokens: agentTokens.filter((token) => token.agentId === agent.id),
+  });
+  const find = (id: string) => localAgents.find((agent) => agent.id === id);
+  const stale = (r: { agentId: string; expectedVersion: string }) => {
+    const agent = find(r.agentId);
+    if (!agent) return fail("That agent no longer exists. Refresh and try again.");
+    if (agent.version !== Number(r.expectedVersion))
+      return fail("The agent changed elsewhere while you were working. Refresh and try again.");
+    return null;
+  };
+  const bumpAgent = (agent: PreviewAgent) => {
+    agent.version++;
+    return ok({ agent: view(agent).agent });
+  };
+  const cleanName = (value: string) => {
+    const trimmed = value.trim();
+    return trimmed && trimmed.length <= 100 ? trimmed : null;
+  };
+  const serverView = (agent: PreviewServerAgent) => ({
+    id: agent.id,
+    name: agent.name,
+    pausedAtUtc: agent.pausedAtUtc,
+    memberships: agent.memberships.map((m) => ({ spaceId: m.spaceId, allowedContainerIds: m.allowedContainerIds })),
+  });
+  const spaceAgents = (spaceId: string) =>
+    ok({
+      agents: serverAgents.map((agent) => ({
+        agent: serverView(agent),
+        ownerName: "You",
+        member: agent.memberships.some((m) => m.spaceId === spaceId),
+      })),
+    });
+  const server = (id: string) => serverAgents.find((agent) => agent.id === id);
+  return {
+    "agents.list": () => ok({ agents: localAgents.map(view) }),
+    "agents.create": (r: { name: string }) => {
+      const valid = cleanName(r.name);
+      if (!valid) return fail("Use 1 to 100 characters.");
+      const agent: PreviewAgent = { id: crypto.randomUUID(), name: valid, pausedAtUtc: null, version: 1 };
+      localAgents.push(agent);
+      return ok({ agent: view(agent).agent });
+    },
+    "agents.rename": (r: { agentId: string; expectedVersion: string; name: string }) => {
+      const refused = stale(r);
+      if (refused) return refused;
+      const valid = cleanName(r.name);
+      if (!valid) return fail("Use 1 to 100 characters.");
+      find(r.agentId)!.name = valid;
+      return bumpAgent(find(r.agentId)!);
+    },
+    "agents.setPaused": (r: { agentId: string; expectedVersion: string; paused: boolean }) => {
+      const refused = stale(r);
+      if (refused) return refused;
+      const agent = find(r.agentId)!;
+      if (r.paused) tasks.filter((t) => t.claimedById === `agent:${agent.id}`).forEach((t) => releaseClaim(t));
+      agent.pausedAtUtc = r.paused ? now() : null;
+      return bumpAgent(agent);
+    },
+    "agents.remove": (r: { agentId: string; expectedVersion: string }) => {
+      const refused = stale(r);
+      if (refused) return refused;
+      const agent = find(r.agentId)!;
+      tasks.filter((t) => t.claimedById === `agent:${agent.id}`).forEach((t) => releaseClaim(t));
+      localAgents.splice(localAgents.indexOf(agent), 1);
+      agent.version++;
+      return ok({ agent: view(agent).agent });
+    },
+    "agents.createToken": (r: { agentId: string; expectedVersion: string; name: string }) => {
+      const refused = stale(r);
+      if (refused) return refused;
+      const valid = cleanName(r.name);
+      if (!valid) return fail("Use 1 to 100 characters.");
+      const token = { id: crypto.randomUUID(), agentId: r.agentId, name: valid, createdAtUtc: now(), lastUsedAtUtc: null };
+      agentTokens.push(token);
+      return ok({ token, secret: `chaos_agent_${crypto.randomUUID()}` });
+    },
+    "agents.revokeToken": (r: { agentId: string; tokenId: string }) => {
+      const index = agentTokens.findIndex((token) => token.id === r.tokenId && token.agentId === r.agentId);
+      if (index < 0) return fail("That token no longer exists. Refresh and try again.");
+      agentTokens.splice(index, 1);
+      return ok({ agent: view(find(r.agentId)!).agent });
+    },
+    "agents.setAccess": (r: { agentId: string; containerId: string; allowed: boolean }) => {
+      if (!find(r.agentId)) return fail("That agent no longer exists. Refresh and try again.");
+      agentAccess.set(`${r.agentId}|${r.containerId}`, r.allowed);
+      return ok({ agent: view(find(r.agentId)!).agent });
+    },
+    "agents.undo": () => ok({ undone: 0, stoppedAt: null, conflict: null }),
+    "agents.serverList": () => ok({ agents: serverAgents.map(serverView) }),
+    "agents.serverCreate": (r: { name: string | null }) => {
+      const valid = cleanName(r.name ?? "");
+      if (!valid) return fail("Use 1 to 100 characters.");
+      const agent: PreviewServerAgent = { id: crypto.randomUUID(), name: valid, pausedAtUtc: null, memberships: [] };
+      serverAgents.push(agent);
+      return ok({ agent: serverView(agent) });
+    },
+    "agents.serverUpdate": (r: { agentId: string; name: string | null; paused: boolean | null }) => {
+      const agent = server(r.agentId);
+      if (!agent) return fail("That agent no longer exists. Refresh and try again.");
+      if (r.name !== null) {
+        const valid = cleanName(r.name);
+        if (!valid) return fail("Use 1 to 100 characters.");
+        agent.name = valid;
+      } else agent.pausedAtUtc = r.paused ? now() : null;
+      return ok({ agent: serverView(agent) });
+    },
+    "agents.serverRemove": (r: { agentId: string }) => {
+      serverAgents.splice(
+        serverAgents.findIndex((agent) => agent.id === r.agentId),
+        1,
+      );
+      return ok({ agents: serverAgents.map(serverView) });
+    },
+    "agents.spaceAgents": (r: { spaceId: string }) => spaceAgents(r.spaceId),
+    "agents.addToSpace": (r: { spaceId: string; agentId: string; allowedContainerIds: string[] | null }) => {
+      const agent = server(r.agentId);
+      if (!agent) return fail("Choose one of your agents, or one whose owner is a member of this space.");
+      agent.memberships.push({ spaceId: r.spaceId, allowedContainerIds: r.allowedContainerIds });
+      return spaceAgents(r.spaceId);
+    },
+    "agents.pauseInSpace": (r: { spaceId: string; agentId: string; paused: boolean }) => {
+      const agent = server(r.agentId);
+      if (!agent || !agent.memberships.some((m) => m.spaceId === r.spaceId)) return fail("That agent is not in this space.");
+      agent.pausedAtUtc = r.paused ? now() : null;
+      return ok({ agent: { agent: serverView(agent), ownerName: "You", member: true } });
+    },
+    "agents.removeFromSpace": (r: { spaceId: string; agentId: string }) => {
+      const agent = server(r.agentId);
+      if (agent) agent.memberships = agent.memberships.filter((m) => m.spaceId !== r.spaceId);
+      return spaceAgents(r.spaceId);
+    },
+    "agents.revert": () => ok({ restoredGroups: 3, trashed: 1, skipped: ["Review the new navigation"] }),
+  };
+}
+
+/** Claims on the preview's tasks (PLAN3 12.4) as the person: the claim sets the task In progress, a release hands it back Ready for agent. */
+function claimHandlers(): Record<string, Handler> {
+  const change = (r: { taskId: string; expectedVersion: string }, apply: (t: TaskResponse) => string | null) => {
+    const t = find(r.taskId);
+    if (!t) return fail("That task no longer exists. Refresh and try again.");
+    if (t.version !== r.expectedVersion) return fail("This task changed elsewhere while you were working. Refresh and try again.");
+    const refused = apply(t);
+    if (refused) return fail(refused);
+    Object.assign(t, { version: bump(t.version), updatedAtUtc: now() });
+    return ok({ task: t, serviceStatus: null, replayed: false });
+  };
+  const hold = (t: TaskResponse) =>
+    Object.assign(t, {
+      claimedById: me,
+      claimedAtUtc: now(),
+      claimExpiresAtUtc: new Date(Date.now() + 120 * 60_000).toISOString(),
+    });
+  return {
+    "claims.claim": (r) =>
+      change(r, (t) => {
+        if (liveClaim(t) && t.claimedById !== me) return `“${t.title}” is already claimed.`;
+        hold(t);
+        if (t.status === "NotStarted") Object.assign(t, { status: "InProgress" });
+        return null;
+      }),
+    "claims.release": (r) =>
+      change(r, (t) => {
+        if (t.claimedById === me) releaseClaim(t);
+        return null;
+      }),
+    "claims.takeover": (r) =>
+      change(r, (t) => {
+        hold(t);
+        return null;
+      }),
+    "claims.heartbeat": (r) =>
+      change(r, (t) => {
+        if (!liveClaim(t) || t.claimedById !== me) return "This claim is not yours to change.";
+        hold(t);
+        return null;
+      }),
+    "claims.setReady": (r: { taskId: string; expectedVersion: string; ready: boolean; agentId: string | null }) =>
+      change(r, (t) => {
+        if (r.agentId && !localAgents.some((agent) => agent.id === r.agentId)) return "That agent no longer exists. Refresh and try again.";
+        Object.assign(t, { agentReady: r.ready, agentAssigneeId: r.ready ? r.agentId : null });
+        return null;
+      }),
+  };
+}
+
 const handlers: Record<string, Handler> = {
   "shell.take": () => ({ ok: true, activations: [] }),
   "shell.zones": () => ({ ok: true, zones: ["UTC", "Africa/Cairo", "Europe/London", "America/New_York"] }),
@@ -2075,16 +2352,18 @@ const handlers: Record<string, Handler> = {
   },
   "queries.counts": (r: { category: string | null }) =>
     ok({
-      views: ["MyDay", "Today", "Upcoming", "Overdue", "Waiting", "RecentlyCompleted", "AssignedToMe", "DelegatedByMe"].map((view) => ({
-        view,
-        count: runQuery({
+      views: ["MyDay", "Today", "Upcoming", "Overdue", "Waiting", "RecentlyCompleted", "AssignedToMe", "DelegatedByMe", "AgentWork"].map(
+        (view) => ({
           view,
-          category: r.category,
-          statuses: [],
-          includeCompleted: false,
-          day: null,
-        } as unknown as TaskQueryRequest).filter((t) => (view === "MyDay" ? !isFinished(t) : true)).length,
-      })),
+          count: runQuery({
+            view,
+            category: r.category,
+            statuses: [],
+            includeCompleted: false,
+            day: null,
+          } as unknown as TaskQueryRequest).filter((t) => (view === "MyDay" ? !isFinished(t) : true)).length,
+        }),
+      ),
       tags: tags.map((tag) => ({
         tagId: tag.id,
         count: tasks.filter((t) => (taskTags.get(t.id) ?? []).includes(tag.id) && (!r.category || t.category === r.category)).length,
@@ -2181,21 +2460,13 @@ const handlers: Record<string, Handler> = {
   "tags.list": () => ok({ tags }),
   "people.list": (r: { spaceId: string }) =>
     ok({
-      people: (spaceMembers.get(r.spaceId) ?? []).map((member) => ({
-        actorId: `person:${member.memberId}`,
-        displayName: member.name,
-        initials: member.name
-          .split(/\s+/)
-          .map((part) => part[0])
-          .join("")
-          .slice(0, 2)
-          .toUpperCase(),
-        colorIndex: 0,
-        kind: "person",
-        isMe: member.isMe,
-        role: member.role,
-        former: false,
-      })),
+      people: [
+        ...(spaceMembers.get(r.spaceId) ?? []).map(personOf),
+        // The Personal space names the person and their local agents (PLAN3 12.3).
+        ...(r.spaceId === "personal"
+          ? [personOf({ memberId: me.slice(7), name: "You", role: 1, kind: 1, joinedAt: "", isMe: true }), ...localAgents.map(agentPerson)]
+          : []),
+      ],
     }),
   "spaces.list": () =>
     ok({
@@ -2308,19 +2579,15 @@ const handlers: Record<string, Handler> = {
     if (invite) invite.revoked = true;
     return ok({});
   },
-  "people.get": (r: { actorId: string }) =>
-    ok({
-      person: {
-        actorId: r.actorId,
-        displayName: "Unknown person",
-        initials: "UP",
-        colorIndex: 0,
-        kind: null,
-        isMe: false,
-        role: null,
-        former: false,
-      },
-    }),
+  "people.get": (r: { spaceId: string; actorId: string }) => {
+    const member = [...spaceMembers.values()].flat().find((entry) => `person:${entry.memberId}`.toLowerCase() === r.actorId.toLowerCase());
+    const person = member
+      ? personOf(member)
+      : r.actorId.toLowerCase() === me.toLowerCase()
+        ? personOf({ memberId: me.slice(7), name: "You", role: 1, kind: 1, joinedAt: "", isMe: true })
+        : localAgents.map(agentPerson).find((person) => person.actorId.toLowerCase() === r.actorId.toLowerCase());
+    return ok({ person: person ?? null });
+  },
   "tags.listDeleted": () => ok({ tags: [] }),
   "tags.targetTags": (r: { targetId: string }) => ok({ tagIds: taskTags.get(r.targetId) ?? [] }),
   "tags.suggest": () => ok({ tags }),
@@ -2447,6 +2714,8 @@ const handlers: Record<string, Handler> = {
     padNotes[i] = { ...padNotes[i], markdown: r.markdown, draftVersion: r.clientRevision, version: bump(padNotes[i].version) };
     return ok({ item: padNotes[i], applied: true });
   },
+  ...agentHandlers(),
+  ...claimHandlers(),
   ...boardHandlers(),
   ...calendarHandlers(),
   ...calendarsHandlers(),

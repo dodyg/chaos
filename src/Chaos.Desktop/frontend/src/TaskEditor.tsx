@@ -52,6 +52,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -85,6 +86,7 @@ import type { PadFocus } from "./ScratchPad";
 import { useSpaceRole } from "./Sharing";
 import { avatarClass } from "./assignees";
 import { DelegationSection } from "./DelegationPanel";
+import { AgentSection, ClaimedLine } from "./claims";
 
 const operationId = () => crypto.randomUUID();
 export type TaskEditorApi = {
@@ -623,9 +625,15 @@ export function TaskEditor({
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <StatusBadge status={editing.status} />
             <PriorityBadge priority={editing.priority} />
+            {editing.agentReady && <Badge variant="outline">Ready for agent</Badge>}
             <span>{editing.category}</span>
             {editing.estimateMinutes != null && <span>{editing.estimateMinutes} min</span>}
           </div>
+          {editing.claimedById && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              <ClaimedLine task={editing} />
+            </p>
+          )}
           {spaceAccess.shared && (
             <AssignmentPicker task={editing} taskApi={taskRpc} canEdit={false} run={run} onSaved={setEditing} setError={setError} />
           )}
@@ -887,6 +895,32 @@ export function TaskEditor({
                     />
                   </>
                 )}
+                <AgentSection
+                  task={editing}
+                  canEdit={canEdit}
+                  shared={spaceAccess.shared}
+                  onTaskChanged={(saved) =>
+                    setEditing((current) =>
+                      current?.id === saved.id
+                        ? {
+                            ...current,
+                            status: saved.status,
+                            version: saved.version,
+                            updatedAtUtc: saved.updatedAtUtc,
+                            claimedById: saved.claimedById,
+                            claimedAtUtc: saved.claimedAtUtc,
+                            claimExpiresAtUtc: saved.claimExpiresAtUtc,
+                            agentReady: saved.agentReady,
+                            agentAssigneeId: saved.agentAssigneeId,
+                          }
+                        : current,
+                    )
+                  }
+                  onChanged={() => {
+                    changed();
+                    void refresh().catch((e: unknown) => setError(String(e)));
+                  }}
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Status">
                     <NativeSelect

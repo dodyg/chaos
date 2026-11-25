@@ -135,6 +135,76 @@ public sealed class SharingMigrationTests
     }
 
     [Test]
+    public async Task Migrate050_AddsAgentsAndClaims_AndRebuildsTheActivityLogKeepingItsSequence()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 49);
+        Execute(connection, """
+            INSERT INTO Profiles (Id,DisplayName,ZoneId,Locale,DateFormat,FirstWeekday,CreatedAtUtc,UpdatedAtUtc)
+                VALUES ('person','Person','UTC','en','YMD',1,'now','now');
+            INSERT INTO Spaces (Id,OwnerProfileId,Kind,Name,CreatedAtUtc,UpdatedAtUtc) VALUES ('space','person',1,'Personal','now','now');
+            INSERT INTO Containers (Id,SpaceId,Kind,Name,NormalizedName,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('inbox','space',0,'Inbox','inbox',0,'now','now');
+            INSERT INTO Tasks (Id,SpaceId,ContainerId,Title,Status,Position,CreatedAtUtc,UpdatedAtUtc) VALUES ('task','space','inbox','Task',0,0,'now','now');
+            INSERT INTO UndoEntries (Id,ProfileId,OperationId,Label,InversePayload,ExpectedVersions,AppliedAtUtc) VALUES ('undo','person','op','Edit task','{}','{}','now');
+            INSERT INTO ActivityLog (Seq,OperationId,OccurredAtUtc,Source,Action,Outcome) VALUES (1,'op1','now','user','tasks.create','ok');
+            INSERT INTO ActivityLog (Seq,OperationId,OccurredAtUtc,Source,Action,Outcome) VALUES (7,'op7','now','sync','sync.apply','ok');
+            INSERT INTO ActivityLogEntities (Seq,Kind,EntityKey,Op,Version) VALUES (7,'task','task','upsert',3);
+            DELETE FROM ActivityLog WHERE Seq = 1;
+            """);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        SyncTriggerInstaller.Install(connection);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_check;"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT Seq FROM ActivityLog;"))).IsEqualTo(7L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM ActivityLogEntities WHERE Seq = 7 AND EntityKey = 'task';"))).IsEqualTo(1L);
+        // Rows 2 to 6 were pruned before the migration: the counter still stands past them.
+        Execute(connection, "INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome,ActorId) VALUES ('op8','now','agent','agent.claim_task','ok','agent:x');");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT Seq FROM ActivityLog WHERE OperationId = 'op8';"))).IsEqualTo(8L);
+        await Assert.That((string)Scalar(connection, "SELECT ActorId FROM ActivityLog WHERE OperationId = 'op8';")!).IsEqualTo("agent:x");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM Tasks WHERE Id='task' AND ClaimedById IS NULL AND ClaimExpiresAtUtc IS NULL AND AgentReady = 0;"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_table_info('UndoEntries') WHERE name = 'ActorId';"))).IsEqualTo(1L);
+        foreach (var table in new[] { "LocalAgents", "LocalAgentAccess", "LocalAgentTokens", "TaskProposals" })
+            await Assert.That(Convert.ToInt64(Scalar(connection, $"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending;"))).IsEqualTo(0L);
+        Execute(connection, """
+            INSERT INTO LocalAgents (Id,Name,Version,CreatedAtUtc,UpdatedAtUtc) VALUES ('agent','Build bot',1,'now','now');
+            INSERT INTO LocalAgentAccess (AgentId,ContainerId,GrantedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc) VALUES ('agent','inbox','now',1,'now','now');
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='local_agent' AND EntityKey='agent' AND GroupName IN ('create','name');"))).IsEqualTo(2L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM SyncPending WHERE Kind='local_agent_access' AND EntityKey='agent|inbox' AND GroupName='create';"))).IsEqualTo(1L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'TR_Sync_TaskProposals_%';"))).IsEqualTo(3L);
+    }
+
+    [Test]
+    [Arguments("DELETE FROM ActivityLog;")]
+    [Arguments("DELETE FROM ActivityLog WHERE Seq > 4;")]
+    public async Task Migrate050_KeepsTheActivityCounter_WhenTheNewestRowsOrTheWholeLogWerePruned(string prune)
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None, 49);
+        Execute(connection, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 9) "
+            + "INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome) SELECT 'op' || i,'now','user','tasks.create','ok' FROM n;");
+        Execute(connection, prune);
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+
+        // A reader's cursor may stand at 9: the next row must still come after it.
+        Execute(connection, "INSERT INTO ActivityLog (OperationId,OccurredAtUtc,Source,Action,Outcome) VALUES ('next','now','user','tasks.create','ok');");
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT Seq FROM ActivityLog WHERE OperationId = 'next';"))).IsEqualTo(10L);
+    }
+
+    [Test]
+    public async Task Migrate050_AgentGrantsAndTokens_DoNotHoldTheirListOrAgentFromBeingPurged()
+    {
+        using var connection = Open();
+        await SqliteMigrationRunner.MigrateAsync(connection, CancellationToken.None);
+        Execute(connection, """
+            INSERT INTO LocalAgentAccess (AgentId,ContainerId,GrantedAtUtc,DeletedAtUtc,Version,CreatedAtUtc,UpdatedAtUtc) VALUES ('gone','purged-list','now','now',2,'now','now');
+            INSERT INTO LocalAgentTokens (Id,AgentId,Name,TokenHash,CreatedAtUtc,RevokedAtUtc) VALUES ('token','gone','Claude',printf('%064d',0),'now','now');
+            """);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_list('LocalAgentAccess');"))).IsEqualTo(0L);
+        await Assert.That(Convert.ToInt64(Scalar(connection, "SELECT count(*) FROM pragma_foreign_key_list('LocalAgentTokens');"))).IsEqualTo(0L);
+    }
+
+    [Test]
     public async Task Migrate047_AddsStandupsAsASyncedTableOfSharedSpaces()
     {
         using var connection = Open();

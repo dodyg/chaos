@@ -142,8 +142,8 @@ public static class SpaceEndpoints
                 StatusFor(result.Error!));
     }
 
-    private static Guid Account(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(Claims.Subject)!.Value);
-    private static Guid Device(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(DesktopClient.DeviceIdClaim)!.Value);
+    internal static Guid Account(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(Claims.Subject)!.Value);
+    internal static Guid Device(ClaimsPrincipal user) => Guid.Parse(user.FindFirst(DesktopClient.DeviceIdClaim)!.Value);
     /// <summary>
     /// The configured public address. Only a development host, which has none configured, falls back to the request:
     /// the Host header is chosen by the caller, so in production it would let an owner mail a Chaos invite that links

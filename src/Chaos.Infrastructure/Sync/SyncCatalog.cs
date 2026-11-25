@@ -266,9 +266,42 @@ public static class SyncCatalog
                 new("planned", ["PlannedDate", "PlannedTime", "PlannedZoneId"]),
                 new("due", ["DueDate", "DueTime", "DueZoneId"]),
                 new("deleted", ["DeletedAtUtc"]),
+                // Q17 (PLAN3 12.4). The claim is written by the claim operation only: in a space the service makes it under the
+                // stream lock; in the Personal space the device's serialized writer does. The agent group is a person's choice.
+                new("claim", ["ClaimedById", "ClaimedAtUtc", "ClaimExpiresAtUtc"]),
+                new("agent", ["AgentReady", "AgentAssigneeId"]),
             ],
             LocalColumns: ["Version"],
             ApplyOrder: 60),
+
+        // Q17 local agents (PLAN3 12.3): the name travels in the account stream so every device shows the same agent;
+        // tokens are device-only (LocalAgentTokens). Access is off until the person ticks lists, one row per list.
+        new SyncTable("LocalAgents", "local_agent", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["CreatedAtUtc"]),
+                new("name", ["Name"]),
+                new("state", ["PausedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 67),
+
+        new SyncTable("LocalAgentAccess", "local_agent_access", SyncMode.Merge, ["AgentId", "ContainerId"],
+            Groups: [new("create", ["GrantedAtUtc", "CreatedAtUtc"]), new("deleted", ["DeletedAtUtc"])],
+            LocalColumns: ["Version"],
+            ApplyOrder: 68),
+
+        // Q17 creates the table; the propose_tasks tool (Q20) is the only writer of proposals.
+        new SyncTable("TaskProposals", "task_proposal", SyncMode.Merge, ["Id"],
+            Groups:
+            [
+                new("create", ["SpaceId", "AgentId", "SourcePadItemId", "Title", "NotesMarkdown", "QuickAddText", "CreatedAtUtc"]),
+                new("state", ["State", "CreatedTaskId", "DecidedAtUtc"]),
+                new("deleted", ["DeletedAtUtc"]),
+            ],
+            LocalColumns: ["Version"],
+            ApplyOrder: 69),
 
         new SyncTable("TaskAssignees", "task_assignee", SyncMode.Merge, ["TaskId", "MemberId"],
             Groups: [new("create", ["AddedAtUtc"]), new("done", ["CompletedAtUtc"]), new("deleted", ["DeletedAtUtc"])],
@@ -724,6 +757,7 @@ public static class SyncCatalog
         new SyncTable("TextBase", "text_base", SyncMode.LocalOnly, ["Kind", "EntityKey"], ApplyOrder: 544), // last agreed text for three-way merge (§9.9)
         new SyncTable("CollaborationNotices", "collaboration_notice", SyncMode.LocalOnly, ["Id"], ApplyOrder: 543),
         new SyncTable("TimeBlockState", "time_block_state", SyncMode.LocalOnly, ["Id"], ApplyOrder: 545), // the runner's Google change-feed position (Q16)
+        new SyncTable("LocalAgentTokens", "local_agent_token", SyncMode.LocalOnly, ["Id"], ApplyOrder: 546), // a local agent's token hashes: this device's, never synced (Q17)
         new SyncTable("ActivityLog", "activity_log", SyncMode.LocalOnly, ["Seq"], ApplyOrder: 535), // system event stream (PLAN2 §6.4)
         new SyncTable("ActivityLogEntities", "activity_log_entity", SyncMode.LocalOnly, ["Seq", "Kind", "EntityKey"], ApplyOrder: 536),
         new SyncTable("ActivityCursors", "activity_cursor", SyncMode.LocalOnly, ["Consumer"], ApplyOrder: 537),

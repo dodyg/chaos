@@ -102,6 +102,7 @@
     "dueDate": "date?",
     "dueTime": "time?",
     "dueZoneId": "string?",
+    "eachMustComplete": "boolean",
     "id": "guid",
     "isOnMyDay": "boolean",
     "isRecurring": "boolean",

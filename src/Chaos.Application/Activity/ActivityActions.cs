@@ -19,6 +19,12 @@ public static class ActivityActions
     public const string TimeBlockApply = "timeblock.apply";
     public const string RemoteApply = "sync.apply";
     public const string ActivityPrune = "activity.prune";
+    /// <summary>A local agent's tool call (PLAN3 12.1): its scope's actor is <c>agent:&lt;id&gt;</c>; the names are the tool names.</summary>
+    public const string AgentClaim = "agent.claim_task";
+    public const string AgentRelease = "agent.release_task";
+    public const string AgentHeartbeat = "agent.heartbeat";
+    /// <summary>The reminder tick's claim expiry pass (12.4).</summary>
+    public const string ClaimsExpire = "claims.expire";
 
     /// <summary>One entry per [NeoRpcMethod]: <c>service.method</c>.</summary>
     public static readonly IReadOnlyList<string> Rpc =
@@ -380,11 +386,37 @@ public static class ActivityActions
         "activity.since",
         "activity.head",
         "activity.jobs",
+        "agents.list",
+        "agents.create",
+        "agents.rename",
+        "agents.setPaused",
+        "agents.remove",
+        "agents.createToken",
+        "agents.revokeToken",
+        "agents.setAccess",
+        "agents.undo",
+        "agents.serverList",
+        "agents.serverCreate",
+        "agents.serverUpdate",
+        "agents.serverRemove",
+        "agents.spaceAgents",
+        "agents.addToSpace",
+        "agents.pauseInSpace",
+        "agents.removeFromSpace",
+        "agents.revert",
+        "claims.claim",
+        "claims.release",
+        "claims.takeover",
+        "claims.heartbeat",
+        "claims.setReady",
+        "spaces.agentSettings",
+        "spaces.setAgentSettings",
     ];
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         Unscoped, Seed, ReminderTick, CalendarRefresh, BackupCheck, GitHubSync, TimeBlockSync, TimeBlockApply, RemoteApply, ActivityPrune,
+        AgentClaim, AgentRelease, AgentHeartbeat, ClaimsExpire,
     };
 
     static ActivityActions()

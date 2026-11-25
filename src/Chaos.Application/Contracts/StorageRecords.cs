@@ -72,6 +72,10 @@ public sealed record SpaceRecord : AggregateRecord
     public required string Name { get; init; }
     public string? DefaultDeadlineReminderJson { get; init; }
     public bool TagsOwnerOnly { get; init; }
+    /// <summary>Agent settings of the space's <c>settings</c> group (PLAN3 12.3, 12.4, E8): whether agents may be added, how long a claim lasts, and whether an agent may close a task.</summary>
+    public bool AgentsAllowed { get; init; }
+    public int ClaimMinutes { get; init; } = Chaos.Sync.AgentLimits.DefaultClaimMinutes;
+    public bool AllowAgentsToClose { get; init; }
 }
 
 public sealed record SpaceStateRecord : AggregateRecord
@@ -120,6 +124,14 @@ public sealed record TaskRecord : AggregateRecord
     public DateTimeOffset? CancelledAtUtc { get; init; }
     public required long Position { get; init; }
     public string? RecurrenceOccurrenceKey { get; init; }
+
+    // Q17 agents (PLAN3 12.4): an exclusive, expiring hold on the task by a person or an agent, and whether a person
+    // made it Ready for agent, optionally for one local agent. The claim is an actor ID (person:… or agent:…).
+    public string? ClaimedById { get; init; }
+    public DateTimeOffset? ClaimedAtUtc { get; init; }
+    public DateTimeOffset? ClaimExpiresAtUtc { get; init; }
+    public bool AgentReady { get; init; }
+    public string? AgentAssigneeId { get; init; }
 
     // Computed flags are derived from Status; excluding them keeps stored snapshots canonical.
     [JsonIgnore]

@@ -79,6 +79,11 @@ const task = (id: string, title: string): TaskResponse => ({
   dueTime: null,
   dueZoneId: null,
   sectionId: null,
+  claimedById: null,
+  claimedAtUtc: null,
+  claimExpiresAtUtc: null,
+  agentReady: false,
+  agentAssigneeId: null,
 });
 const errorOf = (message: string, fieldPath: string) => ({
   kind: "Validation",

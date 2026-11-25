@@ -16,6 +16,8 @@ public enum DaySuggestionReason
     DueSoon = 3,
     RecurrenceToday = 4,
     UnfinishedYesterday = 5,
+    /// <summary>Work an agent handed back (PLAN3 12.8): Needs review and touched by an agent.</summary>
+    WaitingForReview = 6,
 }
 
 public sealed record DaySuggestion(TaskRecord Task, string ContainerName, DaySuggestionReason Reason);
@@ -176,6 +178,12 @@ public sealed class MyDayCommands(IApplicationStore store, TimeProvider clock)
                 {
                     Offer(row.Task, row.ContainerName, DaySuggestionReason.UnfinishedYesterday);
                 }
+            }
+
+            // Waiting for your review (PLAN3 12.8) is offered, never added, like every suggestion.
+            foreach (var row in await RowsAsync(new TaskQuerySpec { View = TaskView.AgentWork, Statuses = [TaskItemStatus.NeedsReview] }))
+            {
+                Offer(row.Task, row.ContainerName, DaySuggestionReason.WaitingForReview);
             }
 
             return (IReadOnlyList<DaySuggestion>)[.. found.Values

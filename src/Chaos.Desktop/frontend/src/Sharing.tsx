@@ -1,11 +1,14 @@
 import React from "react";
 import {
+  agentRpc,
   collaborationRpc,
   gitHubRpc,
   spaceRpc,
   spaceUpdateRpc,
   tagRpc,
+  type agentRpc as AgentRpc,
   type ContainerResponse,
+  type SpaceAgentDto,
   type SpaceInviteResponseItem,
   type SpaceMemberResponse,
   type SpaceResponse,
@@ -14,7 +17,7 @@ import {
   type SpaceUpdateDto,
   type TagResponse,
 } from "#neoastra";
-import { ChevronRight, FolderKanban, Home, ListTodo, Users } from "lucide-react";
+import { Bot, ChevronRight, FolderKanban, Home, ListTodo, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +31,8 @@ import { GitHubSettings } from "./GitHubSettings";
 export const OWNER = 1;
 export const EDITOR = 2;
 export const VIEWER = 3;
+/** The member kind of an agent, as the service numbers member kinds (its `SpaceMember.AgentKind`). */
+export const AGENT_KIND = 2;
 const roleNames: Record<number, string> = { [OWNER]: "Owner", [EDITOR]: "Editor", [VIEWER]: "Viewer" };
 export const roleName = (role: number | null | undefined) => (role ? (roleNames[role] ?? "Member") : "Member");
 const roleSentence: Record<number, string> = {
@@ -463,6 +468,129 @@ export function InviteDialog({
   );
 }
 
+/** Members → Add agent (PLAN3 12.3): an owner picks an agent of their own or of a live member, and the lists it may work in. */
+export function AddAgentDialog({
+  space,
+  lists,
+  onClose,
+  onAdded,
+  api = agentRpc,
+}: {
+  space: { spaceId: string; name: string };
+  /** The space's lists; the agent works in all of them unless the owner picks some. */
+  lists: readonly ContainerResponse[];
+  onClose: () => void;
+  onAdded: () => void;
+  api?: Pick<typeof AgentRpc, "spaceAgents" | "addToSpace">;
+}) {
+  const [candidates, setCandidates] = React.useState<readonly SpaceAgentDto[] | null>(null);
+  const [agentId, setAgentId] = React.useState("");
+  const [allLists, setAllLists] = React.useState(true);
+  const [chosen, setChosen] = React.useState<ReadonlySet<string>>(new Set());
+  const { busy, error, setError, run } = useAction();
+  // The latest client, read inside the effect, so an inline object does not make every render load again.
+  const apiRef = React.useRef(api);
+  apiRef.current = api;
+
+  React.useEffect(() => {
+    let active = true;
+    void apiRef.current
+      .spaceAgents({ spaceId: space.spaceId })
+      .then((result) => {
+        if (!active) return;
+        if (result.ok) {
+          const open = result.agents.filter((entry) => !entry.member);
+          setCandidates(open);
+          setAgentId(open[0]?.agent.id ?? "");
+        } else setError(result.error?.message ?? "Could not load the agents you could add.");
+      })
+      .catch(() => {
+        if (active) setError("Could not load the agents you could add.");
+      });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [space.spaceId]);
+
+  return (
+    <Modal title={`Add an agent to ${space.name}`} onClose={onClose}>
+      {error && <InlineError>{error}</InlineError>}
+      {candidates === null ? (
+        !error && <p className="text-sm text-muted-foreground">Loading agents…</p>
+      ) : candidates.length === 0 ? (
+        <p className="text-sm">
+          There is no agent to add. Create one under Settings → Agents, or ask a member of this space to create one.
+        </p>
+      ) : (
+        <form
+          className="grid gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const agent = candidates.find((entry) => entry.agent.id === agentId);
+            if (!agent) return;
+            void run(() =>
+              api.addToSpace({
+                spaceId: space.spaceId,
+                agentId: agent.agent.id,
+                allowedContainerIds: allLists ? null : [...chosen].sort(),
+              }),
+            ).then((result) => {
+              if (!result) return;
+              onAdded();
+            });
+          }}
+        >
+          <Field label="Agent">
+            <NativeSelect value={agentId} disabled={busy} onChange={(e) => setAgentId(e.target.value)}>
+              {candidates.map((entry) => (
+                <NativeSelectOption key={entry.agent.id} value={entry.agent.id}>
+                  {entry.agent.name} ({entry.ownerName}){entry.agent.pausedAtUtc ? " · paused" : ""}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+          <fieldset className="grid gap-1" disabled={busy}>
+            <legend className="text-sm font-medium">Lists it may work in</legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="accent-primary" checked={allLists} onChange={(e) => setAllLists(e.target.checked)} />
+              All lists
+            </label>
+            {!allLists &&
+              lists.map((list) => (
+                <label key={list.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="accent-primary"
+                    checked={chosen.has(list.id)}
+                    onChange={(e) =>
+                      setChosen((current) => {
+                        const next = new Set(current);
+                        if (e.target.checked) next.add(list.id);
+                        else next.delete(list.id);
+                        return next;
+                      })
+                    }
+                  />
+                  {list.name}
+                </label>
+              ))}
+          </fieldset>
+          <p className="text-xs text-muted-foreground">
+            The agent joins with the Agent role. Members see its changes under its name, and an owner can pause or remove it here.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button disabled={busy || !agentId || (!allLists && chosen.size === 0)}>Add agent</Button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 /** Move to space… (§9.2): pick a shared space where this person can edit, confirm in plain words, then move. */
 export function MoveToSpaceDialog({
   list,
@@ -827,6 +955,12 @@ function SpaceStateSettings({ spaceId }: { spaceId: string }) {
   const [baseStatus, setBaseStatus] = React.useState("NeedsReview");
   const [error, setError] = React.useState<string | null>(null);
   const [ownerOnly, setOwnerOnly] = React.useState(false);
+  const [agentSettings, setAgentSettings] = React.useState<{
+    agentsAllowed: boolean;
+    claimMinutes: number;
+    allowAgentsToClose: boolean;
+  } | null>(null);
+  const [claimMinutes, setClaimMinutes] = React.useState("120");
   const refresh = React.useCallback(async () => {
     const result = await spaceRpc.states({ spaceId });
     if (!result.ok) throw new Error(result.error?.message ?? "Could not load states.");
@@ -842,7 +976,38 @@ function SpaceStateSettings({ spaceId }: { spaceId: string }) {
         if (result.ok) setOwnerOnly(result.ownerOnly);
       })
       .catch((e: unknown) => setError(String(e)));
+    void spaceRpc
+      .agentSettings({ spaceId })
+      .then((result) => {
+        if (result.ok) {
+          setAgentSettings({
+            agentsAllowed: result.agentsAllowed,
+            claimMinutes: result.claimMinutes,
+            allowAgentsToClose: result.allowAgentsToClose,
+          });
+          setClaimMinutes(String(result.claimMinutes));
+        }
+      })
+      .catch((e: unknown) => setError(String(e)));
   }, [spaceId]);
+  const saveAgentSettings = (change: { agentsAllowed?: boolean; claimMinutes?: number; allowAgentsToClose?: boolean }) =>
+    spaceRpc
+      .setAgentSettings({
+        spaceId,
+        agentsAllowed: change.agentsAllowed ?? null,
+        claimMinutes: change.claimMinutes ?? null,
+        allowAgentsToClose: change.allowAgentsToClose ?? null,
+      })
+      .then((result) => {
+        if (!result.ok) throw new Error(result.error?.message ?? "Could not update the agent settings.");
+        setAgentSettings({
+          agentsAllowed: result.agentsAllowed,
+          claimMinutes: result.claimMinutes,
+          allowAgentsToClose: result.allowAgentsToClose,
+        });
+        setClaimMinutes(String(result.claimMinutes));
+      })
+      .catch((e: unknown) => setError(String(e)));
   return (
     <section className="grid gap-2" aria-label="Space states">
       <h3 className="font-semibold">Space states</h3>
@@ -918,6 +1083,46 @@ function SpaceStateSettings({ spaceId }: { spaceId: string }) {
         />{" "}
         Only owners can change the space tag list
       </label>
+      {agentSettings && (
+        <div className="grid gap-2 rounded-md border p-3 text-sm" aria-label="Agent settings">
+          <h4 className="font-medium">Agents</h4>
+          <label>
+            <input
+              type="checkbox"
+              checked={agentSettings.agentsAllowed}
+              onChange={(event) => void saveAgentSettings({ agentsAllowed: event.target.checked })}
+            />{" "}
+            Allow agents in this space
+          </label>
+          <Field label="Claim time in minutes (15 to 1440)">
+            <Input
+              type="number"
+              min={15}
+              max={1440}
+              value={claimMinutes}
+              onChange={(event) => setClaimMinutes(event.target.value)}
+              onBlur={() => {
+                const minutes = Number(claimMinutes);
+                if (agentSettings && Number.isFinite(minutes) && minutes !== agentSettings.claimMinutes && minutes >= 15 && minutes <= 1440)
+                  void saveAgentSettings({ claimMinutes: minutes });
+                else setClaimMinutes(String(agentSettings?.claimMinutes ?? 120));
+              }}
+            />
+          </Field>
+          <label>
+            <input
+              type="checkbox"
+              checked={agentSettings.allowAgentsToClose}
+              onChange={(event) => void saveAgentSettings({ allowAgentsToClose: event.target.checked })}
+            />{" "}
+            Agents may close tasks themselves
+          </label>
+          <p className="text-muted-foreground">
+            A claim expires after this time without activity and the task returns to Ready for agent. Members → Add agent needs agents
+            allowed here.
+          </p>
+        </div>
+      )}
       {error && <InlineError>{error}</InlineError>}
     </section>
   );
@@ -1029,6 +1234,7 @@ export function SpaceHome({
   api = spaceRpc,
   updatesApi = spaceUpdateRpc,
   connectionsApi = gitHubRpc,
+  agentsApi = agentRpc,
   revision = 0,
 }: {
   space: SpaceResponse;
@@ -1041,18 +1247,26 @@ export function SpaceHome({
   updatesApi?: typeof spaceUpdateRpc;
   /** The space's GitHub connection (Q15); the real client unless a test answers. */
   connectionsApi?: typeof gitHubRpc;
+  /** The space's agents (PLAN3 12.3): who could be added, and pausing or removing one; the real client unless a test answers. */
+  agentsApi?: Pick<typeof AgentRpc, "spaceAgents" | "addToSpace" | "pauseInSpace" | "removeFromSpace">;
   /** Bumps when anything on this computer changed, so standups posted by other members appear. */
   revision?: number;
 }) {
   const access = accessIn([space], space.spaceId);
   const [tab, setTab] = React.useState<HomeTab>("overview");
   const [members, setMembers] = React.useState<SpaceMemberResponse[]>([]);
+  /** The agents of this space with their state; empty while loading or offline, when the member list still names them. */
+  const [agents, setAgents] = React.useState<readonly SpaceAgentDto[]>([]);
   const [inviting, setInviting] = React.useState(false);
+  const [addingAgent, setAddingAgent] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
   const [myName, setMyName] = React.useState("");
   const [myGitHubLogin, setMyGitHubLogin] = React.useState("");
   const [notice, setNotice] = React.useState<string | null>(null);
   const { busy, error, run } = useAction();
+  // The latest agent client, read inside the callback, so an inline object does not make every render reload the members.
+  const agentsApiRef = React.useRef(agentsApi);
+  agentsApiRef.current = agentsApi;
 
   const loadMembers = React.useCallback(async () => {
     const result = await api.members({ spaceId: space.spaceId });
@@ -1061,6 +1275,9 @@ export function SpaceHome({
       setMyName((current) => current || (result.members.find((m) => m.isMe)?.name ?? ""));
       setMyGitHubLogin((current) => current || (result.members.find((m) => m.isMe)?.gitHubLogin ?? ""));
     }
+    // Offline, the agents' state is simply unknown; the member list still shows them.
+    const spaceAgents = await agentsApiRef.current.spaceAgents({ spaceId: space.spaceId }).catch(() => null);
+    if (spaceAgents?.ok) setAgents(spaceAgents.agents);
   }, [api, space.spaceId]);
   React.useEffect(() => {
     setTab("overview");
@@ -1146,56 +1363,118 @@ export function SpaceHome({
 
       {tab === "members" && (
         <div role="tabpanel" aria-label="Members" className="grid gap-4">
+          {access.isOwner && (
+            <div>
+              <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setAddingAgent(true)}>
+                <Bot />
+                Add agent
+              </Button>
+            </div>
+          )}
           <ul className="grid gap-1" aria-label="People in this space">
-            {members.map((member) => (
-              <li key={member.memberId} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-                <span className="min-w-0 flex-1 truncate">
-                  {member.name}
-                  {member.isMe && <span className="text-muted-foreground"> (you)</span>}
-                  {member.gitHubLogin && <span className="text-xs text-muted-foreground"> · @{member.gitHubLogin}</span>}
-                </span>
-                {access.isOwner ? (
-                  <NativeSelect
-                    aria-label={`Role of ${member.name}`}
-                    value={String(member.role)}
-                    disabled={busy}
-                    onChange={(e) =>
-                      void run(() =>
-                        api.changeRole({ spaceId: space.spaceId, memberId: member.memberId, role: Number(e.target.value) }),
-                      ).then(async () => {
-                        await loadMembers();
-                        onChanged();
-                      })
-                    }
-                  >
-                    <NativeSelectOption value={String(OWNER)}>Owner</NativeSelectOption>
-                    <NativeSelectOption value={String(EDITOR)}>Editor</NativeSelectOption>
-                    <NativeSelectOption value={String(VIEWER)}>Viewer</NativeSelectOption>
-                  </NativeSelect>
-                ) : (
-                  <span className="text-xs text-muted-foreground">{roleName(member.role)}</span>
-                )}
-                {access.isOwner && !member.isMe && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    aria-label={`Remove ${member.name}`}
-                    onClick={() =>
-                      void run(() => api.removeMember({ spaceId: space.spaceId, memberId: member.memberId })).then(async (result) => {
-                        if (!result) return;
-                        setNotice(`${member.name} was removed.`);
-                        await loadMembers();
-                        onChanged();
-                      })
-                    }
-                  >
-                    Remove
-                  </Button>
-                )}
-              </li>
-            ))}
+            {members.map((member) => {
+              const agent =
+                member.kind === AGENT_KIND
+                  ? agents.find((entry) => entry.agent.id.toLowerCase() === member.memberId.toLowerCase())
+                  : undefined;
+              const paused = !!agent?.agent.pausedAtUtc;
+              return (
+                <li key={member.memberId} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">
+                    {member.name}
+                    {member.kind === AGENT_KIND && <span className="text-muted-foreground"> (agent)</span>}
+                    {member.isMe && <span className="text-muted-foreground"> (you)</span>}
+                    {member.gitHubLogin && <span className="text-xs text-muted-foreground"> · @{member.gitHubLogin}</span>}
+                  </span>
+                  {member.kind === AGENT_KIND ? (
+                    <>
+                      <span className="text-xs text-muted-foreground">{paused ? "Agent · paused" : "Agent"}</span>
+                      {access.isOwner && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            aria-label={`${paused ? "Resume" : "Pause"} ${member.name}`}
+                            onClick={() =>
+                              void run(() =>
+                                agentsApi.pauseInSpace({ spaceId: space.spaceId, agentId: member.memberId, paused: !paused }),
+                              ).then(async (result) => {
+                                if (!result) return;
+                                setNotice(`${member.name} was ${paused ? "resumed" : "paused"}.`);
+                                await loadMembers();
+                                onChanged();
+                              })
+                            }
+                          >
+                            {paused ? "Resume" : "Pause"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            aria-label={`Remove ${member.name}`}
+                            onClick={() =>
+                              void run(() => agentsApi.removeFromSpace({ spaceId: space.spaceId, agentId: member.memberId })).then(
+                                async (result) => {
+                                  if (!result) return;
+                                  setNotice(`${member.name} was removed.`);
+                                  await loadMembers();
+                                  onChanged();
+                                },
+                              )
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </>
+                      )}
+                    </>
+                  ) : access.isOwner ? (
+                    <NativeSelect
+                      aria-label={`Role of ${member.name}`}
+                      value={String(member.role)}
+                      disabled={busy}
+                      onChange={(e) =>
+                        void run(() =>
+                          api.changeRole({ spaceId: space.spaceId, memberId: member.memberId, role: Number(e.target.value) }),
+                        ).then(async () => {
+                          await loadMembers();
+                          onChanged();
+                        })
+                      }
+                    >
+                      <NativeSelectOption value={String(OWNER)}>Owner</NativeSelectOption>
+                      <NativeSelectOption value={String(EDITOR)}>Editor</NativeSelectOption>
+                      <NativeSelectOption value={String(VIEWER)}>Viewer</NativeSelectOption>
+                    </NativeSelect>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{roleName(member.role)}</span>
+                  )}
+                  {member.kind !== AGENT_KIND && access.isOwner && !member.isMe && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      aria-label={`Remove ${member.name}`}
+                      onClick={() =>
+                        void run(() => api.removeMember({ spaceId: space.spaceId, memberId: member.memberId })).then(async (result) => {
+                          if (!result) return;
+                          setNotice(`${member.name} was removed.`);
+                          await loadMembers();
+                          onChanged();
+                        })
+                      }
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
           <form
             className="grid max-w-sm gap-2"
@@ -1291,6 +1570,20 @@ export function SpaceHome({
       )}
 
       {inviting && <InviteDialog space={space} api={api} githubApi={connectionsApi} onClose={() => setInviting(false)} />}
+      {addingAgent && (
+        <AddAgentDialog
+          space={space}
+          lists={lists}
+          api={agentsApi}
+          onClose={() => setAddingAgent(false)}
+          onAdded={() => {
+            setAddingAgent(false);
+            setNotice("Agent added.");
+            void loadMembers();
+            onChanged();
+          }}
+        />
+      )}
       {deleting && (
         <DeleteSpaceDialog
           space={space}

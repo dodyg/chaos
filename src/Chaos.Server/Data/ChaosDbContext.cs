@@ -20,6 +20,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
     public DbSet<SyncChangeRow> SyncChanges => Set<SyncChangeRow>();
     public DbSet<SpaceMember> SpaceMembers => Set<SpaceMember>();
     public DbSet<SpaceInvite> SpaceInvites => Set<SpaceInvite>();
+    public DbSet<AgentRow> Agents => Set<AgentRow>();
     public DbSet<BlobRow> Blobs => Set<BlobRow>();
     public DbSet<BlobObjectRow> BlobObjects => Set<BlobObjectRow>();
     public DbSet<BlobDeletionRow> BlobDeletions => Set<BlobDeletionRow>();
@@ -50,6 +51,7 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
         modelBuilder.ApplyConfiguration(new SyncChangeConfiguration());
         modelBuilder.ApplyConfiguration(new SpaceMemberConfiguration());
         modelBuilder.ApplyConfiguration(new SpaceInviteConfiguration());
+        modelBuilder.ApplyConfiguration(new AgentConfiguration());
         modelBuilder.ApplyConfiguration(new BlobConfiguration());
         modelBuilder.ApplyConfiguration(new BlobObjectConfiguration());
         modelBuilder.ApplyConfiguration(new BlobDeletionConfiguration());
@@ -252,6 +254,22 @@ public sealed class ChaosDbContext(DbContextOptions<ChaosDbContext> options) : D
             e.HasIndex(i => i.TokenHash).IsUnique().HasDatabaseName("UX_SpaceInvites_TokenHash");
             e.HasIndex(i => i.SpaceId).HasDatabaseName("IX_SpaceInvites_SpaceId");
             e.HasOne<SyncStream>().WithMany().HasForeignKey(i => i.SpaceId).OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    private sealed class AgentConfiguration : IEntityTypeConfiguration<AgentRow>
+    {
+        public void Configure(EntityTypeBuilder<AgentRow> e)
+        {
+            e.ToTable("Agents", t =>
+            {
+                t.HasCheckConstraint("CK_Agents_Name", $"length(\"Name\") BETWEEN 1 AND {Chaos.Sync.AgentLimits.MaxNameLength}");
+                t.HasCheckConstraint("CK_Agents_Counters", $"\"AddsInWindow\" BETWEEN 0 AND {Chaos.Sync.AgentLimits.TasksAddedPerHour} AND \"ClaimsInWindow\" BETWEEN 0 AND {Chaos.Sync.AgentLimits.ClaimsPerHour}");
+            });
+            e.HasKey(a => a.Id);
+            e.Property(a => a.Id).ValueGeneratedNever();
+            e.HasIndex(a => new { a.OwnerAccountId, a.RemovedAt }).HasDatabaseName("IX_Agents_Owner");
+            e.HasOne<Account>().WithMany().HasForeignKey(a => a.OwnerAccountId).OnDelete(DeleteBehavior.Cascade);
         }
     }
 

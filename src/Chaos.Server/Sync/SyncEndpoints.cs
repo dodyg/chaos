@@ -42,6 +42,9 @@ public static class SyncEndpoints
         services.AddSingleton<InviteAcceptanceLimiter>();
         services.AddScoped<SpaceService>();
         services.AddHostedService<SpacePurgeService>();
+        services.AddScoped<AgentService>();
+        services.AddScoped<AgentTools>();
+        services.AddHostedService<ClaimExpiryService>();
         return services;
     }
 

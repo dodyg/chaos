@@ -14,7 +14,8 @@ public sealed class AccountDeletion(
     BlobService blobs,
     TimeProvider clock,
     ServerChangeWriter changes,
-    SyncBroadcaster broadcaster)
+    SyncBroadcaster broadcaster,
+    AgentService agents)
 {
     public async Task<AccountDeletionResult> DeleteAsync(Guid accountId, Guid deviceId, CancellationToken ct)
     {
@@ -53,8 +54,10 @@ public sealed class AccountDeletion(
             {
                 return new List<string>();
             }
+            // The account's agents go with it, out of every space; their member rows are not the person's.
+            await agents.RemoveOwnedAsync(accountId, now, ct);
             var allMembers = await db.SpaceMembers
-                .Where(m => m.AccountId == accountId).OrderBy(m => m.SpaceId).ThenBy(m => m.MemberId)
+                .Where(m => m.AccountId == accountId && m.MemberKind == SpaceMember.PersonKind).OrderBy(m => m.SpaceId).ThenBy(m => m.MemberId)
                 .ToListAsync(ct);
             var blocked = new List<string>();
             foreach (var ownedSpace in allMembers.Where(m => m.RemovedAt == null && m.Role == SpaceMember.OwnerRole))

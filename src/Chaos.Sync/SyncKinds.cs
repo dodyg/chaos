@@ -45,9 +45,13 @@ public static class SyncKinds
         new("calendar_source", 1, 57, false, ["create", "name", "look", "busy", "enabled", "owner", "position", "deleted"]),
         new("space_notification_setting", 1, 58, false, new SyncGroupInfo[] { new("create", 6), new("settings", 6) }),
         new("view_alert_setting", 1, 59, false, new SyncGroupInfo[] { new("create", 8), new("settings", 8) }),
-        new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1) }),
+        new("task", 1, 60, true, new SyncGroupInfo[] { new("create", 1), new("title", 1), new("notes", 1), new("status", 1), new("assignment", 5), new("place", 1), new("position", 1), new("priority", 1), new("estimate", 1), new("category", 1), new("planned", 1), new("due", 1), new("deleted", 1), new("claim", 14, SyncWrite.Server), new("agent", 14) }),
         new("task_assignee", 2, 61, false, new SyncGroupInfo[] { new("create", 5), new("done", 5), new("deleted", 5) }),
         new("time_block_event", 1, 66, false, new SyncGroupInfo[] { new("create", 13), new("state", 13) }),
+        // Q17 agents (PLAN3 12.3, 12.6). A local agent's name and state travel in the account stream; its tokens stay on the device.
+        new("local_agent", 1, 67, false, new SyncGroupInfo[] { new("create", 14), new("name", 14), new("state", 14), new("deleted", 14) }),
+        new("local_agent_access", 2, 68, false, new SyncGroupInfo[] { new("create", 14), new("deleted", 14) }),
+        new("task_proposal", 1, 69, true, new SyncGroupInfo[] { new("create", 14), new("state", 14), new("deleted", 14) }),
         new("task_delegation", 1, 62, false, new SyncGroupInfo[] { new("create", 10), new("brief", 10), new("state", 10), new("deleted", 10) }),
         new("nudge", 1, 63, false, new SyncGroupInfo[] { new("record", 10) }),
         new("calendar_event_link", 1, 65, false, ["create", "deleted"]),
@@ -99,11 +103,11 @@ public static class SyncKinds
     {
         var route = kind.Kind switch
         {
-            "profile" or "view_alert_setting" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "time_block_event" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" => new SyncRoute(SyncRouteKind.Account),
+            "profile" or "view_alert_setting" or "space_notification_setting" or "google_account" or "calendar_source" or "calendar_event_link" or "time_block_event" or "reminder_rule" or "reminder_acknowledgement" or "waiting_detail" or "follow_up" or "day_plan" or "day_plan_item" or "week_plan" or "week_goal" or "week_goal_task" or "week_assignment" or "availability_rule" or "week_availability_override" or "summary" or "import_batch" or "imported_item" or "local_agent" or "local_agent_access" => new SyncRoute(SyncRouteKind.Account),
             "space" => new SyncRoute(SyncRouteKind.OwnSpace, KeyPart: 0),
             "space_member" => new SyncRoute(SyncRouteKind.ServerOnly),
             "tag" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
-            "space_state" or "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" or "space_update" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
+            "space_state" or "container" or "task_template" or "saved_view" or "task" or "pad" or "recurrence_series" or "page" or "attachment" or "github_connection" or "space_update" or "task_proposal" => new SyncRoute(SyncRouteKind.OwnSpace, Column: "SpaceId", Group: "create"),
             "section" => Parent("container", "ContainerId"),
             "subtask" or "diary_entry" => Parent("task", "TaskId"),
             "task_assignee" => KeyParent("task", 0),
@@ -148,6 +152,8 @@ public static class SyncKinds
         "diary_entry" or "space_update" => SyncWrite.Author, // the author named in the create group; SyncService checks, owners may delete
         "task_delegation" when group == "brief" => SyncWrite.Author,
         "task_delegation" when group == "state" => SyncWrite.Author, // who, depends on the transition: SyncService checks the table
+        "task" when group == "claim" => SyncWrite.Server, // claims go through the claim operation (PLAN3 5.6, 7.4)
+        "task_proposal" when group == "create" => SyncWrite.Agent, // only the propose_tasks tool creates a proposal; a person decides it
         "nudge" => SyncWrite.Author, // only the delegator nudges; SyncService also applies the rate limit
         _ when kind.StartsWith("github_", StringComparison.Ordinal) => SyncWrite.Owner,
         _ => SyncWrite.Editor,

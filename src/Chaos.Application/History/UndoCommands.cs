@@ -2,10 +2,15 @@ using System.Text.Json;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
+using Chaos.Sync;
 
 namespace Chaos.Application.History;
 
 public sealed record UndoOperationCommand(string OperationId, string TargetOperationId);
+/// <summary>Undo an agent's operations newest first (PLAN3 12.7); <paramref name="MaxOperations"/> bounds the run.</summary>
+public sealed record UndoAgentCommand(string ActorId, int? MaxOperations = null);
+/// <param name="StoppedAt">The change that conflicted, if the run stopped; <paramref name="Conflict"/> says why.</param>
+public sealed record UndoAgentResult(int Undone, string? StoppedAt, string? Conflict);
 
 /// <summary>An undoable operation as the undo list shows it.</summary>
 public sealed record UndoEntrySummary(string OperationId, string Label, DateTimeOffset AppliedAtUtc);
@@ -53,71 +58,124 @@ public sealed class UndoCommands(IApplicationStore store, IIdGenerator ids, Time
                 {
                     var entry = await session.Undo.FindByOperationAsync(profile.Id, command.TargetOperationId, inner)
                         ?? throw AppException.NotFound("That change can no longer be undone. Only the latest 100 changes are kept.");
-                    if (entry.UndoneAtUtc is not null)
-                    {
-                        throw AppException.OperationConflict($"“{entry.Label}” was already undone.");
-                    }
-
-                    var changes = StoredJsonFormats.ReadSnapshot<ChangeSet>(entry.InversePayload)
-                        ?? throw new AppException(AppErrorKind.StorageUnavailable, "The saved undo information could not be read. Nothing was changed.");
-                    var successorId = changes.Entities.Any(item => item.Kind == ChangeKind.RecurrenceOccurrence)
-                        ? changes.Entities.FirstOrDefault(item => item.Kind == ChangeKind.Task && item.Before is null)?.Id : null;
-
-                    // Check every row first: a single later change refuses the undo before anything is written.
-                    foreach (var change in changes.Entities)
-                    {
-                        var (version, name) = await CurrentAsync(session, change, inner);
-                        if (version != change.AfterVersion)
-                        {
-                            throw successorId is null ? Conflict(entry.Label, name) : RecurrenceConflict(entry.Label, successorId);
-                        }
-
-                        // A diary or tag change does not necessarily increment the task row.
-                        // Never remove an occurrence created by this operation if later work
-                        // has been recorded against it, even when its row version is unchanged.
-                        if (change.Kind == ChangeKind.Task && change.Before is null &&
-                            changes.Entities.Any(item => item.Kind == ChangeKind.RecurrenceOccurrence))
-                        {
-                            var history = await session.History.ListByTaskAsync(change.Id, inner);
-                            if (history.Any(item => item.OperationId != entry.OperationId))
-                                throw RecurrenceConflict(entry.Label, successorId!);
-                        }
-                    }
-
-                    foreach (var link in changes.Links.Reverse())
-                    {
-                        await RevertLinkAsync(session, link, entry.Label, now, inner);
-                    }
-
-                    foreach (var change in changes.Assignees.Reverse())
-                    {
-                        var current = (await session.Tasks.ListAssigneesAsync(change.After.TaskId, inner))
-                            .FirstOrDefault(row => row.MemberId == change.After.MemberId);
-                        if (current != change.After) throw Conflict(entry.Label, "assignment");
-                        await session.Tasks.SaveAssigneeAsync(change.Before ?? change.After with { DeletedAtUtc = now }, inner);
-                    }
-
-                    var rewritten = new Dictionary<(ChangeKind Kind, string Id, long Version), long>();
-                    foreach (var change in changes.Entities.Reverse())
-                    {
-                        var (beforeVersion, newVersion) = await RevertEntityAsync(session, change, entry.Label, now, inner);
-                        if (beforeVersion is { } version)
-                        {
-                            rewritten[(change.Kind, change.Id, version)] = newVersion;
-                        }
-                    }
-
-                    if (!await session.Undo.MarkUndoneAsync(entry.Id, now, inner))
-                    {
-                        throw AppException.OperationConflict($"“{entry.Label}” was already undone.");
-                    }
-
-                    await RepointOlderEntriesAsync(session, profile.Id, rewritten, inner);
-
-                    return new UndoResult(entry.Label, changes.Entities.Count + changes.Links.Count + changes.Assignees.Count, Replayed: false);
+                    return await UndoEntryAsync(session, profile, entry, now, inner);
                 }, token);
             return replayed ? result with { Replayed = true } : result;
         }, ct);
+    }
+
+    /// <summary>
+    /// Undo recent changes by an agent (PLAN3 12.7): its operations newest first, each undone exactly like a person's,
+    /// stopping at the first one a later change conflicts with, which is reported with everything undone before it.
+    /// </summary>
+    public async Task<UndoAgentResult> UndoAgentAsync(UndoAgentCommand command, CancellationToken ct = default)
+    {
+        if (!ActorId.TryParse(command.ActorId, out var actor) || actor.Kind != ActorKind.Agent)
+        {
+            throw AppException.Validation("actorId", "Choose an agent whose changes to undo.");
+        }
+
+        var entries = await store.QueryAsync<IReadOnlyList<UndoEntryRecord>>(async (session, token) =>
+            await session.Profiles.GetPrimaryAsync(token) is { } profile
+                ? await session.Undo.ListOpenByActorAsync(profile.Id, actor.ToString(), RecordingDataSession.UndoLimit, token)
+                : [], ct);
+
+        // Each operation is undone in its own transaction, exactly like a person's undo: it gets an operation of its own
+        // (so its history and reminder resync are written), and a conflict found part-way through it rolls back only
+        // that operation, never leaving it half undone. The run stops there; what was undone before it stays undone.
+        var undone = 0;
+        foreach (var entry in entries)
+        {
+            if (command.MaxOperations is { } max && undone >= max) break;
+            try
+            {
+                var result = await TaskMutationSupport.InRecordedTransactionAsync(store, clock, ids, async (session, profile, now, token) =>
+                {
+                    session.SuppressUndoEntry = true;
+                    session.HistoryEventKind = "undo";
+                    session.Begin(ids.NewId().ToString(), "undo.agent");
+                    var current = await session.Undo.FindByOperationAsync(profile.Id, entry.OperationId, token);
+                    return current is null || current.UndoneAtUtc is not null ? null : await UndoEntryAsync(session, profile, current, now, token);
+                }, ct);
+                if (result is not null)
+                {
+                    undone++;
+                }
+            }
+            catch (AppException error) when (error.Kind is AppErrorKind.VersionConflict or AppErrorKind.OperationConflict)
+            {
+                return new UndoAgentResult(undone, entry.Label, error.Message);
+            }
+        }
+
+        return new UndoAgentResult(undone, null, null);
+    }
+
+    /// <summary>Undoes one recorded operation: every before-image or tombstone, its tag links and assignees, in the caller's transaction.</summary>
+    private static async Task<UndoResult> UndoEntryAsync(RecordingDataSession session, ProfileRecord profile, UndoEntryRecord entry, DateTimeOffset now, CancellationToken inner)
+    {
+        if (entry.UndoneAtUtc is not null)
+        {
+            throw AppException.OperationConflict($"“{entry.Label}” was already undone.");
+        }
+
+        var changes = StoredJsonFormats.ReadSnapshot<ChangeSet>(entry.InversePayload)
+            ?? throw new AppException(AppErrorKind.StorageUnavailable, "The saved undo information could not be read. Nothing was changed.");
+        var successorId = changes.Entities.Any(item => item.Kind == ChangeKind.RecurrenceOccurrence)
+            ? changes.Entities.FirstOrDefault(item => item.Kind == ChangeKind.Task && item.Before is null)?.Id : null;
+
+        // Check every row first: a single later change refuses the undo before anything is written.
+        foreach (var change in changes.Entities)
+        {
+            var (version, name) = await CurrentAsync(session, change, inner);
+            if (version != change.AfterVersion)
+            {
+                throw successorId is null ? Conflict(entry.Label, name) : RecurrenceConflict(entry.Label, successorId);
+            }
+
+            // A diary or tag change does not necessarily increment the task row.
+            // Never remove an occurrence created by this operation if later work
+            // has been recorded against it, even when its row version is unchanged.
+            if (change.Kind == ChangeKind.Task && change.Before is null &&
+                changes.Entities.Any(item => item.Kind == ChangeKind.RecurrenceOccurrence))
+            {
+                var history = await session.History.ListByTaskAsync(change.Id, inner);
+                if (history.Any(item => item.OperationId != entry.OperationId))
+                    throw RecurrenceConflict(entry.Label, successorId!);
+            }
+        }
+
+        foreach (var link in changes.Links.Reverse())
+        {
+            await RevertLinkAsync(session, link, entry.Label, now, inner);
+        }
+
+        foreach (var change in changes.Assignees.Reverse())
+        {
+            var current = (await session.Tasks.ListAssigneesAsync(change.After.TaskId, inner))
+                .FirstOrDefault(row => row.MemberId == change.After.MemberId);
+            if (current != change.After) throw Conflict(entry.Label, "assignment");
+            await session.Tasks.SaveAssigneeAsync(change.Before ?? change.After with { DeletedAtUtc = now }, inner);
+        }
+
+        var rewritten = new Dictionary<(ChangeKind Kind, string Id, long Version), long>();
+        foreach (var change in changes.Entities.Reverse())
+        {
+            var (beforeVersion, newVersion) = await RevertEntityAsync(session, change, entry.Label, now, inner);
+            if (beforeVersion is { } version)
+            {
+                rewritten[(change.Kind, change.Id, version)] = newVersion;
+            }
+        }
+
+        if (!await session.Undo.MarkUndoneAsync(entry.Id, now, inner))
+        {
+            throw AppException.OperationConflict($"“{entry.Label}” was already undone.");
+        }
+
+        await RepointOlderEntriesAsync(session, profile.Id, rewritten, inner);
+
+        return new UndoResult(entry.Label, changes.Entities.Count + changes.Links.Count + changes.Assignees.Count, Replayed: false);
     }
 
     private static AppException Conflict(string label, string? name) => AppException.VersionConflict(name is null

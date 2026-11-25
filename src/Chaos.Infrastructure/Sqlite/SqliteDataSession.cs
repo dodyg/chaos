@@ -47,6 +47,7 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     private ICalendarStore? _calendars;
     private ITimeBlockStore? _timeBlocks;
     private IAttachmentStore? _attachments;
+    private IAgentStore? _agents;
 
     /// <summary>The open connection (inside the caller's transaction for writes), for storage-level work such as purge.</summary>
     public SqliteConnection Connection => connection;
@@ -85,6 +86,7 @@ public sealed class SqliteDataSession(SqliteConnection connection, Chaos.Infrast
     public ICalendarStore Calendars => _calendars ??= new SqliteCalendarStore(connection, notes);
     public ITimeBlockStore TimeBlocks => _timeBlocks ??= new SqliteTimeBlockStore(connection, notes);
     public IAttachmentStore Attachments => _attachments ??= new SqliteAttachmentStore(connection);
+    public IAgentStore Agents => _agents ??= new SqliteAgentStore(connection);
 
     /// <summary>Device-only writers note their changes here; the store reads the notes inside the same transaction.</summary>
     public Chaos.Application.Activity.IActivityRecorder Activity => notes;

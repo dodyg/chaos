@@ -197,6 +197,27 @@ public sealed class SpaceMember
     public string? GitHubLogin { get; set; }
 }
 
+/// <summary>
+/// A server agent (PLAN3 12.3): created by an account and added to shared spaces as a member with the Agent role. Its
+/// GUID is its member ID and actor ID. The hourly counters (E8) are a fixed window: when it ends, the counts start over.
+/// </summary>
+public sealed class AgentRow
+{
+    public Guid Id { get; set; }
+    public Guid OwnerAccountId { get; set; }
+    public required string Name { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? PausedAt { get; set; }
+    public DateTimeOffset? RemovedAt { get; set; }
+
+    /// <summary>The OpenIddict application that acts for this agent (Q19); null until its owner connects one.</summary>
+    public string? ClientId { get; set; }
+
+    public DateTimeOffset? RateWindowStart { get; set; }
+    public int AddsInWindow { get; set; }
+    public int ClaimsInWindow { get; set; }
+}
+
 /// <summary>A share invitation. The public token is never persisted; only its SHA-256 hash is stored.</summary>
 public sealed class SpaceInvite
 {

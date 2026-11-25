@@ -4,6 +4,7 @@ import { webcrypto } from "node:crypto";
 import { JSDOM } from "jsdom";
 import React from "react";
 import {
+  agentRpc,
   containerRpc,
   gitHubRpc,
   spaceRpc,
@@ -61,6 +62,11 @@ function task(id: string, title: string, containerId: string, spaceId: string): 
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
   };
 }
 
@@ -489,6 +495,101 @@ test("the Members tab saves and clears a GitHub login, and the owner's Connectio
     await user.click(screen.getByRole("tab", { name: "Connections" }));
     const panel = await screen.findByRole("tabpanel", { name: "Connections" });
     assert.ok(await within(panel).findByText(/Connect the issues of a GitHub repository to Bins/));
+  } finally {
+    cleanup();
+  }
+});
+
+test("the Members tab lists agents without a role, lets an owner pause or remove one, and adds an agent with its lists", async () => {
+  const added: unknown[] = [];
+  const paused: unknown[] = [];
+  const removed: unknown[] = [];
+  const buildBot = { id: "bot", name: "Build bot", pausedAtUtc: null, memberships: [{ spaceId: shared, allowedContainerIds: null }] };
+  const deployBot = { id: "deploy", name: "Deploy bot", pausedAtUtc: null, memberships: [] };
+  const agents = [
+    { agent: buildBot, ownerName: "Ana", member: true },
+    { agent: deployBot, ownerName: "Bo", member: false },
+  ];
+  const api = {
+    ...homeApi(1),
+    members: async () => ({
+      ok: true,
+      error: null,
+      members: [
+        { memberId: "a", name: "Ana", role: 1, kind: 1, joinedAt: "2026-01-01T00:00:00Z", isMe: true, gitHubLogin: null },
+        { memberId: "bot", name: "Build bot", role: 4, kind: 2, joinedAt: "2026-01-03T00:00:00Z", isMe: false, gitHubLogin: null },
+      ],
+    }),
+  };
+  const agentsApi = {
+    ...agentRpc,
+    spaceAgents: async () => ({ ok: true, agents, error: null }),
+    addToSpace: async (request: unknown) => {
+      added.push(request);
+      return { ok: true, agents, error: null };
+    },
+    pauseInSpace: async (request: unknown) => {
+      paused.push(request);
+      return { ok: true, agent: agents[0], error: null };
+    },
+    removeFromSpace: async (request: unknown) => {
+      removed.push(request);
+      return { ok: true, agents: [], error: null };
+    },
+  };
+  const noop = () => {};
+  const user = userEvent.setup({ document: dom.window.document });
+  render(
+    <SpaceHome
+      space={space(1)}
+      lists={[list("bins", "Bin days"), list("road", "Roadmap")]}
+      onOpenList={noop}
+      onLeft={noop}
+      onChanged={noop}
+      api={api}
+      agentsApi={agentsApi}
+    />,
+    { container: dom.window.document.body },
+  );
+  try {
+    await user.click(screen.getByRole("tab", { name: "Members" }));
+    const people = await screen.findByRole("list", { name: "People in this space" });
+    await within(people).findByText("(agent)");
+    assert.ok(within(people).getByText("Build bot"));
+    assert.equal(within(people).queryByRole("combobox", { name: "Role of Build bot" }), null, "an agent has no owner or editor role");
+    await user.click(within(people).getByRole("button", { name: "Pause Build bot" }));
+    await waitFor(() => assert.deepEqual(paused, [{ spaceId: shared, agentId: "bot", paused: true }]));
+    await screen.findByText("Build bot was paused.");
+
+    await user.click(screen.getByRole("button", { name: "Add agent" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add an agent to Bins" });
+    const select = within(dialog).getByLabelText("Agent") as HTMLSelectElement;
+    assert.equal(select.value, "deploy", "an agent already in the space is not offered");
+    assert.match(select.textContent ?? "", /Deploy bot \(Bo\)/);
+    assert.equal((within(dialog).getByRole("checkbox", { name: "All lists" }) as HTMLInputElement).checked, true);
+    await user.click(within(dialog).getByRole("checkbox", { name: "All lists" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Bin days" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
+    await waitFor(() => assert.deepEqual(added, [{ spaceId: shared, agentId: "deploy", allowedContainerIds: ["bins"] }]));
+    await screen.findByText("Agent added.");
+
+    await user.click(within(people).getByRole("button", { name: "Remove Build bot" }));
+    await waitFor(() => assert.deepEqual(removed, [{ spaceId: shared, agentId: "bot" }]));
+    await screen.findByText("Build bot was removed.");
+  } finally {
+    cleanup();
+  }
+
+  // A viewer sees the agent named, with nothing to change and no way to add one.
+  render(<SpaceHome space={space(3)} lists={[]} onOpenList={noop} onLeft={noop} onChanged={noop} api={api} agentsApi={agentsApi} />, {
+    container: dom.window.document.body,
+  });
+  try {
+    await user.click(screen.getByRole("tab", { name: "Members" }));
+    const readOnly = await screen.findByRole("list", { name: "People in this space" });
+    await within(readOnly).findByText("(agent)");
+    assert.equal(screen.queryByRole("button", { name: "Add agent" }), null);
+    assert.equal(within(readOnly).queryByRole("button", { name: /Build bot/ }), null);
   } finally {
     cleanup();
   }
