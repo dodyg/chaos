@@ -17,7 +17,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
 
     /// <summary>Views that have a sidebar count.</summary>
     public static readonly IReadOnlyList<TaskView> CountedViews =
-        [TaskView.MyDay, TaskView.Today, TaskView.Upcoming, TaskView.Overdue, TaskView.AssignedToMe, TaskView.RecentlyCompleted, TaskView.Waiting, TaskView.DelegatedByMe];
+        [TaskView.MyDay, TaskView.Today, TaskView.Upcoming, TaskView.Overdue, TaskView.AssignedToMe, TaskView.RecentlyCompleted, TaskView.Waiting, TaskView.DelegatedByMe, TaskView.AgentWork];
 
     public async Task<TaskQueryPage> RunAsync(TaskQuerySpec spec, CancellationToken ct = default)
     {
@@ -204,6 +204,7 @@ public sealed class TaskQueries(IApplicationStore store, TimeProvider clock)
             OverdueBefore = spec.View == TaskView.Overdue ? today : null,
             OverdueZoneCutoffs = cutoffs,
             DayPlanOn = isMyDay ? spec.Day ?? today : null,
+            Now = context.Now,
             Definition = definition,
             Sort = spec.View == TaskView.Custom ? spec.Sort : null,
             Limit = Math.Clamp(spec.Limit, 1, MaxLimit),

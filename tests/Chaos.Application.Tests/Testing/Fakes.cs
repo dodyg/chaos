@@ -100,6 +100,7 @@ public sealed class InMemoryStore : IApplicationStore
         public ICalendarStore Calendars => throw new NotSupportedException("This test store does not implement calendars; they are tested against SQLite.");
         public ITimeBlockStore TimeBlocks => throw new NotSupportedException("This test store does not implement time blocking; it is tested against SQLite.");
         public IAttachmentStore Attachments => throw new NotSupportedException("This test store does not implement attachments; they are tested against SQLite.");
+        public IAgentStore Agents => throw new NotSupportedException("This test store does not implement agents; they are tested against SQLite.");
     }
 }
 
@@ -338,6 +339,9 @@ public sealed class FakeUndoStore(List<UndoEntryRecord> rows) : IUndoStore
     public Task<IReadOnlyList<UndoEntryRecord>> ListOpenAsync(string profileId, int limit, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<UndoEntryRecord>>(rows.Where(x => x.ProfileId == profileId && x.UndoneAtUtc is null).Reverse().Take(limit).ToList());
 
+    public Task<IReadOnlyList<UndoEntryRecord>> ListOpenByActorAsync(string profileId, string actorId, int limit, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<UndoEntryRecord>>(rows.Where(x => x.ProfileId == profileId && x.ActorId == actorId && x.UndoneAtUtc is null).Reverse().Take(limit).ToList());
+
     public Task<bool> MarkUndoneAsync(string entryId, DateTimeOffset undoneAtUtc, CancellationToken ct)
     {
         var index = rows.FindIndex(x => x.Id == entryId && x.UndoneAtUtc is null);
@@ -420,6 +424,17 @@ public sealed class FakeSpaceStore(List<SpaceRecord> rows, List<SpaceStateRecord
         if (index >= 0) rows[index] = rows[index] with { TagsOwnerOnly = ownerOnly, Version = rows[index].Version + 1, UpdatedAtUtc = now };
         return Task.CompletedTask;
     }
+    public Task SetAgentSettingsAsync(string id, bool? agentsAllowed, int? claimMinutes, bool? allowAgentsToClose, DateTimeOffset now, CancellationToken ct)
+    {
+        var index = rows.FindIndex(row => row.Id == id);
+        if (index >= 0)
+            rows[index] = rows[index] with
+            {
+                AgentsAllowed = agentsAllowed ?? rows[index].AgentsAllowed, ClaimMinutes = claimMinutes ?? rows[index].ClaimMinutes,
+                AllowAgentsToClose = allowAgentsToClose ?? rows[index].AllowAgentsToClose, Version = rows[index].Version + 1, UpdatedAtUtc = now,
+            };
+        return Task.CompletedTask;
+    }
     public Task<SpaceStateRecord?> GetStateAsync(string id, CancellationToken ct) => Task.FromResult(states.FirstOrDefault(state => state.Id == id));
     public Task<SpaceStateRecord?> UpdateStateAsync(SpaceStateRecord state, long expectedVersion, CancellationToken ct) => FakeUpdate.Apply(states, state, expectedVersion);
     public Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>([.. tasks.Where(task => task.CustomStateId == id)]);
@@ -481,6 +496,10 @@ public sealed class FakeTaskStore(List<TaskRecord> rows, List<TaskAssigneeRecord
     public Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct) => Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(x => x.DeletedAtUtc is null && x.PlannedDate is not null && (spaceIds is not { Count: > 0 } || spaceIds.Contains(x.SpaceId))).OrderBy(x => x.PlannedDate).ThenBy(x => x.Id).ToList());
     public Task<TaskRecord?> GetAsync(string taskId, CancellationToken ct) =>
         Task.FromResult(rows.FirstOrDefault(row => row.Id == taskId && row.DeletedAtUtc is null));
+    public Task<IReadOnlyList<TaskRecord>> ListClaimsExpiredAsync(DateTimeOffset before, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(row => row.DeletedAtUtc is null && row.ClaimedById is not null && row.ClaimExpiresAtUtc <= before).ToList());
+    public Task<IReadOnlyList<TaskRecord>> ListClaimedByAsync(string claimedById, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TaskRecord>>(rows.Where(row => row.DeletedAtUtc is null && row.ClaimedById == claimedById).ToList());
 
     public Task AddAsync(TaskRecord task, CancellationToken ct)
     {

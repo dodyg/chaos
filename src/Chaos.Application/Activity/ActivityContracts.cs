@@ -32,7 +32,7 @@ public sealed record ActivityEntity(string Kind, string Key, string Op, long? Ve
 
 public sealed record ActivityEntry(
     long Seq, string OperationId, string OccurredAtUtc, string Source, string Action, string Outcome, string? JobRunId,
-    IReadOnlyList<ActivityEntity> Entities);
+    IReadOnlyList<ActivityEntity> Entities, string? ActorId = null);
 
 public sealed record ActivityPage(IReadOnlyList<ActivityEntry> Entries, long Head, bool Reset);
 

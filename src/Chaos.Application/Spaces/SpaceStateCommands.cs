@@ -3,12 +3,19 @@ using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
 using Chaos.Domain.Tasks;
 using Chaos.Domain.Validation;
+using Chaos.Sync;
 
 namespace Chaos.Application.Spaces;
 
 public sealed record CreateSpaceStateCommand(string OperationId, string SpaceId, string Name, TaskItemStatus BaseStatus);
 public sealed record DeleteSpaceStateCommand(string OperationId, string StateId, long ExpectedVersion);
 public sealed record SpaceStateMutationResult(SpaceStateRecord State, bool Replayed);
+
+/// <summary>The agent settings of a space (PLAN3 12.3, 12.4, E8).</summary>
+public sealed record SpaceAgentSettings(bool AgentsAllowed, int ClaimMinutes, bool AllowAgentsToClose)
+{
+    public static SpaceAgentSettings Of(SpaceRecord space) => new(space.AgentsAllowed, space.ClaimMinutes, space.AllowAgentsToClose);
+}
 
 /// <summary>Owner-managed states retain a base status for existing views and integrations.</summary>
 public sealed class SpaceStateCommands(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
@@ -25,6 +32,33 @@ public sealed class SpaceStateCommands(IApplicationStore store, IIdGenerator ids
             await RequireOwnerAsync(session, space, profile, token);
             if (space.TagsOwnerOnly != ownerOnly) await session.Spaces.SetTagsOwnerOnlyAsync(spaceId, ownerOnly, clock.GetUtcNow(), token);
             return true;
+        }, ct);
+
+    /// <summary>The space's agent settings (PLAN3 12.3, 12.4): whether agents may be added, how many minutes a claim lasts, whether an agent may close a task.</summary>
+    public Task<SpaceAgentSettings> GetAgentSettingsAsync(string spaceId, CancellationToken ct = default) =>
+        store.QueryAsync(async (session, token) => SpaceAgentSettings.Of(await session.Spaces.GetAsync(spaceId, token)
+            ?? throw AppException.NotFound("That space is unavailable.")), ct);
+
+    /// <summary>Changes the given agent settings; an owner of the space only. The change syncs like any other space setting.</summary>
+    public Task<SpaceAgentSettings> SetAgentSettingsAsync(string spaceId, bool? agentsAllowed, int? claimMinutes, bool? allowAgentsToClose, CancellationToken ct = default) =>
+        store.ExecuteAsync(async (session, token) =>
+        {
+            if (claimMinutes is { } minutes && (minutes < AgentLimits.MinClaimMinutes || minutes > AgentLimits.MaxClaimMinutes))
+                throw AppException.Validation("claimMinutes", $"Choose {AgentLimits.MinClaimMinutes} to {AgentLimits.MaxClaimMinutes} minutes.");
+            var profile = await session.Profiles.GetPrimaryAsync(token) ?? throw AppException.NotFound("Your profile is unavailable.");
+            var space = await session.Spaces.GetAsync(spaceId, token) ?? throw AppException.NotFound("That space is unavailable.");
+            await RequireOwnerAsync(session, space, profile, token);
+            var current = SpaceAgentSettings.Of(space);
+            var changed = (agentsAllowed is { } allowed && allowed != current.AgentsAllowed)
+                || (claimMinutes is { } requested && requested != current.ClaimMinutes)
+                || (allowAgentsToClose is { } close && close != current.AllowAgentsToClose);
+            if (!changed)
+            {
+                return current;
+            }
+
+            await session.Spaces.SetAgentSettingsAsync(spaceId, agentsAllowed, claimMinutes, allowAgentsToClose, clock.GetUtcNow(), token);
+            return new SpaceAgentSettings(agentsAllowed ?? current.AgentsAllowed, claimMinutes ?? current.ClaimMinutes, allowAgentsToClose ?? current.AllowAgentsToClose);
         }, ct);
     public Task<IReadOnlyList<SpaceStateRecord>> ListAsync(string spaceId, CancellationToken ct = default) =>
         store.QueryAsync((session, token) => session.Spaces.ListStatesAsync(spaceId, token), ct);

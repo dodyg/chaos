@@ -16,6 +16,23 @@ public sealed class SqliteSpaceStore(SqliteConnection connection) : ISpaceStore
         command.Parameters.AddWithValue("$id", spaceId);
         await command.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task SetAgentSettingsAsync(string spaceId, bool? agentsAllowed, int? claimMinutes, bool? allowAgentsToClose, DateTimeOffset now, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Spaces SET AgentsAllowed=COALESCE($allowed, AgentsAllowed), ClaimMinutes=COALESCE($minutes, ClaimMinutes),
+                AllowAgentsToClose=COALESCE($close, AllowAgentsToClose), Version=Version+1, UpdatedAtUtc=$now
+            WHERE Id=$id AND DeletedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$allowed", agentsAllowed is { } allowed ? (object)(allowed ? 1L : 0L) : DBNull.Value);
+        command.Parameters.AddWithValue("$minutes", claimMinutes is { } minutes ? (object)(long)minutes : DBNull.Value);
+        command.Parameters.AddWithValue("$close", allowAgentsToClose is { } close ? (object)(close ? 1L : 0L) : DBNull.Value);
+        command.Parameters.AddWithValue("$now", StorageFormats.Instant(now));
+        command.Parameters.AddWithValue("$id", spaceId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<IReadOnlyList<SpaceStateRecord>> ListStatesAsync(string spaceId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();
@@ -139,6 +156,9 @@ public sealed class SqliteSpaceStore(SqliteConnection connection) : ISpaceStore
         Kind = (SpaceKind)(int)r.L("Kind"),
         Name = r.S("Name"),
         TagsOwnerOnly = r.L("TagsOwnerOnly") != 0,
+        AgentsAllowed = r.L("AgentsAllowed") != 0,
+        ClaimMinutes = (int)r.L("ClaimMinutes"),
+        AllowAgentsToClose = r.L("AllowAgentsToClose") != 0,
         DefaultDeadlineReminderJson = r.Sn("DefaultDeadlineReminderJson"),
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),

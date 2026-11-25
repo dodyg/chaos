@@ -54,6 +54,11 @@ function task(id: string, title: string): TaskResponse {
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
   };
 }
 function tag(id: string, path: string, parentId: string | null = null): TagResponse {

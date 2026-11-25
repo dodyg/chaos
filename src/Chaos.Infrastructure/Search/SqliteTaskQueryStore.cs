@@ -244,7 +244,7 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                     ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM TaskAssignees a JOIN SpaceMembers m ON m.SpaceId = t.SpaceId AND m.MemberId = a.MemberId JOIN Spaces s ON s.Id=m.SpaceId WHERE a.TaskId = t.Id AND a.MemberId = {builder.P(criteria.ProfileId)} AND a.DeletedAtUtc IS NULL AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
                     : criteria.View == TaskView.DelegatedByMe
                     ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM SpaceMembers m JOIN Spaces s ON s.Id=m.SpaceId WHERE m.SpaceId=t.SpaceId AND m.MemberId={builder.P(criteria.ProfileId)} AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
-                    : criteria.View is TaskView.Custom or TaskView.Search or TaskView.MyDay
+                    : criteria.View is TaskView.Custom or TaskView.Search or TaskView.MyDay or TaskView.AgentWork
                     ? $"(t.SpaceId = {builder.P(criteria.SpaceId)} OR EXISTS (SELECT 1 FROM SpaceMembers m JOIN Spaces s ON s.Id=m.SpaceId WHERE m.SpaceId=t.SpaceId AND m.MemberId={builder.P(criteria.ProfileId)} AND m.RemovedAtUtc IS NULL AND s.DeletedAtUtc IS NULL))"
                     : $"t.SpaceId = {builder.P(criteria.SpaceId)}",
                 "t.DeletedAtUtc IS NULL",
@@ -346,6 +346,16 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                     + " LEFT JOIN SpaceMembers dm ON dm.SpaceId = t.SpaceId AND dm.MemberId = dg.ToMemberId";
             }
 
+            if (criteria.View == TaskView.AgentWork)
+            {
+                // PLAN3 12.8: Ready for agent, held by an agent (a live claim), or Needs review after an agent worked on it.
+                where.Add($"""
+                    ((t.AgentReady = 1 AND t.ClaimedById IS NULL)
+                     OR (t.ClaimedById LIKE 'agent:%' AND t.ClaimExpiresAtUtc > {builder.P(StorageFormats.Instant(criteria.Now))})
+                     OR (t.Status = 3 AND EXISTS (SELECT 1 FROM TaskHistory h WHERE h.TaskId = t.Id AND h.Actor LIKE 'agent:%')))
+                    """);
+            }
+
             if (criteria.Statuses.Count > 0) where.Add($"t.Status IN ({string.Join(", ", criteria.Statuses.Select(status => builder.P((long)status)))})");
             else if (criteria.OpenOnly) where.Add("t.Status NOT IN (4,5)");
             if (criteria.DoneOnly) where.Add("t.Status = 4");
@@ -404,6 +414,7 @@ public sealed class SqliteTaskQueryStore : ITaskQueryStore
                 TaskView.RecentlyCompleted => [new("t.CompletedAtUtc", true)],
                 TaskView.Waiting => [new("(w.PersonNormalized IS NULL)", false), new("COALESCE(w.PersonNormalized, '')", false), new("COALESCE(f.DueAtUtc, '9999-12-31')", false)],
         TaskView.DelegatedByMe => [new("COALESCE(dm.DisplayName, '')", false), new("COALESCE(t.DueDate, '9999-12-31')", false), new("t.Title", false)],
+                TaskView.AgentWork => [new("CASE WHEN t.AgentReady = 1 AND t.ClaimedById IS NULL THEN 0 WHEN t.ClaimedById IS NOT NULL THEN 1 ELSE 2 END", false), new("t.Title", false)],
                 TaskView.Search when criteria.Text is not null => [new("h.Rank", false)],
                 TaskView.Search => [new("t.UpdatedAtUtc", true)],
                 _ => [new("c.Position", false), new("t.Position", false)],

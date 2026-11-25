@@ -117,6 +117,7 @@ const reasonText: Record<string, string> = {
   DueSoon: "Due soon",
   RecurrenceToday: "Repeats today",
   UnfinishedYesterday: "Unfinished yesterday",
+  WaitingForReview: "Waiting for your review",
 };
 
 function dayRequest(day: string, finished: boolean, focus: Focus): TaskQueryRequest {

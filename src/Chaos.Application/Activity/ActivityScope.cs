@@ -9,6 +9,9 @@ public static class ActivitySources
     public const string Import = "import";
     public const string Undo = "undo";
     public const string System = "system";
+
+    /// <summary>A local agent's tool call (PLAN3 12.1): the scope's <see cref="ActorId"/> is then <c>agent:&lt;id&gt;</c>.</summary>
+    public const string Agent = "agent";
 }
 
 /// <summary>

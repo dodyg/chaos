@@ -7,6 +7,9 @@
   <ItemGroup>
     <!-- Local MCP transport: Q0 relay; the tool dispatcher arrives in Q18. -->
     <PackageVersion Include="ModelContextProtocol" Version="2.4.0" Condition="'$(MSBuildProjectName)' == 'Chaos.Desktop' Or '$(MSBuildProjectName)' == 'Chaos.Desktop.Tests'" />
+    <!-- Agent tools (Q17, PLAN3 §12): the tool type of both MCP surfaces is the Microsoft.Extensions.AI AIFunction
+         (McpServerTool.Create in SDK 2.4.0). Latest stable with a net11.0 asset; verified with the MCP SDK pin. -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="11.0.1" />
     <!-- Desktop framework: NeoAstra 1.12.0 (plan §1). Keep template/tool versions aligned. -->
     <PackageVersion Include="NeoAstra" Version="1.12.0" />
     <!-- Client persistence: SQLite via Microsoft.Data.Sqlite 11.0.0 (plan §1). EF Core is banned on the

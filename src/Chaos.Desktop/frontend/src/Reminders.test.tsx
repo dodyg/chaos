@@ -45,6 +45,11 @@ function task(patch: Partial<TaskResponse> = {}): TaskResponse {
     dueTime: "14:00:00",
     dueZoneId: "UTC",
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
     ...patch,
   };
 }

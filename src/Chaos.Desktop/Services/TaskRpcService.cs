@@ -48,7 +48,12 @@ public sealed record TaskResponse(
     string? PlannedZoneId,
     string? DueTime,
     string? DueZoneId,
-    string? SectionId);
+    string? SectionId,
+    string? ClaimedById = null,
+    string? ClaimedAtUtc = null,
+    string? ClaimExpiresAtUtc = null,
+    bool AgentReady = false,
+    string? AgentAssigneeId = null);
 
 public sealed record TaskErrorFieldResponse(string FieldPath, string Message);
 
@@ -205,7 +210,9 @@ public sealed class TaskRpcService(TaskCommands commands, GitHubSyncEngine? sync
         StorageFormats.Instant(task.CreatedAtUtc),
         StorageFormats.Instant(task.UpdatedAtUtc),
         task.Priority.ToString(), task.EstimateMinutes, task.CapacityCategory.ToString(),
-        task.PlannedTime?.ToString("HH:mm:ss"), task.PlannedZoneId, task.DueTime?.ToString("HH:mm:ss"), task.DueZoneId, task.SectionId);
+        task.PlannedTime?.ToString("HH:mm:ss"), task.PlannedZoneId, task.DueTime?.ToString("HH:mm:ss"), task.DueZoneId, task.SectionId,
+        task.ClaimedById, task.ClaimedAtUtc is { } claimedAt ? StorageFormats.Instant(claimedAt) : null,
+        task.ClaimExpiresAtUtc is { } expires ? StorageFormats.Instant(expires) : null, task.AgentReady, task.AgentAssigneeId);
 
     internal static TaskErrorResponse ToErrorResponse(AppException error) => new(
         KindToken(error.Kind),

@@ -73,6 +73,7 @@ import { useTimeZones } from "./ZoneSelect";
 import { CategoryDot, FocusSwitch, asCategory, useFocus, type Category } from "./category";
 import {
   AlarmClock,
+  Bot,
   ChevronRight,
   FileText,
   NotebookPen,
@@ -129,6 +130,7 @@ const viewIcons: Record<string, React.ReactNode> = {
   RecentlyCompleted: <CircleCheckBig />,
   AssignedToMe: <UserRound />,
   DelegatedByMe: <Handshake />,
+  AgentWork: <Bot />,
 };
 
 type Api = {
@@ -2318,6 +2320,7 @@ export function App({
                     changed();
                     void refreshContainers().catch((e: unknown) => setError(String(e)));
                   }}
+                  onAgentsChanged={() => changed()}
                   onNavigate={(next) => {
                     setEditing(null);
                     setView(next);

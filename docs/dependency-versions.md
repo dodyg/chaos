@@ -180,3 +180,18 @@ HTTP experiment pins `ModelContextProtocol.AspNetCore` to the matching version. 
 Aspire's separate AppHost still resolves MCP 1.4.1 transitively from Aspire 17.0.0; the desktop
 pin is scoped to the desktop and its tests so it does not force a major SDK upgrade into the
 development host without a compatibility check.
+
+## Agent tools (Q17, 2026-11-25)
+
+| Package | Version | Licence | Note |
+| --- | --- | --- | --- |
+| Microsoft.Extensions.AI | 11.0.1 | MIT | Latest stable on NuGet at the time (queried 2026-11-25; 11.0.1 has a net11.0 asset and needs only Abstractions 11.0.1 and System.Numerics.Tensors 11.0.0). Referenced by `Chaos.Application` (local agent tools) and `Chaos.Server` (service agent tools). |
+
+Why this package: the pinned `ModelContextProtocol` 2.4.0 takes its server tools as
+`Microsoft.Extensions.AI.AIFunction`s (`McpServerTool.Create(AIFunction)`) and its client tools are
+`AIFunction`s, so the agent tool contract of PLAN3 §12.2 is made once with `AIFunctionFactory` and served by
+both MCP surfaces. The package raises `Microsoft.Extensions.AI.Abstractions` to 11.0.1 under the desktop's
+MCP SDK 2.4.0, which was compiled against 10.11.0. Checked before pinning with a probe on .NET 11.0.0: an SDK
+2.4.0 stdio server serving an `AIFunctionFactory` function, with a 2.4.0 `McpClient` listing it with its JSON
+schema and calling it, resolved Abstractions 11.0.0.0. When the MCP SDK moves to a build that targets the 11
+line itself, nothing else changes.

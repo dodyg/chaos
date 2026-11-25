@@ -23,12 +23,15 @@ public sealed class PermissionMatrixTests(PostgresServer postgres)
         calendar_source=create,name,look,busy,enabled,owner,position,deleted
         space_notification_setting=create,settings
         view_alert_setting=create,settings
-        task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted
+        task=create,title,notes,status,assignment,place,position,priority,estimate,category,planned,due,deleted,claim,agent
         task_assignee=create,done,deleted
         task_delegation=create,brief,state,deleted
         nudge=record
         calendar_event_link=create,deleted
         time_block_event=create,state
+        local_agent=create,name,state,deleted
+        local_agent_access=create,deleted
+        task_proposal=create,state,deleted
         subtask=create,title,notes,status,position,deleted
         task_tag=deleted
         subtask_tag=deleted

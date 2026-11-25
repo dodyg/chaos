@@ -38,6 +38,8 @@ internal sealed class RecordingSpaceStore(RecordingDataSession recorder, ISpaceS
     public Task<SpaceStateRecord?> GetStateAsync(string id, CancellationToken ct) => inner.GetStateAsync(id, ct);
     public Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct) => inner.ListTasksInStateAsync(id, ct);
     public Task SetTagsOwnerOnlyAsync(string id, bool ownerOnly, DateTimeOffset now, CancellationToken ct) => inner.SetTagsOwnerOnlyAsync(id, ownerOnly, now, ct);
+    public Task SetAgentSettingsAsync(string id, bool? agentsAllowed, int? claimMinutes, bool? allowAgentsToClose, DateTimeOffset now, CancellationToken ct) =>
+        inner.SetAgentSettingsAsync(id, agentsAllowed, claimMinutes, allowAgentsToClose, now, ct);
     public async Task AddStateAsync(SpaceStateRecord state, CancellationToken ct)
     {
         await inner.AddStateAsync(state, ct);
@@ -285,6 +287,7 @@ public sealed class RecordingDataSession : IDataSession
     public ICalendarStore Calendars => _inner.Calendars;
     public ITimeBlockStore TimeBlocks => _inner.TimeBlocks;
     public IAttachmentStore Attachments => _attachments ??= new RecordingAttachmentStore(this, _inner.Attachments);
+    public IAgentStore Agents => _inner.Agents; // an agent and its grants are settings, not work an undo reverts
     public Chaos.Application.Activity.IActivityRecorder Activity => _inner.Activity;
 
     /// <summary>The operation being run, set when its receipt check passes (not on a replay).</summary>
@@ -490,6 +493,7 @@ public sealed class RecordingDataSession : IDataSession
                 changes.Entities.ToDictionary(change => $"{change.Kind}:{change.Id}", change => change.AfterVersion),
                 StoredJsonFormats.Options),
             AppliedAtUtc = now,
+            ActorId = AmbientActorContext.Instance.CurrentActor(profile.Id),
         }, ct);
         await _inner.Undo.PruneAsync(profile.Id, UndoLimit, ct);
     }
@@ -661,6 +665,9 @@ internal static class UndoLabels
         ["task.delete"] = "Delete task",
         ["task.restore"] = "Restore task",
         ["task.restore-fields"] = "Restore earlier values of",
+        ["agent.claim_task"] = "Claim",
+        ["agent.release_task"] = "Release the claim on",
+        ["agent.heartbeat"] = "Extend the claim on",
         ["subtask.add"] = "Add subtask",
         ["subtask.update"] = "Edit subtask",
         ["subtask.set-status"] = "Change subtask status",
@@ -762,6 +769,8 @@ internal sealed class RecordingTaskStore(RecordingDataSession recorder, ITaskSto
     public Task<IReadOnlyList<TaskRecord>> ListPlannedAsync(IReadOnlyList<string>? spaceIds, CancellationToken ct) => inner.ListPlannedAsync(spaceIds, ct);
     public Task<IReadOnlyList<TaskRecord>> ListDeletedByContainerAsync(string containerId, CancellationToken ct) => inner.ListDeletedByContainerAsync(containerId, ct);
     public Task<long> GetNextPositionAsync(string containerId, CancellationToken ct) => inner.GetNextPositionAsync(containerId, ct);
+    public Task<IReadOnlyList<TaskRecord>> ListClaimsExpiredAsync(DateTimeOffset before, CancellationToken ct) => inner.ListClaimsExpiredAsync(before, ct);
+    public Task<IReadOnlyList<TaskRecord>> ListClaimedByAsync(string claimedById, CancellationToken ct) => inner.ListClaimedByAsync(claimedById, ct);
 
     public async Task AddAsync(TaskRecord task, CancellationToken ct)
     {

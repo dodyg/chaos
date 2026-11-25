@@ -51,6 +51,11 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
     ...patch,
   };
 }
@@ -86,7 +91,7 @@ const summary = (date: string, today: string, open = 0): DaySummaryResponse => (
 });
 
 /** A fake day service: one chosen task per date in `days`, suggestions for today, and a log of changes. */
-function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: TaskResponse[] = []) {
+function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: TaskResponse[] = [], reason = "Overdue") {
   const calls: { method: string; request: unknown }[] = [];
   const queries: TaskQueryRequest[] = [];
   const change = (method: string) => async (request: { date?: string; fromDate?: string }) => {
@@ -103,7 +108,7 @@ function fakes(today: string, days: Record<string, TaskResponse[]>, suggested: T
     }),
     suggestions: async () => ({
       ok: true,
-      suggestions: suggested.map((item) => ({ task: item, containerName: "Inbox", reason: "Overdue" })),
+      suggestions: suggested.map((item) => ({ task: item, containerName: "Inbox", reason })),
       error: null,
     }),
     add: change("add"),
@@ -207,6 +212,28 @@ test("suggestions are only offered; adding one sends today's date and nothing is
     date: "2026-11-10",
     taskId: "t1",
   });
+  cleanup();
+});
+
+test("a task an agent handed back is suggested as waiting for your review", async () => {
+  const handedBack = task("r1", "Review the draft", { status: "NeedsReview" });
+  const { api, query } = fakes("2026-11-10", {}, [handedBack], "WaitingForReview");
+  render(
+    <MyDay
+      clock={clock("2026-11-10")}
+      revision={0}
+      selectedTaskId={null}
+      busy={false}
+      api={api}
+      queryApi={query}
+      onOpen={() => {}}
+      onChanged={() => {}}
+    />,
+    { container: dom.window.document.body },
+  );
+  const suggestions = await screen.findByRole("list", { name: "Suggested tasks" });
+  assert.ok(within(suggestions).getByText("Review the draft"));
+  assert.ok(within(suggestions).getByText("Waiting for your review"));
   cleanup();
 });
 

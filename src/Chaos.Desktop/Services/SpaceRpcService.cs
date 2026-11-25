@@ -34,6 +34,9 @@ public sealed record CreateSpaceStateRequest(string OperationId, string SpaceId,
 public sealed record DeleteSpaceStateRequest(string OperationId, string StateId, string ExpectedVersion);
 public sealed record SpaceTagPolicyRequest(string SpaceId, bool OwnerOnly);
 public sealed record SpaceTagPolicyResponse(bool Ok, bool OwnerOnly, TaskErrorResponse? Error);
+/// <summary>The space's agent settings (PLAN3 12.3): whether agents may be added, claim minutes (15–1440), whether an agent may close a task. A null field leaves the setting as it is.</summary>
+public sealed record SpaceAgentSettingsRequest(string SpaceId, bool? AgentsAllowed, int? ClaimMinutes, bool? AllowAgentsToClose);
+public sealed record SpaceAgentSettingsResponse(bool Ok, bool AgentsAllowed, int ClaimMinutes, bool AllowAgentsToClose, TaskErrorResponse? Error);
 
 /// <summary>
 /// Shared spaces for the window (PLAN3 Q5). Every method that changes membership needs the service and says so offline;
@@ -50,6 +53,18 @@ public sealed class SpaceRpcService(SpaceQueries queries, SpaceCommands commands
     [NeoRpcMethod("setTagPolicy")]
     public ValueTask<SpaceDoneResponse> SetTagPolicyAsync(SpaceTagPolicyRequest request, CancellationToken ct) =>
         Rpc.Run("spaces.setTagPolicy", async () => { await states.SetTagsOwnerOnlyAsync(request.SpaceId, request.OwnerOnly, ct); return new SpaceDoneResponse(true, null); }, Failed);
+
+    [NeoRpcMethod("agentSettings")]
+    public ValueTask<SpaceAgentSettingsResponse> AgentSettingsAsync(SpaceIdRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.agentSettings", async () => Map(await states.GetAgentSettingsAsync(request.SpaceId, ct)),
+            error => new SpaceAgentSettingsResponse(false, false, 0, false, error));
+
+    [NeoRpcMethod("setAgentSettings")]
+    public ValueTask<SpaceAgentSettingsResponse> SetAgentSettingsAsync(SpaceAgentSettingsRequest request, CancellationToken ct) =>
+        Rpc.Run("spaces.setAgentSettings", async () => Map(await states.SetAgentSettingsAsync(request.SpaceId, request.AgentsAllowed, request.ClaimMinutes, request.AllowAgentsToClose, ct)),
+            error => new SpaceAgentSettingsResponse(false, false, 0, false, error));
+
+    private static SpaceAgentSettingsResponse Map(SpaceAgentSettings settings) => new(true, settings.AgentsAllowed, settings.ClaimMinutes, settings.AllowAgentsToClose, null);
     [NeoRpcMethod("states")]
     public ValueTask<SpaceStatesResponse> StatesAsync(SpaceIdRequest request, CancellationToken ct) =>
         Rpc.Run("spaces.states", async () => new SpaceStatesResponse(true,

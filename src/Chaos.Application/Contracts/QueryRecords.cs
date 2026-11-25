@@ -23,6 +23,11 @@ public enum TaskView
     Custom = 10,
     /// <summary>Tasks the person delegated and that are still live (PLAN3 9.11), grouped by recipient then due date.</summary>
     DelegatedByMe = 11,
+    /// <summary>
+    /// Agent work (PLAN3 12.8): tasks Ready for agent, tasks an agent holds a live claim on, and tasks Needs review that an
+    /// agent worked on. Ready first, then claimed, then review; by title within each.
+    /// </summary>
+    AgentWork = 12,
 }
 
 /// <summary>An inclusive range of local dates; either end may be open.</summary>
@@ -111,6 +116,8 @@ public sealed record TaskQueryCriteria
     public IReadOnlyList<ZoneCutoff> OverdueZoneCutoffs { get; init; } = [];
     /// <summary>My Day view: active (not removed) items of the profile's plan for this local date.</summary>
     public DateOnly? DayPlanOn { get; init; }
+    /// <summary>The moment the view is computed: a live claim is one whose expiry is still ahead (Agent work).</summary>
+    public DateTimeOffset Now { get; init; }
     /// <summary>Custom view: the resolved condition tree and sort.</summary>
     public ResolvedViewGroup? Definition { get; init; }
     public ViewSort? Sort { get; init; }

@@ -42,6 +42,7 @@ public interface IDataSession
     ICalendarStore Calendars { get; }
     ITimeBlockStore TimeBlocks { get; }
     IAttachmentStore Attachments { get; }
+    IAgentStore Agents { get; }
     /// <summary>Device-only writers note their changes here (PLAN2 §6.4 rule 3).</summary>
     Chaos.Application.Activity.IActivityRecorder Activity { get; }
 }
@@ -348,6 +349,47 @@ public interface IUndoStore
     Task PruneAsync(string profileId, int keep, CancellationToken ct);
     /// <summary>Rewrites the change set of an open entry (an undo re-points older entries to the versions it wrote).</summary>
     Task ReplacePayloadAsync(string entryId, string inversePayload, string expectedVersions, CancellationToken ct);
+    /// <summary>Open entries made by one actor (an agent), newest first (PLAN3 12.7).</summary>
+    Task<IReadOnlyList<UndoEntryRecord>> ListOpenByActorAsync(string profileId, string actorId, int limit, CancellationToken ct);
+}
+
+/// <summary>
+/// Local agents, their list access, their tokens and task proposals (PLAN3 12.3, 12.6; migration 050), within the
+/// caller's transaction. Agents, access and proposals are synced aggregates; tokens are this device's.
+/// </summary>
+public interface IAgentStore
+{
+    /// <summary>Live agents by name.</summary>
+    Task<IReadOnlyList<LocalAgentRecord>> ListAsync(CancellationToken ct);
+    Task<LocalAgentRecord?> GetAsync(string agentId, CancellationToken ct);
+    Task<LocalAgentRecord?> GetIncludingDeletedAsync(string agentId, CancellationToken ct);
+    Task AddAsync(LocalAgentRecord agent, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<LocalAgentRecord?> UpdateAsync(LocalAgentRecord agent, long expectedVersion, CancellationToken ct);
+    /// <summary>Grants of one agent, live ones only unless asked.</summary>
+    Task<IReadOnlyList<LocalAgentAccessRecord>> ListAccessAsync(string agentId, bool includeRevoked, CancellationToken ct);
+    Task<LocalAgentAccessRecord?> FindAccessAsync(string agentId, string containerId, CancellationToken ct);
+    /// <summary>Inserts or updates the grant in place.</summary>
+    Task SaveAccessAsync(LocalAgentAccessRecord access, CancellationToken ct);
+
+    Task AddTokenAsync(LocalAgentTokenRecord token, CancellationToken ct);
+    Task<IReadOnlyList<LocalAgentTokenRecord>> ListTokensAsync(string agentId, CancellationToken ct);
+    /// <summary>The live token with this SHA-256, of a live agent: a revoked token, or one of a removed agent, is not found.</summary>
+    Task<LocalAgentTokenRecord?> FindTokenByHashAsync(string tokenHash, CancellationToken ct);
+    Task<LocalAgentTokenRecord?> FindTokenAsync(string tokenId, CancellationToken ct);
+    Task TouchTokenAsync(string tokenId, DateTimeOffset at, CancellationToken ct);
+    Task RevokeTokenAsync(string tokenId, DateTimeOffset at, CancellationToken ct);
+    Task RevokeTokensAsync(string agentId, DateTimeOffset at, CancellationToken ct);
+
+    Task AddProposalAsync(TaskProposalRecord proposal, CancellationToken ct);
+    Task<IReadOnlyList<TaskProposalRecord>> ListProposalsAsync(string spaceId, CancellationToken ct);
+    /// <returns>The stored row, or null when the expected version no longer matches.</returns>
+    Task<TaskProposalRecord?> UpdateProposalAsync(TaskProposalRecord proposal, long expectedVersion, CancellationToken ct);
+
+    /// <summary>How often an actor made an action in the activity log since <paramref name="since"/>: the hourly counters (E8).</summary>
+    Task<int> CountActionsAsync(string actorId, string action, DateTimeOffset since, CancellationToken ct);
+    /// <summary>When the actor first made <paramref name="action"/> since <paramref name="since"/>: the start of its hour.</summary>
+    Task<DateTimeOffset?> FirstActionAsync(string actorId, string action, DateTimeOffset since, CancellationToken ct);
 }
 
 public interface IChecklistConversionStore
@@ -386,6 +428,8 @@ public interface ISpaceStore
     Task<SpaceStateRecord?> UpdateStateAsync(SpaceStateRecord state, long expectedVersion, CancellationToken ct);
     Task<IReadOnlyList<TaskRecord>> ListTasksInStateAsync(string id, CancellationToken ct);
     Task SetTagsOwnerOnlyAsync(string spaceId, bool ownerOnly, DateTimeOffset now, CancellationToken ct);
+    /// <summary>Writes the space's agent settings (12.3); only the given ones change.</summary>
+    Task SetAgentSettingsAsync(string spaceId, bool? agentsAllowed, int? claimMinutes, bool? allowAgentsToClose, DateTimeOffset now, CancellationToken ct);
 }
 
 public interface IPeopleStore
@@ -440,6 +484,10 @@ public interface ITaskStore
     Task<TaskRecord?> UpdateAsync(TaskRecord updated, long expectedVersion, CancellationToken ct);
     /// <summary>Highest Position currently used inside a container among active tasks.</summary>
     Task<long> GetNextPositionAsync(string containerId, CancellationToken ct);
+    /// <summary>Live tasks whose claim ran out at or before <paramref name="before"/> (PLAN3 12.4).</summary>
+    Task<IReadOnlyList<TaskRecord>> ListClaimsExpiredAsync(DateTimeOffset before, CancellationToken ct);
+    /// <summary>Live tasks claimed by one actor (<c>person:…</c> or <c>agent:…</c>).</summary>
+    Task<IReadOnlyList<TaskRecord>> ListClaimedByAsync(string claimedById, CancellationToken ct);
 }
 
 public interface ISubtaskStore

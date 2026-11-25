@@ -18,6 +18,9 @@ public sealed class PeopleQueries(IApplicationStore store)
             var myActor = profile is null ? null : $"person:{profile.Id}";
             if (space.Kind == SpaceKind.Personal && profile is not null && !directory.Any(m => string.Equals(m.ActorId, myActor, StringComparison.OrdinalIgnoreCase)))
                 directory.Add(new DirectoryMember(myActor!, profile.DisplayName));
+            // The person's local agents name themselves in Personal-space history and diary entries (PLAN3 6.1, 12.3).
+            if (space.Kind == SpaceKind.Personal)
+                directory.AddRange((await session.Agents.ListAsync(token)).Select(agent => new DirectoryMember($"agent:{agent.Id}", agent.Name)));
             return (IReadOnlyList<PersonDisplay>)[.. directory.Select(m =>
             {
                 var member = members.FirstOrDefault(entry => string.Equals(entry.ActorId, m.ActorId, StringComparison.OrdinalIgnoreCase));
@@ -28,7 +31,10 @@ public sealed class PeopleQueries(IApplicationStore store)
     public async Task<PersonDisplay> GetAsync(string spaceId, string? actorId, CancellationToken ct = default)
     {
         var people = await ListAsync(spaceId, ct);
+        // A diary entry names its author by profile ID only; an agent author is stored the same way and resolves by its agent ID.
+        var agentForm = actorId is { Length: > 7 } && actorId.StartsWith("person:", StringComparison.OrdinalIgnoreCase) ? "agent:" + actorId[7..] : null;
         return people.FirstOrDefault(p => string.Equals(p.ActorId, actorId, StringComparison.OrdinalIgnoreCase))
+            ?? people.FirstOrDefault(p => agentForm is not null && string.Equals(p.ActorId, agentForm, StringComparison.OrdinalIgnoreCase))
             ?? PeopleDirectory.Resolve(actorId, null, []);
     }
 }

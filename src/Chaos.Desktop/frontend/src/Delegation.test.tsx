@@ -47,6 +47,11 @@ function task(): TaskResponse {
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
   };
 }
 

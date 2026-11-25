@@ -185,6 +185,11 @@ test("an activation from a notification opens its task and shows what happened",
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
   };
   let taken = 0;
   const api = {

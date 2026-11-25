@@ -41,7 +41,8 @@ public sealed class SpaceService(
     SyncBroadcaster broadcaster,
     IEmailSender mail,
     IOptions<SharingOptions> options,
-    ILogger<SpaceService> log)
+    ILogger<SpaceService> log,
+    AgentService agents)
 {
     private readonly TimeSpan _emailExpiry = TimeSpan.FromDays(14);
 
@@ -210,28 +211,41 @@ public sealed class SpaceService(
                 return SpaceOperation<MemberDto>.Refuse(current is null ? SyncRejection.NotMember : SyncRejection.Forbidden,
                     "Only an owner may remove another member.");
             }
-            if (target.Role == SpaceMember.OwnerRole
-                && await db.SpaceMembers.CountAsync(m => m.SpaceId == spaceId && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null, ct) == 1)
+            if (target.MemberKind == SpaceMember.AgentKind)
             {
-                return SpaceOperation<MemberDto>.Refuse("last-owner", "The space must keep an owner.");
+                // An agent leaves only when an owner removes it; its claims here are released first (12.3).
+                var removed = await agents.RemoveFromSpaceAsync(current, target, clock.GetUtcNow(), ct);
+                if (!removed.Succeeded)
+                {
+                    return removed;
+                }
+            }
+            else
+            {
+                if (target.Role == SpaceMember.OwnerRole
+                    && await db.SpaceMembers.CountAsync(m => m.SpaceId == spaceId && m.Role == SpaceMember.OwnerRole && m.RemovedAt == null, ct) == 1)
+                {
+                    return SpaceOperation<MemberDto>.Refuse("last-owner", "The space must keep an owner.");
+                }
+
+                var now = clock.GetUtcNow();
+                target.RemovedAt = now;
+                await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
+                if (target.Role == SpaceMember.OwnerRole) await changes.ClearGitHubRunnerAsync(stream.Id, current.MemberId, target.AccountId, ct);
+                await changes.TombstoneAssignmentsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
+                await changes.SettleDelegationsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
+                if (target.AccountId is { } affected)
+                {
+                    await TombstoneOverlaysAsync(affected, spaceId, current.MemberId, ct);
+                    await BumpMembershipAsync(affected, ct);
+                }
             }
 
-            var now = clock.GetUtcNow();
-            target.RemovedAt = now;
-            await AppendMemberGroupAsync(stream, current.MemberId, target, "state", new() { ["RemovedAtUtc"] = Instant(now) }, ct);
-            if (target.Role == SpaceMember.OwnerRole) await changes.ClearGitHubRunnerAsync(stream.Id, current.MemberId, target.AccountId, ct);
-            await changes.TombstoneAssignmentsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
-            await changes.SettleDelegationsAsync(spaceId, target.MemberId, current.MemberId, now, ct);
-            if (target.AccountId is { } affected)
-            {
-                await TombstoneOverlaysAsync(affected, spaceId, current.MemberId, ct);
-                await BumpMembershipAsync(affected, ct);
-            }
-            db.AuditEvents.Add(new AuditEvent { AccountId = accountId, DeviceId = deviceId, Kind = AuditKinds.MemberRemoved, At = now });
+            db.AuditEvents.Add(new AuditEvent { AccountId = accountId, DeviceId = deviceId, Kind = AuditKinds.MemberRemoved, At = clock.GetUtcNow() });
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
             await NotifyStreamAsync(spaceId, ct);
-            if (target.AccountId is { } changedAccount)
+            if (target.MemberKind == SpaceMember.PersonKind && target.AccountId is { } changedAccount)
             {
                 await NotifyCurrentMembershipAsync(changedAccount, ct);
             }
@@ -930,29 +944,7 @@ public sealed class SpaceService(
         await NotifyMembershipAsync(accountId, version, ct);
     }
 
-    private async Task NotifyStreamAsync(Guid streamId, CancellationToken ct)
-    {
-        var stream = await db.SyncStreams.AsNoTracking().Where(s => s.Id == streamId)
-            .Select(s => new { s.Id, Seq = s.NextSeq - 1 }).FirstOrDefaultAsync(ct);
-        if (stream is null)
-        {
-            return;
-        }
-        var accounts = await db.SpaceMembers.AsNoTracking()
-            .Where(m => m.SpaceId == streamId && m.MemberKind == SpaceMember.PersonKind && m.RemovedAt == null && m.AccountId != null)
-            .Select(m => m.AccountId!.Value).ToListAsync(ct);
-        if (accounts.Count == 0)
-        {
-            accounts.Add(streamId);
-        }
-        foreach (var accountId in accounts.Distinct())
-        {
-            broadcaster.PublishStream(accountId, streamId, stream.Seq);
-        }
-        var payload = SyncNotificationListener.Payload(streamId, stream.Seq);
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_notify({SyncNotificationListener.Channel}, {payload})", CancellationToken.None);
-    }
+    private Task NotifyStreamAsync(Guid streamId, CancellationToken ct) => StreamNotifications.NotifyAsync(db, broadcaster, streamId, ct);
 
     private async Task NotifyMembershipAsync(Guid accountId, long version, CancellationToken ct)
     {

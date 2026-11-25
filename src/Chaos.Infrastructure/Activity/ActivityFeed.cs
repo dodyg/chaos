@@ -33,7 +33,7 @@ public sealed class ActivityFeed(SqliteApplicationStore store, TimeProvider cloc
             using (var command = connection.CreateCommand())
             {
                 command.CommandText = """
-                    SELECT Seq, OperationId, OccurredAtUtc, Source, Action, Outcome, JobRunId
+                    SELECT Seq, OperationId, OccurredAtUtc, Source, Action, Outcome, JobRunId, ActorId
                     FROM ActivityLog WHERE Seq > $after ORDER BY Seq LIMIT $take;
                     """;
                 command.Parameters.AddWithValue("$after", after);
@@ -42,7 +42,8 @@ public sealed class ActivityFeed(SqliteApplicationStore store, TimeProvider cloc
                 while (reader.Read())
                 {
                     entries.Add(new ActivityEntry(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                        reader.GetString(4), reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), []));
+                        reader.GetString(4), reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), [],
+                        reader.IsDBNull(7) ? null : reader.GetString(7)));
                 }
             }
 

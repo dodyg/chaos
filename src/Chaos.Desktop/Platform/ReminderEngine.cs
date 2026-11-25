@@ -6,6 +6,7 @@ using Chaos.Application.Reminders;
 using Chaos.Application.Summaries;
 using Chaos.Application.Views;
 using Chaos.Infrastructure.Activity;
+using Chaos.Application.Agents;
 
 namespace Chaos.Desktop.Platform;
 
@@ -18,7 +19,7 @@ namespace Chaos.Desktop.Platform;
 /// tick generates scheduled plain summaries (PLAN §12) when one is given: morning, evening and
 /// weekly at their times, and missed periods once at the next start.
 /// </summary>
-public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null, IJobRuns? jobRuns = null, CollaborationNoticeDeriver? collaboration = null, CollaborationInbox? inbox = null) : IDisposable
+public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdapter adapter, TimeProvider clock, SummaryCommands? summaries = null, ViewAlertService? viewAlerts = null, IJobRuns? jobRuns = null, CollaborationNoticeDeriver? collaboration = null, CollaborationInbox? inbox = null, ClaimCommands? claims = null) : IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
 
@@ -98,6 +99,21 @@ public sealed class ReminderEngine(ReminderCommands reminders, INotificationAdap
     {
         {
             if (collaboration is not null) await collaboration.DeriveAsync(ct);
+            if (claims is not null)
+            {
+                // Claims of the Personal space whose time ran out go back to the queue (PLAN3 12.4). A failure here must
+                // not stop reminders from being delivered: the same claim would fail again on every tick.
+                try
+                {
+                    using var scope = ActivityScope.Ensure(ActivitySources.Schedule, ActivityActions.ClaimsExpire);
+                    await claims.ExpireDueAsync(ct);
+                }
+                catch (Exception error) when (error is AppException or IOException or InvalidOperationException)
+                {
+                    Trace.TraceWarning("Claim expiry failed; reminders continue: {0}", error);
+                }
+            }
+
             await reminders.ResyncAllAsync(ct);
             if (inbox is not null)
             {

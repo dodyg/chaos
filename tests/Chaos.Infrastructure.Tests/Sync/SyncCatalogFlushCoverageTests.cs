@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using Chaos.Application.Abstractions;
+using Chaos.Application.Agents;
 using Chaos.Application.Attachments;
 using Chaos.Application.Boards;
 using Chaos.Application.Capture;
@@ -121,6 +122,9 @@ public sealed class SyncCatalogFlushCoverageTests
         ["calendar_event_link"] = Calendars,
         ["google_account"] = Calendars,
         ["time_block_event"] = Calendars,
+
+        ["local_agent"] = "agents",
+        ["local_agent_access"] = "agents",
     };
 
     /// <summary>Kinds no real command can reach today, with the exact blocker. Not faked here;
@@ -130,6 +134,7 @@ public sealed class SyncCatalogFlushCoverageTests
         ["space"] = "No Application command writes Spaces: StorageBootstrap creates the personal space once at first start, "
             + "while sync is still disabled, and every later use only reads it (session.Spaces.Get*).",
         ["space_member"] = "Membership is server-written and is never captured into the local outbox.",
+        ["task_proposal"] = "Only the propose_tasks tool (Q20) writes a proposal; Q17 creates the table and the catalog entry.",
     };
 
     public static IEnumerable<string> CoveredKinds() =>
@@ -211,6 +216,16 @@ public sealed class SyncCatalogFlushCoverageTests
                 expected["space_update"] = posted.Item.Update.Id;
                 break;
             }
+            case "agents":
+                var owner = await host.Store.QueryAsync((session, token) => session.Profiles.GetPrimaryAsync(token));
+                var inbox = await host.Store.QueryAsync(async (session, token) =>
+                    (await session.Containers.GetInboxAsync((await session.Spaces.GetPersonalByOwnerAsync(owner!.Id, token))!.Id, token))!.Id);
+                var agentCommands = new AgentCommands(host.Store, host.Ids, host.Clock);
+                var agent = await agentCommands.CreateAsync(new(Op(), "Build bot"));
+                await agentCommands.SetAccessAsync(new(Op(), agent.Id, inbox, Allowed: true));
+                expected["local_agent"] = agent.Id;
+                expected["local_agent_access"] = $"{agent.Id}|{inbox}";
+                break;
             case "reminder_ack":
                 var task = await SyncTestHelpers.CaptureTaskAsync(host);
                 var reminders = new ReminderCommands(host.Store, host.Ids, host.Clock, host.Tasks, new CoveragePresenter());

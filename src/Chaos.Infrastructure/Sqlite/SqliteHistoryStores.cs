@@ -148,8 +148,8 @@ public sealed class SqliteUndoStore(SqliteConnection connection) : IUndoStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO UndoEntries (Id, ProfileId, OperationId, Label, InversePayload, ExpectedVersions, AppliedAtUtc, UndoneAtUtc)
-            VALUES ($id, $profile, $operation, $label, $inverse, $expected, $applied, $undone);
+            INSERT INTO UndoEntries (Id, ProfileId, OperationId, Label, InversePayload, ExpectedVersions, AppliedAtUtc, UndoneAtUtc, ActorId)
+            VALUES ($id, $profile, $operation, $label, $inverse, $expected, $applied, $undone, $actor);
             """;
         command.Parameters.AddWithValue("$id", entry.Id);
         command.Parameters.AddWithValue("$profile", entry.ProfileId);
@@ -159,6 +159,7 @@ public sealed class SqliteUndoStore(SqliteConnection connection) : IUndoStore
         command.Parameters.AddWithValue("$expected", entry.ExpectedVersions);
         command.Parameters.AddWithValue("$applied", StorageFormats.Instant(entry.AppliedAtUtc));
         command.Parameters.AddWithValue("$undone", SqliteProfileStore.OptionalInstant(entry.UndoneAtUtc));
+        command.Parameters.AddWithValue("$actor", SqliteProfileStore.OptionalValue(entry.ActorId));
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -169,6 +170,11 @@ public sealed class SqliteUndoStore(SqliteConnection connection) : IUndoStore
         await ReadAsync(
             "SELECT * FROM UndoEntries WHERE ProfileId = $profile AND UndoneAtUtc IS NULL ORDER BY AppliedAtUtc DESC, rowid DESC LIMIT $limit;",
             ct, ("$profile", profileId), ("$limit", limit));
+
+    public async Task<IReadOnlyList<UndoEntryRecord>> ListOpenByActorAsync(string profileId, string actorId, int limit, CancellationToken ct) =>
+        await ReadAsync(
+            "SELECT * FROM UndoEntries WHERE ProfileId = $profile AND ActorId = $actor AND UndoneAtUtc IS NULL ORDER BY AppliedAtUtc DESC, rowid DESC LIMIT $limit;",
+            ct, ("$profile", profileId), ("$actor", actorId), ("$limit", limit));
 
     public async Task<bool> MarkUndoneAsync(string entryId, DateTimeOffset undoneAtUtc, CancellationToken ct)
     {
@@ -224,6 +230,7 @@ public sealed class SqliteUndoStore(SqliteConnection connection) : IUndoStore
                 ExpectedVersions = reader.S("ExpectedVersions"),
                 AppliedAtUtc = reader.I("AppliedAtUtc"),
                 UndoneAtUtc = reader.In("UndoneAtUtc"),
+                ActorId = reader.Sn("ActorId"),
             });
         }
 

@@ -114,6 +114,7 @@ public sealed class SyncAccountState(SqliteApplicationStore store)
                         Run("UPDATE DiaryEntries SET AuthorProfileId = $to WHERE AuthorProfileId = $from;", ("$to", to), ("$from", from));
                         // Offline history names the device's profile until it adopts the account's canonical identity.
                         Run("UPDATE TaskHistory SET Actor = $to WHERE Actor = $from;", ("$to", $"person:{to}"), ("$from", $"person:{from}"));
+                        Run("UPDATE UndoEntries SET ActorId = $to WHERE ActorId = $from;", ("$to", $"person:{to}"), ("$from", $"person:{from}"));
                     }
                     // History keeps JSON snapshots of the aggregates it describes; undoing from one must name the IDs that exist now.
                     Run("UPDATE TaskHistory SET SnapshotBefore = replace(SnapshotBefore, $from, $to), SnapshotAfter = replace(SnapshotAfter, $from, $to) WHERE instr(COALESCE(SnapshotBefore, '') || COALESCE(SnapshotAfter, ''), $from) > 0;", ("$to", to), ("$from", from));

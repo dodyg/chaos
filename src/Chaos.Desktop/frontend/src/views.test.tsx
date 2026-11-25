@@ -12,6 +12,7 @@ import {
   viewRpc,
   type QueryRowResponse,
   type TagResponse,
+  type TaskQueryRequest,
   type TaskResponse,
   type ViewDto,
 } from "#neoastra";
@@ -54,6 +55,11 @@ function task(id: string, title: string, patch: Partial<TaskResponse> = {}): Tas
     dueTime: null,
     dueZoneId: null,
     sectionId: null,
+    claimedById: null,
+    claimedAtUtc: null,
+    claimExpiresAtUtc: null,
+    agentReady: false,
+    agentAssigneeId: null,
     ...patch,
   };
 }
@@ -635,6 +641,37 @@ test("only pinned views appear under Views, with their count, and opening one li
     await user.click(pinned);
     await screen.findByRole("button", { name: "Matching task" });
     assert.ok(screen.getByRole("heading", { name: "Open bugs" }));
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent work is a built-in view in the sidebar, with its count, and marks the tasks that are Ready for agent", async () => {
+  const base = appApi([], []);
+  const runs: string[] = [];
+  const api = {
+    ...base,
+    queryRpc: {
+      ...base.queryRpc,
+      counts: async () => ({ ok: true, views: [{ view: "AgentWork", count: 2 }], tags: [], containers: [], error: null }),
+      run: async (request: TaskQueryRequest) => {
+        runs.push(request.view);
+        const rows = request.view === "AgentWork" ? [resultRow(task("a", "Draft the icon set", { agentReady: true }))] : [];
+        return { ok: true, rows, totalCount: rows.length, nextCursor: null, error: null };
+      },
+    },
+  };
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<App initialView="tasks" templates={<></>} api={api} />, { container: dom.window.document.body });
+  try {
+    const nav = await screen.findByRole("navigation", { name: "Views" });
+    const entry = await within(nav).findByRole("button", { name: /Agent work/ });
+    assert.match(entry.textContent ?? "", /2/);
+    await user.click(entry);
+    await screen.findByRole("button", { name: "Draft the icon set" });
+    assert.ok(screen.getByRole("heading", { name: "Agent work" }));
+    assert.ok(screen.getByText("Ready for agent"));
+    assert.ok(runs.includes("AgentWork"));
   } finally {
     cleanup();
   }
