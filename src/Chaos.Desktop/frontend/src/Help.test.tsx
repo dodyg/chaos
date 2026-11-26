@@ -55,6 +55,16 @@ test("help covers GitHub issue sync and Google Calendar", async () => {
   cleanup();
 });
 
+test("help covers agents and the phone app", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  render(<Help onNavigate={() => {}} />, { container: dom.window.document.body });
+  assert.ok(screen.getByRole("heading", { name: "Agents (AI assistants)" }));
+  assert.ok(screen.getByRole("heading", { name: "On your phone" }));
+  await user.type(screen.getByLabelText("Search help"), "rotation");
+  assert.ok(screen.getByRole("heading", { name: "Sharing" }));
+  cleanup();
+});
+
 test("F1 and the sidebar Help button open the help page", async () => {
   const api = {
     taskRpc: {

@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ArrowRight,
+  Bot,
   BookOpen,
   CalendarDays,
   Database,
@@ -10,6 +11,7 @@ import {
   GitPullRequest,
   Rocket,
   Search,
+  Smartphone,
   Sparkles,
   StickyNote,
   Sun,
@@ -473,6 +475,11 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             From an evening summary you can carry unfinished tasks over to tomorrow, and post a standup to one of your shared spaces from
             the <em>Your spaces</em> section. Meetings are listed only if you switch on <em>Include meetings in summaries</em>.
           </p>
+          <p>
+            An AI agent you have connected (see Agents) can read the pad and <em>suggest</em> tasks. They appear on the pad as{" "}
+            <em>Suggested by</em> the agent's name, each with <strong>Accept</strong> and <strong>Dismiss</strong>. Nothing becomes a task
+            until you accept it, and accepting links the new task back to the note it came from. You choose the list it lands in.
+          </p>
           <div className="flex flex-wrap gap-2">
             <Go to="pad" onNavigate={onNavigate}>
               Open the pad
@@ -532,7 +539,7 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
       title: "Sharing",
       icon: <Users />,
       keywords:
-        "share shared space invite member role owner editor viewer leave remove move list team collaborate link email offline delegate delegation nudge review follow up assigned standup summary",
+        "share shared space invite member role owner editor viewer leave remove move list team collaborate link email offline delegate delegation nudge review follow up assigned standup summary rotation rotate rotating host agent",
       body: (
         <>
           <p>
@@ -605,6 +612,17 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
             it. Three nudges per task per 24 hours. The <strong>Delegated by me</strong> view lists what you handed out, by person; the
             evening and weekly summaries list delegations waiting for an answer or your review.
           </p>
+          <h3 className="font-semibold">Rotating repeating tasks</h3>
+          <p>
+            In a shared space, a repeating task can rotate its host: in the repeat editor's <strong>Rotation</strong> section, tick the
+            members who take turns and choose who starts. Each new occurrence goes to the next person in the order, skipping anyone who has
+            left the space. The editor shows who is next. Changing the rotation applies from the next occurrence; occurrences already
+            created keep their host.
+          </p>
+          <p>
+            A task that must be completed by <em>each</em> assignee is completed from the desktop; the phone web app disables its check box
+            and says “Complete on desktop”.
+          </p>
           <h3 className="font-semibold">Standups and what your team did</h3>
           <p>
             The evening and weekly summaries have a <strong>Your spaces</strong> section: what other members completed, added and what
@@ -626,6 +644,93 @@ function topics(onNavigate: (view: HelpLink) => void): Topic[] {
           <p>
             Creating a space, inviting, joining, leaving and moving need a connection; Chaos says “Connect to …” when it cannot reach the
             service. Editing a shared list offline works like editing a Personal one, and your changes merge when the connection returns.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: "agents",
+      title: "Agents (AI assistants)",
+      icon: <Bot />,
+      keywords:
+        "agent ai assistant mcp claude token ready for agent claim release take over proposal suggest suggestion delegate revert undo pause remove server agent oauth connector",
+      body: (
+        <>
+          <p>
+            An <strong>agent</strong> is an AI assistant, such as Claude Code or Claude Desktop, that you let work on your tasks. It has its
+            own name, shows in task history as an agent, and can only do what you allow. You decide which work it sees, it takes one task at
+            a time, and you can undo what it did.
+          </p>
+          <h3 className="font-semibold">Local agents (Personal lists)</h3>
+          <ul className="grid list-disc gap-1 pl-5">
+            <li>
+              Open <strong>Settings → Agents</strong>, add an agent and tick the Personal lists it may work in. With nothing ticked it sees
+              nothing.
+            </li>
+            <li>
+              Choose <strong>New token</strong>. The token is shown once, with a ready-made <em>Claude Code</em> command and{" "}
+              <em>Claude Desktop</em> configuration. Run or paste it, then restart that app. It works offline and needs no account.
+            </li>
+            <li>
+              <strong>Rename</strong>, <strong>Pause</strong> (the agent stops and lets go of its tasks) and <strong>Remove</strong> are on
+              the agent. Remove can also undo its changes.
+            </li>
+          </ul>
+          <h3 className="font-semibold">Server agents (shared spaces)</h3>
+          <p>
+            In a shared space the agent works through your online account. Add one under <strong>Settings → Agents → Server agents</strong>,
+            then an owner adds it to a space with <strong>Members → Add agent</strong> and picks the lists it may work in. An assistant that
+            supports remote connectors connects to the service's <code>/mcp</code> address and signs in; the consent page asks which agent
+            it acts as.
+          </p>
+          <h3 className="font-semibold">Handing work to an agent</h3>
+          <ul className="grid list-disc gap-1 pl-5">
+            <li>
+              On a task, switch on <strong>Ready for agent</strong>, optionally naming one agent. The task joins the agent's queue and the{" "}
+              <strong>Agent work</strong> view.
+            </li>
+            <li>
+              In a shared space you can <strong>Delegate…</strong> a task to an agent member like to a person. Delegating to an agent always
+              asks for your review unless the space lets agents close tasks. Agents cannot be nudged.
+            </li>
+          </ul>
+          <h3 className="font-semibold">While it works</h3>
+          <p>
+            An agent <strong>claims</strong> a task before changing it, and the task shows who holds it and until when. A claim runs out if
+            the agent goes quiet and the task returns to Ready for agent. You can <strong>Take over</strong> or <strong>Release</strong> a
+            claim yourself. Agents can add subtasks and notes, <strong>ask for help</strong> (the task becomes waiting with their question)
+            and <strong>hand back</strong> when finished, which puts the task in <em>Needs review</em> and under “Waiting for your review”
+            in My Day. On a task linked to a GitHub issue, their updates are posted signed “— name (agent, via Chaos)”. An agent cannot
+            cancel tasks, delete things or change members, and it has hourly limits on claims and additions.
+          </p>
+          <h3 className="font-semibold">Undoing an agent</h3>
+          <p>
+            <strong>Undo recent changes by …</strong> in Settings → Agents puts back the agent's changes, newest first. Anything you changed
+            afterward is listed and left alone.
+          </p>
+          <Go to="settings" onNavigate={onNavigate}>
+            Open Settings
+          </Go>
+        </>
+      ),
+    },
+    {
+      id: "phone",
+      title: "On your phone",
+      icon: <Smartphone />,
+      keywords: "phone mobile web app pwa browser install home screen offline shared space role viewer",
+      body: (
+        <>
+          <p>
+            Once you sign in to the online service, open its <code>/app</code> address on your phone and use <em>Add to Home Screen</em>.
+            The web app shows My Day and your lists, lets you capture, complete and reopen tasks, and plan tasks onto My Day. It opens
+            offline with what it last read, but changes need a connection.
+          </p>
+          <p>
+            Lists of your shared spaces appear under Personal, grouped by space, with your role stated once per screen. Tasks show their
+            assignees and who wrote each update. Owners and Editors can change shared tasks; as a Viewer the controls are disabled, though
+            you can still plan a task on your own My Day. Capture offers only lists you can write to. If you are removed from a space it
+            disappears from your phone straight away.
           </p>
         </>
       ),
