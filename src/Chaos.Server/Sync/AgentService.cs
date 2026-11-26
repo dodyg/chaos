@@ -740,6 +740,49 @@ public sealed class AgentService(
         }
     }
 
+    /// <summary>
+    /// An agent's update on a task linked to a GitHub issue (PLAN3 12.8, E4): queues the diary entry for the connection's runner
+    /// as a comment link signed with the agent's name, so the owner's device posts it to the issue. A server change, since an agent
+    /// never writes a connection's records. Nothing happens for a task with no active link.
+    /// </summary>
+    internal async Task QueueGitHubCommentAsync(Guid agentId, Guid streamId, string taskId, string diaryKey, CancellationToken ct)
+    {
+        var queued = await transaction(async tx =>
+        {
+            await db.SyncStreams.FromSqlInterpolated($"""SELECT * FROM "SyncStreams" WHERE "Id" = {streamId} AND "DeletedAt" IS NULL FOR UPDATE""").SingleOrDefaultAsync(ct);
+            var link = await db.SyncEntities.FromSqlInterpolated($"""
+                SELECT * FROM "SyncEntities" WHERE "StreamId" = {streamId} AND "Kind" = 'github_issue_link' AND "PurgedAt" IS NULL AND "MovedTo" IS NULL
+                  AND "Groups" -> 'state' -> 'values' ->> 'TaskId' = {taskId} AND "Groups" -> 'state' -> 'values' ->> 'State' = '0'
+                """).AsNoTracking().FirstOrDefaultAsync(ct);
+            var name = await db.Agents.AsNoTracking().Where(a => a.Id == agentId).Select(a => a.Name).FirstOrDefaultAsync(ct);
+            if (link is null || name is null)
+            {
+                return false;
+            }
+
+            var hlc = await changes.NextHlcAsync(streamId, "github_comment_link", diaryKey, ct);
+            await changes.AppendAsync(streamId, agentId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "github_comment_link", diaryKey,
+                new Dictionary<string, SyncGroupState>
+                {
+                    ["create"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?>
+                    {
+                        ["IssueLinkId"] = link.EntityKey, ["CommentId"] = null, ["AuthorLogin"] = null, ["HtmlUrl"] = null, ["Origin"] = 1L,
+                    })),
+                    ["state"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?>
+                    {
+                        ["State"] = 1L, ["BaseBody"] = null, ["BaseRemoteUpdatedUtc"] = null, ["Attribution"] = "— " + name + " (agent, via Chaos)",
+                    })),
+                }), ct);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return true;
+        });
+        if (queued)
+        {
+            await StreamNotifications.NotifyAsync(db, broadcaster, streamId, CancellationToken.None);
+        }
+    }
+
     /// <summary>Whether the live delegation of this task to the agent asks for a review; null when there is none.</summary>
     internal async Task<bool?> DelegationReviewRequiredAsync(Guid agentId, Guid streamId, string taskId, CancellationToken ct)
     {

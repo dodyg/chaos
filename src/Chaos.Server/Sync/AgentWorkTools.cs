@@ -758,12 +758,19 @@ public sealed partial class AgentWorkTools
             var key = Guid.NewGuid().ToString("D");
             var now = _owner.clock.GetUtcNow();
             var hlc = await _owner.changes.NextHlcAsync(task.StreamId, "diary_entry", key, ct);
-            return await _owner.PushAsync(_agentId, task.Key, [Upsert("diary_entry", key, new Dictionary<string, SyncGroupState>
+            var refused = await _owner.PushAsync(_agentId, task.Key, [Upsert("diary_entry", key, new Dictionary<string, SyncGroupState>
             {
                 ["create"] = Group(hlc, ("TaskId", task.Key), ("AuthorProfileId", _agentId.ToString("D")), ("EntryAtUtc", Instant(now)), ("CreatedAtUtc", Instant(now))),
                 ["entry"] = Group(hlc, ("RawMarkdown", markdown ?? string.Empty), ("EditedAtUtc", null)),
                 ["deleted"] = Group(hlc, ("DeletedAtUtc", null), ("RemovedByOwner", 0L)),
             })], "markdown", ct);
+            if (refused is null)
+            {
+                // On a task linked to a GitHub issue the update flows to the issue through the runner, signed with the agent's name (12.8).
+                await _owner.agents.QueueGitHubCommentAsync(_agentId, task.StreamId, task.Key, key, ct);
+            }
+
+            return refused;
         }
 
         private async Task<TaskToolResult?> SetStatusAsync(Located task, long status, CancellationToken ct)

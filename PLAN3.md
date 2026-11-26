@@ -2173,6 +2173,13 @@ sets the task Done (the claim is released first, since a finished task cannot be
 `DelegationCommandsTests` (4 new, 16), Server `ServiceMcpTests` (2 new, 14, PostgreSQL 18.7 through `wslc`, removed afterwards), Desktop frontend `Delegation.test.tsx` 8. Not done: a local agent in the Personal space is still pointed at
 a task with Ready for agent (Personal has no delegation), the dialog change has no test of its own, and the live review and GitHub attribution remain.
 
+**Progress note 2026-11-26 (Q20, GitHub attribution).** An agent's updates on a task linked to a GitHub issue now flow to the issue through the runner, signed `— <agent name> (agent, via Chaos)` (`GitHubCommentMarker.AgentAttribution`).
+Local: `add_update`, `ask_for_help` and `hand_back` queue their diary entry for GitHub when the task has an active link, and `DiaryCommands.AddAsync` stores the agent's signature on the comment link when the ambient actor is a local agent.
+Service: the same three tools queue a `github_comment_link` for the entry as a server change (`AgentService.QueueGitHubCommentAsync`), which the owner's device posts; `AttributionAsync` also resolves an agent-authored entry by its agent
+member, so an unsigned link is signed before it is posted. Reading the comment back strips the line, as for members. Claiming a connected task needed no change (tested). Tests: Infrastructure `GitHubSharingTests` (198 GitHub
+tests, one new for server- and local-agent signatures and the read-back), Server `ServiceMcpTests` (15, one new: queued link, signature, author, and nothing queued for an unlinked task). Note: an agent's text reaches a public issue under
+the owner's GitHub account only for linked tasks; the owner's connection is the opt-in, and there is no per-agent switch yet. Not done: that per-agent switch, and the Accept and Dismiss pad screens.
+
 **Progress note 2026-11-26 (Q20, tools).** `read_pad`, `propose_tasks`, `read_page` and `write_page` are on both surfaces with identical schemas (`docs/mcp/tools.json`, 15 tools; names, descriptions and result types in
 `Chaos.Sync/AgentWorkTools.cs`). Local: `LocalAgentPadPageTools` (Personal space, needs a ticked list; propose runs `ProposalCommands`, 60 calls an hour; writes under `agent.propose_tasks` and `agent.write_page`).
 Service: `AgentPadPageTools` (reachable spaces with a list; the pad is read only, a proposal pushes only the `task_proposal` create group so a person's Accept or Dismiss writes the state; a page is written as
@@ -2185,7 +2192,7 @@ two-device test covers it.
 
 1. Delegate to an agent (with the 12.8 mapping), pad proposals (Accept or Dismiss on the pad), and pages read and
    write for agents within their spaces.
-2. GitHub: an agent claiming a connected task, with attribution naming the agent.
+2. GitHub: an agent claiming a connected task, with attribution naming the agent (done, see the GitHub attribution note).
 3. Tests:
    - delegation to an agent completes through `hand_back` with review
    - proposals never create tasks without a person's click

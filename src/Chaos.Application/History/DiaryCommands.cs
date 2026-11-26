@@ -1,3 +1,4 @@
+using Chaos.Application.GitHub;
 using Chaos.Application.Abstractions;
 using Chaos.Application.Contracts;
 using Chaos.Application.Tasks;
@@ -81,7 +82,15 @@ public sealed class DiaryCommands(IApplicationStore store, IIdGenerator ids, Tim
                     UpdatedAtUtc = now,
                 };
                 await session.Diary.AddAsync(entry, inner);
-                if (github is not null) await session.GitHub.UpsertCommentLinkAsync(new() { DiaryEntryId = entry.Id, IssueLinkId = github.Id, Origin = 1, State = 1 }, inner);
+                if (github is not null)
+                {
+                    // A local agent's update is signed with the agent's name before it is posted; a person's own is not signed.
+                    string? attribution = null;
+                    if (AmbientActorContext.Instance.CurrentActor(profile.Id) is { } actor && actor.StartsWith("agent:", StringComparison.Ordinal)
+                        && await session.Agents.GetAsync(actor[6..], inner) is { } agent)
+                        attribution = GitHubCommentMarker.AgentAttribution(agent.Name);
+                    await session.GitHub.UpsertCommentLinkAsync(new() { DiaryEntryId = entry.Id, IssueLinkId = github.Id, Origin = 1, State = 1, Attribution = attribution }, inner);
+                }
                 await RegisterAsync(session, task.Id, "diary.added", inner);
                 return new DiaryMutationResult(entry, Replayed: false);
             }, token);

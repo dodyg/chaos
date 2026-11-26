@@ -338,6 +338,10 @@ public sealed partial class LocalAgentTools
             }
         }
 
+        /// <summary>An agent's updates on a task linked to a GitHub issue flow to the issue through the runner, signed with the agent's name (12.8).</summary>
+        private Task<bool> LinkedToGitHubAsync(string taskId, CancellationToken ct) =>
+            _store.QueryAsync(async (session, token) => await session.GitHub.FindLinkByTaskAsync(taskId, token) is { State: 0 }, ct);
+
         public async Task<TaskToolResult> AddUpdateAsync(
             [Description("The ID of the task.")] string taskId,
             [Description("The diary entry, in Markdown.")] string markdown,
@@ -353,7 +357,7 @@ public sealed partial class LocalAgentTools
 
             try
             {
-                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, markdown ?? string.Empty, null), cancellationToken);
+                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, markdown ?? string.Empty, null, PostToGitHub: await LinkedToGitHubAsync(task.Id, cancellationToken)), cancellationToken);
                 if (gate.Claimant)
                 {
                     _ = await HeartbeatAsync(taskId, cancellationToken);
@@ -382,7 +386,7 @@ public sealed partial class LocalAgentTools
 
             try
             {
-                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, question ?? string.Empty, null), cancellationToken);
+                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, question ?? string.Empty, null, PostToGitHub: await LinkedToGitHubAsync(task.Id, cancellationToken)), cancellationToken);
                 var current = await Tasks.GetAsync(task.Id, cancellationToken) ?? task;
                 _ = await Tasks.SetStatusAsync(new SetTaskStatusCommand(operationId + ":status", current.Id, current.Version, TaskItemStatus.WaitingOnSomeone, OpenSubtaskChoice.KeepOpen), cancellationToken);
                 _ = await HeartbeatAsync(taskId, cancellationToken);
@@ -409,7 +413,7 @@ public sealed partial class LocalAgentTools
 
             try
             {
-                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, summary ?? string.Empty, null), cancellationToken);
+                _ = await Diary.AddAsync(new AddDiaryEntryCommand(operationId, task.Id, summary ?? string.Empty, null, PostToGitHub: await LinkedToGitHubAsync(task.Id, cancellationToken)), cancellationToken);
                 var current = await Tasks.GetAsync(task.Id, cancellationToken) ?? task;
                 _ = await Tasks.SetStatusAsync(new SetTaskStatusCommand(operationId + ":status", current.Id, current.Version, TaskItemStatus.NeedsReview, OpenSubtaskChoice.KeepOpen), cancellationToken);
                 _ = await ReleaseTaskAsync(taskId, cancellationToken);

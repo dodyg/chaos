@@ -12,6 +12,9 @@ public static class GitHubCommentMarker
     /// <summary>The last line of a comment posted for another member (decision E4): the comment is the owner's, the words are the member's.</summary>
     public static string Attribution(string memberName) => "— " + memberName + " (via Chaos)";
 
+    /// <summary>The same line for an AI agent (PLAN3 12.8): the comment is posted by the owner's account, the words are the agent's.</summary>
+    public static string AgentAttribution(string agentName) => "— " + agentName + " (agent, via Chaos)";
+
     public static string Body(string text, string entryId, string? attribution = null) =>
         text + (attribution is null ? "" : "\n\n" + attribution) + Suffix(entryId);
 
@@ -270,9 +273,12 @@ public sealed class GitHubOutboundComments(IApplicationStore store, IGitHubApi a
         if (string.Equals(entry.AuthorProfileId, profileId, StringComparison.OrdinalIgnoreCase)) return null;
         var task = await s.Tasks.GetAsync(entry.TaskId, ct);
         if (task is null || (await s.Spaces.GetAsync(task.SpaceId, ct))?.Kind != SpaceKind.Shared) return null;
-        var actor = "person:" + entry.AuthorProfileId;
         var members = await s.People.ListAsync(task.SpaceId, ct);
-        var name = PeopleDirectory.Resolve(actor, null, [.. members.Select(member => new DirectoryMember(member.ActorId, member.DisplayName))]).DisplayName;
+        var directory = members.Select(member => new DirectoryMember(member.ActorId, member.DisplayName)).ToList();
+        // An agent's diary entry names the agent by its ID where a member's names the profile (PLAN3 12.8).
+        if (members.Any(member => string.Equals(member.ActorId, "agent:" + entry.AuthorProfileId, StringComparison.OrdinalIgnoreCase)))
+            return GitHubCommentMarker.AgentAttribution(PeopleDirectory.Resolve("agent:" + entry.AuthorProfileId, null, directory).DisplayName);
+        var name = PeopleDirectory.Resolve("person:" + entry.AuthorProfileId, null, directory).DisplayName;
         return GitHubCommentMarker.Attribution(name);
     }
 }
