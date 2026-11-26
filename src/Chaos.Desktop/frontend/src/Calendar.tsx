@@ -876,6 +876,32 @@ export function Calendar({
             )}
             eventContent={(arg: EventContentArg) => {
               const mtg = arg.event.extendedProps.meeting as CalendarMeetingDto | undefined;
+              // In the time grid a block is a narrow box: the title leads and wraps, the time sits under it, and the whole text is the hover tooltip.
+              if (arg.view.type.startsWith("timeGrid") && !arg.event.allDay) {
+                const entry = arg.event.extendedProps.entry as CalendarEntryDto | undefined;
+                const title = mtg?.title ?? entry?.title ?? arg.event.title;
+                const minutes = arg.event.end && arg.event.start ? (arg.event.end.getTime() - arg.event.start.getTime()) / 60000 : 60;
+                const tooltip = arg.timeText ? `${title} (${arg.timeText})` : title;
+                const repeat = entry?.kind === "Repeat" && <Repeat className="mt-0.5 size-3 shrink-0" aria-label="Repeats" />;
+                // A block of half an hour or less has room for one line: the title, then the time if it fits.
+                if (minutes <= 30)
+                  return (
+                    <span className="flex min-w-0 items-center gap-1 px-1 leading-tight" title={tooltip}>
+                      {repeat}
+                      <span className="truncate font-medium">{title}</span>
+                      {arg.timeText && <span className="shrink-0 text-[0.65rem] opacity-80">{arg.timeText}</span>}
+                    </span>
+                  );
+                return (
+                  <span className="flex min-w-0 flex-col px-1 leading-tight" title={tooltip}>
+                    <span className="flex min-w-0 items-start gap-1 font-medium">
+                      {repeat}
+                      <span className="line-clamp-2 break-words">{title}</span>
+                    </span>
+                    {arg.timeText && <span className="truncate text-[0.65rem] opacity-80">{arg.timeText}</span>}
+                  </span>
+                );
+              }
               if (mtg)
                 return (
                   <span className="flex min-w-0 items-center gap-1 px-1">

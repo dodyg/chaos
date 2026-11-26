@@ -198,25 +198,39 @@
   border-width: 2px;
   border-color: var(--primary-foreground);
 }
+/* FullCalendar paints event text from --fc-event-text-color, so each kind sets that variable (a plain color: is overridden).
+   Every kind pairs its fill with a text colour from the same theme role, so it reads in every theme. */
 .chaos-calendar .chaos-event-due {
+  --fc-event-text-color: var(--foreground);
   background: var(--background);
-  color: var(--destructive);
   border-color: var(--destructive);
   border-left-width: 4px;
 }
+.chaos-calendar .chaos-event-due svg {
+  color: var(--destructive);
+}
 .chaos-calendar .chaos-event-repeat {
+  --fc-event-text-color: var(--secondary-foreground);
   background: var(--secondary);
   color: var(--secondary-foreground);
   border-color: var(--border);
   border-style: dotted;
   cursor: pointer;
 }
+/* Work keeps the planned fill (so its text contrast is the accent's own) and is told apart by a stripe. */
 .chaos-calendar .chaos-event-work:not(.chaos-event-due):not(.chaos-event-repeat) {
-  background: color-mix(in oklch, var(--primary) 70%, var(--foreground));
+  border-left: 4px solid var(--foreground);
 }
 .chaos-calendar .chaos-event-done {
-  opacity: 0.55;
+  opacity: 0.7;
   text-decoration: line-through;
+}
+/* Text that does not fit a short block is clipped, never spilled onto the grid in the block's own text colour. */
+.chaos-calendar .fc-timegrid-event {
+  overflow: hidden;
+}
+.chaos-calendar .fc-timegrid-event .fc-event-main {
+  overflow: hidden;
 }
 .chaos-calendar .chaos-cursor {
   outline: 2px solid var(--ring);
@@ -231,7 +245,7 @@
   cursor: pointer;
 }
 .chaos-calendar .chaos-event-meeting.chaos-event-free {
-  opacity: 0.7;
+  opacity: 0.85;
 }
 /* Agenda rows have no coloured block, only a dot: the row keeps the theme's own text colour and background in every theme.
    A due task still reads in the destructive colour. */
