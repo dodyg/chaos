@@ -6,7 +6,9 @@
 
   <ItemGroup>
     <!-- Local MCP transport: Q0 relay; the tool dispatcher arrives in Q18. -->
-    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" Condition="'$(MSBuildProjectName)' == 'Chaos.Desktop' Or '$(MSBuildProjectName)' == 'Chaos.Desktop.Tests'" />
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" Condition="'$(MSBuildProjectName)' == 'Chaos.Desktop' Or '$(MSBuildProjectName)' == 'Chaos.Desktop.Tests' Or '$(MSBuildProjectName)' == 'Chaos.Server' Or '$(MSBuildProjectName)' == 'Chaos.Server.Tests'" />
+    <!-- Service MCP endpoint (Q19): Streamable HTTP on the server, same SDK version as the local surface. -->
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" Condition="'$(MSBuildProjectName)' == 'Chaos.Server' Or '$(MSBuildProjectName)' == 'Chaos.Server.Tests'" />
     <!-- Agent tools (Q17, PLAN3 §12): the tool type of both MCP surfaces is the Microsoft.Extensions.AI AIFunction
          (McpServerTool.Create in SDK 2.4.0). Latest stable with a net11.0 asset; verified with the MCP SDK pin. -->
     <PackageVersion Include="Microsoft.Extensions.AI" Version="11.0.1" />

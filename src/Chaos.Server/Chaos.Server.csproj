@@ -15,6 +15,7 @@
     <PackageReference Include="AWSSDK.S3" />
     <!-- Service-surface agent tools are AIFunctions (Q17, PLAN3 §12): Q19's /mcp endpoint serves them. -->
     <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
     <!-- Direct pin so the service, its tests and the design-time tool share one EF Core version. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />

@@ -32,6 +32,9 @@ internal static class SignInPages
         .alert{padding:.65rem .85rem;border-radius:.5rem;border-left:.3rem solid #c0392b;background:color-mix(in srgb,#c0392b 14%,var(--card));color:var(--text)}
         .note{font-size:.9rem}
         a{color:var(--accent)}
+        fieldset{margin:1rem 0 0;padding:.25rem .9rem .75rem;border:1px solid var(--line);border-radius:.6rem}
+        legend{font-weight:600;font-size:.9rem;padding:0 .3rem}
+        .choice{display:flex;align-items:center;gap:.6rem;font-weight:500;margin:.6rem 0 0}
         hr{margin:1.5rem 0 1rem;border:0;border-top:1px solid var(--line)}
         :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
         """;
@@ -78,6 +81,9 @@ internal static class SignInPages
 
     public static IResult MessagePage(string title, string message, int status = 200) =>
         Render(title, $"<h1>{Encode(title)}</h1><p role=\"status\">{Encode(message)}</p>", status);
+
+    /// <summary>A page whose body is HTML the caller built and encoded (the assistant consent page).</summary>
+    internal static IResult MessageBody(string title, string bodyHtml, int status = 200) => Render(title, bodyHtml, status);
 
     public static IResult InviteLanding(string returnUrl)
     {

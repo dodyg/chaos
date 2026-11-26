@@ -30,6 +30,7 @@ builder.AddNpgsqlDbContext<ChaosDbContext>(
 builder.Services.AddChaosAuth(builder.Configuration, builder.Environment);
 builder.Services.AddServiceRateLimits().AddAccountServices();
 builder.Services.AddSyncService(builder.Configuration);
+builder.Services.AddServiceMcp();
 builder.Services.AddBlobService(builder.Configuration, builder.Environment);
 builder.Services.AddWebSessions(builder.Environment);
 builder.Services.AddScoped<WebReadModel>();
@@ -86,6 +87,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 
     await ServerSchemaGate.EnsureCurrentAsync(db, app.Lifetime.ApplicationStopping);
     await AuthSetup.EnsureDesktopClientAsync(scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(), app.Lifetime.ApplicationStopping);
+    await McpOAuth.EnsureClientAsync(scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(), app.Lifetime.ApplicationStopping);
 }
 
 if (!app.Environment.IsDevelopment())
@@ -97,6 +99,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseSecurityHeaders();
+app.UseMcpGuards();
 
 app.UseWhen(http => http.Request.Path.StartsWithSegments(WebSession.AppPath), mobile =>
 {
@@ -114,6 +117,8 @@ app.UseAntiforgery();
 app.MapDefaultEndpoints();
 app.MapAuthEndpoints();
 app.MapServiceEndpoints();
+app.MapMcpAuth();
+app.MapServiceMcp();
 app.MapInvitePages();
 app.MapWebSessionEndpoints().MapWebReads().MapWebWrites();
 

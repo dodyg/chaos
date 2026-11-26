@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
 using OpenIddict.Client;
+using OpenIddict.Server;
 using OpenIddict.Client.AspNetCore;
 using OpenIddict.Client.WebIntegration;
 using OpenIddict.Validation.AspNetCore;
@@ -81,6 +82,9 @@ public static class AuthSetup
             });
         services.AddAuthorization();
 
+        // The metadata handler below has no services of its own; it reads the request through this accessor.
+        var requests = new HttpContextAccessor();
+        services.AddSingleton<IHttpContextAccessor>(requests);
         var openiddict = services.AddOpenIddict();
         openiddict.AddCore(options =>
         {
@@ -93,7 +97,19 @@ public static class AuthSetup
             options.SetAuthorizationEndpointUris("/connect/authorize").SetTokenEndpointUris("/connect/token").SetRevocationEndpointUris("/connect/revocation");
             options.AllowAuthorizationCodeFlow().AllowRefreshTokenFlow();
             options.RequireProofKeyForCodeExchange();
-            options.RegisterScopes(Scopes.OfflineAccess, DesktopClient.Scope);
+            // OpenIddict answers /.well-known/oauth-authorization-server and openid-configuration; an assistant looks for the
+            // registration endpoint there (RFC 8414, RFC 7591).
+            options.AddEventHandler<OpenIddictServerEvents.HandleConfigurationRequestContext>(handler => handler.UseInlineHandler(context =>
+            {
+                // The issuer is unset when the host takes it from the request, so the address comes from the same place MCP discovery uses.
+                if (requests.HttpContext is { } http)
+                {
+                    context.Metadata["registration_endpoint"] = McpOAuth.BaseUrl(http) + McpOAuth.RegisterPath;
+                }
+
+                return default;
+            }));
+            options.RegisterScopes(Scopes.OfflineAccess, DesktopClient.Scope, McpOAuth.Scope);
             options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15));
             options.SetRefreshTokenLifetime(TimeSpan.FromDays(90));
             // Reuse of a rotated refresh token revokes the whole family at once (PLAN2 §8.4 step 4): no grace window.

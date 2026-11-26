@@ -2154,6 +2154,8 @@ starting its hidden host. The native cross-user pipe check stays blocked as in Q
 **Exit:** an agent added to a shared space picks up a Ready for agent task through the service, and its updates
 appear live on members' desktops.
 
+**Progress note 2026-11-26 (Q19).** The service MCP endpoint is built and tested; the live check with Claude Code as a remote MCP client (item 4) is not done, so the stage stays open. `/mcp` (`ModelContextProtocol.AspNetCore` 2.4.0, stateless Streamable HTTP) serves the same eleven tools as the local surface, from `Chaos.Server/Sync/AgentWorkTools.cs` and `AgentTools.cs`, bound to the token's `agent_id`; `AuthSetup` and `Auth/McpAuth.cs` add the `chaos-mcp` OAuth client (PKCE, loopback and claude.ai redirects), `/connect/register`, discovery documents and the consent page where the owner picks the agent; `Sync/McpEndpoint.cs` holds the TLS, no-CORS, per-agent rate limit and tool-name-only logging rules. No migration. Tests: Server `Sharing/ServiceMcpTests` (11: the contract runner over a real MCP client, OAuth sign-in and consent, allowed lists, pause, injection fixture, logs, token and guard refusals, TLS, per-agent rate limit, the hourly add limit, refresh and removal). The seam now accepts a new subtask or diary entry from an agent (decisions 2026-11-26). Not done: the live check, `attach_file`, `read_page`, `write_page`, `read_pad`, `propose_tasks`, `list_view` (Q20) and the `agent-question` notice. Smallest next action: the live check against a deployed HTTPS service, then Q20.
+
 ### [ ] Q20: Agent workflows
 
 **Depends on:** Q19 and Q13. **Migration:** none expected. **Read:** 12.6, 12.8.

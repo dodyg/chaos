@@ -47,6 +47,13 @@ public static class ServiceEndpoints
                 var key = http.User.FindFirst(DesktopClient.DeviceIdClaim)?.Value ?? http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions { PermitLimit = limit, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
             });
+            // The service MCP endpoint (PLAN3 12.5) applies the same per-minute limit to each agent.
+            limiter.AddPolicy(McpEndpoint.RateLimitPolicy, http =>
+            {
+                var limit = http.RequestServices.GetRequiredService<IOptions<LimitsOptions>>().Value.RequestsPerMinutePerDevice;
+                var key = http.User.FindFirst(McpOAuth.AgentIdClaim)?.Value ?? http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                return RateLimitPartition.GetFixedWindowLimiter("agent:" + key, _ => new FixedWindowRateLimiterOptions { PermitLimit = limit, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
+            });
         });
         return services;
     }
