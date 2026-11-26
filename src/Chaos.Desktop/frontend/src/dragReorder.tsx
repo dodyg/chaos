@@ -113,5 +113,31 @@ export function useDragReorder() {
     };
   }
 
-  return { handle, target };
+  /**
+   * Drop props for a row or container that accepts items from any section of one group.
+   * `targetId` is the row's id (null for a section body, which appends); `onDrop` receives
+   * the dragged id and whether it landed on the lower half of the row.
+   */
+  function anyTarget(targetId: string | null, group: string, onDrop: (sourceId: string, after: boolean) => void) {
+    const accepts = (source: Dragged | null): source is Dragged => source !== null && source.group === group && source.id !== targetId;
+    return {
+      onDragOver: (event: React.DragEvent<HTMLElement>) => {
+        if (!accepts(dragged.current)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+      },
+      onDrop: (event: React.DragEvent<HTMLElement>) => {
+        const source = dragged.current;
+        dragged.current = null;
+        if (!accepts(source)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const box = event.currentTarget.getBoundingClientRect();
+        onDrop(source.id, targetId !== null && event.clientY >= box.top + box.height / 2);
+      },
+    };
+  }
+
+  return { handle, target, anyTarget };
 }

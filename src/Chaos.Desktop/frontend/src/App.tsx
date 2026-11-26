@@ -50,6 +50,15 @@ import { type MarkdownLinks } from "./markdown";
 import { Templates } from "./Templates";
 import { createLatestRequest } from "./latestRequest";
 import { useDragReorder } from "./dragReorder";
+import {
+  loadNavLayout,
+  moveNavItem,
+  navSections,
+  resolveNavLayout,
+  saveNavLayout,
+  type NavPlacement,
+  type NavSection,
+} from "./sidebarLayout";
 import { QueryView, builtInViews, type QueryState } from "./QueryView";
 import { ViewEditor } from "./ViewEditor";
 import { ViewIcon } from "./viewIcons";
@@ -317,6 +326,7 @@ export function App({
   const listRequests = React.useRef(createLatestRequest());
   const selectedContainer = React.useRef("");
   const drag = useDragReorder();
+  const [savedNavLayout, setSavedNavLayout] = React.useState<NavPlacement[]>(loadNavLayout);
 
   async function refresh() {
     if (containerId !== selectedContainer.current) return;
@@ -1075,6 +1085,270 @@ export function App({
   const userContainers = containers.filter((c) => c.kind !== "Inbox");
   const navItem =
     "h-8 min-w-0 flex-1 justify-start gap-2.5 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 [&_svg]:text-muted-foreground aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary aria-[current=page]:[&_svg]:text-primary";
+  const navDefs: { id: string; section: NavSection; node: React.ReactNode }[] = [
+    {
+      id: "myday",
+      section: "main",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "myday" ? "page" : undefined}
+          onClick={() => {
+            setEditing(null);
+            setShowTagSettings(false);
+            setView("myday");
+          }}
+        >
+          <Sun />
+          My Day
+          {(viewCounts.get("MyDay") ?? 0) > 0 && (
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>
+          )}
+        </Button>
+      ),
+    },
+    {
+      id: "myweek",
+      section: "main",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "myweek" ? "page" : undefined}
+          onClick={() => {
+            setEditing(null);
+            setShowTagSettings(false);
+            setView("myweek");
+          }}
+        >
+          <CalendarDays />
+          My Week
+        </Button>
+      ),
+    },
+    {
+      id: "calendar",
+      section: "main",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "calendar" ? "page" : undefined}
+          onClick={() => {
+            setEditing(null);
+            setShowTagSettings(false);
+            setView("calendar");
+          }}
+        >
+          <CalendarRange />
+          Calendar
+        </Button>
+      ),
+    },
+    {
+      id: "inbox",
+      section: "main",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "tasks" && !containerId ? "page" : undefined}
+          onClick={() => openContainer("")}
+        >
+          <Inbox />
+          Inbox
+          {(containerCounts.get(containers.find((c) => c.kind === "Inbox")?.id ?? "") ?? 0) > 0 && (
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+              {containerCounts.get(containers.find((c) => c.kind === "Inbox")!.id)}
+            </span>
+          )}
+        </Button>
+      ),
+    },
+    {
+      id: "collaboration",
+      section: "main",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "collaboration" ? "page" : undefined}
+          onClick={() => {
+            setEditing(null);
+            setShowTagSettings(false);
+            setView("collaboration");
+          }}
+        >
+          <Inbox /> Collaboration inbox
+        </Button>
+      ),
+    },
+    ...builtInViews.map((item) => ({
+      id: `view:${item.view}`,
+      section: "views" as NavSection,
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "query" && query.view === item.view ? "page" : undefined}
+          onClick={() => openQuery({ view: item.view })}
+        >
+          {viewIcons[item.view]}
+          {item.title}
+          {(viewCounts.get(item.view) ?? 0) > 0 && (
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>
+          )}
+        </Button>
+      ),
+    })),
+    ...savedViews
+      .filter((item) => item.pinned)
+      .map((item) => ({
+        id: `saved:${item.id}`,
+        section: "views" as NavSection,
+        node: (
+          <Button
+            type="button"
+            variant="ghost"
+            className={navItem}
+            aria-current={view === "query" && query.view === "Custom" && query.viewId === item.id ? "page" : undefined}
+            onClick={() => openSavedView(item)}
+          >
+            <ViewIcon name={item.icon} color={item.color} />
+            <span className="truncate">{item.name}</span>
+            {(savedViewCounts.get(item.id) ?? 0) > 0 && (
+              <span className="ml-auto text-xs text-muted-foreground tabular-nums">{savedViewCounts.get(item.id)}</span>
+            )}
+          </Button>
+        ),
+      })),
+    {
+      id: "pad",
+      section: "notes",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "pad" ? "page" : undefined}
+          title="Personal pad (Ctrl+Shift+P for a new note)"
+          onClick={() => {
+            setShowTagSettings(false);
+            setView("pad");
+          }}
+        >
+          <StickyNote />
+          Personal pad
+        </Button>
+      ),
+    },
+    {
+      id: "pages",
+      section: "notes",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "pages" ? "page" : undefined}
+          onClick={() => {
+            setEditing(null);
+            openPages(null);
+          }}
+        >
+          <FileText />
+          Pages
+        </Button>
+      ),
+    },
+    {
+      id: "daily",
+      section: "notes",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "daily" ? "page" : undefined}
+          title="Open today's daily page"
+          onClick={() => {
+            setEditing(null);
+            openPages({ kind: "daily", date: dayClock?.today ?? localToday() });
+          }}
+        >
+          <NotebookPen />
+          Daily page
+        </Button>
+      ),
+    },
+    {
+      id: "summaries",
+      section: "notes",
+      node: (
+        <Button
+          type="button"
+          variant="ghost"
+          className={navItem}
+          aria-current={view === "summaries" ? "page" : undefined}
+          onClick={() => {
+            setShowTagSettings(false);
+            setView("summaries");
+          }}
+        >
+          <BookOpen />
+          Summaries
+        </Button>
+      ),
+    },
+  ];
+  const navLayout = resolveNavLayout(
+    navDefs.map(({ id, section }) => ({ id, section })),
+    savedNavLayout,
+  );
+  function placeNavItem(id: string, section: NavSection, index: number) {
+    const next = moveNavItem(navLayout, id, section, index);
+    setSavedNavLayout(next);
+    saveNavLayout(next);
+  }
+  /** Keyboard move: one step within the section, crossing into the neighbouring section at an edge. */
+  function stepNavItem(id: string, section: NavSection, offset: number) {
+    const order = navLayout[section];
+    const target = order.indexOf(id) + offset;
+    if (target >= 0 && target < order.length) return placeNavItem(id, section, target);
+    const neighbour = navSections[navSections.indexOf(section) + offset];
+    if (neighbour) placeNavItem(id, neighbour, offset < 0 ? navLayout[neighbour].length : 0);
+  }
+  function navDrop(section: NavSection, targetId: string | null) {
+    return drag.anyTarget(targetId, "nav", (sourceId, after) => {
+      const rest = navLayout[section].filter((item) => item !== sourceId);
+      const at = targetId === null ? rest.length : rest.indexOf(targetId) + (after ? 1 : 0);
+      placeNavItem(sourceId, section, at);
+    });
+  }
+  function navRows(section: NavSection) {
+    return navLayout[section].map((id) => {
+      const def = navDefs.find((item) => item.id === id)!;
+      return (
+        <div key={id} className="group/row flex items-center rounded-md" {...navDrop(section, id)}>
+          {drag.handle(
+            id,
+            "nav",
+            false,
+            "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5",
+            { label: "Move menu item (arrow keys)", onMove: (offset) => stepNavItem(id, section, offset) },
+          )}
+          {def.node}
+        </div>
+      );
+    });
+  }
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? (tags.find((tag) => tag.id === query.tagId) ?? null) : null;
   /** Everything the command palette can jump to or run, built from the current lists, tags and focus. */
@@ -1692,174 +1966,18 @@ export function App({
             </form>
             <FocusSwitch focus={focus} onChange={setFocus} />
             <nav aria-label="Views" className="grid gap-px">
-              <Button
-                type="button"
-                variant="ghost"
-                className={navItem}
-                aria-current={view === "myday" ? "page" : undefined}
-                onClick={() => {
-                  setEditing(null);
-                  setShowTagSettings(false);
-                  setView("myday");
-                }}
-              >
-                <Sun />
-                My Day
-                {(viewCounts.get("MyDay") ?? 0) > 0 && (
-                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get("MyDay")}</span>
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={navItem}
-                aria-current={view === "myweek" ? "page" : undefined}
-                onClick={() => {
-                  setEditing(null);
-                  setShowTagSettings(false);
-                  setView("myweek");
-                }}
-              >
-                <CalendarDays />
-                My Week
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={navItem}
-                aria-current={view === "calendar" ? "page" : undefined}
-                onClick={() => {
-                  setEditing(null);
-                  setShowTagSettings(false);
-                  setView("calendar");
-                }}
-              >
-                <CalendarRange />
-                Calendar
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={navItem}
-                aria-current={view === "tasks" && !containerId ? "page" : undefined}
-                onClick={() => openContainer("")}
-              >
-                <Inbox />
-                Inbox
-                {(containerCounts.get(containers.find((c) => c.kind === "Inbox")?.id ?? "") ?? 0) > 0 && (
-                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                    {containerCounts.get(containers.find((c) => c.kind === "Inbox")!.id)}
-                  </span>
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={navItem}
-                aria-current={view === "collaboration" ? "page" : undefined}
-                onClick={() => {
-                  setEditing(null);
-                  setShowTagSettings(false);
-                  setView("collaboration");
-                }}
-              >
-                <Inbox /> Collaboration inbox
-              </Button>
-              <SidebarSection id="views" title="Views">
-                {builtInViews.map((item) => (
-                  <Button
-                    key={item.view}
-                    type="button"
-                    variant="ghost"
-                    className={navItem}
-                    aria-current={view === "query" && query.view === item.view ? "page" : undefined}
-                    onClick={() => openQuery({ view: item.view })}
-                  >
-                    {viewIcons[item.view]}
-                    {item.title}
-                    {(viewCounts.get(item.view) ?? 0) > 0 && (
-                      <span className="ml-auto text-xs text-muted-foreground tabular-nums">{viewCounts.get(item.view)}</span>
-                    )}
-                  </Button>
-                ))}
-                {savedViews
-                  .filter((item) => item.pinned)
-                  .map((item) => (
-                    <Button
-                      key={item.id}
-                      type="button"
-                      variant="ghost"
-                      className={navItem}
-                      aria-current={view === "query" && query.view === "Custom" && query.viewId === item.id ? "page" : undefined}
-                      onClick={() => openSavedView(item)}
-                    >
-                      <ViewIcon name={item.icon} color={item.color} />
-                      <span className="truncate">{item.name}</span>
-                      {(savedViewCounts.get(item.id) ?? 0) > 0 && (
-                        <span className="ml-auto text-xs text-muted-foreground tabular-nums">{savedViewCounts.get(item.id)}</span>
-                      )}
-                    </Button>
-                  ))}
+              <div className="grid gap-px" {...navDrop("main", null)}>
+                {navRows("main")}
+              </div>
+              <SidebarSection id="views" title="Views" dropProps={navDrop("views", null)}>
+                {navRows("views")}
                 <Button type="button" variant="ghost" className={navItem} onClick={() => editView({ view: null })}>
                   <Plus />
                   New view
                 </Button>
               </SidebarSection>
-              <SidebarSection id="notes" title="Notes">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={navItem}
-                  aria-current={view === "pad" ? "page" : undefined}
-                  title="Personal pad (Ctrl+Shift+P for a new note)"
-                  onClick={() => {
-                    setShowTagSettings(false);
-                    setView("pad");
-                  }}
-                >
-                  <StickyNote />
-                  Personal pad
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={navItem}
-                  aria-current={view === "pages" ? "page" : undefined}
-                  onClick={() => {
-                    setEditing(null);
-                    openPages(null);
-                  }}
-                >
-                  <FileText />
-                  Pages
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={navItem}
-                  aria-current={view === "daily" ? "page" : undefined}
-                  title="Open today's daily page"
-                  onClick={() => {
-                    setEditing(null);
-                    openPages({ kind: "daily", date: dayClock?.today ?? localToday() });
-                  }}
-                >
-                  <NotebookPen />
-                  Daily page
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={navItem}
-                  aria-current={view === "summaries" ? "page" : undefined}
-                  onClick={() => {
-                    setShowTagSettings(false);
-                    setView("summaries");
-                  }}
-                >
-                  <BookOpen />
-                  Summaries
-                </Button>
+              <SidebarSection id="notes" title="Notes" dropProps={navDrop("notes", null)}>
+                {navRows("notes")}
               </SidebarSection>
             </nav>
             <SidebarSection
@@ -2724,6 +2842,7 @@ function SidebarSection({
   adding = false,
   onAdd,
   form,
+  dropProps,
 }: {
   id: string;
   title: string;
@@ -2732,6 +2851,7 @@ function SidebarSection({
   adding?: boolean;
   onAdd?: () => void;
   form?: React.ReactNode;
+  dropProps?: React.HTMLAttributes<HTMLElement>;
 }) {
   const key = `chaos.sidebar.${id}.collapsed`;
   const [collapsed, setCollapsed] = React.useState(() => {
@@ -2754,7 +2874,7 @@ function SidebarSection({
   }
   const bodyId = `sidebar-section-${id}`;
   return (
-    <section aria-label={title} className="mt-3 grid gap-px">
+    <section aria-label={title} className="mt-3 grid gap-px" {...dropProps}>
       <div className="flex items-center">
         <button
           type="button"
