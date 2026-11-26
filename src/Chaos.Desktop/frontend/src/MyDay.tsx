@@ -3,6 +3,7 @@ import { DateText } from "./dates";
 import { GitHubTaskMark } from "./GitHubTaskMark";
 import { TaskStaleness } from "./TaskStaleness";
 import { ContextMenu } from "radix-ui";
+import { QuickDiaryDialog, QuickDiaryMenuItem } from "./QuickDiary";
 import {
   myDayRpc,
   queryRpc,
@@ -780,8 +781,10 @@ function DayRow({
 }) {
   const task = row.task;
   const done = task.status === "Done" || task.status === "Cancelled";
+  const [diaryOpen, setDiaryOpen] = React.useState(false);
   return (
     <li data-task-row={task.id}>
+      {diaryOpen && <QuickDiaryDialog task={task} onClose={() => setDiaryOpen(false)} />}
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>
           <div
@@ -859,38 +862,37 @@ function DayRow({
             {children}
           </div>
         </ContextMenu.Trigger>
-        {(onSetStatus || onSetCategory) && (
-          <ContextMenu.Portal>
-            <ContextMenu.Content
-              aria-label={`Status for ${task.title}`}
-              className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
-            >
-              {onSetStatus && (
-                <>
-                  <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
-                  {(isFinished(task.status) ? ["NotStarted"] : statuses.filter((status) => status !== "Done")).map((status) => (
-                    <ContextMenu.Item
-                      key={status}
-                      disabled={busy || status === task.status}
-                      className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50"
-                      onSelect={() => onSetStatus(task, status)}
-                    >
-                      {isFinished(task.status) ? "Reopen (previous status)" : label(status)}
-                    </ContextMenu.Item>
-                  ))}
-                </>
-              )}
-              {onSetCategory && (
-                <CategoryMenuItems
-                  category={task.category}
-                  busy={busy}
-                  separator={!!onSetStatus}
-                  onSelect={(category) => onSetCategory(task, category)}
-                />
-              )}
-            </ContextMenu.Content>
-          </ContextMenu.Portal>
-        )}
+        <ContextMenu.Portal>
+          <ContextMenu.Content
+            aria-label={`Status for ${task.title}`}
+            className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+          >
+            <QuickDiaryMenuItem busy={busy} separator={!!(onSetStatus || onSetCategory)} onSelect={() => setDiaryOpen(true)} />
+            {onSetStatus && (
+              <>
+                <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
+                {(isFinished(task.status) ? ["NotStarted"] : statuses.filter((status) => status !== "Done")).map((status) => (
+                  <ContextMenu.Item
+                    key={status}
+                    disabled={busy || status === task.status}
+                    className="cursor-default rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[disabled]:opacity-50"
+                    onSelect={() => onSetStatus(task, status)}
+                  >
+                    {isFinished(task.status) ? "Reopen (previous status)" : label(status)}
+                  </ContextMenu.Item>
+                ))}
+              </>
+            )}
+            {onSetCategory && (
+              <CategoryMenuItems
+                category={task.category}
+                busy={busy}
+                separator={!!onSetStatus}
+                onSelect={(category) => onSetCategory(task, category)}
+              />
+            )}
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
       </ContextMenu.Root>
     </li>
   );

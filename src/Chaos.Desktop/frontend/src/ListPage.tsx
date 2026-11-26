@@ -53,6 +53,7 @@ import { useDragReorder } from "./dragReorder";
 import { taskDragType } from "./tags";
 import { rowClass } from "./taskRow";
 import { useSpaceRole } from "./Sharing";
+import { QuickDiaryDialog, QuickDiaryMenuItem } from "./QuickDiary";
 import { AssigneeChips, useAssigneeChips } from "./assignees";
 import { BulkBar } from "./BulkBar";
 import { CategoryEdge, CategoryMenuItems, asCategory, categoryIcon, categoryTone, type Category, type Focus } from "./category";
@@ -457,6 +458,7 @@ export function ListPage({
                   aria-label={`Status for ${task.title}`}
                   className="z-50 min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
                 >
+                  <QuickDiaryMenuItem busy={locked} onSelect={() => setDiaryTask(task)} />
                   <ContextMenu.Label className="px-2 py-1.5 text-xs text-muted-foreground">Set status</ContextMenu.Label>
                   {(isFinished(task.status) ? ["NotStarted"] : statuses.filter((status) => status !== "Done")).map((status) => (
                     <ContextMenu.Item
@@ -501,8 +503,19 @@ export function ListPage({
     );
   }
 
+  const [diaryTask, setDiaryTask] = React.useState<TaskResponse | null>(null);
   return (
     <>
+      {diaryTask && (
+        <QuickDiaryDialog
+          task={diaryTask}
+          onClose={() => setDiaryTask(null)}
+          onAdded={() => {
+            refresh().catch((e: unknown) => setError(String(e)));
+            changed();
+          }}
+        />
+      )}
       <PageHeader
         eyebrow={`${selected ? selected.kind : "Inbox"}${selected?.archived ? " · archived" : ""}${selected?.deadlineDate ? ` · due ${friendlyDate(selected.deadlineDate, today)} (${relativeDays(selected.deadlineDate, today)})` : ""}`}
         title={listName}
