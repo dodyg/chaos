@@ -205,7 +205,7 @@ test("today's page is stored only once something is written on it", async () => 
   assert.equal(dailyCreates[0].date, "2026-11-14");
   fireEvent.change(await screen.findByLabelText("Daily page"), { target: { value: "Good day" } });
   fireEvent.blur(screen.getByLabelText("Daily page"));
-  await waitFor(() => assert.equal(saves.at(-1)?.markdown, "Good day"));
+  await waitFor(() => assert.match(saves.at(-1)?.markdown ?? "", /^---\r?\nbackground: \w+\r?\n---\r?\n+Good day$/));
   assert.equal(dailyCreates.length, 1, "later typing saves the stored page");
   assert.equal(routed.length, 0);
   cleanup();

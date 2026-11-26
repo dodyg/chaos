@@ -63,6 +63,11 @@ export type PageFocus = { key: number } & PageRequest;
 const operationId = () => crypto.randomUUID();
 const dailyBackgroundKey = "chaos.pages.dailyBackground.v1";
 
+/** A random My Day scene for a daily page that has no background. */
+function randomDailyBackground(): string {
+  return backgroundScenes[Math.floor(Math.random() * backgroundScenes.length)].id;
+}
+
 /** The background new daily pages start with (Settings), or null. */
 export function loadDailyBackground(): string | null {
   try {
@@ -812,6 +817,14 @@ function PageEditor({
   React.useEffect(() => {
     onBackground(background.style);
   }, [background.style?.backgroundImage, background.style?.backgroundColor]);
+  // A stored daily page with no background gets one (the Settings default, else a random scene), once.
+  const backgroundAssigned = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    if (!isDaily || !page || !saver || !snapshot || properties.background) return;
+    if (backgroundAssigned.current.has(page.id)) return;
+    backgroundAssigned.current.add(page.id);
+    setProp("background", loadDailyBackground() ?? randomDailyBackground());
+  }, [isDaily, page?.id, saver, snapshot !== null, properties.background]);
   const headings = React.useMemo(() => headingsOf(body), [body]);
   const words = React.useMemo(() => wordCount(body), [body]);
 
@@ -849,7 +862,7 @@ function PageEditor({
     const date = selected.date;
     void (async () => {
       try {
-        const start = loadDailyBackground();
+        const start = loadDailyBackground() ?? randomDailyBackground();
         const initial = start && !parseFrontMatter(next).present ? setProperty(next, "background", start) : next;
         const result = await api.createDaily({ operationId: operationId(), date, markdown: initial });
         const created = result.ok ? result.pages[0] : undefined;
