@@ -4,6 +4,7 @@ using Chaos.Application.Contracts;
 using Chaos.Application.History;
 using Chaos.Application.Spaces;
 using Chaos.Infrastructure.Sync;
+using Chaos.Desktop.Platform;
 using NeoAstra.Rpc;
 
 namespace Chaos.Desktop.Services;
@@ -20,7 +21,8 @@ public sealed record AgentRemoveRequest(string OperationId, string AgentId, stri
 public sealed record AgentMutationResponse(bool Ok, LocalAgentDto? Agent, TaskErrorResponse? Error);
 public sealed record AgentTokenRequest(string OperationId, string AgentId, string ExpectedVersion, string Name);
 /// <summary><paramref name="Secret"/> is the token to copy into the MCP client; it is shown this once only.</summary>
-public sealed record AgentTokenResponse(bool Ok, LocalAgentTokenDto? Token, string? Secret, TaskErrorResponse? Error);
+/// <summary><paramref name="ClaudeCode"/> and <paramref name="ClaudeDesktop"/> are the MCP client configuration with the token in it, shown once with it.</summary>
+public sealed record AgentTokenResponse(bool Ok, LocalAgentTokenDto? Token, string? Secret, string? ClaudeCode, string? ClaudeDesktop, TaskErrorResponse? Error);
 public sealed record AgentRevokeTokenRequest(string OperationId, string AgentId, string TokenId);
 public sealed record AgentSetAccessRequest(string OperationId, string AgentId, string ContainerId, bool Allowed);
 public sealed record AgentUndoRequest(string ActorId, int? MaxOperations);
@@ -47,7 +49,7 @@ public sealed record RevertAgentResponse(bool Ok, int RestoredGroups, int Trashe
 /// space. Every write of a local agent is a recorded operation of the local person.
 /// </summary>
 [NeoRpcService("agents", Version = 1)]
-public sealed class AgentRpcService(IApplicationStore store, AgentCommands agents, UndoCommands undo, ServiceAgentCommands server, SyncEngine? sync)
+public sealed class AgentRpcService(IApplicationStore store, AgentCommands agents, UndoCommands undo, ServiceAgentCommands server, SyncEngine? sync, McpClientConfig mcp)
 {
     [NeoRpcMethod("list")]
     public ValueTask<AgentListResponse> ListAsync(AgentListRequest request, CancellationToken ct) =>
@@ -104,9 +106,9 @@ public sealed class AgentRpcService(IApplicationStore store, AgentCommands agent
         {
             var created = await agents.CreateTokenAsync(new(request.OperationId, request.AgentId, ReminderRpcService.Number(request.ExpectedVersion, "expectedVersion"),
                 request.Name), ct);
-            return new(true, Map(created.Token), created.Secret, null);
+            return new(true, Map(created.Token), created.Secret, mcp.ClaudeCode(created.Secret), mcp.ClaudeDesktop(created.Secret), null);
         },
-            error => new(false, null, null, error));
+            error => new(false, null, null, null, null, error));
 
     [NeoRpcMethod("revokeToken")]
     public ValueTask<AgentMutationResponse> RevokeTokenAsync(AgentRevokeTokenRequest request, CancellationToken ct) =>

@@ -93,7 +93,11 @@ public sealed class SyncService(
     }
 
     /// <summary>Why the service could not act for an agent: gone, paused, or not a member of any live space.</summary>
-    public sealed class AgentUnavailableException(string? reason) : InvalidOperationException($"The agent cannot act: {reason}.");
+    public sealed class AgentUnavailableException(string? reason) : InvalidOperationException($"The agent cannot act: {reason}.")
+    {
+        /// <summary>The refusal code: <see cref="AgentToolStatus.Paused"/>, or <see cref="SyncRejection.NotMember"/> for a removed agent.</summary>
+        public string? Reason { get; } = reason;
+    }
 
     private const int LatestClientSchema = 99;
 
@@ -721,15 +725,16 @@ public sealed class SyncService(
             {
                 ("task", "assignment" or "agent") => SyncRejection.Forbidden,
                 ("task", _) => await TaskWithinListsAsync(change.EntityKey, change, streamId, lists, ct),
-                ("subtask", _) => await SubtaskWithinListsAsync(change.EntityKey, streamId, lists, ct),
+                ("subtask", _) => await SubtaskWithinListsAsync(change.EntityKey, change, streamId, lists, ct),
                 ("diary_entry", "create") => string.Equals(Value(change, "create", "AuthorProfileId")?.ToString(), me, StringComparison.OrdinalIgnoreCase)
                     ? null : SyncRejection.Forbidden,
-                ("diary_entry", "entry" or "deleted") => string.Equals(await StoredValueAsync(streamId, "diary_entry", change.EntityKey, "create", "AuthorProfileId", ct), me,
-                    StringComparison.OrdinalIgnoreCase) ? null : SyncRejection.Forbidden,
+                // The author is the stored one; an entry created in this very change has none stored yet, so its create group says.
+                ("diary_entry", "entry" or "deleted") => string.Equals(await StoredValueAsync(streamId, "diary_entry", change.EntityKey, "create", "AuthorProfileId", ct)
+                    ?? Value(change, "create", "AuthorProfileId")?.ToString(), me, StringComparison.OrdinalIgnoreCase) ? null : SyncRejection.Forbidden,
                 ("task_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct)
                     ? await TaskWithinListsAsync(change.EntityKey.Split('|')[0], null, streamId, lists, ct) : SyncRejection.Forbidden,
                 ("subtask_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct)
-                    ? await SubtaskWithinListsAsync(change.EntityKey.Split('|')[0], streamId, lists, ct) : SyncRejection.Forbidden,
+                    ? await SubtaskWithinListsAsync(change.EntityKey.Split('|')[0], null, streamId, lists, ct) : SyncRejection.Forbidden,
                 ("page_tag" or "pad_tag", "deleted") => await StoredTagExistsAsync(streamId, change.EntityKey.Split('|')[1], ct) ? null : SyncRejection.Forbidden,
                 ("page", _) => null,
                 ("page_task_link", "anchor") => await TaskWithinListsAsync(change.EntityKey.Split('|')[1], null, streamId, lists, ct),
@@ -776,9 +781,11 @@ public sealed class SyncService(
             && e.PurgedAt == null && e.MovedTo == null).Select(e => e.Groups).FirstOrDefaultAsync(ct) ?? "{}")
         .GetValueOrDefault(group)?.Values.Values.GetValueOrDefault(column)?.ToString();
 
-    private async Task<string?> SubtaskWithinListsAsync(string subtaskId, Guid streamId, string[]? lists, CancellationToken ct)
+    private async Task<string?> SubtaskWithinListsAsync(string subtaskId, SyncChange? change, Guid streamId, string[]? lists, CancellationToken ct)
     {
-        var parent = await StoredValueAsync(streamId, "subtask", subtaskId, "create", "TaskId", ct);
+        // A subtask created in this change has no stored parent yet: its create group names it, and the stored parent wins once there is one.
+        var parent = await StoredValueAsync(streamId, "subtask", subtaskId, "create", "TaskId", ct)
+            ?? (change is null ? null : Value(change, "create", "TaskId")?.ToString());
         return parent is { Length: > 0 } ? await TaskWithinListsAsync(parent, null, streamId, lists, ct) : SyncRejection.ParentUnknown;
     }
 
@@ -862,8 +869,13 @@ public sealed class SyncService(
             var from = creation.Values.Values.GetValueOrDefault("FromMemberId")?.ToString();
             var to = creation.Values.Values.GetValueOrDefault("ToMemberId")?.ToString();
             if (me is null || !string.Equals(from, me, StringComparison.OrdinalIgnoreCase)) return SyncRejection.Forbidden;
+            // The recipient is a live owner or editor, or a live agent of a space that allows agents (12.8).
             if (!Guid.TryParse(to, out var recipient) || !await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId && m.MemberId == recipient
-                    && m.RemovedAt == null && m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole), ct))
+                    && m.RemovedAt == null && ((m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole))
+                        || (m.MemberKind == SpaceMember.AgentKind && m.Role == SpaceMember.AgentRole)), ct))
+                return SyncRejection.Forbidden;
+            if (await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId && m.MemberId == recipient && m.MemberKind == SpaceMember.AgentKind && m.RemovedAt == null, ct)
+                && await SpaceSettingAsync(streamId, "AgentsAllowed", ct) != "1")
                 return SyncRejection.Forbidden;
             if (change.Groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long initial && initial != (long)DelegationState.Pending)
                 return SyncRejection.Forbidden;

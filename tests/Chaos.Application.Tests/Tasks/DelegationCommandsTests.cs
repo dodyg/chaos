@@ -97,6 +97,70 @@ public sealed class DelegationCommandsTests
         await Assert.That(store.Delegations).Count().IsEqualTo(1);
     }
 
+    private async Task<TaskRecord> AgentTaskAsync(InMemoryStore store, bool agentsAllowed = true, bool allowClose = false)
+    {
+        var task = await SharedTaskAsync(store);
+        var index = store.Spaces.FindIndex(space => space.Id == "team");
+        store.Spaces[index] = store.Spaces[index] with { AgentsAllowed = agentsAllowed, AllowAgentsToClose = allowClose };
+        store.People.Add(("team", new SpacePerson("agent:bot", "Build bot", 4, false, null)));
+        return task;
+    }
+
+    [Test]
+    public async Task Delegate_ToAnAgent_PointsTheTaskAtItsQueue_AsksForReview_AndKeepsTheAssignees()
+    {
+        var store = new InMemoryStore();
+        var task = await AgentTaskAsync(store);
+
+        var result = await New(store).DelegateAsync(new("delegate-agent", task.Id, task.Version, "bot", "Ship it", "Deployed", null, ReviewRequired: false, null));
+
+        await Assert.That(result.Delegation.ToMemberId).IsEqualTo("bot");
+        await Assert.That(result.Delegation.State).IsEqualTo(DelegationState.Pending);
+        // The space does not let agents close, so a person's review is asked for whatever was chosen.
+        await Assert.That(result.Delegation.ReviewRequired).IsTrue();
+        await Assert.That((result.Task.AgentReady, result.Task.AgentAssigneeId)).IsEqualTo((true, "bot"));
+        await Assert.That(store.TaskAssignees.Where(a => a.TaskId == task.Id)).IsEmpty(); // an agent is not an assignee
+        await Assert.That(store.Diary.Single(e => e.TaskId == task.Id).RawMarkdown).StartsWith("Delegated to Build bot (agent)");
+        await Assert.That(store.History.Single(h => h.EventKind == "task.delegated").ChangedFields).Contains("AgentReady");
+        // The agent answers through its tools, never a person's command.
+        var refused = await RefusedAsync(() => New(store).RespondAsync(new("accept", result.Delegation.Id, result.Delegation.Version, DelegationResponse.Accept, null)));
+        await Assert.That(refused.Kind).IsEqualTo(AppErrorKind.Validation);
+        var nudge = await RefusedAsync(() => New(store).NudgeAsync(new("nudge", result.Delegation.Id, result.Delegation.Version, null)));
+        await Assert.That(nudge.Message).Contains("agent");
+    }
+
+    [Test]
+    public async Task Delegate_ToAnAgent_KeepsNoReviewOnlyWhereTheSpaceLetsAgentsClose()
+    {
+        var store = new InMemoryStore();
+        var task = await AgentTaskAsync(store, allowClose: true);
+        var result = await New(store).DelegateAsync(new("delegate-agent", task.Id, task.Version, "bot", null, null, null, ReviewRequired: false, null));
+        await Assert.That(result.Delegation.ReviewRequired).IsFalse();
+    }
+
+    [Test]
+    public async Task Delegate_ToAnAgent_WhereAgentsAreNotAllowed_OrToAnUnknownAgent_IsRefused()
+    {
+        var store = new InMemoryStore();
+        var task = await AgentTaskAsync(store, agentsAllowed: false);
+        await Assert.That((await RefusedAsync(() => New(store).DelegateAsync(new("a", task.Id, task.Version, "bot", null, null, null, true, null)))).Kind).IsEqualTo(AppErrorKind.Validation);
+        var fresh = new InMemoryStore();
+        var again = await AgentTaskAsync(fresh);
+        await Assert.That((await RefusedAsync(() => New(fresh).DelegateAsync(new("b", again.Id, again.Version, "nobody", null, null, null, true, null)))).Kind).IsEqualTo(AppErrorKind.Validation);
+    }
+
+    [Test]
+    public async Task Withdraw_FromAnAgent_TakesTheTaskOutOfItsQueue()
+    {
+        var store = new InMemoryStore();
+        var task = await AgentTaskAsync(store);
+        var delegation = (await New(store).DelegateAsync(new("delegate-agent", task.Id, task.Version, "bot", null, null, null, true, null))).Delegation;
+        var result = await New(store).WithdrawAsync(new("withdraw-agent", delegation.Id, delegation.Version));
+        await Assert.That(result.Delegation.State).IsEqualTo(DelegationState.Withdrawn);
+        await Assert.That((result.Task.AgentReady, result.Task.AgentAssigneeId)).IsEqualTo((false, (string?)null));
+        await Assert.That(store.Diary.Last(e => e.TaskId == task.Id).RawMarkdown).Contains("Build bot");
+    }
+
     [Test]
     public async Task Delegate_AfterWaitingFollowUp_UsesDelegationStart()
     {

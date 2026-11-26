@@ -73,7 +73,14 @@ export function AgentsSettings({ api = agentRpc, onChanged }: { api?: AgentsApi;
   const [tokenFor, setTokenFor] = React.useState<string | null>(null);
   const [tokenName, setTokenName] = React.useState("");
   // The secret of a token just made: it exists only here, until the dialog closes.
-  const [secret, setSecret] = React.useState<{ agent: string; token: string; secret: string; copied: boolean } | null>(null);
+  const [secret, setSecret] = React.useState<{
+    agent: string;
+    token: string;
+    secret: string;
+    claudeCode: string;
+    claudeDesktop: string;
+    copied: string | null;
+  } | null>(null);
   const [confirm, setConfirm] = React.useState<Confirm | null>(null);
   const [hours, setHours] = React.useState<Record<string, string>>({});
   const [reverts, setReverts] = React.useState<Record<string, string>>({});
@@ -120,7 +127,14 @@ export function AgentsSettings({ api = agentRpc, onChanged }: { api?: AgentsApi;
     if (!result.ok || !result.secret || !result.token) throw new Error(result.error?.message ?? "The token could not be made.");
     setTokenFor(null);
     setTokenName("");
-    setSecret({ agent, token: result.token.name, secret: result.secret, copied: false });
+    setSecret({
+      agent,
+      token: result.token.name,
+      secret: result.secret,
+      claudeCode: result.claudeCode ?? "",
+      claudeDesktop: result.claudeDesktop ?? "",
+      copied: null,
+    });
   }
 
   const spaceName = (spaceId: string) => spaces.find((space) => space.spaceId.toLowerCase() === spaceId.toLowerCase())?.name ?? spaceId;
@@ -549,18 +563,31 @@ export function AgentsSettings({ api = agentRpc, onChanged }: { api?: AgentsApi;
             <p className="font-medium">Copy this token now. It is shown only once.</p>
             <code className="break-all text-xs">{secret.secret}</code>
             <p className="text-muted-foreground">
-              Chaos does not write the MCP client configuration yet (it comes with Q18). Until then, set the token as the{" "}
-              <code>CHAOS_AGENT_TOKEN</code> environment variable of the agent's MCP client.
+              Add Chaos to the assistant's MCP client with one of these. Both carry the token in the <code>CHAOS_AGENT_TOKEN</code>{" "}
+              environment variable. The assistant then works offline, in the lists you tick for this agent.
             </p>
+            <p className="font-medium">Claude Code</p>
+            <code className="break-all text-xs">{secret.claudeCode}</code>
+            <p className="font-medium">Claude Desktop (claude_desktop_config.json)</p>
+            <pre className="overflow-x-auto text-xs">{secret.claudeDesktop}</pre>
           </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void navigator.clipboard?.writeText(secret.secret).then(() => setSecret({ ...secret, copied: true }))}
-            >
-              {secret.copied ? "Copied" : "Copy token"}
-            </Button>
+          <div className="flex flex-wrap justify-end gap-2">
+            {(
+              [
+                ["token", "Copy token", secret.secret],
+                ["claudeCode", "Copy Claude Code command", secret.claudeCode],
+                ["claudeDesktop", "Copy Claude Desktop config", secret.claudeDesktop],
+              ] as const
+            ).map(([key, label, text]) => (
+              <Button
+                key={key}
+                type="button"
+                variant="outline"
+                onClick={() => void navigator.clipboard?.writeText(text).then(() => setSecret({ ...secret, copied: key }))}
+              >
+                {secret.copied === key ? "Copied" : label}
+              </Button>
+            ))}
             <Button type="button" onClick={() => setSecret(null)}>
               Done
             </Button>

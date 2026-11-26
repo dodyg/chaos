@@ -2119,6 +2119,18 @@ configuration snippet (Q18) and delegating to an agent (Q20); the `propose_tasks
 **Exit:** a local AI assistant lists Ready for agent tasks in allowed Personal lists, claims one, reports progress
 and hands it back, with no account and no network.
 
+**Progress note 2026-11-26 (Q18).** The local MCP server is built and tested; the live check with Claude Code and Claude Desktop (item 5) is not done, so the
+stage stays open. `McpRelayHost` (`Chaos.Desktop/Platform`) serves the SDK over a `CurrentUserOnly` pipe, one connection per assistant, after a
+one-line token handshake (`{"token":"…"}`, answered `{"ok":true|false}`); `McpAgentGate` looks the token up by its SHA-256 and binds the agent's
+`LocalAgentTools`. `--mcp` reads `CHAOS_AGENT_TOKEN` (exit 2 when missing, 1 when refused) and starts a hidden `--mcp-host` when Chaos is not
+running; that host takes the storage lock, serves one session without a window and exits with it. Tools (`docs/mcp/tools.json`, 11): `list_spaces`,
+`list_tasks`, `get_task`, `create_task`, `update_task`, `claim_task`, `release_task`, `heartbeat`, `add_update`, `ask_for_help`, `hand_back`, as
+`AIFunction`s (`LocalAgentTools` and `LocalAgentWorkTools`, names and descriptions in `Chaos.Sync/AgentWorkTools.cs`). Not offered yet: `attach_file`,
+`read_page`, `write_page`, `read_pad`, `propose_tasks` (Q20) and `list_view`. Settings → Agents shows the Claude Code command and the Claude Desktop
+JSON with the token once. Tests (Desktop `McpRelayTests`, 7): token refusal and revocation, paused, unticked list invisible, the contract runner over
+a real pipe and real data root against `tools.json`, the injection fixture, two sessions, the ACL, and the real `Chaos.Desktop.exe --mcp` shim
+starting its hidden host. The native cross-user pipe check stays blocked as in Q0.
+
 ### [ ] Q19: Service MCP server
 
 **Depends on:** Q17 and Q18 (shared tool contract). **Server migration:** only if OAuth client storage needs one.
@@ -2142,13 +2154,51 @@ and hands it back, with no account and no network.
 **Exit:** an agent added to a shared space picks up a Ready for agent task through the service, and its updates
 appear live on members' desktops.
 
+**Progress note 2026-11-26 (Q19).** The service MCP endpoint is built and tested; the live check with Claude Code as a remote MCP client (item 4) is not done, so the stage stays open. `/mcp` (`ModelContextProtocol.AspNetCore` 2.4.0, stateless Streamable HTTP) serves the same eleven tools as the local surface, from `Chaos.Server/Sync/AgentWorkTools.cs` and `AgentTools.cs`, bound to the token's `agent_id`; `AuthSetup` and `Auth/McpAuth.cs` add the `chaos-mcp` OAuth client (PKCE, loopback and claude.ai redirects), `/connect/register`, discovery documents and the consent page where the owner picks the agent; `Sync/McpEndpoint.cs` holds the TLS, no-CORS, per-agent rate limit and tool-name-only logging rules. No migration. Tests: Server `Sharing/ServiceMcpTests` (11: the contract runner over a real MCP client, OAuth sign-in and consent, allowed lists, pause, injection fixture, logs, token and guard refusals, TLS, per-agent rate limit, the hourly add limit, refresh and removal). The seam now accepts a new subtask or diary entry from an agent (decisions 2026-11-26). Not done: the live check, `attach_file`, `read_page`, `write_page`, `read_pad`, `propose_tasks`, `list_view` (Q20) and the `agent-question` notice. Smallest next action: the live check against a deployed HTTPS service, then Q20.
+
 ### [ ] Q20: Agent workflows
+
+**Progress note 2026-11-26 (Q20, first slice).** Only the pad-proposal rules are built; the stage stays open. `ProposalCommands` (`Chaos.Application/Agents`) records an agent's suggestions
+(`ProposeAsync`: live, unpaused agent with a ticked list, a live Personal pad note, at most 20 per call and 100 pending), lists the pending ones (`ListPendingAsync`), and only a person's
+`AcceptAsync` creates the task (through the ordinary task creation, history naming the person, with the pad link back to the note when it still quotes the title) or `DismissAsync` closes it.
+Tests: Infrastructure `Agents/ProposalTests` (4, real SQLite): nothing becomes a task without a click, accept makes the task as the person and links the note and cannot repeat, dismiss
+makes none, and a paused or list-less agent or a foreign note is refused. Not done: the Accept and Dismiss RPC and the pad UI, quick-add parsing of `QuickAddText` on Accept (the screen parses it and sends the draft),
+delegating to an agent with the 12.8 mapping, the GitHub attribution naming the agent, the delegation-through-`hand_back` test and the concurrent page-write merge test. Smallest next action: delegation to an agent (done, see the next note).
+
+**Progress note 2026-11-26 (Q20, delegation to an agent).** A person can delegate a task of a shared space to one of its agents, with the 12.8 mapping. `DelegationCommands` takes an agent member (`agent:<id>`, role Agent, space allows agents) as the recipient:
+the delegation row names the agent's ID, the task gets `AgentReady` and `AgentAssigneeId` (an agent is no assignee, so assignees stay as they are), review is forced on unless the space lets agents close, nudging an agent is refused, and
+withdrawing takes the task out of its queue. The service accepts an agent member as recipient (`DelegationRefusalAsync`) and moves the delegation itself, as server changes that follow the transition table, since an agent never writes a
+delegation: claiming accepts (`AgentService.ApplyDelegationMoveAsync` inside the claim), `ask_for_help` is Question with the question as the response, `hand_back` is Done; with no review asked and a space that lets agents close, `hand_back`
+sets the task Done (the claim is released first, since a finished task cannot be released), otherwise Needs review. A person cannot answer for the agent (forged state refused). The delegate dialog lists the space's agents. Tests: Application
+`DelegationCommandsTests` (4 new, 16), Server `ServiceMcpTests` (2 new, 14, PostgreSQL 18.7 through `wslc`, removed afterwards), Desktop frontend `Delegation.test.tsx` 8. Not done: a local agent in the Personal space is still pointed at
+a task with Ready for agent (Personal has no delegation), the dialog change has no test of its own, and the live review and GitHub attribution remain.
+
+**Progress note 2026-11-26 (Q20, GitHub attribution).** An agent's updates on a task linked to a GitHub issue now flow to the issue through the runner, signed `— <agent name> (agent, via Chaos)` (`GitHubCommentMarker.AgentAttribution`).
+Local: `add_update`, `ask_for_help` and `hand_back` queue their diary entry for GitHub when the task has an active link, and `DiaryCommands.AddAsync` stores the agent's signature on the comment link when the ambient actor is a local agent.
+Service: the same three tools queue a `github_comment_link` for the entry as a server change (`AgentService.QueueGitHubCommentAsync`), which the owner's device posts; `AttributionAsync` also resolves an agent-authored entry by its agent
+member, so an unsigned link is signed before it is posted. Reading the comment back strips the line, as for members. Claiming a connected task needed no change (tested). Tests: Infrastructure `GitHubSharingTests` (198 GitHub
+tests, one new for server- and local-agent signatures and the read-back), Server `ServiceMcpTests` (15, one new: queued link, signature, author, and nothing queued for an unlinked task). Note: an agent's text reaches a public issue under
+the owner's GitHub account only for linked tasks; the owner's connection is the opt-in, and there is no per-agent switch yet. Not done: that per-agent switch, and the Accept and Dismiss pad screens.
+
+**Progress note 2026-11-26 (Q20, pad Accept and Dismiss).** The pad shows an agent's suggestions as "Suggested by Build bot · from “<note>”" with a list chooser (Inbox by default), Accept and Dismiss (`PadSuggestions.tsx`, above the notes).
+`ProposalRpcService` (`proposals.list`, `accept`, `dismiss`) wraps `ProposalCommands`: Accept parses the agent's quick-add text with the same preview the bar uses (one clean task only, else the plain title and notes), takes the notes from
+the agent, makes the task as the person, links the note and wakes sync; a stale or repeated click comes back as data. A list that cannot load shows nothing, so the pad is never in the way. The preview backend models the three methods.
+Tests: Desktop `ProposalRpcTests` (1; Desktop 114), frontend `PadSuggestions.test.tsx` (4; frontend 360), the pad's tests unchanged; checked in the preview (Accept removed the card and added a task). Not done: the per-agent GitHub switch, the
+concurrent page-edit test, a two-device check that a proposal without a `state` value is pending, and suggestions of shared spaces' pads (the service writes them; the pad screen is Personal only). The Q20 exit demonstration end to end is still to be run.
+
+**Progress note 2026-11-26 (Q20, tools).** `read_pad`, `propose_tasks`, `read_page` and `write_page` are on both surfaces with identical schemas (`docs/mcp/tools.json`, 15 tools; names, descriptions and result types in
+`Chaos.Sync/AgentWorkTools.cs`). Local: `LocalAgentPadPageTools` (Personal space, needs a ticked list; propose runs `ProposalCommands`, 60 calls an hour; writes under `agent.propose_tasks` and `agent.write_page`).
+Service: `AgentPadPageTools` (reachable spaces with a list; the pad is read only, a proposal pushes only the `task_proposal` create group so a person's Accept or Dismiss writes the state; a page is written as
+`title` and `text` groups, which a member's device merges with its own edit under E2). Tests: Desktop `McpRelayTests` (8, the runner now covers the four tools and a proposal accepted by a person), Server
+`ServiceMcpTests` (12, new `PadAndPageTools_*` with PostgreSQL 18.7 through `wslc`, removed afterwards), Infrastructure agent tests (8 and `ProposalTests` 4), Desktop 113 in all. Full gate not run. The agent
+page tools do not yet have the concurrent-edit test (the client merge is exercised in the text-merge tests only), and a proposal that arrives on a desktop with no `state` group relies on the column default; no
+two-device test covers it.
 
 **Depends on:** Q19 and Q13. **Migration:** none expected. **Read:** 12.6, 12.8.
 
 1. Delegate to an agent (with the 12.8 mapping), pad proposals (Accept or Dismiss on the pad), and pages read and
    write for agents within their spaces.
-2. GitHub: an agent claiming a connected task, with attribution naming the agent.
+2. GitHub: an agent claiming a connected task, with attribution naming the agent (done, see the GitHub attribution note).
 3. Tests:
    - delegation to an agent completes through `hand_back` with review
    - proposals never create tasks without a person's click

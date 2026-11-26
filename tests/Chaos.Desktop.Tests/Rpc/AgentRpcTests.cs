@@ -23,7 +23,7 @@ public sealed class AgentRpcTests
     }
 
     private static AgentRpcService Agents(ChaosStorageHandle storage, SequentialIdGenerator ids, FixedTimeProvider clock) =>
-        new(storage.Store, new AgentCommands(storage.Store, ids, clock), new UndoCommands(storage.Store, ids, clock), new ServiceAgentCommands(null!), null);
+        new(storage.Store, new AgentCommands(storage.Store, ids, clock), new UndoCommands(storage.Store, ids, clock), new ServiceAgentCommands(null!), null, Chaos.Desktop.Platform.McpClientConfig.ForThisApp(Path.GetTempPath()));
 
     [Test]
     public async Task LocalAgents_CreateTickATokenAndUndo_RoundTrip()

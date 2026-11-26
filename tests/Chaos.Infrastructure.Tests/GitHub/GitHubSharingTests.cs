@@ -224,6 +224,51 @@ public sealed class GitHubSharingTests
     }
 
     [Test]
+    public async Task AgentUpdates_AreSignedWithTheAgentsName_WhetherServerOrLocal_AndReadBackWithoutTheLine()
+    {
+        using var host = await DataHost.StartAsync();
+        var team = await MakeTeamAsync(host);
+        var bot = Guid.NewGuid();
+        await host.Store.ExecuteAsync((s, ct) => Sql(s, $"INSERT INTO SpaceMembers (Id,SpaceId,MemberId,MemberKind,DisplayName,GitHubLogin,Role,JoinedAtUtc) VALUES ('m-bot','{Space}','{bot:D}',2,'Build bot',NULL,4,'2026-11-10T09:00:00Z');", ct), CancellationToken.None);
+        var api = Fake();
+        var (repo, _, link) = await ConnectAsync(host, api);
+
+        // A shared-space agent's entry, authored by the agent's ID and queued by the service without a signature.
+        var served = await host.Store.ExecuteAsync(async (s, ct) =>
+        {
+            var now = host.Clock.GetUtcNow();
+            var entry = new DiaryEntryRecord { Id = host.Ids.NewId().ToString(), TaskId = link.TaskId!, AuthorProfileId = bot.ToString("D"), EntryAtUtc = now, RawMarkdown = "Deployed to staging",
+                Revision = 1, Version = 1, CreatedAtUtc = now, UpdatedAtUtc = now };
+            await s.Diary.AddAsync(entry, ct);
+            await s.GitHub.UpsertCommentLinkAsync(new() { DiaryEntryId = entry.Id, IssueLinkId = link.Id, Origin = 1, State = 1 }, ct);
+            return entry;
+        }, CancellationToken.None);
+        var outbound = new GitHubOutboundComments(host.Store, api, host.Ids, host.Clock);
+        await Assert.That(await outbound.RunAsync(repo.Id, true, CancellationToken.None)).IsEqualTo(1);
+        var remote = (await api.ListCommentsAsync(api.Account, "person", "repo", null, 1, null, null, CancellationToken.None)).Items.Single();
+        await Assert.That(remote.Body).IsEqualTo("Deployed to staging\n\n— Build bot (agent, via Chaos)\n\n<!-- chaos:" + served.Id + " -->");
+        await Assert.That((await host.Store.QueryAsync((s, ct) => s.GitHub.ListCommentLinksAsync(link.Id, ct))).Single().Attribution).IsEqualTo("— Build bot (agent, via Chaos)");
+        await Assert.That(await new GitHubInboundComments(host.Store, host.Ids, host.Clock).ApplyAsync(link.Id,
+            (await host.Store.QueryAsync((s, ct) => s.GitHub.GetIssueLinkAsync(link.Id, ct)))!.Version, [remote], true, CancellationToken.None)).IsEqualTo(0);
+        await Assert.That((await host.Store.QueryAsync((s, ct) => s.Diary.GetAsync(served.Id, ct)))!.RawMarkdown).IsEqualTo("Deployed to staging");
+
+        // A local agent's update, written under its scope, is queued with its own signature.
+        var local = await new Chaos.Application.Agents.AgentCommands(host.Store, host.Ids, host.Clock).CreateAsync(new(DataHost.Op(), "Desk bot"));
+        string mine;
+        using (Chaos.Application.Activity.ActivityScope.Open(Chaos.Application.Activity.ActivitySources.Agent, Chaos.Application.Activity.ActivityActions.AgentAddUpdate,
+            operationId: DataHost.Op(), actorId: $"agent:{local.Id}"))
+        {
+            mine = (await new DiaryCommands(host.Store, host.Ids, host.Clock).AddAsync(new(DataHost.Op(), link.TaskId!, "Checked the logs", null, true))).Entry.Id;
+        }
+
+        await Assert.That(team.Omar).IsNotEqualTo(Guid.Empty);
+        await Assert.That(await outbound.RunAsync(repo.Id, true, CancellationToken.None)).IsEqualTo(1);
+        var comments = (await api.ListCommentsAsync(api.Account, "person", "repo", null, 1, null, null, CancellationToken.None)).Items;
+        await Assert.That(comments.Single(comment => comment.Body.EndsWith("<!-- chaos:" + mine + " -->", StringComparison.Ordinal)).Body)
+            .IsEqualTo("Checked the logs\n\n— Desk bot (agent, via Chaos)\n\n<!-- chaos:" + mine + " -->");
+    }
+
+    [Test]
     public async Task MemberComment_IsPostedSignedWithTheirName_AndReadBackWithoutTheLine()
     {
         using var host = await DataHost.StartAsync();

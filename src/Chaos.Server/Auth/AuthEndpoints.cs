@@ -173,7 +173,7 @@ public static class AuthEndpoints
 
     // ---- OAuth endpoints ------------------------------------------------------------------------------
 
-    private static async Task<IResult> Authorize(HttpContext http, ChaosDbContext db)
+    private static async Task<IResult> Authorize(HttpContext http, ChaosDbContext db, IAntiforgery antiforgery)
     {
         var request = http.GetOpenIddictServerRequest() ?? throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
         var session = await http.AuthenticateAsync(SignInCookie.Scheme);
@@ -196,6 +196,12 @@ public static class AuthEndpoints
             }
 
             return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.PathBase + http.Request.Path + QueryString.Create(pairs) }, [SignInCookie.Scheme]);
+        }
+
+        if (request.ClientId == McpOAuth.ClientId)
+        {
+            // An AI assistant: no device; the account's owner picks the agent it acts as.
+            return await McpOAuth.AuthorizeAsync(http, db, antiforgery, request, accountId, session.Properties?.IssuedUtc ?? DateTimeOffset.UnixEpoch);
         }
 
         if (!Guid.TryParse(request.GetParameter(DesktopClient.DeviceIdParameter)?.ToString(), out var deviceId))
@@ -237,6 +243,20 @@ public static class AuthEndpoints
 
         var result = await http.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         var principal = result.Principal;
+        if (principal is not null && principal.GetClaim(McpOAuth.AgentIdClaim) is { } agentClaim)
+        {
+            // An assistant's refresh: the account must be live and the agent still its own and not removed (a paused agent keeps its token and its tools answer paused).
+            if (!Guid.TryParse(principal.GetClaim(Claims.Subject), out var owner) || !Guid.TryParse(agentClaim, out var agent)
+                || !await db.Accounts.AnyAsync(a => a.Id == owner && a.DeletedAt == null, http.RequestAborted)
+                || !await db.Agents.AnyAsync(a => a.Id == agent && a.OwnerAccountId == owner && a.RemovedAt == null, http.RequestAborted))
+            {
+                return Fail(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Errors.InvalidGrant, "The token is no longer valid.");
+            }
+
+            principal.SetDestinations(_ => [Destinations.AccessToken]);
+            return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
+
         if (principal is null
             || !Guid.TryParse(principal.GetClaim(Claims.Subject), out var accountId)
             || !Guid.TryParse(principal.GetClaim(DesktopClient.DeviceIdClaim), out var deviceId))

@@ -8,6 +8,7 @@ import type {
   CaptureDraftDto,
   ContainerResponse,
   PadItemResponse,
+  ProposalDto,
   DaySummaryResponse,
   QueryRowResponse,
   SectionResponse,
@@ -309,6 +310,20 @@ const deletedPadNotes: PadItemResponse[] = Array.from(
     }) as unknown as PadItemResponse,
 );
 const drawings = new Map<string, { strokesJson: string; revision: string }>();
+const padProposals: ProposalDto[] = [
+  {
+    id: "proposal-1",
+    version: "1",
+    padItemId: "pad-1",
+    agentId: "agent-1",
+    agentName: "Build bot",
+    title: "Read the React Server Components RFC",
+    notes: "Start with the motivation section.",
+    quickAddText: null,
+    createdAtUtc: "2026-11-26T09:00:00Z",
+  },
+];
+
 const padNotes: PadItemResponse[] = [
   {
     id: "pad-1",
@@ -2094,7 +2109,17 @@ function agentHandlers(): Record<string, Handler> {
       if (!valid) return fail("Use 1 to 100 characters.");
       const token = { id: crypto.randomUUID(), agentId: r.agentId, name: valid, createdAtUtc: now(), lastUsedAtUtc: null };
       agentTokens.push(token);
-      return ok({ token, secret: `chaos_agent_${crypto.randomUUID()}` });
+      const secret = `chaos_agent_${crypto.randomUUID()}`;
+      return ok({
+        token,
+        secret,
+        claudeCode: `claude mcp add chaos --env CHAOS_AGENT_TOKEN=${secret} -- Chaos.Desktop.exe --mcp`,
+        claudeDesktop: JSON.stringify(
+          { mcpServers: { chaos: { command: "Chaos.Desktop.exe", args: ["--mcp"], env: { CHAOS_AGENT_TOKEN: secret } } } },
+          null,
+          2,
+        ),
+      });
     },
     "agents.revokeToken": (r: { agentId: string; tokenId: string }) => {
       const index = agentTokens.findIndex((token) => token.id === r.tokenId && token.agentId === r.agentId);
@@ -2637,6 +2662,30 @@ const handlers: Record<string, Handler> = {
     });
     record(created.length === 1 ? `Add “${created[0].title}”` : `Add ${created.length} tasks`);
     return ok({ tasks: created });
+  },
+
+  // Suggestions an agent made from the pad (PLAN3 12.6): nothing becomes a task until Accept.
+  "proposals.list": (r: { padItemId: string | null }) =>
+    ok({ items: padProposals.filter((p) => !r.padItemId || p.padItemId === r.padItemId) }),
+  "proposals.accept": (r: { proposalId: string; containerId: string | null }) => {
+    const found = padProposals.find((p) => p.id === r.proposalId);
+    if (!found)
+      return {
+        ok: false,
+        task: null,
+        replayed: false,
+        error: { kind: "NotFound", message: "That suggestion no longer exists. Refresh and try again.", fields: [] },
+      };
+    padProposals.splice(padProposals.indexOf(found), 1);
+    const t = task(newId("task"), found.title, { containerId: r.containerId ?? "inbox", category: "Personal", notes: found.notes });
+    tasks.push(t);
+    record(`Add “${t.title}”`);
+    return ok({ task: t, replayed: false });
+  },
+  "proposals.dismiss": (r: { proposalId: string }) => {
+    const index = padProposals.findIndex((p) => p.id === r.proposalId);
+    if (index >= 0) padProposals.splice(index, 1);
+    return ok({ replayed: false });
   },
 
   "pad.list": (r: { archived: boolean }) => ok({ items: padNotes.filter((n) => n.archived === r.archived) }),

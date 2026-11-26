@@ -23,6 +23,13 @@ public static class ActivityActions
     public const string AgentClaim = "agent.claim_task";
     public const string AgentRelease = "agent.release_task";
     public const string AgentHeartbeat = "agent.heartbeat";
+    public const string AgentCreateTask = "agent.create_task";
+    public const string AgentUpdateTask = "agent.update_task";
+    public const string AgentAddUpdate = "agent.add_update";
+    public const string AgentAskForHelp = "agent.ask_for_help";
+    public const string AgentHandBack = "agent.hand_back";
+    public const string AgentProposeTasks = "agent.propose_tasks";
+    public const string AgentWritePage = "agent.write_page";
     /// <summary>The reminder tick's claim expiry pass (12.4).</summary>
     public const string ClaimsExpire = "claims.expire";
 
@@ -408,6 +415,9 @@ public static class ActivityActions
         "claims.release",
         "claims.takeover",
         "claims.heartbeat",
+        "proposals.list",
+        "proposals.accept",
+        "proposals.dismiss",
         "claims.setReady",
         "spaces.agentSettings",
         "spaces.setAgentSettings",
@@ -416,7 +426,7 @@ public static class ActivityActions
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         Unscoped, Seed, ReminderTick, CalendarRefresh, BackupCheck, GitHubSync, TimeBlockSync, TimeBlockApply, RemoteApply, ActivityPrune,
-        AgentClaim, AgentRelease, AgentHeartbeat, ClaimsExpire,
+        AgentClaim, AgentRelease, AgentHeartbeat, AgentCreateTask, AgentUpdateTask, AgentAddUpdate, AgentAskForHelp, AgentHandBack, AgentProposeTasks, AgentWritePage, ClaimsExpire,
     };
 
     static ActivityActions()
