@@ -406,18 +406,15 @@ public sealed class McpRelayTests
 
         var name = "Chaos.Mcp.acl-" + Guid.NewGuid().ToString("N");
         await using var pipe = McpRelayHost.OpenServer(name);
-        var rules = pipe.GetAccessControl().GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier)).OfType<PipeAccessRule>().ToList();
-        var me = WindowsIdentity.GetCurrent().User!;
+        var security = pipe.GetAccessControl();
+        var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier)).OfType<PipeAccessRule>().ToList();
+        using var identity = WindowsIdentity.GetCurrent();
+        var me = identity.User!;
         await Assert.That(rules.Count).IsGreaterThan(0);
-        // Every grant is to the current user: no Everyone, Users, Authenticated Users or other account may open the pipe.
-        await Assert.That(rules.Where(rule => rule.AccessControlType == AccessControlType.Allow).All(rule => rule.IdentityReference.Equals(me)
-            || rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null))
-            || rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)))).IsTrue();
-        await Assert.That(rules.Any(rule => rule.AccessControlType == AccessControlType.Allow
-            && (rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.WorldSid, null))
-                || rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null))
-                || rule.IdentityReference.Equals(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null))))).IsFalse();
-        await Assert.That(rules.Any(rule => rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Equals(me))).IsTrue();
+        await Assert.That(rules.Where(rule => rule.AccessControlType == AccessControlType.Allow).All(rule => rule.IdentityReference.Equals(me))).IsTrue();
+        await Assert.That(rules.Any(rule => rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Equals(me)
+            && (rule.PipeAccessRights & PipeAccessRights.FullControl) == PipeAccessRights.FullControl)).IsTrue();
+        await Assert.That(Equals(security.GetOwner(typeof(SecurityIdentifier)), identity.Owner)).IsTrue();
     }
 
     private static string ToolsJsonPath()
