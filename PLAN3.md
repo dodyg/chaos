@@ -2180,6 +2180,12 @@ member, so an unsigned link is signed before it is posted. Reading the comment b
 tests, one new for server- and local-agent signatures and the read-back), Server `ServiceMcpTests` (15, one new: queued link, signature, author, and nothing queued for an unlinked task). Note: an agent's text reaches a public issue under
 the owner's GitHub account only for linked tasks; the owner's connection is the opt-in, and there is no per-agent switch yet. Not done: that per-agent switch, and the Accept and Dismiss pad screens.
 
+**Progress note 2026-11-26 (Q20, pad Accept and Dismiss).** The pad shows an agent's suggestions as "Suggested by Build bot · from “<note>”" with a list chooser (Inbox by default), Accept and Dismiss (`PadSuggestions.tsx`, above the notes).
+`ProposalRpcService` (`proposals.list`, `accept`, `dismiss`) wraps `ProposalCommands`: Accept parses the agent's quick-add text with the same preview the bar uses (one clean task only, else the plain title and notes), takes the notes from
+the agent, makes the task as the person, links the note and wakes sync; a stale or repeated click comes back as data. A list that cannot load shows nothing, so the pad is never in the way. The preview backend models the three methods.
+Tests: Desktop `ProposalRpcTests` (1; Desktop 114), frontend `PadSuggestions.test.tsx` (4; frontend 360), the pad's tests unchanged; checked in the preview (Accept removed the card and added a task). Not done: the per-agent GitHub switch, the
+concurrent page-edit test, a two-device check that a proposal without a `state` value is pending, and suggestions of shared spaces' pads (the service writes them; the pad screen is Personal only). The Q20 exit demonstration end to end is still to be run.
+
 **Progress note 2026-11-26 (Q20, tools).** `read_pad`, `propose_tasks`, `read_page` and `write_page` are on both surfaces with identical schemas (`docs/mcp/tools.json`, 15 tools; names, descriptions and result types in
 `Chaos.Sync/AgentWorkTools.cs`). Local: `LocalAgentPadPageTools` (Personal space, needs a ticked list; propose runs `ProposalCommands`, 60 calls an hour; writes under `agent.propose_tasks` and `agent.write_page`).
 Service: `AgentPadPageTools` (reachable spaces with a list; the pad is read only, a proposal pushes only the `task_proposal` create group so a person's Accept or Dismiss writes the state; a page is written as

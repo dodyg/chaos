@@ -316,6 +316,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddUndoRpcService(new UndoRpcService(new UndoCommands(store, ids, clock)));
         rpc.AddMarkdownRpcService(new MarkdownRpcService(new ChecklistCommands(store, ids, clock), _tasks, sync: _githubEngine));
         rpc.AddPadRpcService(new PadRpcService(new PadCommands(store, ids, clock)));
+        rpc.AddProposalRpcService(new ProposalRpcService(new ProposalCommands(store, ids, clock), new CaptureCommands(store, ids, clock), _syncEngine));
         rpc.AddSiteRpcService(new SiteRpcService(_siteNotes));
         rpc.AddPageRpcService(new PageRpcService(new PageCommands(store, ids, clock)));
         rpc.AddTextMergeRpcService(new TextMergeRpcService());

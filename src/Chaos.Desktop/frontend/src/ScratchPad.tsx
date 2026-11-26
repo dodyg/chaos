@@ -13,6 +13,7 @@ import {
   type TagResponse,
 } from "#neoastra";
 import { QuickAdd, type CapturePreviewApi } from "./QuickAdd";
+import { PadSuggestions, type ProposalApi } from "./PadSuggestions";
 import {
   Archive,
   ArchiveRestore,
@@ -135,6 +136,8 @@ type Props = {
   siteApi?: typeof siteRpc;
   /** Quick-add preview used by Make task. */
   captureApi?: CapturePreviewApi;
+  /** Tasks agents suggested from the pad: Accept or Dismiss (PLAN3 12.6). */
+  proposalApi?: ProposalApi;
   registry: DraftRegistry;
   containers: ContainerResponse[];
   tags: TagResponse[];
@@ -164,6 +167,7 @@ export function ScratchPad({
   tagApi = tagRpc,
   siteApi = siteRpc,
   captureApi,
+  proposalApi,
   registry,
   containers,
   tags,
@@ -1126,6 +1130,18 @@ export function ScratchPad({
         <Banner tone="warning" onDismiss={() => setNotice(null)}>
           {notice}
         </Banner>
+      )}
+
+      {!archived && (
+        <PadSuggestions
+          api={proposalApi}
+          notes={items}
+          noteLabel={(note) => padExcerpt(note.markdown, note.kind)}
+          containers={containers}
+          revision={revision}
+          onChanged={onChanged}
+          onError={onError}
+        />
       )}
 
       {!archived && siteUrl !== null && (
