@@ -313,8 +313,15 @@ export function DelegateDialog({
   const [followUpAt, setFollowUpAt] = React.useState("");
   const [followUpAmount, setFollowUpAmount] = React.useState("");
   const [followUpUnit, setFollowUpUnit] = React.useState("Days");
+  // A member who is an owner or editor, or an agent of the space (the agent works from its queue and hands back for review).
   const eligible = people.filter(
-    (person) => person.kind === "person" && !person.former && !person.isMe && (person.role === 1 || person.role === 2),
+    (person) =>
+      !person.former &&
+      ((person.kind === "person" && !person.isMe && (person.role === 1 || person.role === 2)) ||
+        (person.kind === "agent" && person.role === 4)),
+  );
+  const chosenAgent = eligible.some(
+    (person) => person.kind === "agent" && person.actorId.slice(person.actorId.indexOf(":") + 1) === member,
   );
   return (
     <Modal title="Delegate" onClose={onClose}>
@@ -361,12 +368,18 @@ export function DelegateDialog({
               Choose a member
             </NativeSelectOption>
             {eligible.map((person) => (
-              <NativeSelectOption key={person.actorId} value={person.actorId.slice("person:".length)}>
-                {person.displayName}
+              <NativeSelectOption key={person.actorId} value={person.actorId.slice(person.actorId.indexOf(":") + 1)}>
+                {person.kind === "agent" ? `${person.displayName} (agent)` : person.displayName}
               </NativeSelectOption>
             ))}
           </NativeSelect>
         </Field>
+        {chosenAgent && (
+          <p className="text-sm text-muted-foreground">
+            The agent finds the task in its queue, accepts it by claiming it, asks through its question, and hands the result back. Unless
+            this space lets agents close tasks, you review before it counts as done.
+          </p>
+        )}
         <Field label="Message (optional)">
           <textarea
             value={message}

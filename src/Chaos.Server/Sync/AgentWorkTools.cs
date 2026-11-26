@@ -694,6 +694,8 @@ public sealed partial class AgentWorkTools
                 return refused;
             }
 
+            await _owner.agents.MoveDelegationAsync(_agentId, task.StreamId, task.Key, DelegationState.Question, question.Length > 4_000 ? question[..4_000] : question, cancellationToken);
+
             await _owner.agents.AgentClaimAsync(_agentId, taskId, ClaimAction.Heartbeat, cancellationToken);
             return new TaskToolResult(AgentToolStatus.Ok, taskId);
         }
@@ -709,10 +711,36 @@ public sealed partial class AgentWorkTools
                 return new TaskToolResult(gate.Refusal!, taskId);
             }
 
-            var refused = await DiaryAsync(task, summary, cancellationToken) ?? await SetStatusAsync(task, TaskStatuses.NeedsReview, cancellationToken);
+            // A task delegated without a review, in a space that lets agents close, is done when handed back; otherwise a person reviews (12.8).
+            var review = await _owner.agents.DelegationReviewRequiredAsync(_agentId, task.StreamId, task.Key, cancellationToken);
+            var finish = review == false && task.Space.AllowClose ? TaskStatuses.Done : TaskStatuses.NeedsReview;
+            var refused = await DiaryAsync(task, summary, cancellationToken);
             if (refused is not null)
             {
                 return refused;
+            }
+
+            // A finished task cannot be released, so a closing hand-back gives the claim up first.
+            ClaimOperation? early = null;
+            if (finish == TaskStatuses.Done)
+            {
+                early = await _owner.agents.AgentClaimAsync(_agentId, taskId, ClaimAction.Release, cancellationToken);
+                if (early.Error is { } earlyError)
+                {
+                    return new TaskToolResult(earlyError, taskId, early.RetryAfterSeconds);
+                }
+            }
+
+            refused = await SetStatusAsync(task, finish, cancellationToken);
+            if (refused is not null)
+            {
+                return refused;
+            }
+
+            await _owner.agents.MoveDelegationAsync(_agentId, task.StreamId, task.Key, DelegationState.Done, null, cancellationToken);
+            if (early is not null)
+            {
+                return new TaskToolResult(AgentToolStatus.Ok, taskId);
             }
 
             var released = await _owner.agents.AgentClaimAsync(_agentId, taskId, ClaimAction.Release, cancellationToken);

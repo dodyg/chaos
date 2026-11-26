@@ -354,6 +354,100 @@ public sealed class ServiceMcpTests(PostgresServer postgres)
         await Assert.That(Status(await CallAsync(client, "read_page", new() { ["spaceId"] = Guid.NewGuid().ToString("D") }))).IsEqualTo("forbidden");
     }
 
+    private static RawChange DelegationChange(string key, string task, Guid from, Guid to, bool review) =>
+        Change("task_delegation", key,
+            ("create", new { TaskId = task, FromMemberId = from.ToString("D"), ToMemberId = to.ToString("D"), CreatedAtUtc = Instant() }),
+            ("brief", new { Message = "Please ship it", DoneDefinition = "Deployed", DueDate = (string?)null, ReviewRequired = review ? 1L : 0L }),
+            ("state", new { State = 0L, StateChangedAtUtc = Instant(), Response = (string?)null }),
+            ("deleted", new { DeletedAtUtc = (string?)null }));
+
+    [Test]
+    public async Task Delegation_ToAnAgent_AcceptsOnClaim_AsksThroughAskForHelp_AndIsDoneOnHandBack()
+    {
+        var w = await WorldAsync(postgres, "mcp-delegate");
+        var key = Guid.NewGuid().ToString("D");
+        var pushed = await w.Harness.CallAsync(w.Owner, HttpMethod.Post, "/v2/sync/push", JsonSerializer.Serialize(new
+        {
+            changes = new[] { DelegationChange(key, w.Task, w.Owner.ProfileId, w.Agent, review: true) },
+        }), version: 2, schema: Schema);
+        await Assert.That(pushed.Rejections()).IsEmpty(); // an agent member is a valid recipient
+
+        // The person cannot answer for the agent: only the agent's own work moves the delegation.
+        var forged = await w.Harness.CallAsync(w.Owner, HttpMethod.Post, "/v2/sync/push", JsonSerializer.Serialize(new
+        {
+            changes = new[] { Change("task_delegation", key, ("state", new { State = 1L, StateChangedAtUtc = Instant(), Response = (string?)null })) },
+        }), version: 2, schema: Schema);
+        await Assert.That(forged.Rejections()).IsNotEmpty();
+
+        var token = await TokenAsync(w.Server, w.Owner.Email, w.Agent);
+        var (client, http) = await ConnectAsync(w.Server, token);
+        await using var _ = client;
+        using var __ = http;
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task_delegation", key), "state", "State")).IsEqualTo(0L);
+
+        await Assert.That(Status(await CallAsync(client, "claim_task", new() { ["taskId"] = w.Task }))).IsEqualTo("claimed");
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task_delegation", key), "state", "State")).IsEqualTo((long)DelegationState.Accepted);
+
+        await Assert.That(Status(await CallAsync(client, "ask_for_help", new() { ["taskId"] = w.Task, ["question"] = "Which environment?" }))).IsEqualTo("ok");
+        var asked = await GroupsAsync(w.Server, w.Space, "task_delegation", key);
+        await Assert.That(Value(asked, "state", "State")).IsEqualTo((long)DelegationState.Question);
+        await Assert.That(Value(asked, "state", "Response")).IsEqualTo("Which environment?");
+
+        // The agent picks the work up again, then hands it back: review is asked for, so the task waits for the delegator.
+        await Assert.That(Status(await CallAsync(client, "claim_task", new() { ["taskId"] = w.Task }))).IsEqualTo("claimed");
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task_delegation", key), "state", "State")).IsEqualTo((long)DelegationState.Accepted);
+        await Assert.That(Status(await CallAsync(client, "hand_back", new() { ["taskId"] = w.Task, ["summary"] = "Deployed." }))).IsEqualTo("ok");
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task_delegation", key), "state", "State")).IsEqualTo((long)DelegationState.Done);
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task", w.Task), "status", "Status")).IsEqualTo(3L); // Needs review
+
+        // The delegator accepts the result (Done to Closed is theirs).
+        var closed = await w.Harness.CallAsync(w.Owner, HttpMethod.Post, "/v2/sync/push", JsonSerializer.Serialize(new
+        {
+            changes = new[] { Change("task_delegation", key, ("state", new { State = (long)DelegationState.Closed, StateChangedAtUtc = Instant(), Response = (string?)null })) },
+        }), version: 2, schema: Schema);
+        await Assert.That(closed.Rejections()).IsEmpty();
+    }
+
+    [Test]
+    public async Task Delegation_ToAnAgent_WithoutReview_IsDoneOnHandBackOnlyWhereTheSpaceLetsAgentsClose()
+    {
+        var w = await WorldAsync(postgres, "mcp-delegate-close");
+        var second = Guid.NewGuid().ToString("D");
+        var strictKey = Guid.NewGuid().ToString("D");
+        var openKey = Guid.NewGuid().ToString("D");
+        var token = await TokenAsync(w.Server, w.Owner.Email, w.Agent);
+        var (client, http) = await ConnectAsync(w.Server, token);
+        await using var _ = client;
+        using var __ = http;
+
+        // The space does not let agents close: the delegation asks for no review, but a person still reviews.
+        var first = await w.Harness.CallAsync(w.Owner, HttpMethod.Post, "/v2/sync/push", JsonSerializer.Serialize(new
+        {
+            changes = new[] { DelegationChange(strictKey, w.Task, w.Owner.ProfileId, w.Agent, review: false) },
+        }), version: 2, schema: Schema);
+        await Assert.That(first.Rejections()).IsEmpty();
+        await Assert.That(Status(await CallAsync(client, "claim_task", new() { ["taskId"] = w.Task }))).IsEqualTo("claimed");
+        await Assert.That(Status(await CallAsync(client, "hand_back", new() { ["taskId"] = w.Task, ["summary"] = "Done." }))).IsEqualTo("ok");
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task", w.Task), "status", "Status")).IsEqualTo(3L);
+
+        // Where the space lets agents close, no review means the task is done.
+        var settings = await w.Harness.CallAsync(w.Owner, HttpMethod.Post, "/v2/sync/push", JsonSerializer.Serialize(new
+        {
+            changes = new[]
+            {
+                Change("space", w.Space.ToString("D"), ("settings", new { TagsOwnerOnly = 0L, AgentsAllowed = 1L, ClaimMinutes = 15L, DefaultDeadlineReminderJson = (string?)null, AllowAgentsToClose = 1L })),
+                TaskChange(w.Space, second, w.List, "Second job", "Notes", ready: true),
+                DelegationChange(openKey, second, w.Owner.ProfileId, w.Agent, review: false),
+            },
+        }), version: 2, schema: Schema);
+        await Assert.That(settings.Rejections()).IsEmpty();
+        await Assert.That(Status(await CallAsync(client, "claim_task", new() { ["taskId"] = second }))).IsEqualTo("claimed");
+        var closing = await CallAsync(client, "hand_back", new() { ["taskId"] = second, ["summary"] = "Done." });
+        await Assert.That(Status(closing)).IsEqualTo("ok");
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task", second), "status", "Status")).IsEqualTo(4L); // Done
+        await Assert.That(Value(await GroupsAsync(w.Server, w.Space, "task_delegation", openKey), "state", "State")).IsEqualTo((long)DelegationState.Done);
+    }
+
     [Test]
     public async Task Tools_TextInTasksIsDataAndWidensNothing()
     {

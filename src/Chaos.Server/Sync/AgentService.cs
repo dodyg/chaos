@@ -650,9 +650,110 @@ public sealed class AgentService(
 
         await WriteTaskGroupsAsync(streamId, taskId, claimant.Id, writes, ct);
         await RecordAsync(streamId, taskId, me, kind, [.. writes.Keys], now, ct);
+        if (claimant.Kind == ActorKind.Agent && action == ClaimAction.Claim)
+        {
+            // Accept is automatic when the agent claims a task delegated to it (12.8).
+            await ApplyDelegationMoveAsync(streamId, taskId, claimant.Id, DelegationState.Accepted, null, now, ct);
+        }
+
         var merged = SyncJson.ReadGroups((await db.SyncEntities.FindAsync([streamId, "task", taskId], ct))!.Groups);
         var after = (merged.GetValueOrDefault("status")?.Values.Values.GetValueOrDefault("Status") as long?) ?? 0L;
         return new(null, null, Dto(streamId, taskId, merged, after));
+    }
+
+    private static bool IsLiveDelegation(Dictionary<string, SyncGroupState> groups, string taskId, Guid agentId)
+    {
+        if (groups.GetValueOrDefault("create")?.Values.Values is not { } create
+            || !string.Equals(create.GetValueOrDefault("TaskId")?.ToString(), taskId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(create.GetValueOrDefault("ToMemberId")?.ToString(), agentId.ToString("D"), StringComparison.OrdinalIgnoreCase)
+            || groups.GetValueOrDefault("deleted")?.Values.Values.GetValueOrDefault("DeletedAtUtc") is not null)
+        {
+            return false;
+        }
+
+        var state = groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long value ? (DelegationState)value : DelegationState.Pending;
+        return DelegationTransitions.IsActive(state);
+    }
+
+    /// <summary>
+    /// The agent's side of a delegation (PLAN3 12.8): a delegation to the agent moves with its work, as server changes
+    /// that follow <see cref="DelegationTransitions"/> (an agent never writes a delegation itself). Claiming accepts, asking
+    /// for help is a question, handing back reports done. Inside the caller's transaction, under the stream lock.
+    /// </summary>
+    private async Task<bool> ApplyDelegationMoveAsync(Guid streamId, string taskId, Guid agentId, DelegationState target, string? response, DateTimeOffset now, CancellationToken ct)
+    {
+        var rows = await db.SyncEntities.Where(e => e.AccountId == streamId && e.Kind == "task_delegation" && e.PurgedAt == null && e.MovedTo == null).ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            var groups = SyncJson.ReadGroups(row.Groups);
+            if (!IsLiveDelegation(groups, taskId, agentId))
+            {
+                continue;
+            }
+
+            var current = groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long value ? (DelegationState)value : DelegationState.Pending;
+            var steps = (current, target) switch
+            {
+                (DelegationState.Pending or DelegationState.Question, DelegationState.Accepted) => new[] { DelegationState.Accepted },
+                (DelegationState.Pending or DelegationState.Accepted, DelegationState.Question) => new[] { DelegationState.Question },
+                (DelegationState.Accepted, DelegationState.Done) => new[] { DelegationState.Done },
+                (DelegationState.Pending or DelegationState.Question, DelegationState.Done) => new[] { DelegationState.Accepted, DelegationState.Done },
+                _ => Array.Empty<DelegationState>(),
+            };
+            foreach (var step in steps)
+            {
+                var hlc = await changes.NextHlcAsync(streamId, "task_delegation", row.EntityKey, ct);
+                await changes.AppendAsync(streamId, agentId, SyncChange.Upsert(Guid.NewGuid().ToString("D"), "task_delegation", row.EntityKey,
+                    new Dictionary<string, SyncGroupState>
+                    {
+                        ["state"] = new(hlc, new SyncGroupValues(new Dictionary<string, object?>
+                        {
+                            ["State"] = (long)step, ["StateChangedAtUtc"] = Instant(now), ["Response"] = step == DelegationState.Question ? response : null,
+                        })),
+                    }), ct);
+                await db.SaveChangesAsync(ct);
+            }
+
+            return steps.Length > 0;
+        }
+
+        return false;
+    }
+
+    /// <summary>The same move from a tool call: its own transaction and a wake-up for the members' devices.</summary>
+    internal async Task MoveDelegationAsync(Guid agentId, Guid streamId, string taskId, DelegationState target, string? response, CancellationToken ct)
+    {
+        var moved = await transaction(async tx =>
+        {
+            await db.SyncStreams.FromSqlInterpolated($"""SELECT * FROM "SyncStreams" WHERE "Id" = {streamId} AND "DeletedAt" IS NULL FOR UPDATE""").SingleOrDefaultAsync(ct);
+            var done = await ApplyDelegationMoveAsync(streamId, taskId, agentId, target, response, clock.GetUtcNow(), ct);
+            if (done)
+            {
+                await tx.CommitAsync(ct);
+            }
+
+            return done;
+        });
+        if (moved)
+        {
+            await StreamNotifications.NotifyAsync(db, broadcaster, streamId, CancellationToken.None);
+        }
+    }
+
+    /// <summary>Whether the live delegation of this task to the agent asks for a review; null when there is none.</summary>
+    internal async Task<bool?> DelegationReviewRequiredAsync(Guid agentId, Guid streamId, string taskId, CancellationToken ct)
+    {
+        var rows = await db.SyncEntities.AsNoTracking().Where(e => e.AccountId == streamId && e.Kind == "task_delegation" && e.PurgedAt == null && e.MovedTo == null).ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            var groups = SyncJson.ReadGroups(row.Groups);
+            if (IsLiveDelegation(groups, taskId, agentId))
+            {
+                return groups.GetValueOrDefault("brief")?.Values.Values.GetValueOrDefault("ReviewRequired") is not 0L;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Writes field groups of a task as one server change by <paramref name="actor"/>.</summary>

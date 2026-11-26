@@ -149,7 +149,14 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
         if (string.Equals(toMemberId, profile.Id, StringComparison.OrdinalIgnoreCase))
             throw AppException.Validation("toMemberId", "Choose someone else. To keep the task, leave it assigned to you.");
         var to = people.FirstOrDefault(p => p.ActorId == "person:" + toMemberId && !p.Former && p.Role is 1 or 2)
-            ?? throw AppException.Validation("toMemberId", "Choose a current owner or editor of this space.");
+            ?? people.FirstOrDefault(p => p.ActorId == "agent:" + toMemberId && !p.Former && p.Role == AgentRole);
+        var toAgent = to is not null && IsAgent(to);
+        var agentSpace = toAgent ? await session.Spaces.GetAsync(task.SpaceId, inner) : null;
+        if (to is null) throw AppException.Validation("toMemberId", "Choose a current owner, editor or agent of this space.");
+        if (toAgent && agentSpace is not { AgentsAllowed: true })
+            throw AppException.Validation("toMemberId", "Agents are not allowed in this space.");
+        // A person's review is always asked for, unless the space lets agents close their own tasks (12.8).
+        if (toAgent && agentSpace is { AllowAgentsToClose: false }) reviewRequired = true;
         if (followUp is { Kind: FollowUpKind.BeforeDue } && task.DueDate is null)
             throw AppException.Validation("followUp", "This task has no due date. Add one first, or choose another kind of follow-up.");
 
@@ -162,8 +169,11 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             await ResolveDelegationFollowUpAsync(session, live, now, inner);
         }
 
-        await MakeSoleAssigneeAsync(session, task.Id, to, now, inner);
-        var updated = await TaskCommands.ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, inner);
+        // An agent is no assignee: the task goes to its queue, pointed at it, and the service moves the delegation as it works (12.8).
+        if (!toAgent) await MakeSoleAssigneeAsync(session, task.Id, to, now, inner);
+        var updated = await TaskCommands.ApplyTaskUpdateAsync(session, toAgent
+            ? task with { AgentReady = true, AgentAssigneeId = toMemberId, Version = task.Version + 1, UpdatedAtUtc = now }
+            : task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, inner);
         var delegation = new TaskDelegationRecord
         {
             Id = ids.NewId().ToString(),
@@ -206,13 +216,13 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             }, inner);
         }
 
-        var head = $"Delegated to {to.DisplayName}" + (delegation.DueDate is { } due ? $" · due {due:yyyy-MM-dd}" : string.Empty) + (delegation.ReviewRequired ? " · review needed" : string.Empty);
+        var head = $"Delegated to {to.DisplayName}" + (toAgent ? " (agent)" : string.Empty) + (delegation.DueDate is { } due ? $" · due {due:yyyy-MM-dd}" : string.Empty) + (delegation.ReviewRequired ? " · review needed" : string.Empty);
         var entry = head + (delegation.Message.Length > 0 ? "\n\n" + delegation.Message : string.Empty)
             + (delegation.DoneDefinition.Length > 0 ? "\n\nDone looks like: " + delegation.DoneDefinition : string.Empty);
         await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, entry, now, ids.NewId().ToString()), inner);
 
         await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, string.Empty, before,
-            new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, inner)), "task.delegated", ["Assignees"], now, inner);
+            new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, inner)), "task.delegated", [toAgent ? "AgentReady" : "Assignees"], now, inner);
         return delegation;
     }
 
@@ -348,8 +358,12 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
             var me = RequireEditor(people, profile.Id, "Only owners and editors can take on work in this space.");
             var moved = delegation with { State = DelegationState.Withdrawn, StateChangedAtUtc = now, Version = delegation.Version + 1, UpdatedAtUtc = now };
             _ = await session.Delegations.UpdateAsync(moved, delegation.Version, token) ?? throw AppException.VersionConflict("The delegation changed elsewhere. Refresh and try again.");
-            await MakeSoleAssigneeAsync(session, task.Id, me, now, token);
-            var updated = await TaskCommands.ApplyTaskUpdateAsync(session, task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token);
+            var toAgent = people.Any(person => IsAgent(person) && string.Equals(MemberId(person), delegation.ToMemberId, StringComparison.OrdinalIgnoreCase));
+            if (!toAgent) await MakeSoleAssigneeAsync(session, task.Id, me, now, token);
+            // Taking the work back from an agent also takes the task out of its queue.
+            var updated = await TaskCommands.ApplyTaskUpdateAsync(session, toAgent
+                ? task with { AgentReady = false, AgentAssigneeId = null, Version = task.Version + 1, UpdatedAtUtc = now }
+                : task with { Version = task.Version + 1, UpdatedAtUtc = now }, task.Version, token);
             await session.Diary.AddAsync(DiaryEntry(task.Id, profile.Id, $"Took the task back from {Person(people, delegation.ToMemberId).DisplayName}.", now, ids.NewId().ToString()), token);
             await TaskMutationSupport.WriteTaskHistoryAsync(session, ids, command.OperationId, before,
                 new TaskAggregateSnapshot(updated, await session.Subtasks.ListByTaskAsync(task.Id, token)), "task.delegation-withdrawn", ["Assignees"], now, token);
@@ -377,6 +391,7 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
                 if (!DelegationTransitions.IsAwaitingRecipient(delegation.State))
                     throw AppException.Validation("delegationId", $"This delegation is {Describe(delegation.State)}; there is nothing to nudge about.");
                 var to = Person(people, delegation.ToMemberId);
+                if (IsAgent(to)) throw AppException.Validation("delegationId", "An agent does not read nudges. It picks the task up from its queue.");
                 var recent = (await recording.Delegations.ListNudgesAsync(delegation.Id, inner)).Count(n => n.SentAtUtc > now - DelegationTransitions.NudgeWindow);
                 if (recent >= DelegationTransitions.NudgesPerDelegation)
                     throw AppException.Validation("text", $"You have nudged {to.DisplayName} {recent} times in the last 24 hours. The limit is {DelegationTransitions.NudgesPerDelegation}.");
@@ -461,14 +476,21 @@ public sealed class DelegationCommands(IApplicationStore store, IIdGenerator ids
     }
 
     /// <summary>The member's actor ID without its <c>person:</c> prefix, as assignee rows store it.</summary>
-    private static string MemberId(SpacePerson person) => person.ActorId.StartsWith("person:", StringComparison.Ordinal) ? person.ActorId[7..] : person.ActorId;
+    private static string MemberId(SpacePerson person) =>
+        person.ActorId.StartsWith("person:", StringComparison.Ordinal) ? person.ActorId[7..] : person.ActorId.StartsWith("agent:", StringComparison.Ordinal) ? person.ActorId[6..] : person.ActorId;
+
+    /// <summary>The Agent role of a space member (PLAN3 8.4).</summary>
+    private const int AgentRole = 4;
+
+    private static bool IsAgent(SpacePerson person) => person.ActorId.StartsWith("agent:", StringComparison.Ordinal);
 
     private static SpacePerson RequireEditor(IReadOnlyList<SpacePerson> people, string memberId, string message) =>
         people.FirstOrDefault(p => p.ActorId == "person:" + memberId && !p.Former && p.Role is 1 or 2)
             ?? throw AppException.Validation("memberId", message);
 
     private static SpacePerson Person(IReadOnlyList<SpacePerson> people, string memberId) =>
-        people.FirstOrDefault(p => string.Equals(p.ActorId, "person:" + memberId, StringComparison.OrdinalIgnoreCase))
+        people.FirstOrDefault(p => string.Equals(p.ActorId, "person:" + memberId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(p.ActorId, "agent:" + memberId, StringComparison.OrdinalIgnoreCase))
             ?? new SpacePerson("person:" + memberId, "Unknown person", 0, true, null);
 
     /// <summary>Makes <paramref name="next"/> the task's only live assignee: every other live row is tombstoned, theirs is created or restored.</summary>

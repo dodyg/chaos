@@ -869,8 +869,13 @@ public sealed class SyncService(
             var from = creation.Values.Values.GetValueOrDefault("FromMemberId")?.ToString();
             var to = creation.Values.Values.GetValueOrDefault("ToMemberId")?.ToString();
             if (me is null || !string.Equals(from, me, StringComparison.OrdinalIgnoreCase)) return SyncRejection.Forbidden;
+            // The recipient is a live owner or editor, or a live agent of a space that allows agents (12.8).
             if (!Guid.TryParse(to, out var recipient) || !await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId && m.MemberId == recipient
-                    && m.RemovedAt == null && m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole), ct))
+                    && m.RemovedAt == null && ((m.MemberKind == SpaceMember.PersonKind && (m.Role == SpaceMember.OwnerRole || m.Role == SpaceMember.EditorRole))
+                        || (m.MemberKind == SpaceMember.AgentKind && m.Role == SpaceMember.AgentRole)), ct))
+                return SyncRejection.Forbidden;
+            if (await db.SpaceMembers.AnyAsync(m => m.SpaceId == streamId && m.MemberId == recipient && m.MemberKind == SpaceMember.AgentKind && m.RemovedAt == null, ct)
+                && await SpaceSettingAsync(streamId, "AgentsAllowed", ct) != "1")
                 return SyncRejection.Forbidden;
             if (change.Groups.GetValueOrDefault("state")?.Values.Values.GetValueOrDefault("State") is long initial && initial != (long)DelegationState.Pending)
                 return SyncRejection.Forbidden;

@@ -2163,7 +2163,15 @@ appear live on members' desktops.
 `AcceptAsync` creates the task (through the ordinary task creation, history naming the person, with the pad link back to the note when it still quotes the title) or `DismissAsync` closes it.
 Tests: Infrastructure `Agents/ProposalTests` (4, real SQLite): nothing becomes a task without a click, accept makes the task as the person and links the note and cannot repeat, dismiss
 makes none, and a paused or list-less agent or a foreign note is refused. Not done: the Accept and Dismiss RPC and the pad UI, quick-add parsing of `QuickAddText` on Accept (the screen parses it and sends the draft),
-delegating to an agent with the 12.8 mapping, the GitHub attribution naming the agent, the delegation-through-`hand_back` test and the concurrent page-write merge test. Smallest next action: delegation to an agent.
+delegating to an agent with the 12.8 mapping, the GitHub attribution naming the agent, the delegation-through-`hand_back` test and the concurrent page-write merge test. Smallest next action: delegation to an agent (done, see the next note).
+
+**Progress note 2026-11-26 (Q20, delegation to an agent).** A person can delegate a task of a shared space to one of its agents, with the 12.8 mapping. `DelegationCommands` takes an agent member (`agent:<id>`, role Agent, space allows agents) as the recipient:
+the delegation row names the agent's ID, the task gets `AgentReady` and `AgentAssigneeId` (an agent is no assignee, so assignees stay as they are), review is forced on unless the space lets agents close, nudging an agent is refused, and
+withdrawing takes the task out of its queue. The service accepts an agent member as recipient (`DelegationRefusalAsync`) and moves the delegation itself, as server changes that follow the transition table, since an agent never writes a
+delegation: claiming accepts (`AgentService.ApplyDelegationMoveAsync` inside the claim), `ask_for_help` is Question with the question as the response, `hand_back` is Done; with no review asked and a space that lets agents close, `hand_back`
+sets the task Done (the claim is released first, since a finished task cannot be released), otherwise Needs review. A person cannot answer for the agent (forged state refused). The delegate dialog lists the space's agents. Tests: Application
+`DelegationCommandsTests` (4 new, 16), Server `ServiceMcpTests` (2 new, 14, PostgreSQL 18.7 through `wslc`, removed afterwards), Desktop frontend `Delegation.test.tsx` 8. Not done: a local agent in the Personal space is still pointed at
+a task with Ready for agent (Personal has no delegation), the dialog change has no test of its own, and the live review and GitHub attribution remain.
 
 **Progress note 2026-11-26 (Q20, tools).** `read_pad`, `propose_tasks`, `read_page` and `write_page` are on both surfaces with identical schemas (`docs/mcp/tools.json`, 15 tools; names, descriptions and result types in
 `Chaos.Sync/AgentWorkTools.cs`). Local: `LocalAgentPadPageTools` (Personal space, needs a ticked list; propose runs `ProposalCommands`, 60 calls an hour; writes under `agent.propose_tasks` and `agent.write_page`).
