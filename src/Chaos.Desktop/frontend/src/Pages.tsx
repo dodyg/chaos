@@ -484,7 +484,10 @@ export function Pages({
 
   return (
     <div
-      className="grid min-h-[calc(100vh-40px)] content-start items-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16 lg:grid-cols-[14rem_minmax(0,1fr)]"
+      className={cn(
+        "grid min-h-[calc(100vh-40px)] content-start items-start gap-5 px-[clamp(1rem,4vw,3rem)] pt-8 pb-16",
+        isDailyMode ? "lg:grid-cols-[18rem_minmax(0,1fr)]" : "lg:grid-cols-[14rem_minmax(0,1fr)]",
+      )}
       style={sharedBackground}
     >
       <nav
