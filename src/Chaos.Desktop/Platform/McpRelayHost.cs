@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -48,9 +50,22 @@ public sealed class McpRelayHost : IAsyncDisposable
     public Task Completion => _server;
 
     /// <summary>The pipe as the host opens it: duplex, asynchronous, current user only.</summary>
-    public static NamedPipeServerStream OpenServer(string name) =>
-        new(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+    public static NamedPipeServerStream OpenServer(string name)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        }
+
+        using var identity = WindowsIdentity.GetCurrent();
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(identity.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
+        // CurrentUserOnly clients compare the pipe owner with the token owner, which can differ from the user SID.
+        security.SetOwner(identity.Owner!);
+        return NamedPipeServerStreamAcl.Create(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security);
+    }
 
     private async Task ServeAsync(string name, bool singleSession, CancellationToken ct)
     {
@@ -83,10 +98,15 @@ public sealed class McpRelayHost : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            Trace.TraceInformation("MCP pipe listener stopped.");
         }
         finally
         {
-            try { await Task.WhenAll(sessions); } catch (Exception error) when (error is OperationCanceledException or IOException) { }
+            try { await Task.WhenAll(sessions); }
+            catch (Exception error) when (error is OperationCanceledException or IOException)
+            {
+                Trace.TraceInformation("MCP pipe sessions stopped: {0}", error.GetType().Name);
+            }
         }
     }
 
@@ -115,6 +135,7 @@ public sealed class McpRelayHost : IAsyncDisposable
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                Trace.TraceInformation("MCP pipe session stopped.");
             }
             catch (IOException error)
             {
@@ -234,14 +255,14 @@ public sealed class McpRelayHost : IAsyncDisposable
         var outbound = pipe.CopyToAsync(output, relayStop.Token);
         var completed = await Task.WhenAny(inbound, outbound);
         await relayStop.CancelAsync();
-        try { await completed; } catch (OperationCanceledException) { }
+        try { await completed; } catch (OperationCanceledException) { Trace.TraceInformation("MCP relay stopped."); }
         return 0;
     }
 
     public async ValueTask DisposeAsync()
     {
         await _stop.CancelAsync();
-        try { await _server; } catch (OperationCanceledException) { }
+        try { await _server; } catch (OperationCanceledException) { Trace.TraceInformation("MCP pipe server stopped."); }
         _stop.Dispose();
     }
 }
