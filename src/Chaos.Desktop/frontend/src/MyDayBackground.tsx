@@ -40,6 +40,12 @@ export const backgroundScenes = [
   { id: "autumn", name: "Autumn leaves", url: new URL("./assets/day-backgrounds/autumn.svg", import.meta.url).href },
   { id: "canyon", name: "Red canyon", url: new URL("./assets/day-backgrounds/canyon.svg", import.meta.url).href },
   { id: "lighthouse", name: "Lighthouse", url: new URL("./assets/day-backgrounds/lighthouse.svg", import.meta.url).href },
+  { id: "sunrise", name: "Sunrise", url: new URL("./assets/day-backgrounds/sunrise.svg", import.meta.url).href },
+  { id: "blossom", name: "Cherry blossom", url: new URL("./assets/day-backgrounds/blossom.svg", import.meta.url).href },
+  { id: "moonlit", name: "Moonlit hills", url: new URL("./assets/day-backgrounds/moonlit.svg", import.meta.url).href },
+  { id: "savanna", name: "Savanna", url: new URL("./assets/day-backgrounds/savanna.svg", import.meta.url).href },
+  { id: "glacier", name: "Glacier", url: new URL("./assets/day-backgrounds/glacier.svg", import.meta.url).href },
+  { id: "rain", name: "Rainy day", url: new URL("./assets/day-backgrounds/rain.svg", import.meta.url).href },
 ];
 export type DayBackground =
   { kind: "default" } | { kind: "color"; value: string } | { kind: "image"; value: string } | { kind: "scene"; value: string };

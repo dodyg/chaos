@@ -23,6 +23,12 @@ const scenes = new Set([
   "autumn",
   "canyon",
   "lighthouse",
+  "sunrise",
+  "blossom",
+  "moonlit",
+  "savanna",
+  "glacier",
+  "rain",
 ]);
 function validBackground(value: unknown): value is { kind: string; value?: string } {
   if (!value || typeof value !== "object" || !("kind" in value)) return false;
