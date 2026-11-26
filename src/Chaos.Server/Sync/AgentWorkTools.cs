@@ -17,7 +17,7 @@ namespace Chaos.Server.Sync;
 /// they do to any other push. Results carry user text only in the fields named in <see cref="AgentWorkToolNames"/>, and a
 /// refused call answers a status code, never a message.
 /// </summary>
-public sealed class AgentWorkTools
+public sealed partial class AgentWorkTools
 {
     private readonly ChaosDbContext db;
     private readonly SyncService sync;
@@ -255,7 +255,7 @@ public sealed class AgentWorkTools
         return new WriteGate(null, task, claimant);
     }
 
-    private sealed class Bound
+    private sealed partial class Bound
     {
         private readonly AgentWorkTools _owner;
         private readonly Guid _agentId;
@@ -277,6 +277,7 @@ public sealed class AgentWorkTools
                 AIFunctionFactory.Create(type.GetMethod(nameof(AddUpdateAsync))!, this, AgentWorkToolNames.AddUpdate, AgentWorkToolNames.AddUpdateDescription),
                 AIFunctionFactory.Create(type.GetMethod(nameof(AskForHelpAsync))!, this, AgentWorkToolNames.AskForHelp, AgentWorkToolNames.AskForHelpDescription),
                 AIFunctionFactory.Create(type.GetMethod(nameof(HandBackAsync))!, this, AgentWorkToolNames.HandBack, AgentWorkToolNames.HandBackDescription),
+                .. PadPageFunctions(),
             ];
         }
 

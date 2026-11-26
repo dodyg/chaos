@@ -220,11 +220,12 @@ public sealed class McpRelayTests
         var names = committed.Select(tool => (string)tool!["name"]!).ToArray();
         await Assert.That(names).IsEquivalentTo(new[]
         {
-            "add_update", "ask_for_help", "claim_task", "create_task", "get_task", "hand_back", "heartbeat", "list_spaces", "list_tasks", "release_task", "update_task",
+            "add_update", "ask_for_help", "claim_task", "create_task", "get_task", "hand_back", "heartbeat", "list_spaces", "list_tasks", "propose_tasks", "read_pad", "read_page", "release_task", "update_task", "write_page",
         });
 
         // The contract runner: one fixture per tool, in an order that makes each answer meaningful.
         var ready = await CaptureAsync(fixture, fixture.Inbox, "Ship the release", ready: true);
+        var pad = (await new Chaos.Application.Pad.PadCommands(fixture.Store, fixture.Ids, fixture.Clock).CreateAsync(new(Guid.NewGuid().ToString(), "Call the venue\nOrder the cake"))).Item;
         var steps = new (string Tool, object Arguments, string Status)[]
         {
             ("list_spaces", new { }, "ok"),
@@ -241,6 +242,11 @@ public sealed class McpRelayTests
             ("hand_back", new { taskId = ready.Id, summary = "Shipped; see the diary." }, "ok"),
             ("release_task", new { taskId = ready.Id }, "released"),
             ("create_task", new { listId = fixture.Inbox, title = "Follow-up from the bot", plannedDate = "2026-12-02", subtasks = new[] { "Check logs" } }, "created"),
+            ("read_pad", new { }, "ok"),
+            ("propose_tasks", new { padItemId = pad.Id, tasks = new[] { new { title = "Call the venue", notes = "Ask about Friday" } } }, "created"),
+            ("propose_tasks", new { padItemId = "no-such-note", tasks = new[] { new { title = "x" } } }, "not-found"),
+            ("write_page", new { title = "Launch notes", markdown = "First draft" }, "created"),
+            ("read_page", new { }, "ok"),
         };
         foreach (var (tool, arguments, status) in steps)
         {
@@ -249,6 +255,25 @@ public sealed class McpRelayTests
         }
 
         await Assert.That(steps.Select(step => step.Tool).Distinct().Order(StringComparer.Ordinal).ToArray()).IsEquivalentTo(names);
+
+        // The pad is readable, but a suggestion is not a task until a person accepts it.
+        var notes = await CallAsync(client, "read_pad", null, deadline.Token);
+        await Assert.That(notes["notes"]!.AsArray().Select(note => (string)note!["text"]!).Single()).IsEqualTo("Call the venue\nOrder the cake");
+        var proposals = new Chaos.Application.Agents.ProposalCommands(fixture.Store, fixture.Ids, fixture.Clock);
+        var suggested = (await proposals.ListPendingAsync()).Single();
+        await Assert.That(suggested.AgentName).IsEqualTo("Build bot");
+        await Assert.That(await CallAsync(client, "list_tasks", new { text = "Call the venue" }, deadline.Token)).IsNotNull();
+        await Assert.That((await CallAsync(client, "list_tasks", new { text = "Call the venue" }, deadline.Token))["tasks"]!.AsArray().Count).IsEqualTo(0);
+        var accepted = await proposals.AcceptAsync(new(Guid.NewGuid().ToString(), suggested.Proposal.Id, suggested.Proposal.Version, fixture.Inbox));
+        await Assert.That(accepted.Task!.Title).IsEqualTo("Call the venue");
+
+        // Pages: written, listed, read back and replaced by the agent.
+        var pageId = (string)(await CallAsync(client, "read_page", null, deadline.Token))["pages"]!.AsArray().Single()!["id"]!;
+        var page = await CallAsync(client, "read_page", new { pageId }, deadline.Token);
+        await Assert.That((string)page["data"]!["markdown"]!).IsEqualTo("First draft");
+        await Assert.That((string?)(await CallAsync(client, "write_page", new { pageId, title = "Launch notes", markdown = "Second draft" }, deadline.Token))["status"]).IsEqualTo("ok");
+        await Assert.That((string)(await CallAsync(client, "read_page", new { pageId }, deadline.Token))["data"]!["markdown"]!).IsEqualTo("Second draft");
+        await Assert.That((string?)(await CallAsync(client, "read_page", new { pageId = "missing" }, deadline.Token))["status"]).IsEqualTo("not-found");
 
         // What the bot did is recorded under its name, and the person sees the task waiting for review.
         var task = (await fixture.Store.QueryAsync((session, ct) => session.Tasks.GetAsync(ready.Id, ct)))!;
@@ -364,7 +389,7 @@ public sealed class McpRelayTests
         var good = await RunAsync(token, initialize: true);
         await Assert.That(good.Lines.Length).IsEqualTo(2);
         using var tools = JsonDocument.Parse(good.Lines[1]);
-        await Assert.That(tools.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength()).IsEqualTo(11);
+        await Assert.That(tools.RootElement.GetProperty("result").GetProperty("tools").GetArrayLength()).IsEqualTo(15);
 
         var refused = await RunAsync("wrong-token", initialize: false);
         await Assert.That(refused.Exit).IsEqualTo(1);

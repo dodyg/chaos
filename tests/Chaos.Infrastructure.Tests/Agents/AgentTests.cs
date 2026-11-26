@@ -130,7 +130,8 @@ public sealed class AgentTests
         var functions = tools.For(bot.Id);
         await Assert.That(functions.Select(function => function.Name)).IsEquivalentTo([AgentToolNames.ClaimTask, AgentToolNames.ReleaseTask, AgentToolNames.Heartbeat,
             AgentWorkToolNames.ListSpaces, AgentWorkToolNames.ListTasks, AgentWorkToolNames.GetTask, AgentWorkToolNames.CreateTask, AgentWorkToolNames.UpdateTask,
-            AgentWorkToolNames.AddUpdate, AgentWorkToolNames.AskForHelp, AgentWorkToolNames.HandBack]);
+            AgentWorkToolNames.AddUpdate, AgentWorkToolNames.AskForHelp, AgentWorkToolNames.HandBack,
+            AgentWorkToolNames.ReadPad, AgentWorkToolNames.ProposeTasks, AgentWorkToolNames.ReadPage, AgentWorkToolNames.WritePage]);
         var claim = functions.Single(function => function.Name == AgentToolNames.ClaimTask);
         await Assert.That(claim.Description).IsEqualTo(AgentToolNames.ClaimTaskDescription);
         await Assert.That(claim.JsonSchema.GetProperty("required").EnumerateArray().Select(item => item.GetString()!)).IsEquivalentTo(["taskId"]);

@@ -39,6 +39,10 @@ public sealed partial class LocalAgentTools
             yield return AIFunctionFactory.Create(type.GetMethod(nameof(AddUpdateAsync))!, this, AgentWorkToolNames.AddUpdate, AgentWorkToolNames.AddUpdateDescription);
             yield return AIFunctionFactory.Create(type.GetMethod(nameof(AskForHelpAsync))!, this, AgentWorkToolNames.AskForHelp, AgentWorkToolNames.AskForHelpDescription);
             yield return AIFunctionFactory.Create(type.GetMethod(nameof(HandBackAsync))!, this, AgentWorkToolNames.HandBack, AgentWorkToolNames.HandBackDescription);
+            foreach (var function in PadPageFunctions())
+            {
+                yield return function;
+            }
         }
 
         private static readonly Dictionary<string, TaskItemStatus> Statuses = new(StringComparer.OrdinalIgnoreCase)

@@ -2158,6 +2158,21 @@ appear live on members' desktops.
 
 ### [ ] Q20: Agent workflows
 
+**Progress note 2026-11-26 (Q20, first slice).** Only the pad-proposal rules are built; the stage stays open. `ProposalCommands` (`Chaos.Application/Agents`) records an agent's suggestions
+(`ProposeAsync`: live, unpaused agent with a ticked list, a live Personal pad note, at most 20 per call and 100 pending), lists the pending ones (`ListPendingAsync`), and only a person's
+`AcceptAsync` creates the task (through the ordinary task creation, history naming the person, with the pad link back to the note when it still quotes the title) or `DismissAsync` closes it.
+Tests: Infrastructure `Agents/ProposalTests` (4, real SQLite): nothing becomes a task without a click, accept makes the task as the person and links the note and cannot repeat, dismiss
+makes none, and a paused or list-less agent or a foreign note is refused. Not done: the Accept and Dismiss RPC and the pad UI, quick-add parsing of `QuickAddText` on Accept (the screen parses it and sends the draft),
+delegating to an agent with the 12.8 mapping, the GitHub attribution naming the agent, the delegation-through-`hand_back` test and the concurrent page-write merge test. Smallest next action: delegation to an agent.
+
+**Progress note 2026-11-26 (Q20, tools).** `read_pad`, `propose_tasks`, `read_page` and `write_page` are on both surfaces with identical schemas (`docs/mcp/tools.json`, 15 tools; names, descriptions and result types in
+`Chaos.Sync/AgentWorkTools.cs`). Local: `LocalAgentPadPageTools` (Personal space, needs a ticked list; propose runs `ProposalCommands`, 60 calls an hour; writes under `agent.propose_tasks` and `agent.write_page`).
+Service: `AgentPadPageTools` (reachable spaces with a list; the pad is read only, a proposal pushes only the `task_proposal` create group so a person's Accept or Dismiss writes the state; a page is written as
+`title` and `text` groups, which a member's device merges with its own edit under E2). Tests: Desktop `McpRelayTests` (8, the runner now covers the four tools and a proposal accepted by a person), Server
+`ServiceMcpTests` (12, new `PadAndPageTools_*` with PostgreSQL 18.7 through `wslc`, removed afterwards), Infrastructure agent tests (8 and `ProposalTests` 4), Desktop 113 in all. Full gate not run. The agent
+page tools do not yet have the concurrent-edit test (the client merge is exercised in the text-merge tests only), and a proposal that arrives on a desktop with no `state` group relies on the column default; no
+two-device test covers it.
+
 **Depends on:** Q19 and Q13. **Migration:** none expected. **Read:** 12.6, 12.8.
 
 1. Delegate to an agent (with the 12.8 mapping), pad proposals (Accept or Dismiss on the pad), and pages read and
