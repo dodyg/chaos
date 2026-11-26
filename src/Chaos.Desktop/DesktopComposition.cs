@@ -49,6 +49,7 @@ internal sealed class DesktopComposition : IDisposable
     private readonly TimeProvider _clock;
     private readonly IIdGenerator _ids;
     private readonly string _appVersion;
+    private readonly string _dataRoot;
 
     private readonly ActivityPublisher _activityPublisher;
     private readonly Chaos.Infrastructure.Activity.ActivityFeed _activityFeed;
@@ -92,6 +93,7 @@ internal sealed class DesktopComposition : IDisposable
         try
         {
             _appVersion = appVersion;
+            _dataRoot = dataRoot;
             _clock = TimeProvider.System;
             _ids = new GuidIdGenerator();
 
@@ -210,6 +212,7 @@ internal sealed class DesktopComposition : IDisposable
 
             Activations = new ShellActivations((command, ct) => _reminders.ActAsync(command, ct));
             ProfileSettings = new ProfileSettingsCommands(store, ids, clock);
+            McpGate = new McpAgentGate(store, new LocalAgentTools(store, ids, clock), clock);
 
             // Every worker is built; start them now, so none runs against a half-wired graph.
             _reminderEngine.Start();
@@ -234,6 +237,9 @@ internal sealed class DesktopComposition : IDisposable
     public ShellActivations Activations { get; }
 
     public ProfileSettingsCommands ProfileSettings { get; }
+
+    /// <summary>The gate of the local MCP pipe (PLAN3 12.1): tokens and the agents behind them.</summary>
+    public McpAgentGate McpGate { get; }
 
     /// <summary>
     /// The pause order that restore, reset and joining an account run inside. Outermost first: calendars, time blocking, the
@@ -286,7 +292,7 @@ internal sealed class DesktopComposition : IDisposable
         rpc.AddRecurrenceRpcService(new RecurrenceRpcService(new RecurrenceCommands(store, ids, clock), _tasks));
         rpc.AddDelegationRpcService(new DelegationRpcService(new DelegationCommands(store, ids, clock)));
         rpc.AddAgentRpcService(new AgentRpcService(store, new AgentCommands(store, ids, clock), new UndoCommands(store, ids, clock),
-            new ServiceAgentCommands(_serviceClient), _syncEngine));
+            new ServiceAgentCommands(_serviceClient), _syncEngine, McpClientConfig.ForThisApp(_dataRoot)));
         rpc.AddClaimRpcService(new ClaimRpcService(store, new ClaimCommands(store, ids, clock), new SharedClaimCommands(_serviceClient), _syncEngine));
         rpc.AddSubtaskRpcService(new SubtaskRpcService(_tasks, new SubtaskCommands(store, ids, clock), _githubEngine));
         rpc.AddContainerRpcService(new ContainerRpcService(new ContainerCommands(store, ids, clock), _tasks));

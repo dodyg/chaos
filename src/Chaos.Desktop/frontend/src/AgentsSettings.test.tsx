@@ -87,7 +87,14 @@ function fakeAgents(options: { pauseError?: string } = {}) {
       calls.push({ method: "createToken", ...request });
       const token = { id: "tok1", name: String(request.name), createdAtUtc: "2026-11-25T09:00:00Z", lastUsedAtUtc: null };
       local = local.map((item) => (item.agent.id === request.agentId ? { ...bump(item), tokens: [...item.tokens, token] } : item));
-      return { ok: true, token, secret: "chaos_agent_secret_1", error: null };
+      return {
+        ok: true,
+        token,
+        secret: "chaos_agent_secret_1",
+        claudeCode: "claude mcp add chaos --env CHAOS_AGENT_TOKEN=chaos_agent_secret_1 -- Chaos.Desktop.exe --mcp",
+        claudeDesktop: '{ "mcpServers": {} }',
+        error: null,
+      };
     },
     revokeToken: async (request: Call) => {
       calls.push({ method: "revokeToken", ...request });
@@ -159,7 +166,10 @@ test("a token's secret is shown once with a copy button, then only the token's n
     await user.click(within(bot).getByRole("button", { name: "Create token" }));
     const dialog = await screen.findByRole("dialog", { name: "Token for Build bot · Laptop" });
     assert.ok(within(dialog).getByText("chaos_agent_secret_1"));
-    assert.match(within(dialog).getByRole("status").textContent ?? "", /shown only once[\s\S]*Q18[\s\S]*CHAOS_AGENT_TOKEN/);
+    assert.match(
+      within(dialog).getByRole("status").textContent ?? "",
+      /shown only once[\s\S]*CHAOS_AGENT_TOKEN[\s\S]*claude mcp add chaos[\s\S]*mcpServers/,
+    );
     assert.deepEqual(withoutOperation(calls[0]), { method: "createToken", agentId: "a1", expectedVersion: "1", name: "Laptop" });
     // user-event stands in for the clipboard; the copy is read back from it.
     await user.click(within(dialog).getByRole("button", { name: "Copy token" }));

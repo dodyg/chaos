@@ -2094,7 +2094,17 @@ function agentHandlers(): Record<string, Handler> {
       if (!valid) return fail("Use 1 to 100 characters.");
       const token = { id: crypto.randomUUID(), agentId: r.agentId, name: valid, createdAtUtc: now(), lastUsedAtUtc: null };
       agentTokens.push(token);
-      return ok({ token, secret: `chaos_agent_${crypto.randomUUID()}` });
+      const secret = `chaos_agent_${crypto.randomUUID()}`;
+      return ok({
+        token,
+        secret,
+        claudeCode: `claude mcp add chaos --env CHAOS_AGENT_TOKEN=${secret} -- Chaos.Desktop.exe --mcp`,
+        claudeDesktop: JSON.stringify(
+          { mcpServers: { chaos: { command: "Chaos.Desktop.exe", args: ["--mcp"], env: { CHAOS_AGENT_TOKEN: secret } } } },
+          null,
+          2,
+        ),
+      });
     },
     "agents.revokeToken": (r: { agentId: string; tokenId: string }) => {
       const index = agentTokens.findIndex((token) => token.id === r.tokenId && token.agentId === r.agentId);

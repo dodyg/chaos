@@ -2119,6 +2119,18 @@ configuration snippet (Q18) and delegating to an agent (Q20); the `propose_tasks
 **Exit:** a local AI assistant lists Ready for agent tasks in allowed Personal lists, claims one, reports progress
 and hands it back, with no account and no network.
 
+**Progress note 2026-11-26 (Q18).** The local MCP server is built and tested; the live check with Claude Code and Claude Desktop (item 5) is not done, so the
+stage stays open. `McpRelayHost` (`Chaos.Desktop/Platform`) serves the SDK over a `CurrentUserOnly` pipe, one connection per assistant, after a
+one-line token handshake (`{"token":"…"}`, answered `{"ok":true|false}`); `McpAgentGate` looks the token up by its SHA-256 and binds the agent's
+`LocalAgentTools`. `--mcp` reads `CHAOS_AGENT_TOKEN` (exit 2 when missing, 1 when refused) and starts a hidden `--mcp-host` when Chaos is not
+running; that host takes the storage lock, serves one session without a window and exits with it. Tools (`docs/mcp/tools.json`, 11): `list_spaces`,
+`list_tasks`, `get_task`, `create_task`, `update_task`, `claim_task`, `release_task`, `heartbeat`, `add_update`, `ask_for_help`, `hand_back`, as
+`AIFunction`s (`LocalAgentTools` and `LocalAgentWorkTools`, names and descriptions in `Chaos.Sync/AgentWorkTools.cs`). Not offered yet: `attach_file`,
+`read_page`, `write_page`, `read_pad`, `propose_tasks` (Q20) and `list_view`. Settings → Agents shows the Claude Code command and the Claude Desktop
+JSON with the token once. Tests (Desktop `McpRelayTests`, 7): token refusal and revocation, paused, unticked list invisible, the contract runner over
+a real pipe and real data root against `tools.json`, the injection fixture, two sessions, the ACL, and the real `Chaos.Desktop.exe --mcp` shim
+starting its hidden host. The native cross-user pipe check stays blocked as in Q0.
+
 ### [ ] Q19: Service MCP server
 
 **Depends on:** Q17 and Q18 (shared tool contract). **Server migration:** only if OAuth client storage needs one.

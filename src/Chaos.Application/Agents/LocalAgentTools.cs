@@ -16,12 +16,12 @@ namespace Chaos.Application.Agents;
 /// the agent rules of section 12 first, then the Application command under an agent scope, so its history rows and
 /// undo entries name <c>agent:&lt;id&gt;</c>. Results carry no user text; nothing in a task is ever an instruction.
 /// </summary>
-public sealed class LocalAgentTools(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
+public sealed partial class LocalAgentTools(IApplicationStore store, IIdGenerator ids, TimeProvider clock)
 {
     /// <summary>The tools bound to one agent. Its ID closes over every call; the agent is never an argument the caller picks.</summary>
     public IReadOnlyList<AIFunction> For(string agentId) => new Bound(store, ids, clock, agentId).Functions;
 
-    private sealed class Bound
+    private sealed partial class Bound
     {
         private readonly IApplicationStore _store;
         private readonly IIdGenerator _ids;
@@ -43,6 +43,7 @@ public sealed class LocalAgentTools(IApplicationStore store, IIdGenerator ids, T
                 AIFunctionFactory.Create(typeof(Bound).GetMethod(nameof(ClaimTaskAsync))!, this, AgentToolNames.ClaimTask, AgentToolNames.ClaimTaskDescription),
                 AIFunctionFactory.Create(typeof(Bound).GetMethod(nameof(ReleaseTaskAsync))!, this, AgentToolNames.ReleaseTask, AgentToolNames.ReleaseTaskDescription),
                 AIFunctionFactory.Create(typeof(Bound).GetMethod(nameof(HeartbeatAsync))!, this, AgentToolNames.Heartbeat, AgentToolNames.HeartbeatDescription),
+                .. WorkFunctions(),
             ];
         }
 

@@ -57,6 +57,12 @@ public static class AgentToolStatus
     public const string RateLimited = "rate-limited";
     public const string Forbidden = "forbidden";
     public const string NotFound = "not-found";
+    public const string Ok = "ok";
+    public const string Created = "created";
+    /// <summary>An argument was refused; <c>Field</c> names it.</summary>
+    public const string Invalid = "invalid";
+    /// <summary>The task changed while the call ran; read it again.</summary>
+    public const string Conflict = "conflict";
 }
 
 /// <summary>

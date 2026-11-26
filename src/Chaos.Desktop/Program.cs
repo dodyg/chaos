@@ -22,11 +22,28 @@ internal static class Program
         var instanceKey = SingleInstanceGuard.KeyFor(dataRoot);
         if (args.Contains("--mcp", StringComparer.Ordinal))
         {
-            return McpRelayHost.RelayAsync(instanceKey, dataRoot, Console.OpenStandardInput(), Console.OpenStandardOutput()).GetAwaiter().GetResult();
+            // The MCP client config gives the shim its agent token in the environment (Settings → Agents).
+            var token = Environment.GetEnvironmentVariable("CHAOS_AGENT_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("CHAOS_AGENT_TOKEN is not set. Copy the MCP configuration from Settings → Agents.");
+                return 2;
+            }
+
+            return McpRelayHost.RelayAsync(instanceKey, dataRoot, token, Console.OpenStandardInput(), Console.OpenStandardOutput(), Console.Error).GetAwaiter().GetResult();
         }
         if (args.Contains("--mcp-host", StringComparer.Ordinal))
         {
-            var host = McpRelayHost.Start(instanceKey, singleSession: true);
+            // Started by the shim when Chaos is not running: it owns the storage lock like the app, serves one assistant
+            // session without a window, and exits when that session ends. If the app is already running, it has the pipe.
+            using var hostGuard = new SingleInstanceGuard(instanceKey);
+            if (!hostGuard.IsPrimaryInstance)
+            {
+                return 0;
+            }
+
+            using var hostComposition = DesktopComposition.Create(dataRoot, AppVersion(), IsDevelopmentBuild);
+            var host = McpRelayHost.Start(instanceKey, hostComposition.McpGate, singleSession: true);
             try { host.Completion.GetAwaiter().GetResult(); }
             finally { host.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
             return 0;
@@ -39,7 +56,7 @@ internal static class Program
 
         // Storage, every service and every background worker (see DesktopComposition).
         using var composition = DesktopComposition.Create(dataRoot, AppVersion(), IsDevelopmentBuild);
-        var mcpRelay = McpRelayHost.Start(instanceKey);
+        var mcpRelay = McpRelayHost.Start(instanceKey, composition.McpGate);
 
         // The desktop shell (PLAN §13): tray, global shortcuts, close-to-tray and activation.
         var activations = composition.Activations;
