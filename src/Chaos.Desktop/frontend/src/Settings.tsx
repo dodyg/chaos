@@ -15,10 +15,11 @@ import {
   type ShortcutStatusDto,
   type UpdateCheckResponse,
 } from "#neoastra";
-import { Keyboard, MonitorCog, UserRound } from "lucide-react";
+import { CalendarDays, Keyboard, MonitorCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { loadWorkWeek, saveWorkWeek, weekdayNames, workingDayNames, type WorkWeek } from "./workWeek";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Banner, Field, PageHeader } from "@/components/common";
 
@@ -111,6 +112,12 @@ export function Settings({
   const [tab, setTab] = React.useState(initialTab ?? "general");
   const [update, setUpdate] = React.useState<UpdateCheckResponse | null>(null);
   const [checking, setChecking] = React.useState(false);
+  const [workWeek, setWorkWeek] = React.useState(loadWorkWeek);
+  function changeWorkWeek(patch: Partial<WorkWeek>) {
+    const next = { ...workWeek, ...patch };
+    setWorkWeek(next);
+    saveWorkWeek(next);
+  }
 
   async function checkForUpdates() {
     if (checking) return;
@@ -256,6 +263,35 @@ export function Settings({
                     </NativeSelect>
                   </Field>
                 </div>
+              </Section>
+              <Section
+                title="Working week"
+                icon={<CalendarDays />}
+                description="The day your working week starts on and how many days it has. The calendar starts its weeks there and can show working days only."
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Working week starts on">
+                    <NativeSelect value={String(workWeek.start)} onChange={(e) => changeWorkWeek({ start: Number(e.target.value) })}>
+                      {weekdayNames.map((name, index) => (
+                        <NativeSelectOption key={name} value={index}>
+                          {name}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                  <Field label="Working days per week">
+                    <NativeSelect value={String(workWeek.days)} onChange={(e) => changeWorkWeek({ days: Number(e.target.value) })}>
+                      {[1, 2, 3, 4, 5, 6, 7].map((count) => (
+                        <NativeSelectOption key={count} value={count}>
+                          {count}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </Field>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Working days: {workingDayNames(workWeek).join(", ")}. Saved on this computer.
+                </p>
               </Section>
             </TabsContent>
 

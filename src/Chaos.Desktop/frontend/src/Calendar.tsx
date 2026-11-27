@@ -20,6 +20,7 @@ import {
   type TagResponse,
   type TaskResponse,
 } from "#neoastra";
+import { loadWorkWeek, loadWorkingDaysOnly, nonWorkingDays, saveWorkingDaysOnly } from "./workWeek";
 import { ChevronLeft, ChevronRight, Flag, GripVertical, Repeat, Video, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -432,6 +433,8 @@ export function Calendar({
   const [meeting, setMeeting] = React.useState<SelectedMeeting | null>(null);
   const [notice, setNotice] = React.useState<{ text: string; task: TaskResponse } | null>(null);
   const [cursorDate, setCursorDate] = React.useState<string | null>(null);
+  const [workWeek] = React.useState(loadWorkWeek);
+  const [workingOnly, setWorkingOnly] = React.useState(loadWorkingDaysOnly);
   const [showUnscheduled, setShowUnscheduled] = React.useState(false);
   const [unscheduledTotal, setUnscheduledTotal] = React.useState(0);
 
@@ -718,6 +721,17 @@ export function Calendar({
           Completed
         </label>
         <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={workingOnly}
+            onChange={(event) => {
+              setWorkingOnly(event.target.checked);
+              saveWorkingDaysOnly(event.target.checked);
+            }}
+          />
+          Working days only
+        </label>
+        <label className="inline-flex items-center gap-1.5">
           Space
           <NativeSelect aria-label="Space" value={spaceId} onChange={(event) => setSpaceId(event.target.value)}>
             <NativeSelectOption value="">All spaces</NativeSelectOption>
@@ -870,6 +884,8 @@ export function Calendar({
             plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
             initialView={viewTypes[mode]}
             headerToolbar={false}
+            firstDay={workWeek.start}
+            hiddenDays={workingOnly ? nonWorkingDays(workWeek) : []}
             height="auto"
             nowIndicator
             navLinks={false}
