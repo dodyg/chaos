@@ -53,6 +53,8 @@ import { useDragReorder } from "./dragReorder";
 import {
   loadNavLayout,
   moveNavItem,
+  loadHiddenNav,
+  saveHiddenNav,
   navSections,
   resolveNavLayout,
   saveNavLayout,
@@ -94,6 +96,8 @@ import {
   Database,
   BookOpen,
   CircleHelp,
+  Eye,
+  EyeOff,
   Sun,
   Tags,
   CalendarCheck,
@@ -331,6 +335,8 @@ export function App({
   const selectedContainer = React.useRef("");
   const drag = useDragReorder();
   const [savedNavLayout, setSavedNavLayout] = React.useState<NavPlacement[]>(loadNavLayout);
+  const [hiddenNav, setHiddenNav] = React.useState<string[]>(loadHiddenNav);
+  const [showHiddenNav, setShowHiddenNav] = React.useState(false);
 
   async function refresh() {
     if (containerId !== selectedContainer.current) return;
@@ -1336,22 +1342,40 @@ export function App({
       placeNavItem(sourceId, section, at);
     });
   }
+  function toggleNavHidden(id: string) {
+    const next = hiddenNav.includes(id) ? hiddenNav.filter((item) => item !== id) : [...hiddenNav, id];
+    setHiddenNav(next);
+    saveHiddenNav(next);
+  }
+  const hiddenNavCount = navDefs.filter((def) => hiddenNav.includes(def.id)).length;
   function navRows(section: NavSection) {
-    return navLayout[section].map((id) => {
-      const def = navDefs.find((item) => item.id === id)!;
-      return (
-        <div key={id} className="group/row flex items-center rounded-md" {...navDrop(section, id)}>
-          {drag.handle(
-            id,
-            "nav",
-            false,
-            "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5",
-            { label: "Move menu item (arrow keys)", onMove: (offset) => stepNavItem(id, section, offset) },
-          )}
-          {def.node}
-        </div>
-      );
-    });
+    return navLayout[section]
+      .filter((id) => showHiddenNav || !hiddenNav.includes(id))
+      .map((id) => {
+        const def = navDefs.find((item) => item.id === id)!;
+        const hidden = hiddenNav.includes(id);
+        return (
+          <div key={id} className={`group/row flex items-center rounded-md ${hidden ? "opacity-50" : ""}`} {...navDrop(section, id)}>
+            {drag.handle(
+              id,
+              "nav",
+              false,
+              "w-0 overflow-hidden p-0 group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5",
+              { label: "Move menu item (arrow keys)", onMove: (offset) => stepNavItem(id, section, offset) },
+            )}
+            {def.node}
+            <button
+              type="button"
+              className="w-0 shrink-0 overflow-hidden rounded p-0 text-muted-foreground hover:text-sidebar-foreground group-focus-within/row:w-auto group-focus-within/row:px-0.5 group-hover/row:w-auto group-hover/row:px-0.5 [&_svg]:size-3.5"
+              aria-label={hidden ? "Show this menu item" : "Hide this menu item"}
+              title={hidden ? "Show this menu item" : "Hide this menu item"}
+              onClick={() => toggleNavHidden(id)}
+            >
+              {hidden ? <Eye /> : <EyeOff />}
+            </button>
+          </div>
+        );
+      });
   }
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? (tags.find((tag) => tag.id === query.tagId) ?? null) : null;
@@ -1984,6 +2008,18 @@ export function App({
               <SidebarSection id="notes" title="Notes" dropProps={navDrop("notes", null)}>
                 {navRows("notes")}
               </SidebarSection>
+              {hiddenNavCount > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="mt-1 h-7 justify-start gap-2.5 px-2 text-xs font-normal text-muted-foreground hover:bg-sidebar-accent"
+                  aria-pressed={showHiddenNav}
+                  onClick={() => setShowHiddenNav((value) => !value)}
+                >
+                  {showHiddenNav ? <EyeOff /> : <Eye />}
+                  {showHiddenNav ? "Hide hidden items" : `Show hidden items (${hiddenNavCount})`}
+                </Button>
+              )}
             </nav>
             <SidebarSection
               id="lists"

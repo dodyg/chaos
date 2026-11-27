@@ -51,3 +51,23 @@ export function moveNavItem(resolved: Record<NavSection, string[]>, id: string, 
   next[section].splice(Math.max(0, Math.min(index, next[section].length)), 0, id);
   return navSections.flatMap((name) => next[name].map((item) => ({ id: item, section: name })));
 }
+
+const hiddenKey = "chaos.sidebar.hidden";
+
+/** Ids of menu items the user has hidden from the sidebar. */
+export function loadHiddenNav(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(hiddenKey) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHiddenNav(hidden: readonly string[]) {
+  try {
+    localStorage.setItem(hiddenKey, JSON.stringify(hidden));
+  } catch {
+    /* storage unavailable */
+  }
+}
