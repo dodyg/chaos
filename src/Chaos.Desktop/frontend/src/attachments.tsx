@@ -156,6 +156,7 @@ const shown = new Set([
   "video/webm",
   "video/quicktime",
   "audio/mpeg",
+  "audio/webm",
   "audio/mp4",
   "audio/ogg",
   "audio/wav",
@@ -456,7 +457,8 @@ export function AttachmentActions({
 
 /** A file reference in Markdown: a card with a preview where possible. */
 export function AttachmentCard({ api, item, label }: { api: AttachmentApi; item: AttachmentDto | undefined; label: React.ReactNode }) {
-  const [open, setOpen] = React.useState(false);
+  // Audio (a voice note) shows its player straight away; other files start closed.
+  const [open, setOpen] = React.useState(item?.preview === "audio" && item.bytes === "present");
   const [message, setMessage] = React.useState("");
   if (!item)
     return (

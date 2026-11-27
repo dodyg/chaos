@@ -38,7 +38,7 @@ public static class AttachmentSafety
         "image/png" or "image/jpeg" or "image/gif" or "image/webp" => AttachmentPreview.Image,
         "application/pdf" => AttachmentPreview.Pdf,
         "video/mp4" or "video/webm" or "video/quicktime" => AttachmentPreview.Video,
-        "audio/mpeg" or "audio/mp4" or "audio/ogg" or "audio/wav" => AttachmentPreview.Audio,
+        "audio/mpeg" or "audio/webm" or "audio/mp4" or "audio/ogg" or "audio/wav" => AttachmentPreview.Audio,
         "text/plain" => AttachmentPreview.Text,
         _ => AttachmentPreview.None,
     };

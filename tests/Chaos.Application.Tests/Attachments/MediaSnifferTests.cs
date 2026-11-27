@@ -44,6 +44,14 @@ public sealed class MediaSnifferTests
     }
 
     [Test]
+    public async Task Sniff_TellsAnAudioOnlyWebMFromAVideoOne()
+    {
+        byte[] Webm(string codec) => [0x1A, 0x45, 0xDF, 0xA3, 0x80, 0x86, .. System.Text.Encoding.ASCII.GetBytes(codec)];
+        await Assert.That(MediaSniffer.Sniff(Webm("A_OPUS"), "voice-note.webm")).IsEqualTo("audio/webm");
+        await Assert.That(MediaSniffer.Sniff(Webm("V_VP8"), "clip.webm")).IsEqualTo("video/webm");
+    }
+
+    [Test]
     public async Task Sniff_IgnoresALyingExtension()
     {
         await Assert.That(MediaSniffer.Sniff("%PDF-1.4"u8, "holiday.png")).IsEqualTo("application/pdf");

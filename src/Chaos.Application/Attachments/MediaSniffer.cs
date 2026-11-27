@@ -20,6 +20,24 @@ public static class MediaSniffer
 
     private static ReadOnlySpan<byte> PngSignature => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
+    private static bool HasCodec(ReadOnlySpan<byte> head, ReadOnlySpan<byte> prefix)
+    {
+        // Codec ids are upper-case ASCII, so the prefix also has to be followed by a letter to rule out binary noise.
+        for (var at = head.IndexOf(prefix); at >= 0;)
+        {
+            var next = at + prefix.Length;
+            if (next < head.Length && head[next] is >= (byte)'A' and <= (byte)'Z')
+            {
+                return true;
+            }
+
+            var rest = head[next..].IndexOf(prefix);
+            at = rest < 0 ? -1 : next + rest;
+        }
+
+        return false;
+    }
+
     public static string Sniff(ReadOnlySpan<byte> head, string fileName)
     {
         if (head.Length >= 8 && head[..8].SequenceEqual(PngSignature))
@@ -69,7 +87,9 @@ public static class MediaSniffer
 
         if (head.Length >= 4 && head[0] == 0x1A && head[1] == 0x45 && head[2] == 0xDF && head[3] == 0xA3)
         {
-            return "video/webm";
+            // A voice note recorded by the WebView is WebM too, but with only an audio track; its codec id
+            // ("A_OPUS") is in the track header, a video one ("V_VP8") is not.
+            return HasCodec(head, "A_"u8) && !HasCodec(head, "V_"u8) ? "audio/webm" : "video/webm";
         }
 
         if (head.Length >= 4 && head[..4].SequenceEqual("OggS"u8))
