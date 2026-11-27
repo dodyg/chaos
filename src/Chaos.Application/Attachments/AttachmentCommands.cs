@@ -509,7 +509,7 @@ public sealed class AttachmentCommands
             : transfer?.State == AttachmentSyncState.Downloading ? AttachmentBytesState.Downloading
             : transfer?.State == AttachmentSyncState.DownloadFailed ? AttachmentBytesState.Failed
             : AttachmentBytesState.Missing;
-        return new AttachmentView(row, bytes, AttachmentSafety.PreviewOf(row.MediaType), !AttachmentSafety.IsBlocked(row.FileName), transfer);
+        return new AttachmentView(row, bytes, AttachmentSafety.PreviewOf(row.MediaType, row.FileName), !AttachmentSafety.IsBlocked(row.FileName), transfer);
     }
 
     private static async Task RequireOwnerAsync(IDataSession session, AttachmentOwnerKind kind, string ownerId, CancellationToken token)

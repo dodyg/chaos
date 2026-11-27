@@ -43,6 +43,15 @@ public static class AttachmentSafety
         _ => AttachmentPreview.None,
     };
 
+    /// <summary>
+    /// Like <see cref="PreviewOf(string)"/>, but a recorded voice note stored before audio-only WebM was recognised
+    /// (<c>voice-note.webm</c> as <c>video/webm</c>) is still shown with an audio player.
+    /// </summary>
+    public static AttachmentPreview PreviewOf(string mediaType, string fileName) =>
+        mediaType == "video/webm" && fileName.StartsWith("voice-note.", StringComparison.OrdinalIgnoreCase)
+            ? AttachmentPreview.Audio
+            : PreviewOf(mediaType);
+
     /// <summary>A display name that is safe as a file name on Windows: no path parts, no reserved characters or names.</summary>
     public static string SanitizeFileName(string? raw, string fallback = "file")
     {

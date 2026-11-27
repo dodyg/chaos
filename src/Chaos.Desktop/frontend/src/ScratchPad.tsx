@@ -792,7 +792,7 @@ export function ScratchPad({
                     source={text}
                     links={links}
                     compact
-                    className={cn("text-sm", !expandedIds.has(item.id) && "max-h-40 overflow-hidden")}
+                    className={cn("text-sm", !expandedIds.has(item.id) && "max-h-40 overflow-hidden has-[audio,video]:max-h-none")}
                   />
                   {(text.length > 200 || text.includes("\n")) && (
                     <button
