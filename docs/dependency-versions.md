@@ -17,7 +17,7 @@ version changes; PLAN.md §1 pins are the authority.
 
 | Package | Version | Note |
 | --- | --- | --- |
-| NeoAstra | 1.12.0 | Desktop framework; template/tool aligned (below) |
+| NeoAstra | 1.14.0 | Desktop framework; template/tool aligned (below) |
 | Microsoft.Data.Sqlite | 10.0.14 | Bundled native binary includes FTS5 (proven by test, below) |
 | TUnit | 1.81.16 | Latest stable at kickoff; queried NuGet V3 flat container on 2026-11-09 (`1.81.16` is newest stable). Meta-package; assertions included; no Test SDK/VSTest adapter/Coverlet |
 
@@ -25,7 +25,7 @@ version changes; PLAN.md §1 pins are the authority.
 
 | Tool | Version |
 | --- | --- |
-| NeoAstra.Tool | 1.12.0 |
+| NeoAstra.Tool | 1.14.0 |
 | slopwatch.cmd | 0.4.2 |
 
 ## Frontend (template-provided graph, locked in `frontend/package-lock.json`)
@@ -65,7 +65,7 @@ The larger bundle triggers Vite's chunk-size notice; it is informational.
 
 | Template | Version |
 | --- | --- |
-| NeoAstra.Templates | 1.12.0 (`dotnet new install NeoAstra.Templates::1.12.0`) |
+| NeoAstra.Templates | 1.14.0 (`dotnet new install NeoAstra.Templates::1.14.0`) |
 
 Template output was retargeted: `net10.0` → `net11.0-windows10.0.19041.0`, `PublishAot=false`,
 `IsAotCompatible=false` (PLAN §3: NativeAOT is not a Phase 1 release requirement).

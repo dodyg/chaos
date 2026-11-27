@@ -79,6 +79,10 @@ internal static class Program
             return NeoApp.Run(args, app =>
             {
                 app.Title = "Chaos";
+                // NeoAstra denies every WebView permission request unless told otherwise, which made
+                // getUserMedia fail with NotAllowedError for voice notes. Only the microphone, and only
+                // for Chaos's own document; Windows privacy settings still apply on top.
+                app.AllowPermissions(NeoPermissionKind.Microphone);
                 app.UsePlugins(shell.UsePlugins);
                 app.ConfigureMainWindow((application, window) => shell.ConfigureMainWindow(application, window, initialSettings));
                 app.UseRpc(rpc => composition.AddRpcServices(rpc, shell));

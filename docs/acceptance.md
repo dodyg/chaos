@@ -11,7 +11,7 @@ when it was actually run; everything that needs a person at a Windows desktop is
 | OS | Windows 11 Pro, 10.0.26300, x64 |
 | .NET SDK / runtime | 11.0.100 / 11.0.0 (`global.json`, roll-forward disabled) |
 | C# | 15.0 in every project (`Directory.Build.props`) |
-| NeoAstra | 1.12.0 (package, tool, templates) |
+| NeoAstra | 1.14.0 (package, tool, templates) |
 | SQLite | Microsoft.Data.Sqlite 10.0.14 (bundled native library with FTS5) |
 | TUnit | 1.81.16 under Microsoft.Testing.Platform |
 | Node / npm | 26.12.1 / 11.20.0 |

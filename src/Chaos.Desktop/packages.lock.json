@@ -13,11 +13,11 @@
       },
       "NeoAstra": {
         "type": "Direct",
-        "requested": "[1.12.0, )",
-        "resolved": "1.12.0",
-        "contentHash": "YORNPfSGI9mg4oMyr0u2xQcxwTtoKuSp2ydn8Aw4hCjSM86yt9c+mRocToxyAsPrKt5feEiDBVtS16CmqHEtlA==",
+        "requested": "[1.14.0, )",
+        "resolved": "1.14.0",
+        "contentHash": "og79/kxT4HaSqPdZQOh/GNbyl2pG15fqF6JPrWSDqb2Vile2mGaD4nLiR8iWBndH6PPpdbu+/1nCjrIDmgtgdg==",
         "dependencies": {
-          "NeoAstra.Core": "1.12.0"
+          "NeoAstra.Core": "1.14.0"
         }
       },
       "Microsoft.Data.Sqlite.Core": {
@@ -43,8 +43,8 @@
       },
       "NeoAstra.Core": {
         "type": "Transitive",
-        "resolved": "1.12.0",
-        "contentHash": "tQw9c/WZNlymfAO0wmbKiQDZoAgt4dxTzp3xU1OiVVkmXCJCQBxYu2e72Rf6FYaEM44B3XvlSPF/E4k3LHsSGg=="
+        "resolved": "1.14.0",
+        "contentHash": "KibM5x5y3//EEd9HT7ACw4DhjXWuETIyJarfBKOvLDNcsjH4tuqD8UYJ7dbAHNL+NOSEwwSL4avu71324DqLiQ=="
       },
       "NodaTime": {
         "type": "Transitive",
@@ -177,8 +177,8 @@
     "net11.0-windows10.0.19041/win-x64": {
       "NeoAstra.Core": {
         "type": "Transitive",
-        "resolved": "1.12.0",
-        "contentHash": "tQw9c/WZNlymfAO0wmbKiQDZoAgt4dxTzp3xU1OiVVkmXCJCQBxYu2e72Rf6FYaEM44B3XvlSPF/E4k3LHsSGg=="
+        "resolved": "1.14.0",
+        "contentHash": "KibM5x5y3//EEd9HT7ACw4DhjXWuETIyJarfBKOvLDNcsjH4tuqD8UYJ7dbAHNL+NOSEwwSL4avu71324DqLiQ=="
       },
       "SkiaSharp.NativeAssets.Win32": {
         "type": "Transitive",

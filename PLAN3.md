@@ -184,7 +184,7 @@ records the owner's waiver.** No phase 3 product code merges before Q0 is answer
 
 Every rule in PLAN2 §2 still binds. Read it there, because it is not repeated in full here. In short:
 
-- C# 15, `net11.0` or `net11.0-windows10.0.19041.0`, and NeoAstra 1.12.0. React with strict TypeScript, Vite and
+- C# 15, `net11.0` or `net11.0-windows10.0.19041.0`, and NeoAstra 1.14.0. React with strict TypeScript, Vite and
   shadcn/ui on Tailwind v4.
 - Central package versions, locked restore, warnings as errors. No suppressions and no `VersionOverride`.
 - **EF Core is banned on the client** (`CHAOS001`). Only `Chaos.Server` and `Chaos.Server.Tests` set
