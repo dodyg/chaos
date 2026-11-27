@@ -20,7 +20,7 @@ import {
   type TagResponse,
   type TaskResponse,
 } from "#neoastra";
-import { ChevronLeft, ChevronRight, Flag, GripVertical, Repeat, Video } from "lucide-react";
+import { ChevronLeft, ChevronRight, Flag, GripVertical, Repeat, Video, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,6 +222,8 @@ export function UnscheduledPanel({
   onPlan,
   api,
   listRef,
+  onTotal,
+  onClose,
 }: {
   filters: CalendarFiltersDto;
   revision: number;
@@ -229,6 +231,8 @@ export function UnscheduledPanel({
   onPlan: (row: QueryRowResponse) => void;
   api: CalendarApi;
   listRef: React.RefObject<HTMLDivElement | null>;
+  onTotal?: (total: number) => void;
+  onClose?: () => void;
 }) {
   const [rows, setRows] = React.useState<QueryRowResponse[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -254,6 +258,7 @@ export function UnscheduledPanel({
         if (result.ok) {
           setRows([...result.rows]);
           setTotal(result.totalCount);
+          onTotal?.(result.totalCount);
           setCursor(result.nextCursor);
           setError(null);
         } else setError(result.error?.message ?? "Could not load the unscheduled tasks.");
@@ -287,9 +292,25 @@ export function UnscheduledPanel({
   }
 
   return (
-    <aside aria-label="Unscheduled tasks" className="grid content-start gap-2 rounded-xl border p-3">
-      <h3 className="flex items-baseline justify-between text-sm font-semibold">
-        Unscheduled<span className="text-xs font-normal text-muted-foreground tabular-nums">{total}</span>
+    <aside
+      aria-label="Unscheduled tasks"
+      className="grid content-start gap-2 rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && onClose) {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <h3 className="flex items-center justify-between gap-2 text-sm font-semibold">
+        <span className="flex items-baseline gap-2">
+          Unscheduled<span className="text-xs font-normal text-muted-foreground tabular-nums">{total}</span>
+        </span>
+        {onClose && (
+          <Button type="button" size="icon-xs" variant="ghost" aria-label="Close unscheduled tasks" onClick={onClose}>
+            <X />
+          </Button>
+        )}
       </h3>
       <label className="sr-only" htmlFor="unscheduled-filter">
         Filter unscheduled tasks
@@ -411,6 +432,8 @@ export function Calendar({
   const [meeting, setMeeting] = React.useState<SelectedMeeting | null>(null);
   const [notice, setNotice] = React.useState<{ text: string; task: TaskResponse } | null>(null);
   const [cursorDate, setCursorDate] = React.useState<string | null>(null);
+  const [showUnscheduled, setShowUnscheduled] = React.useState(false);
+  const [unscheduledTotal, setUnscheduledTotal] = React.useState(0);
 
   const filters = React.useMemo<CalendarFiltersDto>(
     () => ({
@@ -663,6 +686,16 @@ export function Calendar({
               if (event.target.value) go(event.target.value);
             }}
           />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-expanded={showUnscheduled}
+            onClick={() => setShowUnscheduled((value) => !value)}
+          >
+            Unscheduled
+            <span className="text-xs text-muted-foreground tabular-nums">{unscheduledTotal}</span>
+          </Button>
           <SegmentedRadio label="Calendar view" value={mode} options={modes} onChange={switchMode} />
         </div>
       </div>
@@ -823,7 +856,7 @@ export function Calendar({
         />
       )}
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_16rem]">
+      <div className="relative">
         <div
           ref={regionRef}
           tabIndex={0}
@@ -921,18 +954,23 @@ export function Calendar({
             }}
           />
         </div>
-        <UnscheduledPanel
-          filters={filters}
-          revision={revision + reloads}
-          api={api}
-          listRef={unscheduledRef}
-          onOpen={(id) => void openTask(id)}
-          onPlan={(row) => {
-            setSelected(null);
-            setMoveError(null);
-            setMoving({ taskId: row.task.id, title: row.task.title, date: cursorDate ?? today, time: null });
-          }}
-        />
+        {/* Always mounted so its rows stay registered as drag sources; shown as an overlay so the grid keeps the full width. */}
+        <div className={cn("absolute right-0 top-0 z-20 w-80 max-w-full", !showUnscheduled && "hidden")}>
+          <UnscheduledPanel
+            filters={filters}
+            onTotal={setUnscheduledTotal}
+            onClose={() => setShowUnscheduled(false)}
+            revision={revision + reloads}
+            api={api}
+            listRef={unscheduledRef}
+            onOpen={(id) => void openTask(id)}
+            onPlan={(row) => {
+              setSelected(null);
+              setMoveError(null);
+              setMoving({ taskId: row.task.id, title: row.task.title, date: cursorDate ?? today, time: null });
+            }}
+          />
+        </div>
       </div>
       <p className={cn("text-xs text-muted-foreground")}>
         Planned tasks are solid; time blocks with an estimate have a dashed edge; <Flag className="inline size-3" /> marks a due date;{" "}
