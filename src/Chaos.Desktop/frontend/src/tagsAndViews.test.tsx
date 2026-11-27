@@ -213,11 +213,9 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
   const tree = await screen.findByRole("navigation", { name: "Tags" });
   const home = within(tree).getByRole("button", { name: /^home\d*$/ });
   await waitFor(() => assert.match(home.textContent ?? "", /2$/));
-  assert.equal(
-    within(tree).getByRole("button", { name: /garden/ }).style.paddingLeft,
-    "0.5rem",
-    "the sidebar shows tags flat, with their full path",
-  );
+  assert.equal(within(tree).queryByRole("button", { name: /garden/ }), null, "nested tags wait behind their parent");
+  await user.click(within(tree).getByRole("button", { name: "Expand home" }));
+  assert.equal(within(tree).getByRole("button", { name: /garden/ }).parentElement!.style.paddingLeft, "0.85rem");
   assert.match(within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name: /Today/ }).textContent ?? "", /3$/);
 
   await user.click(home);
@@ -339,9 +337,9 @@ test("dropping a task on a tag tags it without moving it", async () => {
   );
 
   const row = (await screen.findByRole("button", { name: "Buy seeds" })).closest("li")!;
-  const garden = within(await screen.findByRole("navigation", { name: "Tags" }))
-    .getByRole("button", { name: /garden/ })
-    .closest("li")!;
+  const tree = await screen.findByRole("navigation", { name: "Tags" });
+  fireEvent.click(within(tree).getByRole("button", { name: "Expand home" }));
+  const garden = within(tree).getByRole("button", { name: /garden/ }).parentElement!;
   const data = new Map<string, string>();
   const dataTransfer = {
     setData: (type: string, value: string) => {

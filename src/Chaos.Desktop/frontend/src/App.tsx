@@ -66,7 +66,7 @@ import { ViewAlertStack } from "./ViewAlerts";
 import { QuickAdd } from "./QuickAdd";
 import { NewTagForm, TagSettings, TagTree } from "./tags";
 import { TagsPage } from "./TagsPage";
-import { sidebarTags } from "./tagList";
+import { sidebarEntries } from "./tagList";
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
 import { Pages, type PageFocus, type PageRequest } from "./Pages";
@@ -1355,7 +1355,7 @@ export function App({
   }
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? (tags.find((tag) => tag.id === query.tagId) ?? null) : null;
-  const shownTags = sidebarTags(tags, tagCounts, activeTag?.id ?? null).map((tag) => ({ ...tag, name: tag.path, depth: 0 }));
+  const shownTags = sidebarEntries(tags, tagCounts, activeTag?.id ?? null);
   /** Everything the command palette can jump to or run, built from the current lists, tags and focus. */
   const [paletteTreePages, setPaletteTreePages] = React.useState<PageSummaryResponse[]>([]);
   React.useEffect(() => {
@@ -2140,9 +2140,9 @@ export function App({
             >
               {shownTags.length > 0 || tags.length === 0 ? (
                 <TagTree
-                  tags={shownTags}
+                  entries={shownTags}
                   counts={tagCounts}
-                  activeTagId={activeTag?.id ?? null}
+                  activeTag={activeTag}
                   busy={busy}
                   onOpen={(tag) => openQuery({ view: "Tag", tagId: tag.id })}
                   onTagTask={(taskId, tag) => void tagTask(taskId, tag)}

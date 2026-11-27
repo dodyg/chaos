@@ -1,13 +1,13 @@
 import React from "react";
 import { tagRpc, type TagResponse } from "#neoastra";
-import { Archive, ArchiveRestore, Pin, PinOff, Settings2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronRight, Pin, PinOff, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { InlineError } from "@/components/common";
 import { TagDot } from "./tags";
-import { listTags, type TagSort } from "./tagList";
+import { listTags, tagForest, visibleRows, type TagSort } from "./tagList";
 
 type TagsApi = Pick<typeof tagRpc, "setPinned" | "setArchived">;
 
@@ -39,7 +39,26 @@ export function TagsPage({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const archivedCount = tags.filter((tag) => tag.archived).length;
-  const rows = listTags(tags, counts, { filter, sort, showArchived });
+  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(new Set());
+  // Browsing shows the nesting; searching and the archive list are flat, each tag under its full path.
+  const nested = !filter.trim() && !showArchived;
+  const rows = nested
+    ? visibleRows(
+        tagForest(
+          tags.filter((tag) => !tag.archived),
+          counts,
+          sort,
+        ),
+        collapsed,
+      )
+    : listTags(tags, counts, { filter, sort, showArchived }).map((tag) => ({ tag, depth: 0, hasChildren: false }));
+  function toggle(id: string) {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
 
   async function change(action: () => ReturnType<TagsApi["setPinned"]>, failure: string) {
     if (busy) return;
@@ -101,17 +120,38 @@ export function TagsPage({
         </p>
       ) : (
         <ul className="grid gap-px rounded-xl border bg-card p-1" aria-label={showArchived ? "Archived tags" : "Tags"}>
-          {rows.map((tag) => {
+          {rows.map(({ tag, depth, hasChildren }) => {
             const count = counts.get(tag.id) ?? 0;
             return (
-              <li key={tag.id} className="group/row flex items-center gap-1 rounded-md hover:bg-accent/50">
+              <li
+                key={tag.id}
+                className="group/row flex items-center gap-1 rounded-md hover:bg-accent/50"
+                style={{ paddingLeft: `${depth * 1.25}rem` }}
+              >
+                {nested &&
+                  (hasChildren ? (
+                    <button
+                      type="button"
+                      className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      aria-expanded={!collapsed.has(tag.id)}
+                      aria-label={`${collapsed.has(tag.id) ? "Expand" : "Collapse"} ${tag.path}`}
+                      onClick={() => toggle(tag.id)}
+                    >
+                      <ChevronRight
+                        className={cn("size-4 transition-transform", !collapsed.has(tag.id) && "rotate-90")}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : (
+                    <span className="inline-block size-6 shrink-0" aria-hidden="true" />
+                  ))}
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   onClick={() => onOpen(tag)}
                 >
                   <TagDot color={tag.color} />
-                  <span className={cn("truncate", tag.archived && "text-muted-foreground")}>{tag.path}</span>
+                  <span className={cn("truncate", tag.archived && "text-muted-foreground")}>{nested ? tag.name : tag.path}</span>
                   <span className={cn("ml-auto text-xs tabular-nums", count > 0 ? "text-muted-foreground" : "text-muted-foreground/50")}>
                     {count > 0 ? `${count} open` : "no open tasks"}
                   </span>

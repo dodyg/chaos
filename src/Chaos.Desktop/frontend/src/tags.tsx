@@ -1,11 +1,12 @@
 import React from "react";
 import { tagRpc, type TagResponse } from "#neoastra";
-import { Hash, LockKeyhole, Plus, Trash2, X } from "lucide-react";
+import { ChevronRight, Hash, LockKeyhole, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Field, InlineError } from "@/components/common";
+import type { SidebarEntry, TagNode } from "./tagList";
 
 /** The fixed tag palette (PLAN §6); keys match TagColors on the server. */
 export const tagColors = ["slate", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink"] as const;
@@ -262,68 +263,114 @@ export function TagPicker({
   );
 }
 
+const expandedKey = "chaos.sidebar.tags.expanded";
+
+function loadExpanded(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(expandedKey) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 /**
- * Sidebar tag tree (PLAN §6/§10): nested tags with colors and open-task counts; each tag is a
- * view of its own and a drop target that tags a dragged task without moving it.
+ * Sidebar tag tree (PLAN §6/§10): the shortlist of tags, each with a chevron when it has nested
+ * tags. A tag's count includes its nested tags. Each tag is a view of its own and a drop target
+ * that tags a dragged task without moving it. The open tag's parents open by themselves.
  */
 export function TagTree({
-  tags,
+  entries,
   counts,
-  activeTagId,
+  activeTag,
   busy,
   onOpen,
   onTagTask,
 }: {
-  tags: TagResponse[];
+  entries: SidebarEntry[];
   counts: ReadonlyMap<string, number>;
-  activeTagId: string | null;
+  activeTag: TagResponse | null;
   busy: boolean;
   onOpen: (tag: TagResponse) => void;
   onTagTask: (taskId: string, tag: TagResponse) => void;
 }) {
   const [over, setOver] = React.useState<string | null>(null);
-  if (tags.length === 0) return <p className="px-2 py-1 text-muted-foreground">No tags yet. Create one below or type one on a task.</p>;
+  const [expanded, setExpanded] = React.useState(loadExpanded);
+  if (entries.length === 0) return <p className="px-2 py-1 text-muted-foreground">No tags yet. Create one below or type one on a task.</p>;
   const accepts = (event: React.DragEvent) => !busy && Array.from(event.dataTransfer?.types ?? []).includes(taskDragType);
+  const isOpen = (tag: TagResponse) => expanded.has(tag.id) || (activeTag !== null && activeTag.path.startsWith(`${tag.path}/`));
+  function toggle(tag: TagResponse) {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(tag.id) && !(activeTag?.path.startsWith(`${tag.path}/`) ?? false)) next.delete(tag.id);
+      else next.add(tag.id);
+      try {
+        localStorage.setItem(expandedKey, JSON.stringify([...next]));
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
+  }
+
+  function row(tag: TagResponse, label: string, children: TagNode[], depth: number): React.ReactNode {
+    const open = children.length > 0 && isOpen(tag);
+    return (
+      <li key={tag.id}>
+        <div
+          className={cn("flex items-center rounded-md", over === tag.id && "bg-brand-soft ring-1 ring-primary")}
+          style={{ paddingLeft: `${depth * 0.85}rem` }}
+          onDragOver={(event) => {
+            if (!accepts(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setOver(tag.id);
+          }}
+          onDragLeave={() => setOver((current) => (current === tag.id ? null : current))}
+          onDrop={(event) => {
+            setOver(null);
+            const taskId = event.dataTransfer?.getData(taskDragType);
+            if (!taskId || busy) return;
+            event.preventDefault();
+            onTagTask(taskId, tag);
+          }}
+        >
+          {children.length > 0 ? (
+            <button
+              type="button"
+              className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-expanded={open}
+              aria-label={`${open ? "Collapse" : "Expand"} ${tag.path}`}
+              onClick={() => toggle(tag)}
+            >
+              <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="inline-block size-5 shrink-0" aria-hidden="true" />
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            aria-current={activeTag?.id === tag.id ? "page" : undefined}
+            className="h-8 min-w-0 flex-1 justify-start gap-2 px-1.5 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary"
+            onClick={() => onOpen(tag)}
+          >
+            <TagDot color={tag.color} />
+            <span className="truncate">{label}</span>
+            {(counts.get(tag.id) ?? 0) > 0 && (
+              <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.get(tag.id)}</span>
+            )}
+          </Button>
+        </div>
+        {open && <ol className="grid gap-px">{children.map((child) => row(child.tag, child.tag.name, child.children, depth + 1))}</ol>}
+      </li>
+    );
+  }
+
   return (
     <nav aria-label="Tags">
-      <ol className="grid gap-px">
-        {tags.map((tag) => (
-          <li
-            key={tag.id}
-            className={cn("rounded-md", over === tag.id && "bg-brand-soft ring-1 ring-primary")}
-            onDragOver={(event) => {
-              if (!accepts(event)) return;
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-              setOver(tag.id);
-            }}
-            onDragLeave={() => setOver((current) => (current === tag.id ? null : current))}
-            onDrop={(event) => {
-              setOver(null);
-              const taskId = event.dataTransfer?.getData(taskDragType);
-              if (!taskId || busy) return;
-              event.preventDefault();
-              onTagTask(taskId, tag);
-            }}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={busy}
-              aria-current={activeTagId === tag.id ? "page" : undefined}
-              className="h-8 w-full min-w-0 justify-start gap-2 px-2 font-normal text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-100 aria-[current=page]:bg-brand-soft aria-[current=page]:font-semibold aria-[current=page]:text-primary"
-              style={{ paddingLeft: `${0.5 + tag.depth * 0.85}rem` }}
-              onClick={() => onOpen(tag)}
-            >
-              <TagDot color={tag.color} />
-              <span className="truncate">{tag.name}</span>
-              {(counts.get(tag.id) ?? 0) > 0 && (
-                <span className="ml-auto text-xs text-muted-foreground tabular-nums">{counts.get(tag.id)}</span>
-              )}
-            </Button>
-          </li>
-        ))}
-      </ol>
+      <ol className="grid gap-px">{entries.map((entry) => row(entry.tag, entry.label, entry.children, 0))}</ol>
     </nav>
   );
 }

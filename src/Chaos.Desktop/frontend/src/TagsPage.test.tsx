@@ -20,7 +20,18 @@ const userEvent = (await import("@testing-library/user-event")).default;
 const { TagsPage } = await import("./TagsPage");
 
 function tag(path: string, extra: Partial<TagResponse> = {}): TagResponse {
-  return { id: path, name: path, path, parentId: null, color: null, version: "3", depth: 0, pinned: false, archived: false, ...extra };
+  return {
+    id: path,
+    name: path.split("/").at(-1)!,
+    path,
+    parentId: null,
+    color: null,
+    version: "3",
+    depth: 0,
+    pinned: false,
+    archived: false,
+    ...extra,
+  };
 }
 
 test("the tags page pins, archives and filters tags through the tag RPC", async () => {
@@ -76,5 +87,42 @@ test("the tags page pins, archives and filters tags through the tag RPC", async 
   const archived = await screen.findByRole("list", { name: "Archived tags" });
   assert.ok(within(archived).getByRole("button", { name: "Restore old" }));
   assert.equal(within(archived).queryByRole("button", { name: /^Pin / }), null, "an archived tag cannot be pinned");
+  cleanup();
+});
+
+test("the tags page nests tags under their parent, collapses them, and goes flat when searching", async () => {
+  const user = userEvent.setup({ document: dom.window.document });
+  const api = {
+    setPinned: async () => ({ ok: true, tag: null, error: null }),
+    setArchived: async () => ({ ok: true, tag: null, error: null }),
+  };
+  render(
+    <TagsPage
+      tags={[tag("platform"), tag("platform/ios", { parentId: "platform" }), tag("platform/android", { parentId: "platform" }), tag("bug")]}
+      counts={new Map([["platform", 5]])}
+      api={api}
+      onOpen={() => {}}
+      onManage={() => {}}
+      onChanged={async () => {}}
+    />,
+    { container: dom.window.document.body },
+  );
+
+  const list = screen.getByRole("list", { name: "Tags" });
+  assert.deepEqual(
+    within(list)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent?.replace(/\d+ open|no open tasks/, "").trim()),
+    ["bug", "platform", "android", "ios"],
+    "children sit under their parent by name",
+  );
+
+  await user.click(screen.getByRole("button", { name: "Collapse platform" }));
+  assert.equal(within(list).getAllByRole("listitem").length, 2);
+
+  await user.type(screen.getByRole("textbox", { name: "Filter tags" }), "ios");
+  const flat = within(screen.getByRole("list", { name: "Tags" })).getAllByRole("listitem");
+  assert.equal(flat.length, 1);
+  assert.match(flat[0].textContent ?? "", /platform\/ios/, "a match shows its full path");
   cleanup();
 });
