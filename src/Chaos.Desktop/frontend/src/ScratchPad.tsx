@@ -155,6 +155,39 @@ type Props = {
   onOpenPage?: (request: PageRequest) => void;
 };
 
+/** A note body cut off at 10rem, with Show more / Show less only when something is actually hidden. */
+function ClampedNote({ expanded, onToggle, children }: { expanded: boolean; onToggle: () => void; children: React.ReactNode }) {
+  const box = React.useRef<HTMLDivElement | null>(null);
+  const [overflows, setOverflows] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const element = box.current;
+    if (!element || expanded) return;
+    const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [expanded, children]);
+  return (
+    <>
+      <div ref={box} className={cn(!expanded && "max-h-40 overflow-hidden has-[audio,video]:max-h-none")}>
+        {children}
+      </div>
+      {(expanded || overflows) && (
+        <button
+          type="button"
+          className="mt-1 text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:underline"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
+  );
+}
+
 /**
  * The Personal scratch pad (PLAN §9, §15 WP5): untitled Markdown notes that save as you
  * type, ordered by hand, tagged and archived; "Make task" on a selection with a backlink;
@@ -788,28 +821,18 @@ export function ScratchPad({
                 </button>
               ) : text.trim() ? (
                 <>
-                  <MarkdownPreview
-                    source={text}
-                    links={links}
-                    compact
-                    className={cn("text-sm", !expandedIds.has(item.id) && "max-h-40 overflow-hidden has-[audio,video]:max-h-none")}
-                  />
-                  {(text.length > 200 || text.includes("\n")) && (
-                    <button
-                      type="button"
-                      className="mt-1 text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:underline"
-                      aria-expanded={expandedIds.has(item.id)}
-                      onClick={() =>
-                        setExpandedIds((prev) => {
-                          const next = new Set(prev);
-                          if (!next.delete(item.id)) next.add(item.id);
-                          return next;
-                        })
-                      }
-                    >
-                      {expandedIds.has(item.id) ? "Show less" : "Show more"}
-                    </button>
-                  )}
+                  <ClampedNote
+                    expanded={expandedIds.has(item.id)}
+                    onToggle={() =>
+                      setExpandedIds((prev) => {
+                        const next = new Set(prev);
+                        if (!next.delete(item.id)) next.add(item.id);
+                        return next;
+                      })
+                    }
+                  >
+                    <MarkdownPreview source={text} links={links} compact className="text-sm" />
+                  </ClampedNote>
                 </>
               ) : (
                 <span className="text-muted-foreground italic">Empty note</span>
