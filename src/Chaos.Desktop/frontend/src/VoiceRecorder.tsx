@@ -49,6 +49,8 @@ export const browserRecorder: RecorderEngine = {
     let context: AudioContext | null = null;
     try {
       context = new AudioContext();
+      // Created after an await, so the engine may leave it suspended, which reads as silence.
+      void context.resume().catch(() => undefined);
       const analyser = context.createAnalyser();
       analyser.fftSize = 512;
       context.createMediaStreamSource(stream).connect(analyser);
