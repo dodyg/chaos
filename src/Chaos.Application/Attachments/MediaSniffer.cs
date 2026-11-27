@@ -87,9 +87,11 @@ public static class MediaSniffer
 
         if (head.Length >= 4 && head[0] == 0x1A && head[1] == 0x45 && head[2] == 0xDF && head[3] == 0xA3)
         {
+            // Only the header holds track entries; later bytes are compressed media that can contain "V_" by chance.
+            var header = head[..Math.Min(head.Length, 4096)];
             // A voice note recorded by the WebView is WebM too, but with only an audio track; its codec id
             // ("A_OPUS") is in the track header, a video one ("V_VP8") is not.
-            return HasCodec(head, "A_"u8) && !HasCodec(head, "V_"u8) ? "audio/webm" : "video/webm";
+            return HasCodec(header, "A_"u8) && !HasCodec(header, "V_"u8) ? "audio/webm" : "video/webm";
         }
 
         if (head.Length >= 4 && head[..4].SequenceEqual("OggS"u8))

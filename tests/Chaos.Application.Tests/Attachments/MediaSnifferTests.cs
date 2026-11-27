@@ -49,6 +49,9 @@ public sealed class MediaSnifferTests
         byte[] Webm(string codec) => [0x1A, 0x45, 0xDF, 0xA3, 0x80, 0x86, .. System.Text.Encoding.ASCII.GetBytes(codec)];
         await Assert.That(MediaSniffer.Sniff(Webm("A_OPUS"), "voice-note.webm")).IsEqualTo("audio/webm");
         await Assert.That(MediaSniffer.Sniff(Webm("V_VP8"), "clip.webm")).IsEqualTo("video/webm");
+        // Later "V_X" bytes inside compressed audio must not turn the file into a video.
+        var noisy = Webm("A_OPUS").Concat(new byte[6000]).Concat("V_VP8"u8.ToArray()).ToArray();
+        await Assert.That(MediaSniffer.Sniff(noisy, "voice-note.webm")).IsEqualTo("audio/webm");
     }
 
     [Test]
