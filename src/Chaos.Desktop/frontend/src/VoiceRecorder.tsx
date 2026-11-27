@@ -17,6 +17,8 @@ export type RecordedAudio = { blob: Blob; mimeType: string };
 
 /** A live recording: levels while it runs, the audio when it stops. */
 export type RecordingSession = {
+  /** What the engine is listening to, for the "no sound" hint: the device name and the state of its parts. */
+  describe?: () => string;
   onLevel: (listener: (level: number) => void) => void;
   stop: () => Promise<RecordedAudio>;
   cancel: () => void;
@@ -37,6 +39,13 @@ export const browserRecorder: RecorderEngine = {
       MediaRecorder: typeof MediaRecorder === "undefined" ? undefined : MediaRecorder,
     }),
   start: async () => {
+    // Made before the first await, while the click still counts as a user gesture, so the engine starts it running.
+    let context: AudioContext | null = null;
+    try {
+      context = new AudioContext();
+    } catch {
+      /* the meter is optional; recording still works */
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = pickMimeType((type) => MediaRecorder.isTypeSupported(type));
     const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
@@ -46,10 +55,8 @@ export const browserRecorder: RecorderEngine = {
     };
     let listener: ((level: number) => void) | null = null;
     let frame = 0;
-    let context: AudioContext | null = null;
     try {
-      context = new AudioContext();
-      // Created after an await, so the engine may leave it suspended, which reads as silence.
+      if (!context) throw new Error("no audio context");
       void context.resume().catch(() => undefined);
       const analyser = context.createAnalyser();
       analyser.fftSize = 512;
@@ -71,6 +78,15 @@ export const browserRecorder: RecorderEngine = {
     };
     recorder.start(1000);
     return {
+      describe: () => {
+        const track = stream.getAudioTracks()[0];
+        const device = track?.label || "unnamed device";
+        const parts = [`Listening to: ${device}`];
+        if (track?.muted) parts.push("the system reports it muted");
+        if (track && track.readyState !== "live") parts.push(`track ${track.readyState}`);
+        if (context && context.state !== "running") parts.push(`meter ${context.state}`);
+        return parts.join("; ");
+      },
       onLevel: (next) => {
         listener = next;
       },
@@ -135,6 +151,7 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
   const [history, setHistory] = React.useState<readonly number[]>([]);
   const [heardSound, setHeardSound] = React.useState(false);
   const levelNow = React.useRef(0);
+  const [listening, setListening] = React.useState("");
   const session = React.useRef<RecordingSession | null>(null);
   const startedAt = React.useRef<Date | null>(null);
   const fileInput = React.useRef<HTMLInputElement | null>(null);
@@ -189,6 +206,7 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
       levelNow.current = 0;
       setHistory([]);
       setHeardSound(false);
+      setListening(started.describe?.() ?? "");
       setState({ kind: "recording", startedAt: Date.now() });
     } catch (error) {
       setState({ kind: "problem", problem: classifyMicError(error) });
@@ -274,6 +292,7 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
         {quiet && (
           <span role="status" className="text-xs text-muted-foreground">
             No sound yet. Check that the right microphone is selected and not muted.
+            {listening && <span className="mt-1 block break-words opacity-80">{listening}</span>}
           </span>
         )}
         <div className="flex items-center gap-2">
