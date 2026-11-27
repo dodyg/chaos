@@ -13,11 +13,13 @@ public sealed record TagListContainerRequest(string ContainerId);
 public sealed record TagShareListRequest(string OperationId, string ContainerId);
 public sealed record TagShareListResponse(bool Ok, int TagsShared, int LinksShared, TaskErrorResponse? Error);
 public sealed record TagSuggestRequest(string Text);
-public sealed record TagResponse(string Id, string Name, string Path, string? ParentId, string? Color, string Version, int Depth);
+public sealed record TagResponse(string Id, string Name, string Path, string? ParentId, string? Color, string Version, int Depth, bool Pinned = false, bool Archived = false);
 public sealed record TagListResponse(bool Ok, IReadOnlyList<TagResponse> Tags, TaskErrorResponse? Error);
 public sealed record TagCreateRequest(string OperationId, string Path, string? ParentId, string? Color);
 public sealed record TagRenameRequest(string OperationId, string TagId, string ExpectedVersion, string Name);
 public sealed record TagColorRequest(string OperationId, string TagId, string ExpectedVersion, string? Color);
+public sealed record TagPinRequest(string OperationId, string TagId, string ExpectedVersion, bool Pinned);
+public sealed record TagArchiveRequest(string OperationId, string TagId, string ExpectedVersion, bool Archived);
 public sealed record TagMoveRequest(string OperationId, string TagId, string ExpectedVersion, string? ParentId);
 public sealed record TagChangeRequest(string OperationId, string TagId, string ExpectedVersion);
 public sealed record TagMergePreviewRequest(string SourceId, string TargetId);
@@ -98,6 +100,20 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
     {
         using var rpcScope = ActivityScope.Rpc("tags.setColor");
         return await TagResultAsync(() => tags.SetColorAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), Blank(request.Color)), ct));
+    }
+
+    [NeoRpcMethod("setPinned")]
+    public async ValueTask<TagOperationResponse> SetPinnedAsync(TagPinRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.setPinned");
+        return await TagResultAsync(() => tags.SetPinnedAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), request.Pinned), ct));
+    }
+
+    [NeoRpcMethod("setArchived")]
+    public async ValueTask<TagOperationResponse> SetArchivedAsync(TagArchiveRequest request, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("tags.setArchived");
+        return await TagResultAsync(() => tags.SetArchivedAsync(new(request.OperationId, request.TagId, Version(request.ExpectedVersion), request.Archived), ct));
     }
 
     [NeoRpcMethod("move")]
@@ -187,7 +203,9 @@ public sealed class TagRpcService(TagCommands tags, Chaos.Desktop.Platform.GitHu
         row.Tag.ParentTagId,
         row.Tag.ColorKey,
         row.Tag.Version.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        row.Path.Count(character => character == '/'));
+        row.Path.Count(character => character == '/'),
+        row.Tag.Pinned,
+        row.Tag.Archived);
 
     internal static int Count(long value) => (int)Math.Clamp(value, 0, int.MaxValue);
 

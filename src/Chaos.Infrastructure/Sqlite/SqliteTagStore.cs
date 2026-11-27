@@ -36,9 +36,9 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO Tags (Id, OwnerProfileId, SpaceId, DisplayName, NormalizedName, ParentTagId, ColorKey, Position,
-                Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
+                Pinned, Archived, Version, CreatedAtUtc, UpdatedAtUtc, DeletedAtUtc)
             VALUES ($id, $owner, $space, $display, $normalized, $parent, $color, $position,
-                $version, $created, $updated, $deleted);
+                $pinned, $archived, $version, $created, $updated, $deleted);
             """;
         Bind(command, tag);
         command.Parameters.AddWithValue("$version", tag.Version);
@@ -52,7 +52,7 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE Tags SET DisplayName = $display, NormalizedName = $normalized, ParentTagId = $parent,
-                ColorKey = $color, Position = $position, Version = $version, UpdatedAtUtc = $updated, DeletedAtUtc = $deleted
+                ColorKey = $color, Position = $position, Pinned = $pinned, Archived = $archived, Version = $version, UpdatedAtUtc = $updated, DeletedAtUtc = $deleted
             WHERE Id = $id AND Version = $expected;
             """;
         Bind(command, updated);
@@ -195,6 +195,8 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         command.Parameters.AddWithValue("$parent", SqliteProfileStore.OptionalValue(tag.ParentTagId));
         command.Parameters.AddWithValue("$color", SqliteProfileStore.OptionalValue(tag.ColorKey));
         command.Parameters.AddWithValue("$position", tag.Position);
+        command.Parameters.AddWithValue("$pinned", tag.Pinned ? 1 : 0);
+        command.Parameters.AddWithValue("$archived", tag.Archived ? 1 : 0);
         command.Parameters.AddWithValue("$updated", StorageFormats.Instant(tag.UpdatedAtUtc));
         command.Parameters.AddWithValue("$deleted", SqliteProfileStore.OptionalInstant(tag.DeletedAtUtc));
     }
@@ -209,6 +211,8 @@ public sealed class SqliteTagStore(SqliteConnection connection) : ITagStore
         ParentTagId = r.Sn("ParentTagId"),
         ColorKey = r.Sn("ColorKey"),
         Position = r.L("Position"),
+        Pinned = r.L("Pinned") != 0,
+        Archived = r.L("Archived") != 0,
         Version = r.L("Version"),
         CreatedAtUtc = r.I("CreatedAtUtc"),
         UpdatedAtUtc = r.I("UpdatedAtUtc"),

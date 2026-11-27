@@ -9,6 +9,8 @@ namespace Chaos.Application.Tags;
 public sealed record CreateTagCommand(string OperationId, string Path, string? ParentTagId, string? ColorKey, string? SpaceId = null);
 public sealed record RenameTagCommand(string OperationId, string TagId, long ExpectedVersion, string Name);
 public sealed record SetTagColorCommand(string OperationId, string TagId, long ExpectedVersion, string? ColorKey);
+public sealed record SetTagPinnedCommand(string OperationId, string TagId, long ExpectedVersion, bool Pinned);
+public sealed record SetTagArchivedCommand(string OperationId, string TagId, long ExpectedVersion, bool Archived);
 public sealed record MoveTagCommand(string OperationId, string TagId, long ExpectedVersion, string? ParentTagId);
 public sealed record MergeTagCommand(string OperationId, string SourceTagId, long SourceVersion, string TargetTagId, long TargetVersion);
 public sealed record DeleteTagCommand(string OperationId, string TagId, long ExpectedVersion);

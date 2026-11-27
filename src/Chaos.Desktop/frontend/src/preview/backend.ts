@@ -79,9 +79,15 @@ const containers: ContainerResponse[] = [
 ];
 const sections = new Map<string, SectionResponse[]>([["sprint", [{ id: "s-review", title: "In review", version: "1" }]]]);
 const tags: TagResponse[] = [
-  { id: "t-ai", name: "ai", path: "ai", parentId: null, depth: 0, color: null, version: "1" },
-  { id: "t-ideas", name: "ideas", path: "ideas", parentId: null, depth: 0, color: null, version: "1" },
+  { id: "t-ai", name: "ai", path: "ai", parentId: null, depth: 0, color: null, version: "1", pinned: false, archived: false },
+  { id: "t-ideas", name: "ideas", path: "ideas", parentId: null, depth: 0, color: null, version: "1", pinned: false, archived: false },
 ];
+function updateTag(id: string, change: (tag: TagResponse) => TagResponse): TagResponse {
+  const index = tags.findIndex((tag) => tag.id === id);
+  const current = tags[index];
+  tags[index] = { ...change(current), version: String(Number(current.version) + 1) };
+  return tags[index];
+}
 const taskTags = new Map<string, string[]>([["task-2", ["t-ai"]]]);
 
 function task(id: string, title: string, patch: Partial<TaskResponse> = {}): TaskResponse {
@@ -2614,6 +2620,9 @@ const handlers: Record<string, Handler> = {
     return ok({ person: person ?? null });
   },
   "tags.listDeleted": () => ok({ tags: [] }),
+  "tags.setPinned": (r: { tagId: string; pinned: boolean }) => ok({ tag: updateTag(r.tagId, (tag) => ({ ...tag, pinned: r.pinned })) }),
+  "tags.setArchived": (r: { tagId: string; archived: boolean }) =>
+    ok({ tag: updateTag(r.tagId, (tag) => ({ ...tag, archived: r.archived, pinned: r.archived ? false : tag.pinned })) }),
   "tags.targetTags": (r: { targetId: string }) => ok({ tagIds: taskTags.get(r.targetId) ?? [] }),
   "tags.suggest": () => ok({ tags }),
 

@@ -65,6 +65,8 @@ import { ViewIcon } from "./viewIcons";
 import { ViewAlertStack } from "./ViewAlerts";
 import { QuickAdd } from "./QuickAdd";
 import { NewTagForm, TagSettings, TagTree } from "./tags";
+import { TagsPage } from "./TagsPage";
+import { sidebarTags } from "./tagList";
 import { ScratchPad, padExcerpt, type PadFocus } from "./ScratchPad";
 import { DraftRegistry } from "./padAutosave";
 import { Pages, type PageFocus, type PageRequest } from "./Pages";
@@ -93,6 +95,7 @@ import {
   BookOpen,
   CircleHelp,
   Sun,
+  Tags,
   CalendarCheck,
   CalendarDays,
   CalendarRange,
@@ -170,6 +173,7 @@ type View =
   | "templates"
   | "query"
   | "pad"
+  | "tags"
   | "pages"
   | "daily"
   | "myday"
@@ -1351,6 +1355,7 @@ export function App({
   }
   const showDetail = editing !== null && view !== "templates";
   const activeTag = view === "query" && query.view === "Tag" ? (tags.find((tag) => tag.id === query.tagId) ?? null) : null;
+  const shownTags = sidebarTags(tags, tagCounts, activeTag?.id ?? null).map((tag) => ({ ...tag, name: tag.path, depth: 0 }));
   /** Everything the command palette can jump to or run, built from the current lists, tags and focus. */
   const [paletteTreePages, setPaletteTreePages] = React.useState<PageSummaryResponse[]>([]);
   React.useEffect(() => {
@@ -2133,14 +2138,35 @@ export function App({
                 />
               }
             >
-              <TagTree
-                tags={tags}
-                counts={tagCounts}
-                activeTagId={activeTag?.id ?? null}
-                busy={busy}
-                onOpen={(tag) => openQuery({ view: "Tag", tagId: tag.id })}
-                onTagTask={(taskId, tag) => void tagTask(taskId, tag)}
-              />
+              {shownTags.length > 0 || tags.length === 0 ? (
+                <TagTree
+                  tags={shownTags}
+                  counts={tagCounts}
+                  activeTagId={activeTag?.id ?? null}
+                  busy={busy}
+                  onOpen={(tag) => openQuery({ view: "Tag", tagId: tag.id })}
+                  onTagTask={(taskId, tag) => void tagTask(taskId, tag)}
+                />
+              ) : (
+                <p className="px-2 py-1 text-muted-foreground">No pinned or busy tags. Pin some from All tags.</p>
+              )}
+              {tags.length > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={navItem}
+                  aria-current={view === "tags" ? "page" : undefined}
+                  title="Filter, pin, archive and manage every tag"
+                  onClick={() => {
+                    setEditing(null);
+                    setShowTagSettings(false);
+                    setView("tags");
+                  }}
+                >
+                  <Tags />
+                  All tags ({tags.filter((tag) => !tag.archived).length})…
+                </Button>
+              )}
               <DeletedItems
                 className="pt-2"
                 noun="tags"
@@ -2302,7 +2328,19 @@ export function App({
                 }}
               />
 
-              {view === "pad" ? (
+              {view === "tags" ? (
+                <TagsPage
+                  tags={tags}
+                  counts={tagCounts}
+                  api={tagApi}
+                  onOpen={(tag) => openQuery({ view: "Tag", tagId: tag.id })}
+                  onManage={(tag) => {
+                    openQuery({ view: "Tag", tagId: tag.id });
+                    setShowTagSettings(true);
+                  }}
+                  onChanged={refreshMeta}
+                />
+              ) : view === "pad" ? (
                 <ScratchPad
                   api={padApi}
                   tagApi={tagApi}

@@ -166,6 +166,7 @@ public static class SyncCatalog
                 new("parent", ["ParentTagId"]),
                 new("color", ["ColorKey"]),
                 new("position", ["Position"]),
+                new("organize", ["Pinned", "Archived"]),
                 new("deleted", ["DeletedAtUtc"]),
             ],
             LocalColumns: ["Version"],

@@ -38,7 +38,7 @@ public static class SyncKinds
         new("task_template", 1, 35, true, ["create", "name", "payload", "deleted"]),
         new("section", 1, 40, false, ["create", "title", "position", "deleted"]),
         new("space_state", 1, 45, true, new SyncGroupInfo[] { new("create", 7), new("name", 7), new("base", 7), new("position", 7), new("deleted", 7) }),
-        new("tag", 1, 50, false, ["create", "name", "parent", "color", "position", "deleted"]),
+        new("tag", 1, 50, false, new SyncGroupInfo[] { new("create", 1), new("name", 1), new("parent", 1), new("color", 1), new("position", 1), new("deleted", 1), new("organize", 15) }),
         new("google_account", 1, 54, false, ["create", "deleted"]),
         new("board_setting", 1, 55, false, ["create", "grouping", "limits", "deleted"]),
         new("saved_view", 1, 56, true, ["create", "name", "look", "pinned", "position", "definition", "layout", "alerts", "deleted"]),

@@ -697,6 +697,8 @@ internal static class UndoLabels
         ["tag.create"] = "Create tag",
         ["tag.rename"] = "Rename tag",
         ["tag.set-color"] = "Recolor tag",
+        ["tag.pin"] = "Pin tag",
+        ["tag.archive"] = "Archive tag",
         ["tag.move"] = "Move tag",
         ["tag.merge"] = "Merge tag",
         ["tag.delete"] = "Delete tag",

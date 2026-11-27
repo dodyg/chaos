@@ -335,6 +335,8 @@ public static class ActivityActions
         "tags.rename",
         "tags.restore",
         "tags.setColor",
+        "tags.setPinned",
+        "tags.setArchived",
         "tags.suggest",
         "tags.targetTags",
         "tags.unlink",

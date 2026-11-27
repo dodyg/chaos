@@ -77,7 +77,9 @@ function resultRow(item: TaskResponse): QueryRowResponse {
     delegatedTo: null,
   };
 }
-const tags: TagResponse[] = [{ id: "bug", name: "bug", path: "bug", parentId: null, color: null, version: "1", depth: 0 }];
+const tags: TagResponse[] = [
+  { id: "bug", name: "bug", path: "bug", parentId: null, color: null, version: "1", depth: 0, pinned: false, archived: false },
+];
 const icons = ["list", "bug", "flag"];
 
 // ---- The model ----------------------------------------------------------------------------------

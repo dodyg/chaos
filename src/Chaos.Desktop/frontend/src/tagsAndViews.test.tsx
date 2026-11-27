@@ -68,6 +68,8 @@ function tag(id: string, path: string, parentId: string | null = null): TagRespo
     path,
     parentId,
     color: path === "home" ? "green" : null,
+    pinned: false,
+    archived: false,
     version: "1",
     depth: path.split("/").length - 1,
   };
@@ -173,7 +175,11 @@ function api(overrides: { tagRpc?: Partial<typeof tagRpc>; queryRpc?: Partial<ty
       counts: async () => ({
         ok: true,
         views: [{ view: "Today", count: 3 }],
-        tags: [{ tagId: "home", count: 2 }],
+        tags: [
+          { tagId: "home", count: 2 },
+          { tagId: "garden", count: 1 },
+          { tagId: "work", count: 1 },
+        ],
         containers: [],
         error: null,
       }),
@@ -205,9 +211,13 @@ test("the tag tree nests tags, shows counts and opens a tag view whose result op
   );
 
   const tree = await screen.findByRole("navigation", { name: "Tags" });
-  const home = within(tree).getByRole("button", { name: /home/ });
+  const home = within(tree).getByRole("button", { name: /^home\d*$/ });
   await waitFor(() => assert.match(home.textContent ?? "", /2$/));
-  assert.equal(within(tree).getByRole("button", { name: /garden/ }).style.paddingLeft, "1.35rem");
+  assert.equal(
+    within(tree).getByRole("button", { name: /garden/ }).style.paddingLeft,
+    "0.5rem",
+    "the sidebar shows tags flat, with their full path",
+  );
   assert.match(within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name: /Today/ }).textContent ?? "", /3$/);
 
   await user.click(home);

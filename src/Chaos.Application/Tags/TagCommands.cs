@@ -134,6 +134,33 @@ public sealed partial class TagCommands(IApplicationStore store, IIdGenerator id
             Task.FromResult(tag.ColorKey == color ? tag : tag with { ColorKey = color, Version = tag.Version + 1, UpdatedAtUtc = now }), ct);
     }
 
+    /// <summary>Pins a personal tag to the sidebar, or unpins it. Space tags are shared, so they are not pinned.</summary>
+    public async Task<TagMutationResult> SetPinnedAsync(SetTagPinnedCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await MutateTagAsync(command.OperationId, "tag.pin", command, command.TagId, command.ExpectedVersion, (_, _, tag, now, _) =>
+        {
+            if (tag.SpaceId is not null) throw AppException.Validation("tagId", "Only your own tags can be pinned.");
+            return Task.FromResult(tag.Pinned == command.Pinned ? tag : tag with { Pinned = command.Pinned, Version = tag.Version + 1, UpdatedAtUtc = now });
+        }, ct);
+    }
+
+    /// <summary>Archives a personal tag (hidden from the sidebar, still usable on tasks) or brings it back. Archiving unpins it.</summary>
+    public async Task<TagMutationResult> SetArchivedAsync(SetTagArchivedCommand command, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return await MutateTagAsync(command.OperationId, "tag.archive", command, command.TagId, command.ExpectedVersion, (_, _, tag, now, _) =>
+        {
+            if (tag.SpaceId is not null) throw AppException.Validation("tagId", "Only your own tags can be archived.");
+            var pinned = !command.Archived && tag.Pinned;
+            return Task.FromResult(tag.Archived == command.Archived && tag.Pinned == pinned
+                ? tag
+                : tag with { Archived = command.Archived, Pinned = pinned, Version = tag.Version + 1, UpdatedAtUtc = now });
+        }, ct);
+    }
+
     /// <summary>Moves a tag (with its subtree) under another tag or to the root; cycles and too-deep trees are rejected.</summary>
     public async Task<TagMutationResult> MoveAsync(MoveTagCommand command, CancellationToken ct = default)
     {

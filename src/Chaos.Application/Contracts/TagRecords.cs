@@ -13,6 +13,10 @@ public sealed record TagRecord : AggregateRecord
     public string? ParentTagId { get; init; }
     public string? ColorKey { get; init; }
     public required long Position { get; init; }
+    /// <summary>Shown at the top of the sidebar Tags list.</summary>
+    public bool Pinned { get; init; }
+    /// <summary>Kept out of the sidebar; the tag still works on tasks.</summary>
+    public bool Archived { get; init; }
 }
 
 /// <summary>One tag link to a task or a subtask (PLAN §5 TaskTags/SubtaskTags).</summary>

@@ -177,6 +177,36 @@ public sealed class TagsAndSearchTests
     }
 
     [Test]
+    public async Task PinAndArchive_PersistAcrossRestart_ArchivingUnpins_AndStaleVersionsAreRejected()
+    {
+        using var host = await Host.StartAsync();
+        var tag = (await host.Tags.CreateAsync(new(Op(), "backend", null, null))).Tag;
+        await Assert.That(tag.Pinned).IsFalse();
+        await Assert.That(tag.Archived).IsFalse();
+
+        var pinned = (await host.Tags.SetPinnedAsync(new(Op(), tag.Id, tag.Version, true))).Tag;
+        await Assert.That(pinned.Pinned).IsTrue();
+        await Assert.That(pinned.Version).IsEqualTo(tag.Version + 1);
+
+        var stale = await ThrowsAppAsync(() => host.Tags.SetPinnedAsync(new(Op(), tag.Id, tag.Version, false)));
+        await Assert.That(stale.Kind).IsEqualTo(AppErrorKind.VersionConflict);
+
+        var unchanged = (await host.Tags.SetPinnedAsync(new(Op(), tag.Id, pinned.Version, true))).Tag;
+        await Assert.That(unchanged.Version).IsEqualTo(pinned.Version);
+
+        var archived = (await host.Tags.SetArchivedAsync(new(Op(), tag.Id, pinned.Version, true))).Tag;
+        await Assert.That(archived.Archived).IsTrue();
+        await Assert.That(archived.Pinned).IsFalse();
+
+        var listed = (await host.Tags.ListAsync()).Single().Tag;
+        await Assert.That(listed.Archived).IsTrue();
+        await Assert.That(listed.Pinned).IsFalse();
+
+        var restored = (await host.Tags.SetArchivedAsync(new(Op(), tag.Id, archived.Version, false))).Tag;
+        await Assert.That(restored.Archived).IsFalse();
+    }
+
+    [Test]
     [Arguments("work", "Work")]
     [Arguments("work", "ｗｏｒｋ")]
     [Arguments("Straße", "STRASSE")]

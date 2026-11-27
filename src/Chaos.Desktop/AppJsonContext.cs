@@ -263,6 +263,8 @@ using NeoAstra.Rpc;
 [JsonSerializable(typeof(TagCreateRequest))]
 [JsonSerializable(typeof(TagRenameRequest))]
 [JsonSerializable(typeof(TagColorRequest))]
+[JsonSerializable(typeof(TagPinRequest))]
+[JsonSerializable(typeof(TagArchiveRequest))]
 [JsonSerializable(typeof(TagMoveRequest))]
 [JsonSerializable(typeof(TagChangeRequest))]
 [JsonSerializable(typeof(TagMergePreviewRequest))]
