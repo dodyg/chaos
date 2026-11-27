@@ -224,7 +224,7 @@ export function Settings({
           <p className="text-sm text-muted-foreground">Loading settings…</p>
         ) : (
           <form className="grid gap-5" onSubmit={save}>
-            <TabsContent value="general">
+            <TabsContent value="general" className="grid gap-5">
               <Section
                 title="You and your time"
                 icon={<UserRound />}
