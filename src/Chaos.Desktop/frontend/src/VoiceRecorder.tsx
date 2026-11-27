@@ -101,6 +101,9 @@ export const browserRecorder: RecorderEngine = {
   },
 };
 
+/** How many bars of recent loudness the recording strip shows. */
+const barCount = 40;
+
 type Props = {
   engine?: RecorderEngine;
   disabled?: boolean;
@@ -127,6 +130,9 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
   const [state, setState] = React.useState<State>({ kind: "idle" });
   const [elapsed, setElapsed] = React.useState(0);
   const [level, setLevel] = React.useState(0);
+  const [history, setHistory] = React.useState<readonly number[]>([]);
+  const [heardSound, setHeardSound] = React.useState(false);
+  const levelNow = React.useRef(0);
   const session = React.useRef<RecordingSession | null>(null);
   const startedAt = React.useRef<Date | null>(null);
   const fileInput = React.useRef<HTMLInputElement | null>(null);
@@ -148,7 +154,16 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
       setElapsed(ms);
       if (ms >= maxVoiceMs) void stop();
     }, 250);
-    return () => clearInterval(handle);
+    // A scrolling strip of the recent loudness, so speech reads as a waveform and silence as a flat line.
+    const strip = setInterval(() => {
+      const heard = levelNow.current;
+      if (heard > 0.04) setHeardSound(true);
+      setHistory((previous) => [...previous.slice(-(barCount - 1)), heard]);
+    }, 70);
+    return () => {
+      clearInterval(handle);
+      clearInterval(strip);
+    };
   }, [recordingSince]);
 
   async function start() {
@@ -161,11 +176,17 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
     try {
       const started = await engine.start();
       session.current = started;
-      started.onLevel(setLevel);
+      started.onLevel((next) => {
+        levelNow.current = next;
+        setLevel(next);
+      });
       startedAt.current = new Date();
       finishing.current = false;
       setElapsed(0);
       setLevel(0);
+      levelNow.current = 0;
+      setHistory([]);
+      setHeardSound(false);
       setState({ kind: "recording", startedAt: Date.now() });
     } catch (error) {
       setState({ kind: "problem", problem: classifyMicError(error) });
@@ -207,37 +228,62 @@ export function VoiceRecorder({ engine = browserRecorder, disabled, onRecorded, 
   }
 
   if (state.kind === "recording") {
+    const quiet = !heardSound && elapsed > 3000;
+    const share = Math.min(1, elapsed / maxVoiceMs);
     return (
       <div
         role="group"
         aria-label="Recording a voice note"
-        className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-1.5"
+        className="grid w-full max-w-sm gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
       >
-        <span className="size-2.5 animate-pulse rounded-full bg-destructive motion-reduce:animate-none" aria-hidden="true" />
-        <span role="timer" aria-label="Recording time" className="text-sm tabular-nums">
-          {formatElapsed(elapsed)} <span className="text-xs text-muted-foreground">of {formatElapsed(maxVoiceMs)}</span>
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="relative flex size-3 items-center justify-center" aria-hidden="true">
+            <span className="absolute size-3 animate-ping rounded-full bg-destructive/50 motion-reduce:animate-none" />
+            <span className="size-2.5 rounded-full bg-destructive" />
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-destructive">Recording</span>
+          <span role="timer" aria-label="Recording time" className="ml-auto text-lg font-medium tabular-nums">
+            {formatElapsed(elapsed)} <span className="text-xs font-normal text-muted-foreground">of {formatElapsed(maxVoiceMs)}</span>
+          </span>
+        </div>
         <div
           role="meter"
           aria-label="Microphone level"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(level * 100)}
-          className="h-2 w-24 overflow-hidden rounded-full bg-muted"
+          className="flex h-12 items-center gap-px overflow-hidden rounded-md bg-background/60 px-1"
         >
-          <div
-            className="h-full bg-destructive transition-[width] duration-75 motion-reduce:transition-none"
-            style={{ width: `${Math.round(level * 100)}%` }}
-          />
+          {Array.from({ length: barCount }, (_, index) => {
+            const value = history[index - (barCount - history.length)] ?? 0;
+            const height = Math.max(0.06, Math.sqrt(value));
+            return (
+              <span
+                key={index}
+                className={value > 0.04 ? "w-full rounded-full bg-destructive" : "w-full rounded-full bg-muted-foreground/40"}
+                style={{ height: `${Math.round(height * 100)}%` }}
+              />
+            );
+          })}
         </div>
-        <Button type="button" size="sm" onClick={() => void stop()}>
-          <Square />
-          Stop and save
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={cancel}>
-          <X />
-          Discard
-        </Button>
+        <div className="h-0.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+          <div className="h-full bg-destructive/60" style={{ width: `${share * 100}%` }} />
+        </div>
+        {quiet && (
+          <span role="status" className="text-xs text-muted-foreground">
+            No sound yet. Check that the right microphone is selected and not muted.
+          </span>
+        )}
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" onClick={() => void stop()}>
+            <Square />
+            Stop and save
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={cancel}>
+            <X />
+            Discard
+          </Button>
+        </div>
       </div>
     );
   }
