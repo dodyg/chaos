@@ -315,7 +315,11 @@ const idleSync = {
 test("the repository being synced shows a Syncing indicator while a pass runs", async () => {
   const api = {
     ...gitHubRpc,
-    status: async () => ({ ...connected, repositories: [repository], sync: { ...idleSync, running: true, currentRepositoryId: repository.id } }),
+    status: async () => ({
+      ...connected,
+      repositories: [repository],
+      sync: { ...idleSync, running: true, currentRepositoryId: repository.id },
+    }),
   };
   render(<GitHubSettings api={api} />);
   try {
