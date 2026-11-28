@@ -17,6 +17,7 @@ import { trackSync, setSyncObserved } from "./syncActivity";
 import { useActivity, useJobChange } from "./activity";
 
 type Api = typeof githubRpc;
+const syncIntervals = [1, 2, 5, 10, 15, 30, 60, 120, 360, 720, 1440];
 const emptyFilter: GitHubFilterDto = {
   labels: [],
   labelMode: "any",
@@ -249,6 +250,19 @@ export function GitHubSettings({
     setSyncObserved("github", status?.sync?.running === true);
   }, [status?.sync?.running]);
   React.useEffect(() => () => setSyncObserved("github", false), []);
+  // The host pushes only start and finish; while a pass runs, poll lightly so the repository being synced stays current.
+  React.useEffect(() => {
+    if (!status?.sync?.running) return;
+    const timer = setInterval(() => {
+      void api
+        .status({ spaceId })
+        .then((result) => {
+          if (result.ok) setStatus(result);
+        })
+        .catch(() => undefined);
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [api, spaceId, pollIntervalMs, status?.sync?.running]);
   async function syncNow(repositoryId: string | null = null) {
     await run(async () => {
       const result = await trackSync("github", api.syncNow({ repositoryId, spaceId }));
@@ -437,6 +451,27 @@ export function GitHubSettings({
               Sync changes with GitHub. Actions on linked tasks sync that issue in the background. The first import includes the newest 100
               comments; older comments stay on GitHub.
             </p>
+            {connection.isRunner && (
+              <Field label="Sync automatically every">
+                <NativeSelect
+                  value={String(status.syncIntervalMinutes ?? 5)}
+                  disabled={working}
+                  onChange={(e) =>
+                    void run(async () => {
+                      const result = await api.setSyncInterval({ minutes: Number(e.target.value) });
+                      if (!result.ok) throw new Error(result.error?.message ?? "Could not save the sync interval.");
+                      await load();
+                    })
+                  }
+                >
+                  {syncIntervals.map((m) => (
+                    <NativeSelectOption key={m} value={String(m)}>
+                      {m < 60 ? `${m} ${m === 1 ? "minute" : "minutes"}` : `${m / 60} ${m === 60 ? "hour" : "hours"}`}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+            )}
             {sync?.running && (
               <p role="status" className="text-sm">
                 Fetching GitHub issues and comments…
@@ -499,71 +534,84 @@ export function GitHubSettings({
           <div className="grid gap-3">
             <h3 className="font-semibold">Repositories</h3>
             {status.repositories.length === 0 && <p className="text-sm text-muted-foreground">No repositories added yet.</p>}
-            {status.repositories.map((r) => (
-              <div key={r.id} className="grid gap-2 rounded-xl border p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <strong dir="auto" className="mr-auto">
-                    {r.fullName}
-                  </strong>
-                  <span className="text-sm">{r.state}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    aria-label={`Sync ${r.fullName}`}
-                    disabled={working || !connection.isRunner || connection.state !== "Active" || r.state !== "Active"}
-                    onClick={() => void syncNow(r.id)}
-                  >
-                    Sync
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={working}
-                    onClick={() => {
-                      setEditing(r);
-                      setChosen(null);
-                    }}
-                  >
-                    Edit repository
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={working}
-                    onClick={() =>
-                      void run(() => change(() => retry("pauseRepository", api.pauseRepository, versioned(r, r.state === "Active"))))
-                    }
-                  >
-                    {r.state === "Unavailable" ? "Retry repository" : r.state === "Paused" ? "Resume" : "Pause"}
-                  </Button>
-                  <Button variant="outline" size="sm" disabled={working} onClick={() => setConfirm(r)}>
-                    Remove
-                  </Button>
+            {status.repositories.map((r) => {
+              const syncingNow = sync?.running === true && sync.currentRepositoryId === r.id;
+              return (
+                <div
+                  key={r.id}
+                  data-syncing={syncingNow || undefined}
+                  className={`grid gap-2 rounded-xl border p-3 transition-colors ${syncingNow ? "border-primary bg-primary/5" : ""}`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong dir="auto" className="mr-auto">
+                      {r.fullName}
+                    </strong>
+                    {syncingNow ? (
+                      <span role="status" className="flex items-center gap-1 text-sm font-medium text-primary">
+                        <RefreshCw aria-hidden="true" className="size-3.5 motion-safe:animate-spin" /> Syncing…
+                      </span>
+                    ) : (
+                      <span className="text-sm">{r.state}</span>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Sync ${r.fullName}`}
+                      disabled={working || !connection.isRunner || connection.state !== "Active" || r.state !== "Active"}
+                      onClick={() => void syncNow(r.id)}
+                    >
+                      Sync
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={working}
+                      onClick={() => {
+                        setEditing(r);
+                        setChosen(null);
+                      }}
+                    >
+                      Edit repository
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={working}
+                      onClick={() =>
+                        void run(() => change(() => retry("pauseRepository", api.pauseRepository, versioned(r, r.state === "Active"))))
+                      }
+                    >
+                      {r.state === "Unavailable" ? "Retry repository" : r.state === "Paused" ? "Resume" : "Pause"}
+                    </Button>
+                    <Button variant="outline" size="sm" disabled={working} onClick={() => setConfirm(r)}>
+                      Remove
+                    </Button>
+                  </div>
+                  {editing?.id === r.id && (
+                    <RepositoryOptions
+                      key={r.version}
+                      targets={status.targets}
+                      repository={r}
+                      busy={working}
+                      onCancel={() => setEditing(null)}
+                      onSave={(options) =>
+                        void run(async () => {
+                          await change(() =>
+                            retry("updateRepository", api.updateRepository, {
+                              operationId: crypto.randomUUID(),
+                              id: r.id,
+                              expectedVersion: r.version,
+                              ...options,
+                            }),
+                          );
+                          setEditing(null);
+                        })
+                      }
+                    />
+                  )}
                 </div>
-                {editing?.id === r.id && (
-                  <RepositoryOptions
-                    key={r.version}
-                    targets={status.targets}
-                    repository={r}
-                    busy={working}
-                    onCancel={() => setEditing(null)}
-                    onSave={(options) =>
-                      void run(async () => {
-                        await change(() =>
-                          retry("updateRepository", api.updateRepository, {
-                            operationId: crypto.randomUUID(),
-                            id: r.id,
-                            expectedVersion: r.version,
-                            ...options,
-                          }),
-                        );
-                        setEditing(null);
-                      })
-                    }
-                  />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="grid gap-3 rounded-xl border p-4">
             <h3 className="font-semibold">Add a repository</h3>

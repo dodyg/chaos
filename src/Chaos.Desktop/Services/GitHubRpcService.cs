@@ -37,12 +37,13 @@ public sealed record GitHubSectionDto(string Id, string Title);
 public sealed record GitHubTargetDto(string Id, string Name, IReadOnlyList<GitHubSectionDto> Sections);
 /// <summary><see cref="IsOwner"/> says this person manages the connection; <see cref="MemberCount"/> is who sees what it brings in.</summary>
 public sealed record GitHubStatusResponse(bool Ok, GitHubConnectionDto? Connection, IReadOnlyList<GitHubRepositoryDto> Repositories, IReadOnlyList<GitHubTargetDto> Targets, TaskErrorResponse? Error, GitHubSyncDto? Sync = null,
-    bool IsOwner = false, string? SpaceId = null, string? SpaceName = null, int MemberCount = 1);
+    bool IsOwner = false, string? SpaceId = null, string? SpaceName = null, int MemberCount = 1, int SyncIntervalMinutes = 5);
+public sealed record GitHubSyncIntervalRequest(int Minutes);
 public sealed record GitHubOperationResponse(bool Ok, TaskErrorResponse? Error);
 public sealed record GitHubCandidatesResponse(bool Ok, IReadOnlyList<GitHubCandidateDto> Repositories, string? NextCursor, TaskErrorResponse? Error);
 
 public sealed record GitHubSyncRequest(string? RepositoryId, string? SpaceId = null);
-public sealed record GitHubSyncDto(bool Running, string? StartedAtUtc, string? FinishedAtUtc, int? Created, int? Updated, int? CommentChanges, int? Conflicts, bool MorePages, TaskErrorResponse? Error);
+public sealed record GitHubSyncDto(bool Running, string? StartedAtUtc, string? FinishedAtUtc, int? Created, int? Updated, int? CommentChanges, int? Conflicts, bool MorePages, TaskErrorResponse? Error, string? CurrentRepositoryId = null);
 public sealed record GitHubSyncResponse(bool Ok, GitHubSyncDto? Sync, TaskErrorResponse? Error);
 
 [NeoRpcService("github", Version = 1)]
@@ -62,7 +63,7 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
             }, ct);
             return new(true, status.Connection is { } c ? new(c.Id, Number(c.Version), Number(c.AccountId), c.AccountLogin, c.State switch { 0 => "Active", 1 => "Paused", _ => "NeedsSignIn" }, c.PostDiaryByDefault, c.CreateLabelsForTags, c.RunnerDeviceName, status.IsRunner) : null,
                 status.Repositories.Select(r => new GitHubRepositoryDto(r.Id, Number(r.Version), Number(r.RepositoryId), r.FullName, r.State switch { 0 => "Active", 1 => "Paused", _ => "Unavailable" }, r.TargetContainerId, r.TargetSectionId, ReadFilter(r.FilterJson), r.MilestonesAsProjects, r.TaskCategory.ToString(), r.IsPrivate)).ToArray(), targets, null, SyncStatus(status.Connection),
-                status.IsOwner, status.SpaceId, status.SpaceName, members);
+                status.IsOwner, status.SpaceId, status.SpaceName, members, await commands.GetSyncIntervalMinutesAsync(ct));
         },
             error => new(false, null, [], [], error));
 
@@ -173,9 +174,10 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
         var error = connection.LastErrorKind is { } kind && Enum.IsDefined((GitHubErrorKind)kind) ? Error(new((GitHubErrorKind)kind)) : null;
         return new(false, Instant(connection.LastSyncStartedUtc), Instant(connection.LastSyncCompletedUtc), null, null, null, null, false, error);
     }
-    private static GitHubSyncDto MapSync(GitHubSyncActivity state) => new(state.Running, Instant(state.StartedAtUtc), Instant(state.FinishedAtUtc),
+    private GitHubSyncDto MapSync(GitHubSyncActivity state) => new(state.Running, Instant(state.StartedAtUtc), Instant(state.FinishedAtUtc),
         state.Result?.Created, state.Result?.Updated, state.Result?.CommentChanges, state.Result?.Conflicts, state.Result?.MorePages ?? false,
-        state.AppError is { } app ? TaskRpcService.ToErrorResponse(app) : state.GitHubError is { } kind ? Error(new(kind)) : null);
+        state.AppError is { } app ? TaskRpcService.ToErrorResponse(app) : state.GitHubError is { } kind ? Error(new(kind)) : null,
+        state.Running ? sync?.CurrentRepositoryId : null);
     private static string? Instant(DateTimeOffset? value) => value?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
     [NeoRpcMethod("connect")]
@@ -246,6 +248,12 @@ public sealed class GitHubRpcService(GitHubConnectionCommands commands, IApplica
     {
         using var rpcScope = ActivityScope.Rpc("github.updateSettings");
         return await Run(async () => { await commands.UpdateSettingsAsync(new(r.OperationId, r.Id, Positive(r.ExpectedVersion), r.PostDiaryByDefault, r.CreateLabelsForTags), ct); });
+    }
+    [NeoRpcMethod("setSyncInterval")]
+    public async ValueTask<GitHubOperationResponse> SetSyncIntervalAsync(GitHubSyncIntervalRequest r, CancellationToken ct)
+    {
+        using var rpcScope = ActivityScope.Rpc("github.setSyncInterval");
+        return await Run(async () => { await commands.SetSyncIntervalMinutesAsync(r.Minutes, ct); });
     }
     [NeoRpcMethod("setSelfAssignment")]
     public async ValueTask<GitHubOperationResponse> SetSelfAssignmentAsync(GitHubSelfAssignmentRequest r, CancellationToken ct)

@@ -469,6 +469,7 @@ test("the Members tab saves and clears a GitHub login, and the owner's Connectio
       spaceId: shared,
       spaceName: "Bins",
       memberCount: 2,
+      syncIntervalMinutes: 5,
     }),
   };
   const noop = () => {};
@@ -655,6 +656,7 @@ test("the invite dialog warns about a private repository connected to the space 
       spaceId: shared,
       spaceName: "Bins",
       memberCount: 1,
+      syncIntervalMinutes: 5,
     }),
   };
   const user = userEvent.setup({ document: dom.window.document });

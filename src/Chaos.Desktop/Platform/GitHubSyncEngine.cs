@@ -26,6 +26,8 @@ public sealed class GitHubSyncEngine(IGitHubSyncRunner runner, TimeProvider cloc
     private GitHubSyncActivity _fullActivity = new(false, null, null, null, null, null);
     public GitHubSyncActivity Status { get { lock (_stateGate) return _fullActivity; } }
     public event Action? WorkCompleted;
+    /// <summary>The repository the running full pass is syncing now, or null.</summary>
+    public string? CurrentRepositoryId { get { lock (_stateGate) return _fullActivity.Running ? runner.CurrentRepositoryId : null; } }
 
     public GitHubSyncActivity? TaskStatus(string taskId)
     {

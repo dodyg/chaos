@@ -27,6 +27,7 @@ const disconnected: GitHubStatusResponse = {
   spaceId: null,
   spaceName: null,
   memberCount: 1,
+  syncIntervalMinutes: 5,
 };
 const connected: GitHubStatusResponse = {
   ...disconnected,
@@ -308,7 +309,23 @@ const idleSync = {
   conflicts: null,
   morePages: false,
   error: null,
+  currentRepositoryId: null,
 };
+
+test("the repository being synced shows a Syncing indicator while a pass runs", async () => {
+  const api = {
+    ...gitHubRpc,
+    status: async () => ({ ...connected, repositories: [repository], sync: { ...idleSync, running: true, currentRepositoryId: repository.id } }),
+  };
+  render(<GitHubSettings api={api} />);
+  try {
+    const row = (await screen.findByText(repository.fullName)).closest("[data-syncing]");
+    assert.ok(row);
+    assert.ok(within(row as HTMLElement).getByRole("status"));
+  } finally {
+    cleanup();
+  }
+});
 
 test("editing a repository shows its category and saves a new selection", async () => {
   const updates: Array<{ taskCategory: string | null }> = [];

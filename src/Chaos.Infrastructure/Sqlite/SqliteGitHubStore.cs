@@ -15,6 +15,21 @@ public sealed class SqliteGitHubStore(SqliteConnection connection) : IGitHubStor
         return await command.ExecuteScalarAsync(ct) as string ?? throw new InvalidOperationException("This device has no identity.");
     }
 
+    public async Task<int> GetSyncIntervalMinutesAsync(CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Value FROM DeviceSettings WHERE Key='GitHubSyncIntervalMinutes'";
+        return await command.ExecuteScalarAsync(ct) is string text && int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var minutes) && minutes is >= 1 and <= 1440 ? minutes : 5;
+    }
+
+    public async Task SetSyncIntervalMinutesAsync(int minutes, CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO DeviceSettings (Key, Value) VALUES ('GitHubSyncIntervalMinutes', $v) ON CONFLICT(Key) DO UPDATE SET Value = excluded.Value;";
+        command.Parameters.AddWithValue("$v", minutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task ResetRunnerStateAsync(string connectionId, CancellationToken ct)
     {
         using var command = connection.CreateCommand();

@@ -60,6 +60,7 @@ using NeoAstra.Rpc;
 [JsonSerializable(typeof(GitHubLookupRequest))]
 [JsonSerializable(typeof(GitHubChangeRequest))]
 [JsonSerializable(typeof(GitHubSettingsRequest))]
+[JsonSerializable(typeof(GitHubSyncIntervalRequest))]
 [JsonSerializable(typeof(GitHubFilterDto))]
 [JsonSerializable(typeof(GitHubAddRequest))]
 [JsonSerializable(typeof(GitHubUpdateRequest))]

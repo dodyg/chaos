@@ -172,6 +172,7 @@ public static class ActivityActions
         "github.taskSync",
         "github.updateRepository",
         "github.updateSettings",
+        "github.setSyncInterval",
         "googleCalendar.calendars",
         "googleCalendar.choose",
         "googleCalendar.connect",

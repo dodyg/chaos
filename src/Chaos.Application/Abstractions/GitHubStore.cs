@@ -6,6 +6,9 @@ namespace Chaos.Application.Abstractions;
 public interface IGitHubStore
 {
     Task<string> GetDeviceIdAsync(CancellationToken ct);
+    /// <summary>Minutes between this device's full sync passes (a device-only setting; default 5).</summary>
+    Task<int> GetSyncIntervalMinutesAsync(CancellationToken ct);
+    Task SetSyncIntervalMinutesAsync(int minutes, CancellationToken ct);
     Task ResetRunnerStateAsync(string connectionId, CancellationToken ct);
     Task AddConnectionAsync(GitHubConnectionRecord row, CancellationToken ct);
     Task<GitHubConnectionRecord?> GetConnectionAsync(string id, CancellationToken ct);

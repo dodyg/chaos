@@ -8,11 +8,16 @@ public interface IGitHubSyncRunner
 {
     Task<GitHubSyncResult> RunAsync(string? repositoryId, CancellationToken ct, string? connectionId = null);
     Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct);
+    /// <summary>The repository subscription a running full pass is working on right now; null between repositories or when idle.</summary>
+    string? CurrentRepositoryId => null;
 }
 
 /// <summary>One explicit sync pass. The desktop engine owns scheduling, cancellation and replacement quiescence.</summary>
 public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, GitHubIssueFetcher issues, GitHubCommentFetcher comments, IIdGenerator ids, TimeProvider clock) : IGitHubSyncRunner
 {
+    private volatile string? _syncingRepositoryId;
+    public string? CurrentRepositoryId => _syncingRepositoryId;
+
     /// <summary>Syncs only an existing linked issue after a local action; never advances repository feed cursors.</summary>
     public async Task<GitHubSyncResult> RunTaskAsync(string taskId, CancellationToken ct)
     {
@@ -102,6 +107,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             foreach (var repo in repositories)
             {
                 currentRepository = repo.Id;
+                _syncingRepositoryId = repo.Id;
                 var refresh = new GitHubInboundRefresh(store, api, new GitHubInboundCommands(store, ids, clock), clock);
                 await refresh.RefreshIdentityAsync(repo.Id, ct);
                 var outboundComments = new GitHubOutboundComments(store, api, ids, clock);
@@ -131,6 +137,7 @@ public sealed class GitHubSyncCommands(IApplicationStore store, IGitHubApi api, 
             await Record(GitHubErrorKind.Validation, null);
             throw;
         }
+        finally { _syncingRepositoryId = null; }
         await Record(null, null);
         return result;
 

@@ -22,7 +22,7 @@ public sealed record GitHubFilter(IReadOnlyList<string> Labels, string LabelMode
 }
 /// <summary>The connection of one space as this device sees it. <see cref="IsRunner"/> says the engine runs here; <see cref="IsOwner"/> says this person manages it.</summary>
 public sealed record GitHubStatus(GitHubConnectionRecord? Connection, IReadOnlyList<GitHubRepositoryRecord> Repositories, bool IsRunner = false, bool IsOwner = false, string? SpaceId = null, string? SpaceName = null);
-public sealed record GitHubSchedule(GitHubStatus Status, DateTimeOffset? ConnectionRetryUtc, IReadOnlyList<GitHubIssueLinkRecord> LinkRetries);
+public sealed record GitHubSchedule(GitHubStatus Status, DateTimeOffset? ConnectionRetryUtc, IReadOnlyList<GitHubIssueLinkRecord> LinkRetries, int IntervalMinutes = 5);
 public sealed record GitHubRepositoryCandidate(GitHubRepository Repository, bool AlreadyAdded);
 public sealed record GitHubRepositoryCandidates(IReadOnlyList<GitHubRepositoryCandidate> Repositories, string? NextCursor);
 public sealed record ConnectGitHubCommand(string OperationId, string? SpaceId = null);
@@ -131,15 +131,25 @@ public sealed partial class GitHubConnectionCommands(IApplicationStore store, IG
         if (profile is null) return [];
         var deviceId = await s.GitHub.GetDeviceIdAsync(token);
         var result = new List<GitHubSchedule>();
+        var interval = await s.GitHub.GetSyncIntervalMinutesAsync(token);
         foreach (var connection in await s.GitHub.ListConnectionsAsync(token))
         {
             if (connection.RunnerDeviceId != deviceId || !await GitHubSpaces.CanRunAsync(s, connection, profile, token)) continue;
             var space = await GitHubSpaces.SpaceOfAsync(s, connection, token);
             result.Add(new(new(connection, await s.GitHub.ListSubscriptionsAsync(connection.Id, token), true, true, space.Id, space.Name),
-                await s.GitHub.GetConnectionRetryAsync(connection.Id, token), await s.GitHub.ListScheduledRetriesAsync(connection.Id, 200, token)));
+                await s.GitHub.GetConnectionRetryAsync(connection.Id, token), await s.GitHub.ListScheduledRetriesAsync(connection.Id, 200, token), interval));
         }
         return result;
     }, ct);
+
+    public Task<int> GetSyncIntervalMinutesAsync(CancellationToken ct = default) => store.QueryAsync((s, token) => s.GitHub.GetSyncIntervalMinutesAsync(token), ct);
+
+    /// <summary>Sets how often this device runs a full GitHub sync pass, in minutes (1 to 1440).</summary>
+    public async Task SetSyncIntervalMinutesAsync(int minutes, CancellationToken ct = default)
+    {
+        if (minutes is < 1 or > 1440) throw AppException.Validation("minutes", "Choose between 1 minute and 24 hours.");
+        await store.ExecuteAsync(async (s, token) => { await s.GitHub.SetSyncIntervalMinutesAsync(minutes, token); return true; }, ct);
+    }
 
     public async Task<GitHubConnectionRecord> ConnectAsync(ConnectGitHubCommand command, CancellationToken ct = default)
     {

@@ -8,7 +8,7 @@ import { useJobs } from "./activity";
  * nothing polls.
  */
 export function SyncLogo() {
-  const { github, calendar } = useSyncActivity();
+  const { calendar } = useSyncActivity();
   const jobs = useJobs();
   const githubRunning = jobs["github.sync"]?.running === true;
   const calendarRunning = jobs["calendar.refresh"]?.running === true;
@@ -25,7 +25,8 @@ export function SyncLogo() {
     },
     [],
   );
-  const mode = github && calendar ? "both" : github ? "github" : calendar ? "calendar" : undefined;
+  // GitHub syncs often in the background and its ring was distracting; its progress shows per repository in GitHub settings instead.
+  const mode = calendar ? "calendar" : undefined;
   return (
     <span className="sync-logo" data-sync={mode} data-testid="sync-logo">
       <img src={new URL("../../../../eng/assets/chaos-icon.svg", import.meta.url).href} alt="" />

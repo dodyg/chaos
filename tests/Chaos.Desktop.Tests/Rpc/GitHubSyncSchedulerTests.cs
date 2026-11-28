@@ -92,14 +92,14 @@ public sealed class GitHubSyncSchedulerTests
         using var engine = new GitHubSyncEngine(runner, clock);
         using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(Active(), null, pending ? [link] : [])]), clock);
         scheduler.Start();
-        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(10));
-        clock.Advance(TimeSpan.FromSeconds(10));
-        await runner.Full.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromSeconds(50));
-        clock.Advance(TimeSpan.FromSeconds(49));
+        // Starting the app does not sync: the link retry (due in a minute) comes before the first full pass (one interval away).
+        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromSeconds(59));
         await Assert.That(runner.Retried.Task.IsCompleted).IsFalse();
+        await Assert.That(runner.Full.Task.IsCompleted).IsFalse();
         clock.Advance(TimeSpan.FromSeconds(1));
         await runner.Retried.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(runner.Full.Task.IsCompleted).IsFalse();
     }
 
     [Test]
@@ -107,12 +107,12 @@ public sealed class GitHubSyncSchedulerTests
     {
         var clock = new ManualClock();
         var runner = new RetryRunner(() => { });
-        var deadline = clock.GetUtcNow().AddMinutes(2);
+        var deadline = clock.GetUtcNow().AddMinutes(7);
         using var engine = new GitHubSyncEngine(runner, clock);
         using var scheduler = new GitHubSyncScheduler(engine, _ => Task.FromResult<IReadOnlyList<GitHubSchedule>>([new GitHubSchedule(Active(), deadline, [])]), clock);
         scheduler.Start();
-        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromMinutes(2));
-        clock.Advance(TimeSpan.FromSeconds(119));
+        await Assert.That(await clock.Created.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(TimeSpan.FromMinutes(7));
+        clock.Advance(TimeSpan.FromSeconds(419));
         await Assert.That(runner.Full.Task.IsCompleted).IsFalse();
         clock.Advance(TimeSpan.FromSeconds(1));
         await runner.Full.Task.WaitAsync(TimeSpan.FromSeconds(10));

@@ -65,8 +65,8 @@ public sealed class GitHubSyncScheduler(GitHubSyncEngine engine, Func<Cancellati
                     foreach (var id in attemptedLinks.Where(entry => entry.Value <= now).Select(entry => entry.Key).ToArray()) attemptedLinks.Remove(id);
                     var forced = Interlocked.Exchange(ref _force, 0) != 0;
                     if (forced) attemptedLinks.Clear();
-                    // A connection seen for the first time waits ten seconds, as the first pass after start always did; a wake
-                    // (a local action, a new repository, connectivity back) makes every full pass due now.
+                    // A connection seen for the first time (as at app start) waits one full interval, so starting the app never
+                    // syncs by itself; a wake (a local action, a new repository, connectivity back) makes every full pass due now.
                     foreach (var state in states)
                     {
                         var id = state.Status.Connection!.Id;
@@ -74,7 +74,7 @@ public sealed class GitHubSyncScheduler(GitHubSyncEngine engine, Func<Cancellati
                         {
                             if (forced) _cadence[id] = (now, cadence.Failures);
                         }
-                        else _cadence[id] = (forced ? now : now.AddSeconds(10), 0);
+                        else _cadence[id] = (forced ? now : now.AddMinutes(Math.Clamp(state.IntervalMinutes, 1, 1440)), 0);
                     }
                     // The connection whose next work is due first goes first: its full pass, a due link retry, or a backoff.
                     var plan = states.Select(state =>
@@ -121,7 +121,7 @@ public sealed class GitHubSyncScheduler(GitHubSyncEngine engine, Func<Cancellati
                     }
                     else
                     {
-                        _cadence[current.Id] = (clock.GetUtcNow().AddSeconds(activity.Result?.MorePages == true ? 10 : 300), 0);
+                        _cadence[current.Id] = (clock.GetUtcNow().AddSeconds(activity.Result?.MorePages == true ? 10 : Math.Clamp(plan.State.IntervalMinutes, 1, 1440) * 60), 0);
                     }
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { throw; }
