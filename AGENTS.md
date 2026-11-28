@@ -1,5 +1,13 @@
 # Agent notes
 
+## Desktop framework (NeoAstra)
+
+Before changing the desktop host, its RPC services or how the frontend calls them, read
+`.claude/skills/neoastra/SKILL.md` (a general NeoAstra guide, with pointers to the package's own docs).
+In this repo the host is `src/Chaos.Desktop`: `Program.cs`, `DesktopComposition.AddRpcServices`, `Services/*RpcService.cs`
+and `AppJsonContext.cs`. A new RPC method also needs its `service.method` name in `ActivityActions.Rpc` and must run
+through `Rpc.Run`/`ActivityScope.Rpc`; `ActivityStreamTests` enforces both.
+
 ## Containers
 
 Aspire 17 now runs containers through `wslc`, so there is no need for Docker. Do not install, start or
